@@ -1,0 +1,80 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Repository state
+
+**Pre-implementation.** This repo currently contains only design/reference documents — no source, no build system, no tests, one commit (`Initial commit`). There are therefore **no build, lint, or test commands yet**. When the first code lands, the language/toolchain choice and its commands belong in this section; do not invent them before then.
+
+Present files:
+- `IMAS-CORE_FUNCTIONALITY_INVENTORY.md` — the primary technical reference (938 lines). A per-capability, code-verified inventory of the IMAS-Core surface this project must mirror. Read this before designing anything.
+- `README.md` — one-line project statement.
+- `CODE_OF_CONDUCT.md` — ITER's Contributor Covenant; contact `imas-administration@iter.org`.
+
+`IMAS-CORE_FUNCTIONALITY_INVENTORY.md` cross-references `NORTH_STAR.md`, `CONTEXT.md`, `CLAUDE.md`, `docs/adr/0001-*.md`, `CMakeLists.txt` and `src/**` paths. **Those live in the separate IMAS-Core repository, not here.** Every `src/...:NNN` and `include/...` citation in that document is a pointer into IMAS-Core's tree. Don't try to resolve them locally, and don't treat their absence as a gap in this repo.
+
+## What this project is
+
+A **middleware shim between the IMAS HLIs and IMAS-Core**:
+
+```
+HLI (imas-python, imas-Fortran, imas-CPP, imas-Matlab, imas-Java)
+        │  compiled/configured against DD version V
+        ▼
+IMAS-Multiversion-DD-Loader   ← this project: mirrors IMAS-Core's public C ABI
+        │  translates DD paths V ⇄ W
+        ▼
+IMAS-Core (libal)             ← low-level access layer, stores IDSs written under DD version W
+```
+
+The core idea: **this project re-exports IMAS-Core's public C ABI verbatim** — same function names, same signatures, same `al_status_t` contract — and interposes between the mirrored functions. An HLI set up for DD 4.1.1 can then read an IDS stored under an earlier DD by having its path arguments rewritten on the way down and results rewritten on the way back up.
+
+Conversion is **best-effort and explicitly lossy**. Fields that were removed, renamed with changed semantics, or sign-flipped (COCOS) between versions cannot always round-trip. Loss must be surfaced, not silently swallowed — but note the ABI leaves little room for it: `al_status_t` carries a single `int code` plus a `char message[256]`, and `code == 0` means success. Deciding how partial/lossy conversions are reported through that narrow channel is a core design question, not an implementation detail.
+
+## Architecture: where the conversion seams are
+
+Derived from the inventory — these are the ABI entry points that carry DD paths or IDS names and therefore need translation. Everything else can pass straight through.
+
+**Down-converted (HLI's DD version → stored DD version):**
+
+| Function | Path-bearing arguments |
+|---|---|
+| `al_begin_global_action` | `dataobjectname` (IDS name), `datapath` |
+| `al_begin_slice_action` | `dataobjectname` |
+| `al_begin_timerange_action` | `dataobjectname` |
+| `al_begin_arraystruct_action` | `path`, `timebase` |
+| `al_read_data` / `al_write_data` | `field`, `timebase` |
+| `al_delete_data` | `path` |
+| `al_get_occurrences` | `ids_name` |
+| `al_list_filled_paths` | `dataobjectname` |
+| `al_bind_plugin` / `al_unbind_plugin` | `fieldPath` |
+| `al_plugin_*` reentry family | same path arguments as their non-`al_plugin_` twins |
+
+**Up-converted (stored → HLI's DD version):** `al_list_filled_paths`'s returned `path_list` is the main one — it hands back DD paths that were written under the stored version and must be presented in the caller's version. Note the caller owns and must free both the list and every string in it; a shim that rewrites those strings takes on that ownership contract too.
+
+Also relevant to path handling: `field`/`path` arguments are **relative to `ctxID` unless prefixed with `/`**, in which case they're absolute. A converter must handle both forms, and must know the enclosing context's path to resolve the relative case — meaning the shim has to track context state (`dectxID`/`octxID`/`actxID` → resolved DD path), not just rewrite strings statelessly. AOS iteration via `al_iterate_over_arraystruct` mutates that state.
+
+## Constraints inherited from the mirrored ABI
+
+Read the inventory for the full picture; these are the ones that most directly shape this project's design.
+
+- **`getDDVersion()` is deliberately dead in IMAS-Core** — it returns the sentinel `"!!DEPRECATED!!"`, and an upstream test asserts it stays that way. This project **cannot** ask IMAS-Core which DD version a pulse was written under via that call. Determining the stored version is an open problem and a prerequisite for conversion.
+- **`datapath` on `al_begin_global_action` is near-inert.** HDF5, MDSplus, Memory, ASCII, and Flexbuffers all ignore it. Only UDA in remote mode with `cache_mode=ids` actually honors it. Don't build a partial-get strategy on it.
+- **`al_list_filled_paths` hard-fails on 4 of 6 backends** (MDSplus, Memory, ASCII, Flexbuffers throw unconditionally; only HDF5 has a real implementation, UDA delegates). If the conversion logic wants to discover what's actually stored, that discovery path only works against HDF5/UDA. Plan a fallback.
+- **Two conflicting meanings of `0`.** In `al_status_t.code`, `0` = success. In `Backend::readData` / plugin `read_data`'s `int` return, `0` = *not found* and `1` = success. A shim sitting between these layers translates in both directions — getting this backwards is the single easiest bug to introduce here.
+- **`MAXDIM = 7`** (max array rank), **`MAX_ERR_MSG_LEN = 256`** (`al_status_t.message`).
+- **Data types: `CHAR_DATA`, `INTEGER_DATA`, `DOUBLE_DATA`, `COMPLEX_DATA` only** — no boolean, no single-precision float. DD type changes across versions must land in one of these four.
+- **Time-range and slice support is not universal.** Only HDF5 supports `supportsTimeRangeOperation()` unconditionally; MDSplus supports interpolation but *not* time range; UDA's support is gated on the remote server plugin version (`> 1.4.0`); Memory/ASCII/Flexbuffers support neither.
+- Several upstream behaviors are outright bugs or silent degradations the inventory documents in detail (e.g. `al_plugin_begin_timerange_action` has a header/impl signature mismatch and is unlinkable; `al_setvalue_*_parameter_plugin` null-derefs on an unregistered plugin name; `al_unregister_plugin` only destroys plugins that were bound). When mirroring the ABI, decide *deliberately* per case whether to reproduce the upstream behavior or fix it at the shim — and record the decision.
+
+## Working with DD versions
+
+Use the **`imas-dd` MCP server** as the authority on DD content and inter-version differences — do not guess at path renames or reason from memory about what changed between versions.
+
+- 35 versions in the chain, `3.22.0` … `4.1.1`; `4.1.0` is flagged as current. The 3.x → 4.0.0 boundary is the big breaking one.
+- `get_dd_migration_guide(from_version, to_version)` — breaking changes, COCOS sign-flip tables, path renames, unit changes. This is the closest thing to a specification of what the conversion layer must implement. Use `summary_only=true` / `ids_filter` to keep responses manageable; unfiltered full-DD guides are large.
+- `get_dd_changelog` — ranks paths by volatility across versions; useful for finding where conversion will hurt most.
+- `check_dd_paths` / `search_dd_paths` / `get_dd_version_context` — validate that a specific path exists in a specific version.
+- `get_dd_cocos_fields` — COCOS-sensitive fields, i.e. the ones where conversion is a sign transformation, not a rename.
+
+A rename table alone is insufficient for correctness: unit changes and COCOS sign flips are *value* transformations that have to happen on the data buffers in `al_read_data`/`al_write_data`, not on the path strings.
