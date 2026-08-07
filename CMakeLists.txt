@@ -158,6 +158,58 @@ if(IMAS_MVDD_BUILD_TESTS)
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
     add_test(NAME abi-smoke COMMAND abi_smoke)
+
+    # --- Seam test: proves the runtime-binding architecture (issue #3) -----
+    #
+    # A recording stub stands in for IMAS-Core: it exports the ABI symbols
+    # the shim resolves at runtime (al_context_info, getALVersion) and
+    # records what it received, so assertions can be made directly on what
+    # crossed the boundary instead of inferring it from a data round trip.
+    #
+    # The stub is deliberately never linked into seam_test: doing so would
+    # give the linker two candidate definitions of al_context_info (the
+    # shim's and the stub's) to choose between — exactly the ambiguity
+    # runtime binding exists to avoid. seam_test only dlopen's the stub
+    # itself, purely to read back its recorded state.
+    add_library(recording_stub SHARED
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/stub/recording_stub.c")
+    # Matches the shim's bare-soname fallback (src/resolve.rs) so the
+    # bare-soname scenario below can exercise the loader's normal search
+    # path instead of the explicit override.
+    set_target_properties(recording_stub PROPERTIES OUTPUT_NAME al)
+
+    add_executable(seam_test "${CMAKE_CURRENT_SOURCE_DIR}/tests/seam_test.c")
+    target_link_libraries(seam_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
+    target_compile_definitions(seam_test PRIVATE
+        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+    add_dependencies(seam_test imas_mvdd_capi recording_stub)
+    set_target_properties(seam_test PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    add_test(NAME seam-success COMMAND seam_test success)
+    set_tests_properties(seam-success PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+    add_test(NAME seam-version-drift-tolerated COMMAND seam_test success)
+    set_tests_properties(seam-version-drift-tolerated PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_VERSION=1.9.9")
+
+    add_test(NAME seam-version-mismatch COMMAND seam_test version-mismatch)
+    set_tests_properties(seam-version-mismatch PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_VERSION=2.0.0")
+
+    add_test(NAME seam-missing-library COMMAND seam_test missing-library)
+    set_tests_properties(seam-missing-library PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=${CMAKE_CURRENT_BINARY_DIR}/does-not-exist.so")
+
+    add_test(NAME seam-bare-soname COMMAND seam_test bare-soname)
+    if(APPLE)
+        set(_seam_search_path_var DYLD_LIBRARY_PATH)
+    else()
+        set(_seam_search_path_var LD_LIBRARY_PATH)
+    endif()
+    set_tests_properties(seam-bare-soname PROPERTIES ENVIRONMENT
+        "${_seam_search_path_var}=$<TARGET_FILE_DIR:recording_stub>")
 endif()
 
 # ---------------------------------------------------------------------------

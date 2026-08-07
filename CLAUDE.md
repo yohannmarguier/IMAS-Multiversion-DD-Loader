@@ -5,7 +5,7 @@ If it has to been modified, apply the same changes to CLAUDE.md.
 
 ## Repository state
 
-**Skeleton only.** The build system exists and is verified end to end, but the shim itself is not implemented: `src/lib.rs` holds `al_status_t`, the shared constants, and two placeholder symbols that let the ABI pipeline be tested. **No conversion logic exists yet.**
+**Runtime binding proven on one symbol; no conversion logic yet.** The build system is verified end to end, and `src/resolve.rs` / `src/dl.rs` prove the runtime-binding architecture (see `docs/adr/0001-runtime-binding-not-linking.md`) on `al_context_info`: the shim opens IMAS-Core with local symbol visibility via hand-rolled `dlopen`/`dlsym` bindings, checks `getALVersion()` against the version it was built against, and forwards the call — verified by `tests/seam_test.c` against a recording stub (`tests/stub/`) standing in for IMAS-Core. Every other mirrored ABI entry point, and all DD path/version translation, is still unimplemented.
 
 Single crate at the repo root. Keep it that way until `imas-core-sys` lands — cargo allows only one package per `links` value, so the crate binding `libal` must be separate, and that is the moment to add `[workspace]` to `Cargo.toml` plus a `crates/` directory. Nothing moves when that happens.
 

@@ -7,10 +7,12 @@ pkg-config file — are produced by [cargo-c]; CMake drives cargo-c rather than
 compiling anything itself, so consumers depend on this project the way they
 depend on IMAS-Core.
 
-**Status: skeleton.** The build is complete and verified end to end, but the
-shim is not implemented — `src/lib.rs` holds `al_status_t`, the shared
-constants and two placeholder symbols that exist to test the ABI pipeline.
-No conversion logic yet.
+**Status: runtime binding proven on one symbol.** The build is complete and
+verified end to end. `al_context_info` proves the runtime-binding
+architecture (`src/resolve.rs`, `src/dl.rs`) — the shim resolves IMAS-Core
+lazily via `dlopen`/`dlsym`, version-checks it, and forwards the call — but
+every other mirrored ABI entry point, and all DD path/version conversion, is
+still unimplemented.
 
 ## Toolchain
 
@@ -42,7 +44,7 @@ packaging use.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `IMAS_MVDD_BUILD_TESTS` | `ON` | Build the C smoke test and register both test suites |
+| `IMAS_MVDD_BUILD_TESTS` | `ON` | Build the C test suites and register them with ctest |
 | `IMAS_MVDD_CARGO_OFFLINE` | `OFF` | Pass `--offline` to cargo, for build nodes without network |
 
 Use a single-config generator (Ninja, Unix Makefiles) and set
@@ -55,7 +57,11 @@ CMakeLists.txt          drives cargo-c; owns install and tests
 Cargo.toml              crate-type + [package.metadata.capi]
 cbindgen.toml           generated-header settings
 src/lib.rs              the mirrored C ABI
+src/resolve.rs          runtime resolution of IMAS-Core: path/version checks, al_context_info
+src/dl.rs               minimal dlopen/dlsym/dlerror bindings
 tests/abi_smoke.c       links C against the generated header
+tests/seam_test.c       drives al_context_info against the recording stub
+tests/stub/             recording stub standing in for IMAS-Core in the seam test
 scripts/iter-env.sh     ITER cluster module loads
 docs/                   reference material — read the inventory before designing anything
 ```
@@ -71,6 +77,11 @@ that the C smoke test and in-tree consumers link against.
   header and the built shared library. This is the one that proves the ABI
   pipeline is intact end to end: cbindgen emitted a usable header, cargo-c
   produced a linkable library, and the struct layouts agree on both sides.
+- `seam-*` — five scenarios (`success`, `version-drift-tolerated`,
+  `version-mismatch`, `missing-library`, `bare-soname`) drive the shim's
+  exported `al_context_info` against a recording stub (`tests/stub/`) that
+  stands in for IMAS-Core, proving the runtime-binding architecture end to
+  end (see `docs/adr/0001-runtime-binding-not-linking.md`).
 
 CI (`.github/workflows/ci.yml`) runs fmt, clippy and the whole CMake path —
 build, `ctest`, install, then a `pkg-config` query against the installed tree —
