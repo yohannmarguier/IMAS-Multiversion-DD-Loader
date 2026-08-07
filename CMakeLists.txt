@@ -158,6 +158,31 @@ if(IMAS_MVDD_BUILD_TESTS)
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
     add_test(NAME abi-smoke COMMAND abi_smoke)
+
+    # A fake IMAS-Core for the tracer-bullet test below: exports
+    # al_context_info and getALVersion under their real names, records what
+    # it received. Deliberately NOT linked into that test executable: doing
+    # so would give the linker two candidate definitions of al_context_info
+    # (the shim's and the stub's) to pick between, undermining the very
+    # thing the test exists to prove. The test only dlopen's this at runtime
+    # for introspection, the same way the shim dlopen's it as IMAS-Core (see
+    # docs/adr/0001-runtime-binding-not-linking.md).
+    add_library(recording_stub SHARED
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/support/recording_stub.c")
+
+    add_executable(tracer_bullet_context_info
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/tracer_bullet_context_info.c")
+    target_link_libraries(tracer_bullet_context_info PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
+    target_compile_definitions(tracer_bullet_context_info PRIVATE
+        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+    add_dependencies(tracer_bullet_context_info imas_mvdd_capi recording_stub)
+    set_target_properties(tracer_bullet_context_info PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    foreach(scenario success minor-drift major-mismatch unresolvable)
+        add_test(NAME tracer-bullet-context-info-${scenario}
+            COMMAND tracer_bullet_context_info ${scenario})
+    endforeach()
 endif()
 
 # ---------------------------------------------------------------------------

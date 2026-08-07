@@ -7,10 +7,11 @@ pkg-config file — are produced by [cargo-c]; CMake drives cargo-c rather than
 compiling anything itself, so consumers depend on this project the way they
 depend on IMAS-Core.
 
-**Status: skeleton.** The build is complete and verified end to end, but the
-shim is not implemented — `src/lib.rs` holds `al_status_t`, the shared
-constants and two placeholder symbols that exist to test the ABI pipeline.
-No conversion logic yet.
+**Status: runtime binding proven on one symbol.** The build is complete and
+verified end to end. `al_context_info` proves the runtime-binding
+architecture — the shim resolves IMAS-Core lazily via `dlopen`/`dlsym`,
+version-checks it, and forwards the call — but every other mirrored ABI
+entry point, and all DD path/version conversion, is still unimplemented.
 
 ## Toolchain
 
@@ -55,7 +56,11 @@ CMakeLists.txt          drives cargo-c; owns install and tests
 Cargo.toml              crate-type + [package.metadata.capi]
 cbindgen.toml           generated-header settings
 src/lib.rs              the mirrored C ABI
+src/binding.rs          runtime resolution of IMAS-Core: path/version checks, al_context_info
+src/dl.rs               minimal dlopen/dlsym bindings (no libloading dependency)
 tests/abi_smoke.c       links C against the generated header
+tests/tracer_bullet_context_info.c   drives al_context_info against the recording stub
+tests/support/         recording stub standing in for IMAS-Core in the tracer-bullet test
 scripts/iter-env.sh     ITER cluster module loads
 docs/                   reference material — read the inventory before designing anything
 ```
@@ -71,6 +76,11 @@ that the C smoke test and in-tree consumers link against.
   header and the built shared library. This is the one that proves the ABI
   pipeline is intact end to end: cbindgen emitted a usable header, cargo-c
   produced a linkable library, and the struct layouts agree on both sides.
+- `tracer-bullet-context-info-*` — four scenarios (`success`, `minor-drift`,
+  `major-mismatch`, `unresolvable`) drive the shim's exported
+  `al_context_info` against a recording stub (`tests/support/`) that stands
+  in for IMAS-Core, proving the runtime-binding architecture end to end (see
+  `docs/adr/0001-runtime-binding-not-linking.md`).
 
 CI (`.github/workflows/ci.yml`) runs fmt, clippy and the whole CMake path —
 build, `ctest`, install, then a `pkg-config` query against the installed tree —

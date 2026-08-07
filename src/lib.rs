@@ -1,15 +1,20 @@
 //! IMAS-Multiversion-DD-Loader — C ABI surface.
 //!
 //! This crate re-exports IMAS-Core's public C ABI verbatim and interposes on
-//! the path-bearing entry points. Only the scaffolding is here so far: the
-//! shared constants and `al_status_t`, plus two symbols that let the build
-//! pipeline (cargo-c → header → C consumer) be verified end to end.
+//! the path-bearing entry points. The shared constants, `al_status_t`, and
+//! the runtime-binding architecture (`src/binding.rs`) are proven end to end
+//! on `al_context_info`; every other mirrored entry point is still
+//! unimplemented.
 
 // The mirrored ABI dictates the names; matching IMAS-Core exactly is the point.
 #![allow(non_camel_case_types)]
 
 use std::ffi::c_char;
 use std::ffi::c_int;
+
+mod binding;
+#[cfg(unix)]
+mod dl;
 
 /// Length of `al_status_t::message`, mirroring IMAS-Core's `MAX_ERR_MSG_LEN`.
 pub const MAX_ERR_MSG_LEN: usize = 256;
