@@ -1,8 +1,7 @@
 /* The tracer bullet from issue #3: drives the shim's exported
- * al_context_info and asserts on what a recording stub -- standing in for
- * IMAS-Core -- actually received. Proves the shim exports al_context_info
- * *and* calls al_context_info, with its own definition never capturing the
- * outbound call.
+ * al_context_info against both a recording stub and a real IMAS-Core.
+ * Proves the shim exports al_context_info *and* calls al_context_info, with
+ * its own definition never capturing the outbound call.
  *
  * The stub is deliberately never linked into this executable: linking it
  * would give the linker two candidate definitions of al_context_info (the
@@ -70,6 +69,16 @@ static void *open_stub_for_introspection(void) {
     return handle;
 }
 
+static void check_context_info(int ctx, const char *expected_info) {
+    char *info = NULL;
+    al_status_t status = al_context_info(ctx, &info);
+
+    CHECK(status.code == 0);
+    CHECK(info != NULL);
+    CHECK(strcmp(info, expected_info) == 0);
+    free(info);
+}
+
 static void scenario_success(void) {
     void *stub = open_stub_for_introspection();
     int_accessor_fn call_count = (int_accessor_fn)dlsym_or_die(stub, "recording_stub_call_count");
@@ -78,20 +87,12 @@ static void scenario_success(void) {
         (int_accessor_fn)dlsym_or_die(stub, "recording_stub_version_call_count");
     CHECK(call_count() == 0);
 
-    char *info = NULL;
-    al_status_t status = al_context_info(42, &info);
-
-    CHECK(status.code == 0);
-    CHECK(info != NULL);
-    free(info);
+    check_context_info(42, "recording-stub: context info");
     CHECK(call_count() == 1);
     CHECK(last_ctx() == 42);
 
     /* A second call reaches the stub again without re-resolving. */
-    char *info2 = NULL;
-    al_status_t status2 = al_context_info(7, &info2);
-    CHECK(status2.code == 0);
-    free(info2);
+    check_context_info(7, "recording-stub: context info");
     CHECK(call_count() == 2);
     CHECK(last_ctx() == 7);
     CHECK(version_call_count() == 1);
@@ -162,6 +163,22 @@ static void scenario_missing_library(void) {
 
     printf("runtime_binding_test missing-library: status=%d message=%s\n", status.code,
            status.message);
+}
+
+static void scenario_real_core(void) {
+    /* Unlike the other scenarios, this one runs against a real, acquired
+     * IMAS-Core (see CMakeLists.txt's IMAS-Core acquisition section), not
+     * the recording stub, so there is no introspection handle to open:
+     * real IMAS-Core exports no such thing. ctxID 0 is real IMAS-Core's
+     * "NULL context" case (al_lowlevel.cpp), the one value it answers
+     * deterministically with no context ever having been opened. */
+    check_context_info(0, "NULL context");
+
+    /* The same public forwarding path remains stable across repeated calls.
+     * Stub-only introspection in scenario_success verifies memoization. */
+    check_context_info(0, "NULL context");
+
+    printf("runtime_binding_test real-core: the shim reached real IMAS-Core, not a stub\n");
 }
 
 static void scenario_bare_soname(void) {
@@ -508,7 +525,7 @@ int main(int argc, char **argv) {
         fprintf(stderr,
                 "usage: %s "
                 "<success|version-drift|version-mismatch|null-version|missing-library|"
-                "bare-soname|verbatim-forwarding>\n",
+                "bare-soname|verbatim-forwarding|real-core>\n",
                 argv[0]);
         return 2;
     }
@@ -516,6 +533,8 @@ int main(int argc, char **argv) {
     const char *scenario = argv[1];
     if (strcmp(scenario, "success") == 0) {
         scenario_success();
+    } else if (strcmp(scenario, "real-core") == 0) {
+        scenario_real_core();
     } else if (strcmp(scenario, "version-drift") == 0) {
         scenario_version_drift();
     } else if (strcmp(scenario, "version-mismatch") == 0) {

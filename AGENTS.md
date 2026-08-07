@@ -5,31 +5,37 @@ If it has to been modified, apply the same changes to AGENTS.md.
 
 ## Repository state
 
-**Runtime binding proven, fourteen symbols forwarded; no conversion logic yet.** The build system is verified end to end, and `src/resolve.rs` / `src/dl.rs` prove the runtime-binding architecture (see `docs/adr/0001-runtime-binding-not-linking.md`): the shim opens IMAS-Core with local symbol visibility via hand-rolled `dlopen`/`dlsym` bindings, checks `getALVersion()` against the version it was built against, and forwards the call — verified by `tests/runtime_binding_test.c` against a recording stub (`tests/stub/`) standing in for IMAS-Core. `al_context_info` plus the thirteen data-entry, action-lifecycle and data-operation symbols listed in the seam table below (the pulse lifecycle and data access clusters) forward unchanged this way. Every other mirrored ABI entry point, and all DD path/version translation, is still unimplemented.
+**Runtime binding proven, fourteen symbols forwarded; no conversion logic yet.** The build system is verified end to end, and `src/resolve.rs` / `src/dl.rs` prove the runtime-binding architecture (see `docs/adr/0001-runtime-binding-not-linking.md`): the shim opens IMAS-Core with local symbol visibility via hand-rolled `dlopen`/`dlsym` bindings, checks `getALVersion()` against the version it was built against, and forwards the call — verified by `tests/runtime_binding_test.c` against a recording stub (`tests/stub/`) standing in for IMAS-Core and, for `al_context_info`, against a real, CMake-acquired IMAS-Core. `al_context_info` plus the thirteen data-entry, action-lifecycle and data-operation symbols listed in the seam table below (the pulse lifecycle and data access clusters) forward unchanged this way. Every other mirrored ABI entry point, and all DD path/version translation, is still unimplemented.
 
 Single crate at the repo root. Keep it that way until `imas-core-sys` lands — cargo allows only one package per `links` value, so the crate binding `libal` must be separate, and that is the moment to add `[workspace]` to `Cargo.toml` plus a `crates/` directory. Nothing moves when that happens.
 
-**Language: Rust.** The C ABI artefacts (shared library, cbindgen-generated header, pkg-config file) are produced by [cargo-c]; CMake drives cargo-c rather than compiling anything itself. Toolchain on the ITER cluster comes from modules `Rust/1.88.0-GCCcore-14.3.0` and `cargo-c/0.10.15-GCCcore-14.3.0` — `source scripts/iter-env.sh`.
+**Language: Rust.** The C ABI artefacts (shared library, cbindgen-generated header, pkg-config file) are produced by [cargo-c]; CMake drives cargo-c rather than compiling anything itself. Toolchain on the ITER cluster comes from modules `Rust/1.88.0-GCCcore-14.3.0`, `cargo-c/0.10.15-GCCcore-14.3.0` and `IMAS-Core/5.7.1` — `source scripts/iter-env.sh`.
+
+IMAS-Core is required to configure — there is no skip-if-missing path. CMake
+acquires it in one of three modes (installed package lookup by default,
+development layout, or download-and-build); see CMakeLists.txt's IMAS-Core
+acquisition section for the option names and `IMAS_CORE_LIBRARY`-free test
+wiring.
 
 ```console
 $ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release   # Debug → cargo `dev` profile
 $ cmake --build build
-$ ctest --test-dir build --output-on-failure       # rust-unit + abi-smoke
+$ ctest --test-dir build --output-on-failure       # rust-unit + abi-smoke + tracer (stub and real IMAS-Core)
 $ cmake --install build --prefix /path/to/prefix
 $ cargo fmt && cargo clippy --all-targets          # lint, no CMake wrapper
 ```
 
 CI (`.github/workflows/ci.yml`) runs fmt, clippy and the whole CMake path for
-both `Debug` and `Release`, pinned to the cluster's Rust/cargo-c versions. It
-is the only thing keeping the CMake path honest — `cargo test` alone never
-re-runs cargo-c, never regenerates the header, and never compiles the C smoke
-test.
+both `Debug` and `Release`, pinned to the cluster's Rust/cargo-c versions, and
+downloads and builds IMAS-Core to exercise the same path. It is the only
+thing keeping the CMake path honest — `cargo test` alone never re-runs
+cargo-c, never regenerates the header, and never compiles the C smoke test.
 
 `README.md` carries the build options and layout. The *why* behind the build
 lives in comments next to what it explains — `CMakeLists.txt` for the staging
-tree, the install path and the multi-config refusal, `Cargo.toml` for the
-`capi` feature and the workspace question. Keep it there rather than restating
-it in prose that can drift.
+tree, the install path, the multi-config refusal and the IMAS-Core
+acquisition modes, `Cargo.toml` for the `capi` feature and the workspace
+question. Keep it there rather than restating it in prose that can drift.
 
 [cargo-c]: https://github.com/lu-zero/cargo-c
 
