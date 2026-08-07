@@ -79,11 +79,14 @@ that the C smoke test and in-tree consumers link against.
 
 ```
 <prefix>/include/imas_mvdd_loader.h
-<prefix>/lib/libimas_mvdd_loader.{a,so,dylib}
-<prefix>/lib/pkgconfig/imas-mvdd-loader.pc
-<prefix>/lib/cmake/imas-mvdd-loader/imas-mvdd-loaderConfig.cmake
-<prefix>/lib/cmake/imas-mvdd-loader/imas-mvdd-loaderConfigVersion.cmake
+<prefix>/<libdir>/libimas_mvdd_loader.{a,so,dylib}
+<prefix>/<libdir>/pkgconfig/imas-mvdd-loader.pc
+<prefix>/<libdir>/cmake/imas-mvdd-loader/imas-mvdd-loaderConfig.cmake
+<prefix>/<libdir>/cmake/imas-mvdd-loader/imas-mvdd-loaderConfigVersion.cmake
 ```
+
+`<libdir>` is selected by `GNUInstallDirs` and may be `lib`, `lib64` or a
+platform-specific multiarch directory.
 
 cargo-c produces the library, header and `.pc` file directly; the CMake
 package config (`cmake/imas-mvdd-loaderConfig.cmake.in`) is authored by hand
