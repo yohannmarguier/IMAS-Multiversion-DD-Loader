@@ -25,7 +25,7 @@ const CORE_LIBRARY_ENV_VAR: &str = "IMAS_CORE_LIBRARY";
 const BUILT_AGAINST_VERSION: &str = env!("IMAS_CORE_VERSION");
 
 type ContextInfoFn = unsafe extern "C" fn(c_int, *mut *mut c_char) -> al_status_t;
-type GetAlVersionFn = unsafe extern "C" fn() -> *const c_char;
+type VersionAccessorFn = unsafe extern "C" fn() -> *const c_char;
 type GetBackendIdFn = unsafe extern "C" fn(c_int, *mut c_int) -> al_status_t;
 type BuildUriFromLegacyParametersFn = unsafe extern "C" fn(
     c_int,
@@ -115,8 +115,8 @@ struct CoreBinding {
     build_uri_from_legacy_parameters: BuildUriFromLegacyParametersFn,
     const2str: StringLookupFn,
     err2str: StringLookupFn,
-    get_al_version: GetAlVersionFn,
-    get_dd_version: GetAlVersionFn,
+    get_al_version: VersionAccessorFn,
+    get_dd_version: VersionAccessorFn,
     begin_dataentry_action: BeginDataentryActionFn,
     close_pulse: ClosePulseFn,
     begin_global_action: BeginGlobalActionFn,
@@ -217,7 +217,7 @@ fn resolve() -> Result<CoreBinding, ResolutionError> {
     // report checked, before any other IMAS-Core symbol is resolved at all
     // (see the ADR's Consequences) — a major mismatch means the ABI itself
     // may disagree, so nothing past this point can be trusted.
-    let get_al_version: GetAlVersionFn =
+    let get_al_version: VersionAccessorFn =
         unsafe { resolve_symbol(&library, &path, "getALVersion") }?;
     let found_version = unsafe { get_al_version() };
     if found_version.is_null() {
@@ -253,7 +253,7 @@ fn resolve() -> Result<CoreBinding, ResolutionError> {
         unsafe { resolve_symbol(&library, &path, "al_build_uri_from_legacy_parameters") }?;
     let const2str: StringLookupFn = unsafe { resolve_symbol(&library, &path, "const2str") }?;
     let err2str: StringLookupFn = unsafe { resolve_symbol(&library, &path, "err2str") }?;
-    let get_dd_version: GetAlVersionFn =
+    let get_dd_version: VersionAccessorFn =
         unsafe { resolve_symbol(&library, &path, "getDDVersion") }?;
     let begin_dataentry_action: BeginDataentryActionFn =
         unsafe { resolve_symbol(&library, &path, "al_begin_dataentry_action") }?;
