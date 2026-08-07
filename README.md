@@ -22,7 +22,7 @@ On the ITER cluster:
 $ source scripts/iter-env.sh     # Rust/1.88.0-GCCcore-14.3.0 + cargo-c/0.10.15-GCCcore-14.3.0 + IMAS-Core/5.7.1
 ```
 
-Elsewhere: Rust ≥ 1.88, `cargo install cargo-c`, CMake ≥ 3.20, a C and C++
+Elsewhere: Rust ≥ 1.88, `cargo install cargo-c`, CMake ≥ 3.21, a C and C++
 compiler, and IMAS-Core itself — see the acquisition options below.
 
 CMake fails at configure time with the module names above if either tool is
@@ -95,8 +95,8 @@ that the C smoke test and in-tree consumers link against.
   `docs/adr/0001-runtime-binding-not-linking.md`). The first six run against
   a recording stub (`tests/stub/`) standing in for IMAS-Core; `real-core`
   runs the same kind of assertion against the IMAS-Core CMake acquired for
-  this build (see CMakeLists.txt), so nothing here can pass against the stub
-  and fail for real.
+  this build (see CMakeLists.txt), checking the same exported C ABI call and
+  its independently known `NULL context` result against the genuine library.
 
 CI (`.github/workflows/ci.yml`) runs fmt, clippy and the whole CMake path —
 build, `ctest`, install, then a `pkg-config` query against the installed tree —
