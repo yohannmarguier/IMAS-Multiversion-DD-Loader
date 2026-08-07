@@ -57,7 +57,7 @@ CMakeLists.txt          drives cargo-c; owns install, package config and tests
 Cargo.toml              crate-type + [package.metadata.capi]
 IMAS_CORE_VERSION       supported IMAS-Core release used by the runtime compatibility gate
 cbindgen.toml           generated-header settings
-cmake/imas-mvdd-loaderConfig.cmake.in  find_package template (no cargo-c equivalent)
+cmake/imas-mvdd-loaderConfig.cmake.in  find_package template, hand-authored
 src/lib.rs              the mirrored C ABI
 src/resolve.rs          runtime resolution of IMAS-Core: path/version checks, al_context_info
 src/dl.rs               minimal dlopen/dlsym/dlerror bindings
@@ -85,12 +85,10 @@ that the C smoke test and in-tree consumers link against.
 <prefix>/lib/cmake/imas-mvdd-loader/imas-mvdd-loaderConfigVersion.cmake
 ```
 
-cargo-c produces the library, header and `.pc` file directly. The CMake
-package config has no cargo-c equivalent — `cmake/imas-mvdd-loaderConfig.cmake.in`
-is authored directly and installed alongside the `.pc` file. The version file
-declares `SameMajorVersion` compatibility, matching the tolerated-minor/
-rejected-major promise the runtime version gate already enforces against
-IMAS-Core itself.
+cargo-c produces the library, header and `.pc` file directly; the CMake
+package config (`cmake/imas-mvdd-loaderConfig.cmake.in`) is authored by hand
+— see that file and `CMakeLists.txt` for why. Its version file declares
+`SameMajorVersion` compatibility.
 
 A downstream CMake project consumes the installed package the same way it
 would IMAS-Core:
