@@ -4,11 +4,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository state
 
-**Pre-implementation.** This repo currently contains only design/reference documents — no source, no build system, no tests, one commit (`Initial commit`). There are therefore **no build, lint, or test commands yet**. When the first code lands, the language/toolchain choice and its commands belong in this section; do not invent them before then.
+**Skeleton only.** The build system exists and is verified end to end, but the shim itself is not implemented: `src/lib.rs` holds `al_status_t`, the shared constants, and two placeholder symbols that let the ABI pipeline be tested. **No conversion logic exists yet.**
 
-Present files:
-- `IMAS-CORE_FUNCTIONALITY_INVENTORY.md` — the primary technical reference (938 lines). A per-capability, code-verified inventory of the IMAS-Core surface this project must mirror. Read this before designing anything.
-- `README.md` — one-line project statement.
+Single crate at the repo root. Keep it that way until `imas-core-sys` lands — cargo allows only one package per `links` value, so the crate binding `libal` must be separate, and that is the moment to add `[workspace]` to `Cargo.toml` plus a `crates/` directory. Nothing moves when that happens.
+
+**Language: Rust.** The C ABI artefacts (shared library, cbindgen-generated header, pkg-config file) are produced by [cargo-c]; CMake drives cargo-c rather than compiling anything itself. Toolchain on the ITER cluster comes from modules `Rust/1.88.0-GCCcore-14.3.0` and `cargo-c/0.10.15-GCCcore-14.3.0` — `source scripts/iter-env.sh`.
+
+```console
+$ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release   # Debug → cargo `dev` profile
+$ cmake --build build
+$ ctest --test-dir build --output-on-failure       # rust-unit + abi-smoke
+$ cmake --install build --prefix /path/to/prefix
+$ cargo fmt && cargo clippy --all-targets          # lint, no CMake wrapper
+```
+
+See `docs/BUILDING.md` for options, layout and why install re-runs cargo-c
+instead of copying the staged tree.
+
+[cargo-c]: https://github.com/lu-zero/cargo-c
+
+Reference documents:
+- `docs/IMAS-CORE_FUNCTIONALITY_INVENTORY.md` — the primary technical reference (938 lines). A per-capability, code-verified inventory of the IMAS-Core surface this project must mirror. Read this before designing anything.
+- `docs/PROTOTYPE_CRITIC.md` — critique of the earlier `dd-maps/` + `middleware/` prototype: which of its choices were load-bearing and which should not be inherited without a decision.
 - `CODE_OF_CONDUCT.md` — ITER's Contributor Covenant; contact `imas-administration@iter.org`.
 
 `IMAS-CORE_FUNCTIONALITY_INVENTORY.md` cross-references `NORTH_STAR.md`, `CONTEXT.md`, `CLAUDE.md`, `docs/adr/0001-*.md`, `CMakeLists.txt` and `src/**` paths. **Those live in the separate IMAS-Core repository, not here.** Every `src/...:NNN` and `include/...` citation in that document is a pointer into IMAS-Core's tree. Don't try to resolve them locally, and don't treat their absence as a gap in this repo.

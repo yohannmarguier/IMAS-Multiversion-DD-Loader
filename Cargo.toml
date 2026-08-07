@@ -1,0 +1,43 @@
+[package]
+name = "imas-mvdd-loader"
+description = "Middleware shim between the IMAS HLIs and IMAS-Core"
+version = "0.1.0"
+edition = "2024"
+# Matches the ITER cluster module Rust/1.88.0-GCCcore-14.3.0.
+rust-version = "1.88"
+publish = false
+
+# Single crate for now. When `imas-core-sys` lands — a `-sys` crate is forced
+# to be separate, since cargo allows only one package per `links` value — add
+# a [workspace] section here with `members = ["crates/*"]`; this package stays
+# put and becomes the workspace root.
+
+[lib]
+# `staticlib` + `cdylib` are what cargo-c consumes; `rlib` keeps the crate
+# usable from Rust integration tests and future workspace members.
+name = "imas_mvdd_loader"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# cargo-c enables this feature on every invocation and refuses to build without
+# it. Also usable to gate code that only makes sense behind the C ABI.
+capi = []
+
+# --- cargo-c configuration -------------------------------------------------
+# Drives header generation (cbindgen), soname/versioning and the .pc file.
+
+[package.metadata.capi.header]
+name = "imas_mvdd_loader"
+subdirectory = false
+
+[package.metadata.capi.library]
+name = "imas_mvdd_loader"
+
+[package.metadata.capi.pkg_config]
+name = "imas-mvdd-loader"
+filename = "imas-mvdd-loader"
+description = "Middleware shim between the IMAS HLIs and IMAS-Core"
+
+[profile.release]
+# The shim sits on the read path of every HLI call; keep symbols for perf work.
+debug = 1
