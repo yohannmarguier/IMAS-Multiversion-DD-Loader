@@ -141,7 +141,8 @@ next to the equivalent `pkg-config` check.
   exports of IMAS-Core and the shim with `nm`.
 - `real-core-abi` — compiles the generated header and IMAS-Core's real
   `al_lowlevel.h` into one C++ translation unit. It checks every mirrored
-  parameter list plus `al_status_t` layout and the shared ABI constants.
+  parameter list plus `al_status_t` layout and the shared ABI constants;
+  `real-core-abi-rejects-mismatch` proves a modified shim header is rejected.
 - `runtime-binding-*` — default scenarios drive the shim through its exported
   C ABI. The recording-stub scenarios include `utility-forwarding`, which
   verifies the backend-id accessor, legacy URI builder, both string helpers,

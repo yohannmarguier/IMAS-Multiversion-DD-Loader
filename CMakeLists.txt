@@ -269,6 +269,12 @@ set_target_properties(imas_mvdd_loader PROPERTIES
 if(IMAS_MVDD_BUILD_TESTS)
     enable_testing()
 
+    get_target_property(_imas_core_include_dirs ${IMAS_CORE_AL_TARGET}
+        INTERFACE_INCLUDE_DIRECTORIES)
+    if(NOT _imas_core_include_dirs)
+        message(FATAL_ERROR "${IMAS_CORE_AL_TARGET} does not publish IMAS-Core headers")
+    endif()
+
     add_test(NAME rust-unit
         COMMAND "${CARGO_EXECUTABLE}" test ${CARGO_COMMON_ARGS})
 
@@ -295,7 +301,9 @@ if(IMAS_MVDD_BUILD_TESTS)
 
     # Runtime dlsym cannot type-check the hand-written signatures. Compile both
     # public headers into one translation unit and compare every mirrored
-    # function's parameter types plus al_status_t's layout (ADR 0001).
+    # function's parameter types plus al_status_t's layout. C++ is necessary
+    # here: IMAS-Core and the shim independently declare anonymous status
+    # structs, so C sees their otherwise identical return types as distinct.
     add_executable(real_core_abi_check
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_abi_check.cpp")
     target_include_directories(real_core_abi_check PRIVATE
@@ -304,6 +312,18 @@ if(IMAS_MVDD_BUILD_TESTS)
     target_compile_features(real_core_abi_check PRIVATE cxx_std_17)
     add_dependencies(real_core_abi_check imas_mvdd_capi)
     add_test(NAME real-core-abi COMMAND real_core_abi_check)
+
+    # Compile the checker against a copy of the generated header with a
+    # deliberately wrong shared constant. This guards the guard: a successful
+    # nested build is a test failure, while the expected compiler rejection
+    # demonstrates that the ordinary ABI comparison catches drift loudly.
+    add_test(NAME real-core-abi-rejects-mismatch
+        COMMAND "${CMAKE_COMMAND}"
+            "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DSHIM_INCLUDE_DIR=${IMAS_MVDD_STAGED_INCLUDE_DIR}"
+            "-DCORE_INCLUDE_DIRS=${_imas_core_include_dirs}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_abi_mismatch.cmake")
 
     # --- Runtime-binding test: proves the architecture (issue #3) ---------
     #
@@ -411,12 +431,6 @@ if(IMAS_MVDD_BUILD_TESTS)
     # matching headers and library in every acquisition mode, so drive all
     # data, plugin, utility, and version seams through a legal HDF5 lifecycle
     # unconditionally rather than making this coverage opt-in.
-    get_target_property(_imas_core_include_dirs ${IMAS_CORE_AL_TARGET}
-        INTERFACE_INCLUDE_DIRECTORIES)
-    if(NOT _imas_core_include_dirs)
-        message(FATAL_ERROR "${IMAS_CORE_AL_TARGET} does not publish IMAS-Core headers")
-    endif()
-
     add_library(real_core_test_plugin MODULE
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_test_plugin.cpp")
     target_include_directories(real_core_test_plugin PRIVATE ${_imas_core_include_dirs})
