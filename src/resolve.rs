@@ -26,6 +26,18 @@ const BUILT_AGAINST_VERSION: &str = env!("IMAS_CORE_VERSION");
 
 type ContextInfoFn = unsafe extern "C" fn(c_int, *mut *mut c_char) -> al_status_t;
 type GetAlVersionFn = unsafe extern "C" fn() -> *const c_char;
+type GetBackendIdFn = unsafe extern "C" fn(c_int, *mut c_int) -> al_status_t;
+type BuildUriFromLegacyParametersFn = unsafe extern "C" fn(
+    c_int,
+    c_int,
+    c_int,
+    *const c_char,
+    *const c_char,
+    *const c_char,
+    *const c_char,
+    *mut *mut c_char,
+) -> al_status_t;
+type StringLookupFn = unsafe extern "C" fn(c_int) -> *const c_char;
 
 type BeginDataentryActionFn = unsafe extern "C" fn(*const c_char, c_int, *mut c_int) -> al_status_t;
 type ClosePulseFn = unsafe extern "C" fn(c_int, c_int) -> al_status_t;
@@ -99,6 +111,12 @@ struct CoreBinding {
     // succeeds.
     _library: Library,
     context_info: ContextInfoFn,
+    get_backend_id: GetBackendIdFn,
+    build_uri_from_legacy_parameters: BuildUriFromLegacyParametersFn,
+    const2str: StringLookupFn,
+    err2str: StringLookupFn,
+    get_al_version: GetAlVersionFn,
+    get_dd_version: GetAlVersionFn,
     begin_dataentry_action: BeginDataentryActionFn,
     close_pulse: ClosePulseFn,
     begin_global_action: BeginGlobalActionFn,
@@ -193,6 +211,14 @@ fn resolve() -> Result<CoreBinding, al_status_t> {
 
     let context_info: ContextInfoFn =
         unsafe { resolve_symbol(&library, &path, "al_context_info") }?;
+    let get_backend_id: GetBackendIdFn =
+        unsafe { resolve_symbol(&library, &path, "al_get_backendID") }?;
+    let build_uri_from_legacy_parameters: BuildUriFromLegacyParametersFn =
+        unsafe { resolve_symbol(&library, &path, "al_build_uri_from_legacy_parameters") }?;
+    let const2str: StringLookupFn = unsafe { resolve_symbol(&library, &path, "const2str") }?;
+    let err2str: StringLookupFn = unsafe { resolve_symbol(&library, &path, "err2str") }?;
+    let get_dd_version: GetAlVersionFn =
+        unsafe { resolve_symbol(&library, &path, "getDDVersion") }?;
     let begin_dataentry_action: BeginDataentryActionFn =
         unsafe { resolve_symbol(&library, &path, "al_begin_dataentry_action") }?;
     let close_pulse: ClosePulseFn = unsafe { resolve_symbol(&library, &path, "al_close_pulse") }?;
@@ -256,6 +282,12 @@ fn resolve() -> Result<CoreBinding, al_status_t> {
     Ok(CoreBinding {
         _library: library,
         context_info,
+        get_backend_id,
+        build_uri_from_legacy_parameters,
+        const2str,
+        err2str,
+        get_al_version,
+        get_dd_version,
         begin_dataentry_action,
         close_pulse,
         begin_global_action,
@@ -288,6 +320,63 @@ fn resolve() -> Result<CoreBinding, al_status_t> {
         plugin_write_data,
         _version_drift: version_drift,
     })
+}
+
+pub(crate) unsafe fn get_backend_id(ctx: c_int, backend_id: *mut c_int) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.get_backend_id)(ctx, backend_id) },
+        Err(status) => *status,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) unsafe fn build_uri_from_legacy_parameters(
+    backend_id: c_int,
+    pulse: c_int,
+    run: c_int,
+    user: *const c_char,
+    tokamak: *const c_char,
+    version: *const c_char,
+    options: *const c_char,
+    uri: *mut *mut c_char,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.build_uri_from_legacy_parameters)(
+                backend_id, pulse, run, user, tokamak, version, options, uri,
+            )
+        },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) fn const2str(id: c_int) -> *const c_char {
+    string_lookup(id, |binding| binding.const2str)
+}
+
+pub(crate) fn err2str(id: c_int) -> *const c_char {
+    string_lookup(id, |binding| binding.err2str)
+}
+
+pub(crate) fn get_al_version() -> *const c_char {
+    match core() {
+        Ok(binding) => unsafe { (binding.get_al_version)() },
+        Err(_) => std::ptr::null(),
+    }
+}
+
+pub(crate) fn get_dd_version() -> *const c_char {
+    match core() {
+        Ok(binding) => unsafe { (binding.get_dd_version)() },
+        Err(_) => std::ptr::null(),
+    }
+}
+
+fn string_lookup(id: c_int, lookup: impl FnOnce(&CoreBinding) -> StringLookupFn) -> *const c_char {
+    match core() {
+        Ok(binding) => unsafe { lookup(binding)(id) },
+        Err(_) => std::ptr::null(),
+    }
 }
 
 /// The explicit override if set, else a bare soname resolved through the

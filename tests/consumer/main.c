@@ -8,8 +8,8 @@
 #include <imas_mvdd_loader.h>
 
 int main(void) {
-    const char *version = imas_mvdd_loader_version();
+    const char *version = getALVersion();
     assert(version != NULL && version[0] != '\0');
-    printf("imas-mvdd-loader %s: consumer smoke test passed\n", version);
+    printf("IMAS-Core %s through the installed shim: consumer smoke test passed\n", version);
     return 0;
 }

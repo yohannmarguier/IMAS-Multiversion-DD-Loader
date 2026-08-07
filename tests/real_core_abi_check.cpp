@@ -12,6 +12,12 @@
 // both projects intentionally use an anonymous C struct for it.
 #define al_status_t core_al_status_t
 #define al_context_info core_al_context_info
+#define al_get_backendID core_al_get_backendID
+#define al_build_uri_from_legacy_parameters core_al_build_uri_from_legacy_parameters
+#define const2str core_const2str
+#define err2str core_err2str
+#define getALVersion core_getALVersion
+#define getDDVersion core_getDDVersion
 #define al_begin_dataentry_action core_al_begin_dataentry_action
 #define al_close_pulse core_al_close_pulse
 #define al_begin_global_action core_al_begin_global_action
@@ -52,6 +58,12 @@ constexpr int core_max_err_msg_len = MAX_ERR_MSG_LEN;
 
 #undef al_status_t
 #undef al_context_info
+#undef al_get_backendID
+#undef al_build_uri_from_legacy_parameters
+#undef const2str
+#undef err2str
+#undef getALVersion
+#undef getDDVersion
 #undef al_begin_dataentry_action
 #undef al_close_pulse
 #undef al_begin_global_action
@@ -110,6 +122,18 @@ static_assert(MAXDIM == core_maxdim);
 static_assert(MAX_ERR_MSG_LEN == core_max_err_msg_len);
 
 CHECK_SIGNATURE(al_context_info);
+CHECK_SIGNATURE(al_get_backendID);
+using core_build_uri_from_legacy_parameters_c = core_al_status_t (*)(
+    int, int, int, const char*, const char*, const char*, const char*, char**);
+static_assert(same_status_function<
+              decltype(static_cast<core_build_uri_from_legacy_parameters_c>(
+                  &core_al_build_uri_from_legacy_parameters)),
+              decltype(&al_build_uri_from_legacy_parameters)>::value,
+              "al_build_uri_from_legacy_parameters must match IMAS-Core's C overload");
+static_assert(std::is_same_v<decltype(&core_const2str), decltype(&const2str)>);
+static_assert(std::is_same_v<decltype(&core_err2str), decltype(&err2str)>);
+static_assert(std::is_same_v<decltype(&core_getALVersion), decltype(&getALVersion)>);
+static_assert(std::is_same_v<decltype(&core_getDDVersion), decltype(&getDDVersion)>);
 using core_begin_dataentry_action_c =
     core_al_status_t (*)(const char*, int, int*);
 static_assert(same_status_function<

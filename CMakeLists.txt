@@ -17,10 +17,6 @@ include(GNUInstallDirs)
 
 option(IMAS_MVDD_BUILD_TESTS "Build and register the test suite" ON)
 option(IMAS_MVDD_CARGO_OFFLINE "Pass --offline to cargo (build nodes without network)" OFF)
-set(IMAS_MVDD_REAL_CORE_LIBRARY "" CACHE FILEPATH
-    "Optional path to a real IMAS-Core libal for runtime-binding tests")
-set(IMAS_MVDD_REAL_CORE_INCLUDE_DIR "" CACHE PATH
-    "Optional directory containing the matching IMAS-Core al_const.h and al_defs.h")
 
 set(IMAS_MVDD_PACKAGE imas-mvdd-loader)   # cargo package name
 set(IMAS_MVDD_LIB_NAME imas_mvdd_loader)  # resulting library / header name
@@ -283,6 +279,19 @@ if(IMAS_MVDD_BUILD_TESTS)
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
     add_test(NAME abi-smoke COMMAND abi_smoke)
+    set_tests_properties(abi-smoke PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:${IMAS_CORE_AL_TARGET}>")
+
+    # Keep the runtime-bound surface honest mechanically: after filtering to
+    # IMAS-Core's public C ABI, the shim and Core must export the same names.
+    # This deliberately catches a missing new symbol or any leftover shim-only
+    # scaffolding without maintaining a second handwritten symbol list.
+    add_test(NAME real-core-export-list
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCORE_LIBRARY=$<TARGET_FILE:${IMAS_CORE_AL_TARGET}>"
+            "-DSHIM_LIBRARY=$<TARGET_FILE:imas_mvdd_loader>"
+            "-DNM_EXECUTABLE=${CMAKE_NM}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_exports.cmake")
 
     # Runtime dlsym cannot type-check the hand-written signatures. Compile both
     # public headers into one translation unit and compare every mirrored
@@ -364,6 +373,11 @@ if(IMAS_MVDD_BUILD_TESTS)
     add_test(NAME runtime-binding-plugin-timerange-omitted
         COMMAND runtime_binding_test plugin-timerange-omitted)
 
+    add_test(NAME runtime-binding-utility-forwarding
+        COMMAND runtime_binding_test utility-forwarding)
+    set_tests_properties(runtime-binding-utility-forwarding PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
     add_test(NAME runtime-binding-bare-soname COMMAND runtime_binding_test bare-soname)
     if(APPLE)
         set(_runtime_binding_search_path_var DYLD_LIBRARY_PATH)
@@ -393,63 +407,47 @@ if(IMAS_MVDD_BUILD_TESTS)
     endif()
 
     # A real-Core run cannot use the recording stub's private accessors or
-    # fabricated context IDs. When an installed/built IMAS-Core is supplied,
-    # drive all issue-#6 and issue-#7 symbols through a legal temporary HDF5
-    # lifecycle, using a loadable fixture for plugin-management calls.
-    if(IMAS_MVDD_REAL_CORE_LIBRARY OR IMAS_MVDD_REAL_CORE_INCLUDE_DIR)
-        if(NOT IMAS_MVDD_REAL_CORE_LIBRARY OR NOT IMAS_MVDD_REAL_CORE_INCLUDE_DIR)
-            message(FATAL_ERROR
-                "IMAS_MVDD_REAL_CORE_LIBRARY and "
-                "IMAS_MVDD_REAL_CORE_INCLUDE_DIR must be set together")
-        endif()
-        if(NOT EXISTS "${IMAS_MVDD_REAL_CORE_LIBRARY}")
-            message(FATAL_ERROR
-                "IMAS_MVDD_REAL_CORE_LIBRARY does not exist: "
-                "${IMAS_MVDD_REAL_CORE_LIBRARY}")
-        endif()
-        foreach(_real_core_header
-                al_const.h
-                al_defs.h
-                al_lowlevel.h
-                access_layer_plugin.h)
-            if(NOT EXISTS "${IMAS_MVDD_REAL_CORE_INCLUDE_DIR}/${_real_core_header}")
-                message(FATAL_ERROR
-                    "IMAS_MVDD_REAL_CORE_INCLUDE_DIR does not contain "
-                    "${_real_core_header}: ${IMAS_MVDD_REAL_CORE_INCLUDE_DIR}")
-            endif()
-        endforeach()
-
-        add_library(real_core_test_plugin MODULE
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_test_plugin.cpp")
-        target_include_directories(real_core_test_plugin PRIVATE
-            "${IMAS_MVDD_REAL_CORE_INCLUDE_DIR}")
-        target_compile_features(real_core_test_plugin PRIVATE cxx_std_17)
-        set_target_properties(real_core_test_plugin PROPERTIES
-            PREFIX ""
-            OUTPUT_NAME "mvddtest_plugin"
-            SUFFIX ".so"
-            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
-
-        add_executable(real_core_forwarding_test
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_forwarding_test.c")
-        target_include_directories(real_core_forwarding_test PRIVATE
-            "${IMAS_MVDD_REAL_CORE_INCLUDE_DIR}")
-        target_compile_definitions(real_core_forwarding_test PRIVATE
-            "REAL_CORE_TEST_PLUGIN_DIR=\"$<TARGET_FILE_DIR:real_core_test_plugin>\""
-            "REAL_CORE_TEST_PLUGIN_NAME=\"mvddtest\"")
-        target_link_libraries(real_core_forwarding_test PRIVATE imas_mvdd_loader)
-        add_dependencies(real_core_forwarding_test
-            imas_mvdd_capi
-            real_core_test_plugin)
-        set_target_properties(real_core_forwarding_test PROPERTIES
-            BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
-
-        add_test(NAME runtime-binding-real-core-forwarding
-            COMMAND real_core_forwarding_test)
-        set_tests_properties(runtime-binding-real-core-forwarding PROPERTIES
-            ENVIRONMENT "IMAS_CORE_LIBRARY=${IMAS_MVDD_REAL_CORE_LIBRARY}"
-            LABELS real-core)
+    # fabricated context IDs. The acquired Core target already provides the
+    # matching headers and library in every acquisition mode, so drive all
+    # data, plugin, utility, and version seams through a legal HDF5 lifecycle
+    # unconditionally rather than making this coverage opt-in.
+    get_target_property(_imas_core_include_dirs ${IMAS_CORE_AL_TARGET}
+        INTERFACE_INCLUDE_DIRECTORIES)
+    if(NOT _imas_core_include_dirs)
+        message(FATAL_ERROR "${IMAS_CORE_AL_TARGET} does not publish IMAS-Core headers")
     endif()
+
+    add_library(real_core_test_plugin MODULE
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_test_plugin.cpp")
+    target_include_directories(real_core_test_plugin PRIVATE ${_imas_core_include_dirs})
+    target_compile_features(real_core_test_plugin PRIVATE cxx_std_17)
+    set_target_properties(real_core_test_plugin PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "mvddtest_plugin"
+        SUFFIX ".so"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
+
+    add_executable(real_core_forwarding_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_forwarding_test.c")
+    target_include_directories(real_core_forwarding_test PRIVATE ${_imas_core_include_dirs})
+    target_compile_definitions(real_core_forwarding_test PRIVATE
+        "REAL_CORE_TEST_PLUGIN_DIR=\"$<TARGET_FILE_DIR:real_core_test_plugin>\""
+        "REAL_CORE_TEST_PLUGIN_NAME=\"mvddtest\"")
+    target_link_libraries(real_core_forwarding_test PRIVATE imas_mvdd_loader)
+    add_dependencies(real_core_forwarding_test
+        imas_mvdd_capi
+        real_core_test_plugin)
+    if(IMAS_CORE_BUILT_FROM_SOURCE)
+        add_dependencies(real_core_test_plugin ${IMAS_CORE_AL_TARGET})
+    endif()
+    set_target_properties(real_core_forwarding_test PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    add_test(NAME runtime-binding-real-core-forwarding
+        COMMAND real_core_forwarding_test)
+    set_tests_properties(runtime-binding-real-core-forwarding PROPERTIES
+        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:${IMAS_CORE_AL_TARGET}>"
+        LABELS real-core)
 endif()
 
 # ---------------------------------------------------------------------------

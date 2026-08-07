@@ -70,6 +70,75 @@ const char *getALVersion(void) {
     return version_override != NULL ? version_override : RECORDING_STUB_DEFAULT_VERSION;
 }
 
+/* --- utility and version accessors --------------------------------------- */
+
+static int g_utility_call_count = 0;
+static const char *g_utility_last_symbol = NULL;
+static int g_utility_last_int = 0;
+static int g_utility_backend_ctx = 0;
+static int *g_utility_backend_output = NULL;
+static int g_utility_builder_backend = 0;
+static int g_utility_builder_pulse = 0;
+static int g_utility_builder_run = 0;
+static char *g_utility_builder_strings[4] = {NULL, NULL, NULL, NULL};
+static char **g_utility_builder_output = NULL;
+
+static void record_utility_call(const char *symbol) {
+    g_utility_call_count++;
+    g_utility_last_symbol = symbol;
+}
+
+al_status_t al_get_backendID(int ctx, int *beid) {
+    record_utility_call("al_get_backendID");
+    g_utility_backend_ctx = ctx;
+    g_utility_backend_output = beid;
+    if (beid != NULL) {
+        *beid = 9001;
+    }
+    return ok_status();
+}
+
+al_status_t al_build_uri_from_legacy_parameters(const int backendID, const int pulse,
+                                                 const int run, const char *user,
+                                                 const char *tokamak, const char *version,
+                                                 const char *options, char **uri) {
+    record_utility_call("al_build_uri_from_legacy_parameters");
+    g_utility_builder_backend = backendID;
+    g_utility_builder_pulse = pulse;
+    g_utility_builder_run = run;
+    const char *strings[] = {user, tokamak, version, options};
+    for (int i = 0; i < 4; ++i) {
+        free(g_utility_builder_strings[i]);
+        g_utility_builder_strings[i] = record_str(strings[i]);
+    }
+    g_utility_builder_output = uri;
+    if (uri != NULL) {
+        static const char result[] = "imas:recording?utility=legacy";
+        *uri = malloc(sizeof result);
+        if (*uri != NULL) {
+            memcpy(*uri, result, sizeof result);
+        }
+    }
+    return ok_status();
+}
+
+const char *const2str(int id) {
+    record_utility_call("const2str");
+    g_utility_last_int = id;
+    return "recording-constant";
+}
+
+const char *err2str(int id) {
+    record_utility_call("err2str");
+    g_utility_last_int = id;
+    return "recording-error";
+}
+
+const char *getDDVersion(void) {
+    record_utility_call("getDDVersion");
+    return "!!DEPRECATED!!";
+}
+
 /* --- al_begin_dataentry_action ------------------------------------------ */
 
 static int g_dataentry_call_count = 0;
@@ -621,6 +690,37 @@ int recording_stub_last_ctx(void) {
 
 int recording_stub_version_call_count(void) {
     return g_version_call_count;
+}
+
+int recording_stub_utility_call_count(void) {
+    return g_utility_call_count;
+}
+const char *recording_stub_utility_last_symbol(void) {
+    return g_utility_last_symbol;
+}
+int recording_stub_utility_last_int(void) {
+    return g_utility_last_int;
+}
+int recording_stub_utility_backend_ctx(void) {
+    return g_utility_backend_ctx;
+}
+const void *recording_stub_utility_backend_output(void) {
+    return g_utility_backend_output;
+}
+int recording_stub_utility_builder_backend(void) {
+    return g_utility_builder_backend;
+}
+int recording_stub_utility_builder_pulse(void) {
+    return g_utility_builder_pulse;
+}
+int recording_stub_utility_builder_run(void) {
+    return g_utility_builder_run;
+}
+const char *recording_stub_utility_builder_string(int index) {
+    return index >= 0 && index < 4 ? g_utility_builder_strings[index] : NULL;
+}
+const void *recording_stub_utility_builder_output(void) {
+    return g_utility_builder_output;
 }
 
 int recording_stub_dataentry_call_count(void) {

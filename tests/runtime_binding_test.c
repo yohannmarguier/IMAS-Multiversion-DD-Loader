@@ -41,6 +41,7 @@
 #endif
 
 typedef int (*int_accessor_fn)(void);
+typedef const char *(*indexed_str_accessor_fn)(int index);
 typedef double (*double_accessor_fn)(void);
 typedef const char *(*str_accessor_fn)(void);
 typedef const void *(*ptr_accessor_fn)(void);
@@ -659,12 +660,82 @@ static void scenario_plugin_timerange_omitted(void) {
     printf("runtime_binding_test plugin-timerange-omitted: matches IMAS-Core's unlinkable ABI\n");
 }
 
+/* Issue #8's utility and version ABI seam. The stub records every argument
+ * and returns distinct values, so this verifies the generated header and the
+ * runtime forwarding boundary without coupling to resolver internals. */
+static void scenario_utility_forwarding(void) {
+    void *stub = open_stub_for_introspection();
+    int_accessor_fn call_count =
+        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_utility_call_count");
+    str_accessor_fn last_symbol =
+        (str_accessor_fn)dlsym_or_die(stub, "recording_stub_utility_last_symbol");
+    int_accessor_fn last_int =
+        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_utility_last_int");
+    int_accessor_fn backend_ctx =
+        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_utility_backend_ctx");
+    ptr_accessor_fn backend_output =
+        (ptr_accessor_fn)dlsym_or_die(stub, "recording_stub_utility_backend_output");
+    int_accessor_fn builder_backend =
+        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_utility_builder_backend");
+    int_accessor_fn builder_pulse =
+        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_utility_builder_pulse");
+    int_accessor_fn builder_run =
+        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_utility_builder_run");
+    indexed_str_accessor_fn builder_string = (indexed_str_accessor_fn)dlsym_or_die(
+        stub, "recording_stub_utility_builder_string");
+    ptr_accessor_fn builder_output =
+        (ptr_accessor_fn)dlsym_or_die(stub, "recording_stub_utility_builder_output");
+    int_accessor_fn version_call_count =
+        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_version_call_count");
+
+    CHECK(call_count() == 0);
+    int backend_id = -1;
+    CHECK(al_get_backendID(801, &backend_id).code == 0);
+    CHECK(call_count() == 1);
+    CHECK(strcmp(last_symbol(), "al_get_backendID") == 0);
+    CHECK(backend_ctx() == 801 && backend_output() == &backend_id);
+    CHECK(backend_id == 9001);
+
+    char *uri = NULL;
+    CHECK(al_build_uri_from_legacy_parameters(3, 44, 5, "user", "tokamak", "4.1.1",
+                                              "options=record", &uri)
+              .code == 0);
+    CHECK(call_count() == 2);
+    CHECK(strcmp(last_symbol(), "al_build_uri_from_legacy_parameters") == 0);
+    CHECK(builder_backend() == 3 && builder_pulse() == 44 && builder_run() == 5);
+    CHECK(strcmp(builder_string(0), "user") == 0);
+    CHECK(strcmp(builder_string(1), "tokamak") == 0);
+    CHECK(strcmp(builder_string(2), "4.1.1") == 0);
+    CHECK(strcmp(builder_string(3), "options=record") == 0);
+    CHECK(builder_output() == &uri);
+    CHECK(strcmp(uri, "imas:recording?utility=legacy") == 0);
+    free(uri);
+
+    CHECK(strcmp(const2str(12345), "recording-constant") == 0);
+    CHECK(call_count() == 3);
+    CHECK(strcmp(last_symbol(), "const2str") == 0 && last_int() == 12345);
+    CHECK(strcmp(err2str(-44), "recording-error") == 0);
+    CHECK(call_count() == 4);
+    CHECK(strcmp(last_symbol(), "err2str") == 0 && last_int() == -44);
+    CHECK(strcmp(getDDVersion(), "!!DEPRECATED!!") == 0);
+    CHECK(call_count() == 5);
+    CHECK(strcmp(last_symbol(), "getDDVersion") == 0);
+
+    /* One getALVersion call bootstraps resolution; this is the forwarded one. */
+    CHECK(strcmp(getALVersion(), SUPPORTED_CORE_VERSION) == 0);
+    CHECK(version_call_count() == 2);
+
+    printf("runtime_binding_test utility-forwarding: every utility and version symbol reached "
+           "the stub unmodified\n");
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr,
                 "usage: %s "
                 "<success|version-drift|version-mismatch|null-version|missing-library|"
-                "bare-soname|verbatim-forwarding|plugin-forwarding|plugin-timerange-omitted|real-core>\n",
+                "bare-soname|verbatim-forwarding|plugin-forwarding|plugin-timerange-omitted|"
+                "utility-forwarding|real-core>\n",
                 argv[0]);
         return 2;
     }
@@ -690,6 +761,8 @@ int main(int argc, char **argv) {
         scenario_plugin_forwarding();
     } else if (strcmp(scenario, "plugin-timerange-omitted") == 0) {
         scenario_plugin_timerange_omitted();
+    } else if (strcmp(scenario, "utility-forwarding") == 0) {
+        scenario_utility_forwarding();
     } else {
         fprintf(stderr, "unknown scenario: %s\n", scenario);
         return 2;

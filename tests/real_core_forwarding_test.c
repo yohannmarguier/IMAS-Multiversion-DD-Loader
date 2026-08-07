@@ -160,6 +160,28 @@ static void check_arraystruct_read(int pulse_ctx) {
     CHECK_OK(al_end_action(op_ctx));
 }
 
+/* The utility/version calls have no lifecycle of their own, except that the
+ * backend-id accessor needs an open context. Exercise each through a real
+ * HDF5 pulse so the issue-#8 seam is covered against Core as well as the
+ * recording stub. */
+static void check_utility_and_version_accessors(int pulse_ctx) {
+    int backend_id = -1;
+    CHECK_OK(al_get_backendID(pulse_ctx, &backend_id));
+    CHECK(backend_id == HDF5_BACKEND);
+
+    char *legacy_uri = NULL;
+    CHECK_OK(al_build_uri_from_legacy_parameters(HDF5_BACKEND, 44, 5, "mvdd-user",
+                                                 "mvdd-tokamak", "4.1.1", "", &legacy_uri));
+    CHECK(legacy_uri != NULL && legacy_uri[0] != '\0');
+    /* IMAS-Core's ownership contract for this output is undocumented (see
+     * the inventory), so do not guess at a deallocator in this probe. */
+
+    CHECK(strcmp(const2str(HDF5_BACKEND), "HDF5_BACKEND") == 0);
+    CHECK(strcmp(err2str(BACKEND_ERR), "BACKEND_ERR") == 0);
+    CHECK(getALVersion() != NULL && getALVersion()[0] != '\0');
+    CHECK(strcmp(getDDVersion(), "!!DEPRECATED!!") == 0);
+}
+
 /* The reentry calls bypass plugin dispatch and talk to the backend directly. */
 static void check_plugin_reentry(int pulse_ctx) {
     int op_ctx = -1;
@@ -259,6 +281,7 @@ int main(void) {
 
     int pulse_ctx = -1;
     CHECK_OK(al_begin_dataentry_action(uri, FORCE_CREATE_PULSE, &pulse_ctx));
+    check_utility_and_version_accessors(pulse_ctx);
 
     /* Seed a dynamic signal and a two-element AOS. */
     int op_ctx = -1;
@@ -326,6 +349,6 @@ int main(void) {
     CHECK(rmdir(pulse_dir) == 0);
     CHECK(rmdir(temp_dir) == 0);
 
-    printf("real_core_forwarding_test: issue-6 and all issue-7 symbols crossed real IMAS-Core\n");
+    printf("real_core_forwarding_test: issue-6, issue-7, and issue-8 symbols crossed real IMAS-Core\n");
     return EXIT_SUCCESS;
 }

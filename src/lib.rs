@@ -4,9 +4,8 @@
 //! the path-bearing entry points. The shared constants and `al_status_t` are
 //! here, and the runtime-binding architecture (see `src/resolve.rs` and
 //! `docs/adr/0001-runtime-binding-not-linking.md`) is proven end to end on
-//! `al_context_info` plus the thirteen data-entry, action-lifecycle and
-//! data-operation symbols below. Every other mirrored entry point, and all
-//! DD path/version conversion, is still unimplemented.
+//! all 37 linkable exported IMAS-Core C symbols. DD path/version conversion is still
+//! unimplemented.
 
 // The mirrored ABI dictates the names; matching IMAS-Core exactly is the point.
 #![allow(non_camel_case_types)]
@@ -45,27 +44,6 @@ impl Default for al_status_t {
     }
 }
 
-/// Version of this shim, as a NUL-terminated static string.
-///
-/// Deliberately *not* named `getDDVersion` — that IMAS-Core call is dead and
-/// returns the sentinel `"!!DEPRECATED!!"`.
-#[unsafe(no_mangle)]
-pub extern "C" fn imas_mvdd_loader_version() -> *const c_char {
-    concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr().cast()
-}
-
-/// Reset `status` to success (`code == 0`, empty message).
-///
-/// # Safety
-/// `status` must be non-null and point to a writable `al_status_t`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn imas_mvdd_loader_status_clear(status: *mut al_status_t) {
-    if status.is_null() {
-        return;
-    }
-    unsafe { *status = al_status_t::default() };
-}
-
 /// Mirrors IMAS-Core's `al_context_info` exactly — same name, same
 /// signature. Resolves IMAS-Core lazily on first call (see
 /// `resolve::context_info`) and forwards every call to the real
@@ -79,6 +57,72 @@ pub unsafe extern "C" fn imas_mvdd_loader_status_clear(status: *mut al_status_t)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn al_context_info(ctx: c_int, info: *mut *mut c_char) -> al_status_t {
     unsafe { resolve::context_info(ctx, info) }
+}
+
+/// Mirrors IMAS-Core's `al_get_backendID` exactly and forwards unchanged.
+///
+/// # Safety
+/// `backend_id` must be a valid, writable `*mut c_int`, matching IMAS-Core's
+/// own contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_get_backendID(ctx: c_int, backend_id: *mut c_int) -> al_status_t {
+    unsafe { resolve::get_backend_id(ctx, backend_id) }
+}
+
+/// Mirrors IMAS-Core's legacy URI builder exactly and forwards unchanged.
+///
+/// # Safety
+/// Every string must be a valid, NUL-terminated C string, and `uri` must be
+/// a valid, writable `*mut *mut c_char`, matching IMAS-Core's own contract.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_build_uri_from_legacy_parameters(
+    backend_id: c_int,
+    pulse: c_int,
+    run: c_int,
+    user: *const c_char,
+    tokamak: *const c_char,
+    version: *const c_char,
+    options: *const c_char,
+    uri: *mut *mut c_char,
+) -> al_status_t {
+    unsafe {
+        resolve::build_uri_from_legacy_parameters(
+            backend_id, pulse, run, user, tokamak, version, options, uri,
+        )
+    }
+}
+
+/// Mirrors IMAS-Core's constant-to-string helper exactly and forwards
+/// unchanged. It returns null only if IMAS-Core could not be resolved; IMAS-
+/// Core's own return value, including its empty string for unknown constants,
+/// is otherwise returned verbatim.
+#[unsafe(no_mangle)]
+pub extern "C" fn const2str(id: c_int) -> *const c_char {
+    resolve::const2str(id)
+}
+
+/// Mirrors IMAS-Core's error-code-to-string helper exactly and forwards
+/// unchanged. It returns null only if IMAS-Core could not be resolved.
+#[unsafe(no_mangle)]
+pub extern "C" fn err2str(id: c_int) -> *const c_char {
+    resolve::err2str(id)
+}
+
+/// Mirrors IMAS-Core's access-layer version accessor exactly and forwards
+/// unchanged. It returns null only if IMAS-Core could not be resolved.
+#[unsafe(no_mangle)]
+pub extern "C" fn getALVersion() -> *const c_char {
+    resolve::get_al_version()
+}
+
+/// Mirrors IMAS-Core's deliberately deprecated DD-version accessor exactly.
+/// Its sentinel `"!!DEPRECATED!!"` is forwarded rather than replaced with a
+/// version inferred by the shim. It returns null only if IMAS-Core could not
+/// be resolved.
+#[unsafe(no_mangle)]
+pub extern "C" fn getDDVersion() -> *const c_char {
+    resolve::get_dd_version()
 }
 
 /// Mirrors IMAS-Core's `al_begin_dataentry_action` exactly and forwards
@@ -199,6 +243,11 @@ pub unsafe extern "C" fn al_begin_arraystruct_action(
 ) -> al_status_t {
     unsafe { resolve::begin_arraystruct_action(ctx_id, path, timebase, size, actx_id) }
 }
+
+// Deliberately no `al_begin_array_struct_action`: IMAS-Core exports the
+// spelling above (without the second underscore) and has never declared or
+// exported this compatibility alias. Adding it would make the shim's ABI
+// surface differ from IMAS-Core's (issue #8).
 
 /// Mirrors IMAS-Core's `al_end_action` exactly and forwards unchanged.
 #[unsafe(no_mangle)]
@@ -552,27 +601,9 @@ pub unsafe extern "C" fn al_plugin_write_data(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CStr;
 
     #[test]
-    fn version_matches_the_package() {
-        let version = unsafe { CStr::from_ptr(imas_mvdd_loader_version()) };
-        assert_eq!(version.to_str().unwrap(), env!("CARGO_PKG_VERSION"));
-    }
-
-    #[test]
-    fn status_clear_zeroes_a_dirty_status() {
-        let mut status = al_status_t {
-            code: 42,
-            message: [b'x' as c_char; MAX_ERR_MSG_LEN],
-        };
-        unsafe { imas_mvdd_loader_status_clear(&raw mut status) };
-        assert_eq!(status.code, 0);
-        assert!(status.message.iter().all(|&byte| byte == 0));
-    }
-
-    #[test]
-    fn status_clear_tolerates_null() {
-        unsafe { imas_mvdd_loader_status_clear(std::ptr::null_mut()) };
+    fn status_default_is_success() {
+        assert_eq!(al_status_t::default().code, 0);
     }
 }
