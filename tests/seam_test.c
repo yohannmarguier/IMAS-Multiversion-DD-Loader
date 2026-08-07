@@ -24,7 +24,6 @@
  * a shared symbol, so the shim doesn't grow a permanent public export for a
  * test-only need. */
 
-#include <assert.h>
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,6 +36,15 @@
 #endif
 
 typedef int (*int_accessor_fn)(void);
+
+#define CHECK(condition)                                                        \
+    do {                                                                        \
+        if (!(condition)) {                                                     \
+            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
+                    #condition);                                                \
+            exit(EXIT_FAILURE);                                                 \
+        }                                                                       \
+    } while (0)
 
 static void *dlsym_or_die(void *handle, const char *name) {
     void *symbol = dlsym(handle, name);
@@ -60,24 +68,24 @@ static void scenario_success(void) {
     void *stub = open_stub_for_introspection();
     int_accessor_fn call_count = (int_accessor_fn)dlsym_or_die(stub, "recording_stub_call_count");
     int_accessor_fn last_ctx = (int_accessor_fn)dlsym_or_die(stub, "recording_stub_last_ctx");
-    assert(call_count() == 0);
+    CHECK(call_count() == 0);
 
     char *info = NULL;
     al_status_t status = al_context_info(42, &info);
 
-    assert(status.code == 0);
-    assert(info != NULL);
+    CHECK(status.code == 0);
+    CHECK(info != NULL);
     free(info);
-    assert(call_count() == 1);
-    assert(last_ctx() == 42);
+    CHECK(call_count() == 1);
+    CHECK(last_ctx() == 42);
 
     /* A second call reaches the stub again without re-resolving. */
     char *info2 = NULL;
     al_status_t status2 = al_context_info(7, &info2);
-    assert(status2.code == 0);
+    CHECK(status2.code == 0);
     free(info2);
-    assert(call_count() == 2);
-    assert(last_ctx() == 7);
+    CHECK(call_count() == 2);
+    CHECK(last_ctx() == 7);
 
     printf("seam_test success: the shim reached the stub, not itself\n");
 }
@@ -89,12 +97,12 @@ static void scenario_version_mismatch(void) {
     char *info = NULL;
     al_status_t status = al_context_info(1, &info);
 
-    assert(status.code != 0);
-    assert(strstr(status.message, "1.0.0") != NULL); /* built-against version */
-    assert(strstr(status.message, "2.0.0") != NULL); /* stub's reported version */
-    assert(strstr(status.message, "IMAS_CORE_LIBRARY") != NULL);
+    CHECK(status.code != 0);
+    CHECK(strstr(status.message, "1.0.0") != NULL); /* built-against version */
+    CHECK(strstr(status.message, "2.0.0") != NULL); /* stub's reported version */
+    CHECK(strstr(status.message, "IMAS_CORE_LIBRARY") != NULL);
     /* The mismatch must fail resolution before ever forwarding the call. */
-    assert(call_count() == 0);
+    CHECK(call_count() == 0);
 
     printf("seam_test version-mismatch: resolution failed before forwarding\n");
 }
@@ -103,9 +111,9 @@ static void scenario_missing_library(void) {
     char *info = NULL;
     al_status_t status = al_context_info(1, &info);
 
-    assert(status.code != 0);
-    assert(status.message[0] != '\0');
-    assert(strstr(status.message, "IMAS_CORE_LIBRARY") != NULL);
+    CHECK(status.code != 0);
+    CHECK(status.message[0] != '\0');
+    CHECK(strstr(status.message, "IMAS_CORE_LIBRARY") != NULL);
 
     printf("seam_test missing-library: status=%d message=%s\n", status.code, status.message);
 }
@@ -117,12 +125,12 @@ static void scenario_bare_soname(void) {
      * DYLD_LIBRARY_PATH. */
     char *info = NULL;
     al_status_t status = al_context_info(11, &info);
-    assert(status.code == 0);
+    CHECK(status.code == 0);
     free(info);
 
     void *stub = open_stub_for_introspection();
     int_accessor_fn last_ctx = (int_accessor_fn)dlsym_or_die(stub, "recording_stub_last_ctx");
-    assert(last_ctx() == 11);
+    CHECK(last_ctx() == 11);
 
     printf("seam_test bare-soname: resolved IMAS-Core through the loader's search path\n");
 }
