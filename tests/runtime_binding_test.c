@@ -71,6 +71,8 @@ static void scenario_success(void) {
     void *stub = open_stub_for_introspection();
     int_accessor_fn call_count = (int_accessor_fn)dlsym_or_die(stub, "recording_stub_call_count");
     int_accessor_fn last_ctx = (int_accessor_fn)dlsym_or_die(stub, "recording_stub_last_ctx");
+    int_accessor_fn version_call_count =
+        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_version_call_count");
     CHECK(call_count() == 0);
 
     char *info = NULL;
@@ -89,8 +91,29 @@ static void scenario_success(void) {
     free(info2);
     CHECK(call_count() == 2);
     CHECK(last_ctx() == 7);
+    CHECK(version_call_count() == 1);
 
     printf("runtime_binding_test success: the shim reached the stub, not itself\n");
+}
+
+static void scenario_version_drift(void) {
+    void *stub = open_stub_for_introspection();
+    int_accessor_fn version_call_count =
+        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_version_call_count");
+
+    char *info = NULL;
+    al_status_t status = al_context_info(42, &info);
+    CHECK(status.code == 0);
+    free(info);
+    CHECK(version_call_count() == 1);
+
+    char *info2 = NULL;
+    al_status_t status2 = al_context_info(7, &info2);
+    CHECK(status2.code == 0);
+    free(info2);
+    CHECK(version_call_count() == 1);
+
+    printf("runtime_binding_test version-drift: recorded and tolerated once\n");
 }
 
 static void scenario_version_mismatch(void) {
@@ -158,7 +181,7 @@ static void scenario_bare_soname(void) {
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr,
-                "usage: %s <success|version-mismatch|null-version|missing-library|bare-soname>\n",
+                "usage: %s <success|version-drift|version-mismatch|null-version|missing-library|bare-soname>\n",
                 argv[0]);
         return 2;
     }
@@ -166,6 +189,8 @@ int main(int argc, char **argv) {
     const char *scenario = argv[1];
     if (strcmp(scenario, "success") == 0) {
         scenario_success();
+    } else if (strcmp(scenario, "version-drift") == 0) {
+        scenario_version_drift();
     } else if (strcmp(scenario, "version-mismatch") == 0) {
         scenario_version_mismatch();
     } else if (strcmp(scenario, "null-version") == 0) {

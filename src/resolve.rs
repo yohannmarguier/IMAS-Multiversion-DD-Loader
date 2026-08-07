@@ -31,6 +31,24 @@ struct CoreBinding {
     // `context_info`. Never read again once resolution succeeds.
     _library: Library,
     context_info: ContextInfoFn,
+    // Retained with the binding so tolerated compatibility drift remains
+    // recorded for the process lifetime after its diagnostic is emitted.
+    _version_drift: Option<VersionDrift>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct VersionDrift {
+    built_against: String,
+    found: String,
+}
+
+impl VersionDrift {
+    fn record(&self) {
+        eprintln!(
+            "imas-mvdd-loader: tolerating IMAS-Core version drift (built against {}, found {})",
+            self.built_against, self.found
+        );
+    }
 }
 
 static CORE: OnceLock<Result<CoreBinding, al_status_t>> = OnceLock::new();
@@ -69,8 +87,10 @@ fn resolve() -> Result<CoreBinding, al_status_t> {
         .to_string_lossy()
         .into_owned();
 
-    if let Err(detail) = check_major_version(BUILT_AGAINST_VERSION, &found_version) {
-        return Err(failure(&detail));
+    let version_drift = check_major_version(BUILT_AGAINST_VERSION, &found_version)
+        .map_err(|detail| failure(&detail))?;
+    if let Some(drift) = &version_drift {
+        drift.record();
     }
 
     let context_info: ContextInfoFn =
@@ -79,6 +99,7 @@ fn resolve() -> Result<CoreBinding, al_status_t> {
     Ok(CoreBinding {
         _library: library,
         context_info,
+        _version_drift: version_drift,
     })
 }
 
@@ -127,21 +148,19 @@ unsafe fn resolve_symbol<F: Copy>(
 /// resolved IMAS-Core reports. Only `major` gates: a mismatch there means
 /// the ABI itself may disagree, so resolution must fail; minor/patch drift
 /// is tolerated.
-fn check_major_version(built_against: &str, found: &str) -> Result<(), String> {
+fn check_major_version(built_against: &str, found: &str) -> Result<Option<VersionDrift>, String> {
     let built_major = major_component(built_against);
     let found_major = major_component(found);
 
     match (built_major, found_major) {
         (Some(b), Some(f)) if b == f => {
             if built_against != found {
-                // No logging infrastructure exists yet; this is the
-                // "recorded" half of "recorded and tolerated" until one
-                // does.
-                eprintln!(
-                    "imas-mvdd-loader: tolerating IMAS-Core version drift (built against {built_against}, found {found})"
-                );
+                return Ok(Some(VersionDrift {
+                    built_against: built_against.to_string(),
+                    found: found.to_string(),
+                }));
             }
-            Ok(())
+            Ok(None)
         }
         (Some(_), Some(_)) => Err(format!(
             "IMAS-Core major version mismatch: shim built against {built_against}, found {found}"
@@ -225,13 +244,19 @@ mod tests {
 
     #[test]
     fn identical_versions_agree() {
-        assert_eq!(check_major_version("4.1.1", "4.1.1"), Ok(()));
+        assert_eq!(check_major_version("4.1.1", "4.1.1"), Ok(None));
     }
 
     #[test]
     fn minor_and_patch_drift_is_tolerated() {
-        assert_eq!(check_major_version("4.1.1", "4.2.0"), Ok(()));
-        assert_eq!(check_major_version("1.0.0", "1.0.9"), Ok(()));
+        assert_eq!(
+            check_major_version("4.1.1", "4.2.0"),
+            Ok(Some(VersionDrift {
+                built_against: "4.1.1".to_string(),
+                found: "4.2.0".to_string(),
+            }))
+        );
+        assert!(check_major_version("1.0.0", "1.0.9").is_ok_and(|drift| drift.is_some()));
     }
 
     #[test]

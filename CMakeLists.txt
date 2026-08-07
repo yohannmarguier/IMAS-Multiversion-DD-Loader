@@ -216,9 +216,13 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(runtime-binding-success PROPERTIES ENVIRONMENT
         "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
 
-    add_test(NAME runtime-binding-version-drift-tolerated COMMAND runtime_binding_test success)
-    set_tests_properties(runtime-binding-version-drift-tolerated PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_VERSION=${IMAS_CORE_DRIFT_VERSION}")
+    add_test(NAME runtime-binding-version-drift-tolerated
+        COMMAND runtime_binding_test version-drift)
+    set_tests_properties(runtime-binding-version-drift-tolerated PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_VERSION=${IMAS_CORE_DRIFT_VERSION}"
+        PASS_REGULAR_EXPRESSION
+            "tolerating IMAS-Core version drift.*built against ${IMAS_CORE_VERSION}, found ${IMAS_CORE_DRIFT_VERSION}")
 
     add_test(NAME runtime-binding-version-mismatch COMMAND runtime_binding_test version-mismatch)
     set_tests_properties(runtime-binding-version-mismatch PROPERTIES ENVIRONMENT

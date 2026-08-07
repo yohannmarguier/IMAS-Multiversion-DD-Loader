@@ -20,6 +20,7 @@ typedef struct {
 
 static int g_call_count = 0;
 static int g_last_ctx = 0;
+static int g_version_call_count = 0;
 
 al_status_t al_context_info(int ctx, char **info) {
     g_call_count++;
@@ -44,6 +45,7 @@ al_status_t al_context_info(int ctx, char **info) {
 /* Defaults to the repository's supported IMAS-Core release;
  * RECORDING_STUB_VERSION lets a test simulate a different release. */
 const char *getALVersion(void) {
+    g_version_call_count++;
     if (getenv("RECORDING_STUB_NULL_VERSION") != NULL) {
         return NULL;
     }
@@ -61,4 +63,8 @@ int recording_stub_call_count(void) {
 
 int recording_stub_last_ctx(void) {
     return g_last_ctx;
+}
+
+int recording_stub_version_call_count(void) {
+    return g_version_call_count;
 }
