@@ -81,7 +81,7 @@ tests/abi_smoke.c       links C against the generated header
 tests/real_core_abi_check.cpp  compares generated declarations with IMAS-Core's real header
 tests/runtime_binding_test.c  drives forwarding against the recording stub and the basic ABI seam against real IMAS-Core
 tests/check_exports.cmake     mechanically compares the shim's exported C ABI with IMAS-Core's
-tests/real_core_forwarding_test.c  optional legal HDF5 lifecycle against real IMAS-Core
+tests/real_core_forwarding_test.c  required legal HDF5 forwarding coverage against real IMAS-Core
 tests/real_core_test_plugin.cpp  loadable fixture for real-Core plugin seam tests
 tests/stub/             recording stub standing in for IMAS-Core in the runtime-binding test
 tests/consumer/         throwaway downstream project proving find_package on the installed tree
