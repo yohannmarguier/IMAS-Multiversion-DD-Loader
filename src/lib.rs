@@ -3,7 +3,7 @@
 //! This crate re-exports IMAS-Core's public C ABI verbatim and interposes on
 //! the path-bearing entry points. The shared constants and `al_status_t` are
 //! here, and the runtime-binding architecture is proven end to end on one
-//! seam, `al_context_info` (see `src/resolve.rs` and
+//! symbol, `al_context_info` (see `src/resolve.rs` and
 //! `docs/adr/0001-runtime-binding-not-linking.md`). Every other mirrored
 //! entry point, and all DD path/version conversion, is still unimplemented.
 

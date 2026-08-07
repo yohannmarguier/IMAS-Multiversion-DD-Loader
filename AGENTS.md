@@ -5,7 +5,7 @@ If it has to been modified, apply the same changes to AGENTS.md.
 
 ## Repository state
 
-**Runtime binding proven on one symbol; no conversion logic yet.** The build system is verified end to end, and `src/resolve.rs` / `src/dl.rs` prove the runtime-binding architecture (see `docs/adr/0001-runtime-binding-not-linking.md`) on `al_context_info`: the shim opens IMAS-Core with local symbol visibility via hand-rolled `dlopen`/`dlsym` bindings, checks `getALVersion()` against the version it was built against, and forwards the call — verified by `tests/seam_test.c` against a recording stub (`tests/stub/`) standing in for IMAS-Core. Every other mirrored ABI entry point, and all DD path/version translation, is still unimplemented.
+**Runtime binding proven on one symbol; no conversion logic yet.** The build system is verified end to end, and `src/resolve.rs` / `src/dl.rs` prove the runtime-binding architecture (see `docs/adr/0001-runtime-binding-not-linking.md`) on `al_context_info`: the shim opens IMAS-Core with local symbol visibility via hand-rolled `dlopen`/`dlsym` bindings, checks `getALVersion()` against the version it was built against, and forwards the call — verified by `tests/runtime_binding_test.c` against a recording stub (`tests/stub/`) standing in for IMAS-Core. Every other mirrored ABI entry point, and all DD path/version translation, is still unimplemented.
 
 Single crate at the repo root. Keep it that way until `imas-core-sys` lands — cargo allows only one package per `links` value, so the crate binding `libal` must be separate, and that is the moment to add `[workspace]` to `Cargo.toml` plus a `crates/` directory. Nothing moves when that happens.
 

@@ -87,7 +87,7 @@ static void scenario_success(void) {
     CHECK(call_count() == 2);
     CHECK(last_ctx() == 7);
 
-    printf("seam_test success: the shim reached the stub, not itself\n");
+    printf("runtime_binding_test success: the shim reached the stub, not itself\n");
 }
 
 static void scenario_version_mismatch(void) {
@@ -104,7 +104,7 @@ static void scenario_version_mismatch(void) {
     /* The mismatch must fail resolution before ever forwarding the call. */
     CHECK(call_count() == 0);
 
-    printf("seam_test version-mismatch: resolution failed before forwarding\n");
+    printf("runtime_binding_test version-mismatch: resolution failed before forwarding\n");
 }
 
 static void scenario_missing_library(void) {
@@ -115,7 +115,8 @@ static void scenario_missing_library(void) {
     CHECK(status.message[0] != '\0');
     CHECK(strstr(status.message, "IMAS_CORE_LIBRARY") != NULL);
 
-    printf("seam_test missing-library: status=%d message=%s\n", status.code, status.message);
+    printf("runtime_binding_test missing-library: status=%d message=%s\n", status.code,
+           status.message);
 }
 
 static void scenario_bare_soname(void) {
@@ -132,7 +133,7 @@ static void scenario_bare_soname(void) {
     int_accessor_fn last_ctx = (int_accessor_fn)dlsym_or_die(stub, "recording_stub_last_ctx");
     CHECK(last_ctx() == 11);
 
-    printf("seam_test bare-soname: resolved IMAS-Core through the loader's search path\n");
+    printf("runtime_binding_test bare-soname: resolved IMAS-Core through the loader's search path\n");
 }
 
 int main(int argc, char **argv) {

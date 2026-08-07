@@ -1,4 +1,4 @@
-/* Stands in for IMAS-Core in tests/seam_test.c: exports al_context_info and
+/* Stands in for IMAS-Core in tests/runtime_binding_test.c: exports al_context_info and
  * getALVersion under their real names and signatures, and records what it
  * received instead of doing anything real.
  *
@@ -37,7 +37,7 @@ al_status_t al_context_info(int ctx, char **info) {
     return status;
 }
 
-/* Defaults to the version seam_test.c and src/resolve.rs both expect the
+/* Defaults to the version runtime_binding_test.c and src/resolve.rs both expect the
  * shim to be built against ("1.0.0"); RECORDING_STUB_VERSION lets a test
  * scenario simulate a different IMAS-Core. */
 const char *getALVersion(void) {
@@ -46,7 +46,7 @@ const char *getALVersion(void) {
 }
 
 /* Introspection accessors below: not part of the mirrored IMAS-Core ABI.
- * tests/seam_test.c dlsym's these directly rather than linking this stub —
+ * tests/runtime_binding_test.c dlsym's these directly rather than linking this stub —
  * see CMakeLists.txt for why. */
 
 int recording_stub_call_count(void) {

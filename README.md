@@ -60,8 +60,8 @@ src/lib.rs              the mirrored C ABI
 src/resolve.rs          runtime resolution of IMAS-Core: path/version checks, al_context_info
 src/dl.rs               minimal dlopen/dlsym/dlerror bindings
 tests/abi_smoke.c       links C against the generated header
-tests/seam_test.c       drives al_context_info against the recording stub
-tests/stub/             recording stub standing in for IMAS-Core in the seam test
+tests/runtime_binding_test.c  drives al_context_info against the recording stub
+tests/stub/             recording stub standing in for IMAS-Core in the runtime-binding test
 scripts/iter-env.sh     ITER cluster module loads
 docs/                   reference material — read the inventory before designing anything
 ```
@@ -77,7 +77,7 @@ that the C smoke test and in-tree consumers link against.
   header and the built shared library. This is the one that proves the ABI
   pipeline is intact end to end: cbindgen emitted a usable header, cargo-c
   produced a linkable library, and the struct layouts agree on both sides.
-- `seam-*` — five scenarios (`success`, `version-drift-tolerated`,
+- `runtime-binding-*` — five scenarios (`success`, `version-drift-tolerated`,
   `version-mismatch`, `missing-library`, `bare-soname`) drive the shim's
   exported `al_context_info` against a recording stub (`tests/stub/`) that
   stands in for IMAS-Core, proving the runtime-binding architecture end to
