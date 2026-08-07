@@ -20,6 +20,10 @@ include(GNUInstallDirs)
 
 option(IMAS_MVDD_BUILD_TESTS "Build and register the test suite" ON)
 option(IMAS_MVDD_CARGO_OFFLINE "Pass --offline to cargo (build nodes without network)" OFF)
+set(IMAS_MVDD_REAL_CORE_LIBRARY "" CACHE FILEPATH
+    "Optional path to a real IMAS-Core libal for runtime-binding tests")
+set(IMAS_MVDD_REAL_CORE_INCLUDE_DIR "" CACHE PATH
+    "Optional directory containing the matching IMAS-Core al_const.h and al_defs.h")
 
 set(IMAS_MVDD_PACKAGE imas-mvdd-loader)   # cargo package name
 set(IMAS_MVDD_LIB_NAME imas_mvdd_loader)  # resulting library / header name
@@ -339,6 +343,10 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(runtime-binding-missing-library PROPERTIES ENVIRONMENT
         "IMAS_CORE_LIBRARY=${CMAKE_CURRENT_BINARY_DIR}/does-not-exist.so")
 
+    add_test(NAME runtime-binding-verbatim-forwarding COMMAND runtime_binding_test verbatim-forwarding)
+    set_tests_properties(runtime-binding-verbatim-forwarding PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
     add_test(NAME runtime-binding-bare-soname COMMAND runtime_binding_test bare-soname)
     if(APPLE)
         set(_runtime_binding_search_path_var DYLD_LIBRARY_PATH)
@@ -365,6 +373,44 @@ if(IMAS_MVDD_BUILD_TESTS)
         # Built from source, EXCLUDE_FROM_ALL: nothing else pulls it into the
         # default build target, so the test binary that needs it must.
         add_dependencies(runtime_binding_test ${IMAS_CORE_AL_TARGET})
+    endif()
+
+    # A real-Core run cannot use the recording stub's private accessors or
+    # fabricated context IDs. When an installed/built IMAS-Core is supplied,
+    # drive all issue-#6 symbols through a legal temporary HDF5 lifecycle.
+    if(IMAS_MVDD_REAL_CORE_LIBRARY OR IMAS_MVDD_REAL_CORE_INCLUDE_DIR)
+        if(NOT IMAS_MVDD_REAL_CORE_LIBRARY OR NOT IMAS_MVDD_REAL_CORE_INCLUDE_DIR)
+            message(FATAL_ERROR
+                "IMAS_MVDD_REAL_CORE_LIBRARY and "
+                "IMAS_MVDD_REAL_CORE_INCLUDE_DIR must be set together")
+        endif()
+        if(NOT EXISTS "${IMAS_MVDD_REAL_CORE_LIBRARY}")
+            message(FATAL_ERROR
+                "IMAS_MVDD_REAL_CORE_LIBRARY does not exist: "
+                "${IMAS_MVDD_REAL_CORE_LIBRARY}")
+        endif()
+        foreach(_real_core_header al_const.h al_defs.h)
+            if(NOT EXISTS "${IMAS_MVDD_REAL_CORE_INCLUDE_DIR}/${_real_core_header}")
+                message(FATAL_ERROR
+                    "IMAS_MVDD_REAL_CORE_INCLUDE_DIR does not contain "
+                    "${_real_core_header}: ${IMAS_MVDD_REAL_CORE_INCLUDE_DIR}")
+            endif()
+        endforeach()
+
+        add_executable(real_core_forwarding_test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_forwarding_test.c")
+        target_include_directories(real_core_forwarding_test PRIVATE
+            "${IMAS_MVDD_REAL_CORE_INCLUDE_DIR}")
+        target_link_libraries(real_core_forwarding_test PRIVATE imas_mvdd_loader)
+        add_dependencies(real_core_forwarding_test imas_mvdd_capi)
+        set_target_properties(real_core_forwarding_test PROPERTIES
+            BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+        add_test(NAME runtime-binding-real-core-forwarding
+            COMMAND real_core_forwarding_test)
+        set_tests_properties(runtime-binding-real-core-forwarding PROPERTIES
+            ENVIRONMENT "IMAS_CORE_LIBRARY=${IMAS_MVDD_REAL_CORE_LIBRARY}"
+            LABELS real-core)
     endif()
 endif()
 
