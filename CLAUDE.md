@@ -24,8 +24,11 @@ is the only thing keeping the CMake path honest — `cargo test` alone never
 re-runs cargo-c, never regenerates the header, and never compiles the C smoke
 test.
 
-See `docs/BUILDING.md` for options, layout and why install re-runs cargo-c
-instead of copying the staged tree.
+`README.md` carries the build options and layout. The *why* behind the build
+lives in comments next to what it explains — `CMakeLists.txt` for the staging
+tree, the install path and the multi-config refusal, `Cargo.toml` for the
+`capi` feature and the workspace question. Keep it there rather than restating
+it in prose that can drift.
 
 [cargo-c]: https://github.com/lu-zero/cargo-c
 
