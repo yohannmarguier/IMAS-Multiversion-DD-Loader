@@ -2,7 +2,7 @@
 
 project(imas-mvdd-loader
     VERSION 0.1.0
-    DESCRIPTION "Middleware shim between the IMAS HLIs and IMAS-Core"
+    DESCRIPTION "Shim between the IMAS HLIs and IMAS-Core"
     # The shipped ABI remains C, but tests compile C++ for a loadable plugin
     # fixture. find_package(al-core CONFIG)'s find_dependency(Boost) also
     # requires a configured C++ compiler.

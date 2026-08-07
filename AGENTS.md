@@ -51,7 +51,7 @@ Reference documents:
 
 ## What this project is
 
-A **middleware shim between the IMAS HLIs and IMAS-Core**:
+A **shim between the IMAS HLIs and IMAS-Core**:
 
 ```
 HLI (imas-python, imas-Fortran, imas-CPP, imas-Matlab, imas-Java)

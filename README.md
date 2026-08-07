@@ -1,6 +1,6 @@
 # IMAS-Multiversion-DD-Loader
 
-Middleware between IMAS HLI and IMAS-Core providing a path conversion to load from the DD version of a HLI, all the version of the DD with potential losses
+Shim between the IMAS HLIs and IMAS-Core for path conversion across DD versions, with explicitly lossy semantics.
 
 The library is Rust. The C ABI artefacts — shared library, generated header,
 pkg-config file — are produced by [cargo-c]; CMake drives cargo-c rather than

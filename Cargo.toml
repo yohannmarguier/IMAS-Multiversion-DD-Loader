@@ -1,6 +1,6 @@
 [package]
 name = "imas-mvdd-loader"
-description = "Middleware shim between the IMAS HLIs and IMAS-Core"
+description = "Shim between the IMAS HLIs and IMAS-Core"
 version = "0.1.0"
 edition = "2024"
 # Matches the ITER cluster module Rust/1.88.0-GCCcore-14.3.0.
@@ -36,7 +36,7 @@ name = "imas_mvdd_loader"
 [package.metadata.capi.pkg_config]
 name = "imas-mvdd-loader"
 filename = "imas-mvdd-loader"
-description = "Middleware shim between the IMAS HLIs and IMAS-Core"
+description = "Shim between the IMAS HLIs and IMAS-Core"
 
 [profile.release]
 # The shim sits on the read path of every HLI call; keep symbols for perf work.
