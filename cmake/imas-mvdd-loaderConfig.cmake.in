@@ -1,0 +1,19 @@
+@PACKAGE_INIT@
+
+# Defines the same imported target the in-tree build exposes
+# (imas-mvdd-loader::imas-mvdd-loader), pointed at the installed library and
+# header instead of the build tree's staged copies.
+#
+# ${CMAKE_SHARED_LIBRARY_PREFIX}/${CMAKE_SHARED_LIBRARY_SUFFIX} are left
+# unevaluated here (configure_package_config_file runs with @ONLY, so plain
+# ${...} passes through) and resolve against the *consuming* project's
+# platform when it calls find_package, not this package's build platform.
+if(NOT TARGET imas-mvdd-loader::imas-mvdd-loader)
+    add_library(imas-mvdd-loader::imas-mvdd-loader SHARED IMPORTED)
+    set_target_properties(imas-mvdd-loader::imas-mvdd-loader PROPERTIES
+        IMPORTED_LOCATION
+            "@PACKAGE_CMAKE_INSTALL_LIBDIR@/${CMAKE_SHARED_LIBRARY_PREFIX}imas_mvdd_loader${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        INTERFACE_INCLUDE_DIRECTORIES "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@")
+endif()
+
+check_required_components(imas-mvdd-loader)

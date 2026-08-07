@@ -105,7 +105,7 @@ jobs:
       - name: Install
         run: cmake --install build --prefix "$PWD/dist"
 
-      - name: Check the installed package is consumable
+      - name: Check the installed package is consumable via pkg-config
         run: |
           set -euo pipefail
           # Locate the .pc rather than assuming a libdir: GNUInstallDirs picks
@@ -113,5 +113,22 @@ jobs:
           pc=$(find dist -name imas-mvdd-loader.pc | head -1)
           test -n "$pc" || { echo "no pkg-config file installed"; exit 1; }
           test -f dist/include/imas_mvdd_loader.h
-          PKG_CONFIG_PATH=$(dirname "$pc") \
-            pkg-config --print-errors --cflags --libs imas-mvdd-loader
+          pc_dir=$(dirname "$pc")
+          read -r -a pkg_flags <<< "$(PKG_CONFIG_PATH="$pc_dir" \
+            pkg-config --print-errors --cflags --libs imas-mvdd-loader)"
+          cc tests/consumer/main.c -o build/pkg-config-consumer "${pkg_flags[@]}"
+          libdir=$(PKG_CONFIG_PATH="$pc_dir" \
+            pkg-config --variable=libdir imas-mvdd-loader)
+          LD_LIBRARY_PATH="$libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            ./build/pkg-config-consumer
+
+      - name: Check the installed package is consumable via find_package
+        # tests/consumer is a throwaway downstream CMake project: it only
+        # sees the installed tree (dist/), never this repo's source or
+        # build tree, proving find_package works the way a real consumer
+        # would use it.
+        run: |
+          set -euo pipefail
+          cmake -S tests/consumer -B build-consumer -DCMAKE_PREFIX_PATH="$PWD/dist"
+          cmake --build build-consumer
+          ./build-consumer/consumer_smoke
