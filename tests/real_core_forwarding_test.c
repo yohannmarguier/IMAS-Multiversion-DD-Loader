@@ -1,8 +1,7 @@
-/* Optional integration test for issues #6 and #7: exercise every newly
- * mirrored symbol through the shim against a real IMAS-Core libal. Unlike the
- * recording-stub test, this test uses only the public C ABI and legal context
- * lifecycles. CMake registers it only when matching Core headers and library
- * are supplied explicitly. */
+/* Required integration test for issues #6 through #8: exercise every mirrored
+ * symbol through the shim against the CMake-acquired IMAS-Core libal. Unlike
+ * the recording-stub test, this test uses only the public C ABI and legal
+ * context lifecycles. */
 
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE
