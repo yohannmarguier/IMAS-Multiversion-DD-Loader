@@ -48,6 +48,21 @@ jobs:
           curl -fsSL "https://github.com/lu-zero/cargo-c/releases/download/v${CARGO_C_VERSION}/cargo-c-x86_64-unknown-linux-musl.tar.gz" \
             | tar -xz -C "$HOME/.cargo/bin"
 
+      # IMAS-Core is required to configure (see CMakeLists.txt's IMAS-Core
+      # acquisition section) so the tracer (tests/runtime_binding_test.c)
+      # can run against the real thing, not only the recording stub. CI has
+      # no installed IMAS-Core and no sibling checkout, so it downloads and
+      # builds the pinned tag; these are its own build dependencies, not the
+      # shim's.
+      - name: Install IMAS-Core build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libboost-filesystem-dev libhdf5-dev
+
+      - name: Cache acquired IMAS-Core
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: al-core-${{ runner.os }}-${{ matrix.build_type }}-${{ hashFiles('IMAS_CORE_VERSION') }}
+
       - name: Format
         run: cargo fmt --check
 
@@ -55,13 +70,37 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON
 
       - name: Build
         run: cmake --build build
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+      # The download above proved IMAS_CORE_DOWNLOAD_DEPENDENCIES; this
+      # proves the *default* acquisition mode (installed-package lookup),
+      # which nothing else here exercises, against the very IMAS-Core just
+      # built — cmake --install works against any subdirectory's own build
+      # tree, EXCLUDE_FROM_ALL notwithstanding. imas_print_version is built
+      # explicitly first: EXCLUDE_FROM_ALL means nothing pulled it into the
+      # default build above, but IMAS-Core's own install() rule for it runs
+      # unconditionally.
+      - name: Install the acquired IMAS-Core (for the default-mode check below)
+        if: matrix.build_type == 'Release'
+        run: |
+          cmake --build build --target imas_print_version
+          cmake --install build/_deps/al-core-build --prefix "$PWD/al-core-dist"
+
+      - name: Configure, build and test the default (installed-lookup) acquisition mode
+        if: matrix.build_type == 'Release'
+        run: |
+          cmake -S . -B build-installed-mode -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_PREFIX_PATH="$PWD/al-core-dist"
+          cmake --build build-installed-mode
+          ctest --test-dir build-installed-mode --output-on-failure
 
       - name: Install
         run: cmake --install build --prefix "$PWD/dist"

@@ -3,7 +3,13 @@
 project(imas-mvdd-loader
     VERSION 0.1.0
     DESCRIPTION "Middleware shim between the IMAS HLIs and IMAS-Core"
-    LANGUAGES C)
+    # CXX is never compiled here: this project stays C at the ABI boundary
+    # (see docs/adr/0001-runtime-binding-not-linking.md). It is enabled
+    # anyway because find_package(al-core CONFIG)'s find_dependency(Boost)
+    # requires a C++ compiler to be configured in the *consuming* project,
+    # not just IMAS-Core's own build — Boost's CMake package checks
+    # CMAKE_CXX_COMPILER_LOADED unconditionally.
+    LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 
@@ -36,6 +42,103 @@ math(EXPR IMAS_CORE_DRIFT_MINOR "${IMAS_CORE_SUPPORTED_MINOR} + 1")
 set(IMAS_CORE_INCOMPATIBLE_VERSION "${IMAS_CORE_INCOMPATIBLE_MAJOR}.0.0")
 set(IMAS_CORE_DRIFT_VERSION
     "${IMAS_CORE_SUPPORTED_MAJOR}.${IMAS_CORE_DRIFT_MINOR}.0")
+
+# ---------------------------------------------------------------------------
+# IMAS-Core acquisition
+#
+# The shim never links against IMAS-Core; it resolves it at runtime (see
+# docs/adr/0001-runtime-binding-not-linking.md). CMake still has to acquire
+# a real IMAS-Core in the build tree, so the test suite has one to run the
+# tracer (tests/runtime_binding_test.c) against, not only the recording
+# stub — a build that quietly tests nothing against real IMAS-Core is worse
+# than one that fails, so there is no skip-if-missing path.
+#
+# Three modes, matching the option vocabulary IMAS-Fortran's AL core
+# acquisition module already established (its top-level CMakeLists.txt),
+# so a reviewer from that team can read this with knowledge they already
+# have:
+#   - installed (default): find_package(al-core CONFIG) against a
+#     pre-installed IMAS-Core. Deliberately its CMake package — introduced
+#     in IMAS-Core 5.7.1 — rather than its pkg-config file: the .pc file's
+#     Libs line carries a GNU-ld-only flag that breaks on macOS.
+#   - development layout (-D IMAS_CORE_DEVELOPMENT_LAYOUT=ON): build a
+#     sibling checkout at ../IMAS-Core.
+#   - download and build (-D IMAS_CORE_DOWNLOAD_DEPENDENCIES=ON): fetch and
+#     build IMAS_CORE_GIT_TAG.
+#
+# Both build modes add IMAS-Core with EXCLUDE_FROM_ALL: its own install()
+# rules must never run as part of installing this shim, or installing the
+# shim would deposit a second copy of IMAS-Core into the prefix.
+# ---------------------------------------------------------------------------
+
+option(IMAS_CORE_DOWNLOAD_DEPENDENCIES
+    "Download and build IMAS-Core at IMAS_CORE_GIT_TAG instead of finding an installed one" OFF)
+option(IMAS_CORE_DEVELOPMENT_LAYOUT
+    "Build IMAS-Core from a sibling checkout at ../IMAS-Core instead of finding an installed one" OFF)
+if(IMAS_CORE_DEVELOPMENT_LAYOUT AND IMAS_CORE_DOWNLOAD_DEPENDENCIES)
+    message(STATUS
+        "IMAS_CORE_DEVELOPMENT_LAYOUT=ON: setting IMAS_CORE_DOWNLOAD_DEPENDENCIES=OFF")
+    set(IMAS_CORE_DOWNLOAD_DEPENDENCIES OFF CACHE BOOL
+        "Download and build IMAS-Core at IMAS_CORE_GIT_TAG instead of finding an installed one"
+        FORCE)
+endif()
+
+set(IMAS_CORE_GIT_REPOSITORY "https://github.com/iterorganization/IMAS-Core.git"
+    CACHE STRING "Git repository of IMAS-Core, for IMAS_CORE_DOWNLOAD_DEPENDENCIES")
+# Defaults to the pin above rather than a floating branch: nothing here
+# links against IMAS-Core for a linker to validate signatures against, so a
+# drifted upstream would corrupt memory silently at runtime instead of
+# failing the build, and CI would stop being reproducible across days.
+set(IMAS_CORE_GIT_TAG "${IMAS_CORE_VERSION}"
+    CACHE STRING "Git tag of IMAS-Core, for IMAS_CORE_DOWNLOAD_DEPENDENCIES")
+
+set(IMAS_CORE_MODULE_HINT "module load IMAS-Core/${IMAS_CORE_VERSION}")
+
+if(IMAS_CORE_DOWNLOAD_DEPENDENCIES)
+    message(STATUS
+        "Acquiring IMAS-Core: downloading ${IMAS_CORE_GIT_REPOSITORY} @ ${IMAS_CORE_GIT_TAG}")
+    include(FetchContent)
+    FetchContent_Declare(al-core
+        GIT_REPOSITORY "${IMAS_CORE_GIT_REPOSITORY}"
+        GIT_TAG        "${IMAS_CORE_GIT_TAG}")
+    FetchContent_GetProperties(al-core)
+    if(NOT al-core_POPULATED)
+        FetchContent_Populate(al-core)
+        add_subdirectory("${al-core_SOURCE_DIR}" "${al-core_BINARY_DIR}" EXCLUDE_FROM_ALL)
+    endif()
+    set(IMAS_CORE_AL_TARGET al)
+    set(IMAS_CORE_BUILT_FROM_SOURCE TRUE)
+elseif(IMAS_CORE_DEVELOPMENT_LAYOUT)
+    set(IMAS_CORE_DEV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../IMAS-Core")
+    if(NOT EXISTS "${IMAS_CORE_DEV_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "IMAS_CORE_DEVELOPMENT_LAYOUT=ON but '${IMAS_CORE_DEV_DIR}' has no "
+            "CMakeLists.txt. This mode expects a sibling checkout of IMAS-Core "
+            "next to this repository.")
+    endif()
+    message(STATUS "Acquiring IMAS-Core: development layout at ${IMAS_CORE_DEV_DIR}")
+    add_subdirectory("${IMAS_CORE_DEV_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/al-core-build"
+        EXCLUDE_FROM_ALL)
+    set(IMAS_CORE_AL_TARGET al)
+    set(IMAS_CORE_BUILT_FROM_SOURCE TRUE)
+else()
+    find_package(al-core CONFIG)
+    if(NOT al-core_FOUND)
+        message(FATAL_ERROR
+            "IMAS-Core was not found (find_package(al-core CONFIG)). This project "
+            "requires IMAS-Core to configure - pick one of:\n"
+            "  1. installed (default): point CMAKE_PREFIX_PATH (or al-core_DIR) at "
+            "an install prefix\n     containing lib/cmake/al-core/al-coreConfig.cmake "
+            "(IMAS-Core >= 5.7.1).\n     On the ITER cluster: ${IMAS_CORE_MODULE_HINT}\n"
+            "  2. development layout: -D IMAS_CORE_DEVELOPMENT_LAYOUT=ON, with a "
+            "sibling checkout\n     at ../IMAS-Core\n"
+            "  3. download and build: -D IMAS_CORE_DOWNLOAD_DEPENDENCIES=ON, fetches "
+            "${IMAS_CORE_GIT_REPOSITORY}\n     at ${IMAS_CORE_GIT_TAG}\n")
+    endif()
+    message(STATUS "Acquiring IMAS-Core: found installed package (al-core_DIR=${al-core_DIR})")
+    set(IMAS_CORE_AL_TARGET al-core::al)
+    set(IMAS_CORE_BUILT_FROM_SOURCE FALSE)
+endif()
 
 if(CMAKE_CONFIGURATION_TYPES)
     message(FATAL_ERROR
@@ -244,6 +347,25 @@ if(IMAS_MVDD_BUILD_TESTS)
     endif()
     set_tests_properties(runtime-binding-bare-soname PROPERTIES ENVIRONMENT
         "${_runtime_binding_search_path_var}=$<TARGET_FILE_DIR:recording_stub>")
+
+    # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
+    #
+    # The same shim call as scenario_success, but against the IMAS-Core
+    # acquired above instead of the recording stub: al_context_info must
+    # reach a real implementation, not only a substitute for one. ctxID 0
+    # is the one value real IMAS-Core answers deterministically without any
+    # context ever having been opened (al_lowlevel.cpp's "NULL context"
+    # branch), which is what makes this runnable with no fixture beyond the
+    # acquired library itself. No environment setup is needed: CMake points
+    # IMAS_CORE_LIBRARY at whichever acquisition mode succeeded.
+    add_test(NAME runtime-binding-real-core COMMAND runtime_binding_test real-core)
+    set_tests_properties(runtime-binding-real-core PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:${IMAS_CORE_AL_TARGET}>")
+    if(IMAS_CORE_BUILT_FROM_SOURCE)
+        # Built from source, EXCLUDE_FROM_ALL: nothing else pulls it into the
+        # default build target, so the test binary that needs it must.
+        add_dependencies(runtime_binding_test ${IMAS_CORE_AL_TARGET})
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------

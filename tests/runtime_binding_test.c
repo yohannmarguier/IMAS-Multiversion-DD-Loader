@@ -161,6 +161,31 @@ static void scenario_missing_library(void) {
            status.message);
 }
 
+static void scenario_real_core(void) {
+    /* Unlike the other scenarios, this one runs against a real, acquired
+     * IMAS-Core (see CMakeLists.txt's IMAS-Core acquisition section), not
+     * the recording stub, so there is no introspection handle to open:
+     * real IMAS-Core exports no such thing. ctxID 0 is real IMAS-Core's
+     * "NULL context" case (al_lowlevel.cpp), the one value it answers
+     * deterministically with no context ever having been opened. */
+    char *info = NULL;
+    al_status_t status = al_context_info(0, &info);
+    CHECK(status.code == 0);
+    CHECK(info != NULL);
+    free(info);
+
+    /* Called again to prove resolution is memoized rather than repeated:
+     * a second real call through the same cached binding must still reach
+     * IMAS-Core and succeed, not silently reuse the first call's result. */
+    char *info2 = NULL;
+    al_status_t status2 = al_context_info(0, &info2);
+    CHECK(status2.code == 0);
+    CHECK(info2 != NULL);
+    free(info2);
+
+    printf("runtime_binding_test real-core: the shim reached real IMAS-Core, not a stub\n");
+}
+
 static void scenario_bare_soname(void) {
     /* No IMAS_CORE_LIBRARY override here (see CMakeLists.txt): the shim
      * must locate IMAS-Core by its bare soname through the loader's normal
@@ -181,7 +206,7 @@ static void scenario_bare_soname(void) {
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr,
-                "usage: %s <success|version-drift|version-mismatch|null-version|missing-library|bare-soname>\n",
+                "usage: %s <success|version-drift|version-mismatch|null-version|missing-library|bare-soname|real-core>\n",
                 argv[0]);
         return 2;
     }
@@ -189,6 +214,8 @@ int main(int argc, char **argv) {
     const char *scenario = argv[1];
     if (strcmp(scenario, "success") == 0) {
         scenario_success();
+    } else if (strcmp(scenario, "real-core") == 0) {
+        scenario_real_core();
     } else if (strcmp(scenario, "version-drift") == 0) {
         scenario_version_drift();
     } else if (strcmp(scenario, "version-mismatch") == 0) {
