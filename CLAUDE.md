@@ -11,9 +11,11 @@ Single crate at the repo root. Keep it that way until `imas-core-sys` lands — 
 
 **Language: Rust.** The C ABI artefacts (shared library, cbindgen-generated header, pkg-config file) are produced by [cargo-c]; CMake drives cargo-c rather than compiling anything itself. Toolchain on the ITER cluster comes from modules `Rust/1.88.0-GCCcore-14.3.0`, `cargo-c/0.10.15-GCCcore-14.3.0` and `IMAS-Core/5.7.1` — `source scripts/iter-env.sh`.
 
-IMAS-Core is required to configure — there is no skip-if-missing path. CMake
-acquires it in one of three modes (installed package lookup by default,
-development layout, or download-and-build); see CMakeLists.txt's IMAS-Core
+Real IMAS-Core is required by the default configure profile. CMake acquires it
+in one of three modes (installed package lookup by default, development layout,
+or download-and-build). CI's explicit `IMAS_MVDD_REAL_CORE_TESTS=OFF` profile
+is the only stub-only path; it registers the recording-stub seams without
+silently reducing the real-Core suite. See CMakeLists.txt's IMAS-Core
 acquisition section for the option names and `IMAS_CORE_LIBRARY`-free test
 wiring.
 
@@ -25,11 +27,12 @@ $ cmake --install build --prefix /path/to/prefix
 $ cargo fmt && cargo clippy --all-targets          # lint, no CMake wrapper
 ```
 
-CI (`.github/workflows/ci.yml`) runs fmt, clippy and the whole CMake path for
-both `Debug` and `Release`, pinned to the cluster's Rust/cargo-c versions, and
-downloads and builds IMAS-Core to exercise the same path. It is the only
-thing keeping the CMake path honest — `cargo test` alone never re-runs
-cargo-c, never regenerates the header, and never compiles the C smoke test.
+CI (`.github/workflows/ci.yml`) has a fast recording-stub job for fmt, clippy,
+both CMake configurations, install and downstream consumption, plus a full job
+on pull requests and `main` pushes that downloads and caches the pinned
+IMAS-Core build before the drift and real-Core seams. It is the only thing
+keeping the CMake path honest — `cargo test` alone never re-runs cargo-c, never
+regenerates the header, and never compiles the C smoke test.
 
 `README.md` carries the build options and layout. The *why* behind the build
 lives in comments next to what it explains — `CMakeLists.txt` for the staging

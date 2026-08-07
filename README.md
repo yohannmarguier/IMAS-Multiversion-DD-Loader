@@ -36,10 +36,12 @@ missing, so a wrong environment is caught immediately rather than mid-build.
 
 ## Build, test, install
 
-IMAS-Core is required to configure — there is no skip-if-missing path.
-Installed-package lookup (`find_package(al-core CONFIG)`) is the default; a
-missing IMAS-Core fails configure immediately with all three acquisition
-options and the cluster module-load hint. See `CMakeLists.txt`'s IMAS-Core
+Real IMAS-Core is required by the default configure profile. Installed-package
+lookup (`find_package(al-core CONFIG)`) is the default; a missing IMAS-Core
+fails configure immediately with all three acquisition options and the cluster
+module-load hint. CI's explicit `IMAS_MVDD_REAL_CORE_TESTS=OFF` profile is the
+only stub-only path: it registers the recording-stub seams and does not pretend
+to cover the drift or real-Core checks. See `CMakeLists.txt`'s IMAS-Core
 acquisition section for the full rationale.
 
 ```console
@@ -59,6 +61,7 @@ packaging use.
 |---|---|---|
 | `IMAS_MVDD_BUILD_TESTS` | `ON` | Build the C test suites and register them with ctest |
 | `IMAS_MVDD_CARGO_OFFLINE` | `OFF` | Pass `--offline` to cargo, for build nodes without network |
+| `IMAS_MVDD_REAL_CORE_TESTS` | `ON` | Acquire IMAS-Core and register the drift and real-Core seam tests; `OFF` is the explicit recording-stub-only CI profile |
 | `IMAS_CORE_DOWNLOAD_DEPENDENCIES` | `OFF` | Fetch and build IMAS-Core at `IMAS_CORE_GIT_TAG` instead of finding an installed one |
 | `IMAS_CORE_DEVELOPMENT_LAYOUT` | `OFF` | Build IMAS-Core from a sibling checkout at `../IMAS-Core` instead of finding an installed one |
 | `IMAS_CORE_GIT_REPOSITORY` / `IMAS_CORE_GIT_TAG` | upstream repo / the `IMAS_CORE_VERSION` pin | Where `IMAS_CORE_DOWNLOAD_DEPENDENCIES` fetches from |
@@ -81,6 +84,8 @@ tests/abi_smoke.c       links C against the generated header
 tests/real_core_abi_*_check.c  compares generated declarations with IMAS-Core's real header
 tests/runtime_binding_test.c  drives forwarding against the recording stub and the basic ABI seam against real IMAS-Core
 tests/check_exports.cmake     mechanically compares the shim's exported C ABI with IMAS-Core's
+tests/check_ci_workflow.cmake guards the fast/full CI responsibilities and pinned toolchains
+tests/check-installed-package.sh  consumes an installed tree through pkg-config and find_package
 tests/real_core_forwarding_test.c  required legal HDF5 forwarding coverage against real IMAS-Core
 tests/real_core_test_plugin.cpp  loadable fixture for real-Core plugin seam tests
 tests/stub/             recording stub standing in for IMAS-Core in the runtime-binding test
@@ -134,9 +139,12 @@ next to the equivalent `pkg-config` check.
 ## Tests
 
 - `rust-unit` — `cargo test` over the crate.
+- `ci-workflow` — guards the fast/full job split, unrestricted push trigger,
+  pinned toolchains, explicit test profiles, install checks, and
+  `--no-tests=error` coverage gate.
 - `abi-smoke` — compiles and runs `tests/abi_smoke.c` against the generated
-  header and the built shared library, forwarding real version/string helpers
-  to the CMake-acquired IMAS-Core.
+  header and built shared library. It forwards to the recording stub in the
+  fast profile and CMake-acquired IMAS-Core in the full profile.
 - `real-core-export-list` — mechanically compares the filtered public C
   exports of IMAS-Core and the shim with `nm`.
 - `real-core-abi` — compiles the generated header and IMAS-Core's real
@@ -164,11 +172,13 @@ what arrived at the boundary, while the real-Core case proves that the shim's
 calls form a valid lifecycle accepted by the actual implementation. See
 `docs/adr/0001-runtime-binding-not-linking.md`.
 
-CI (`.github/workflows/ci.yml`) runs fmt, clippy and the whole CMake path —
-build, `ctest`, install, then `pkg-config` and `find_package` consumer builds
-against the installed tree — for both `Debug` and `Release`, pinned to the
-cluster's Rust and cargo-c versions so it guards the MSRV too. It downloads
-and builds IMAS-Core to exercise the same acquisition path as a real
-configure would.
+CI (`.github/workflows/ci.yml`) splits early feedback from the expensive real
+dependency. The `fast` job runs fmt, clippy, both CMake build configurations,
+all recording-stub seams, install, and both installed-package consumers. The
+`full` job runs for pull requests and `main` pushes; it downloads and caches the
+pinned IMAS-Core build, then runs the ABI drift and real-Core seam suites before
+performing the same install and consumer checks. Every CTest invocation uses
+`--no-tests=error`; both jobs stay pinned to the cluster's Rust and cargo-c
+module versions.
 
 [cargo-c]: https://github.com/lu-zero/cargo-c

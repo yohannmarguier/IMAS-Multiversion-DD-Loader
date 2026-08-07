@@ -1,12 +1,11 @@
 name: CI
 
-# The point of this workflow is to keep the CMake path exercised. Day to day
-# you run `cargo test`; nothing else re-runs cargo-c, regenerates the header,
-# or compiles the C smoke test — and unexercised build glue rots silently.
+# The fast job keeps the ordinary CMake path and recording-stub seams cheap.
+# The full job adds the expensive checks that need a genuine IMAS-Core build.
+# Both install the shim and consume only its installed package artifacts.
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -24,15 +23,14 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  fast:
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        # Both build types: Debug and Release map to different cargo profiles,
-        # and a mismatch there is silent — it produced a wrong-profile build
-        # once already.
+        # Debug and Release select different cargo profiles; exercise both
+        # without making either wait for the real IMAS-Core build.
         build_type: [Debug, Release]
 
     steps:
@@ -48,12 +46,50 @@ jobs:
           curl -fsSL "https://github.com/lu-zero/cargo-c/releases/download/v${CARGO_C_VERSION}/cargo-c-x86_64-unknown-linux-musl.tar.gz" \
             | tar -xz -C "$HOME/.cargo/bin"
 
-      # IMAS-Core is required to configure (see CMakeLists.txt's IMAS-Core
-      # acquisition section) so the tracer (tests/runtime_binding_test.c)
-      # can run against the real thing, not only the recording stub. CI has
-      # no installed IMAS-Core and no sibling checkout, so it downloads and
-      # builds the pinned tag; these are its own build dependencies, not the
-      # shim's.
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Configure recording-stub profile
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DIMAS_MVDD_REAL_CORE_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test recording-stub seams
+        run: ctest --test-dir build --output-on-failure --no-tests=error
+
+      - name: Install
+        run: cmake --install build --prefix "$PWD/dist"
+
+      - name: Check the installed package is consumable
+        run: |
+          set -euo pipefail
+          core=$(find "$PWD/build" -maxdepth 2 -type f -name 'libal.so*' | head -1)
+          test -n "$core"
+          bash tests/check-installed-package.sh build dist "$core"
+
+  full:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal -c rustfmt -c clippy
+          rustup default "$RUST_VERSION"
+
+      - name: Install cargo-c ${{ env.CARGO_C_VERSION }}
+        run: |
+          curl -fsSL "https://github.com/lu-zero/cargo-c/releases/download/v${CARGO_C_VERSION}/cargo-c-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C "$HOME/.cargo/bin"
+
       - name: Install IMAS-Core build dependencies
         run: sudo apt-get update && sudo apt-get install -y libboost-filesystem-dev libhdf5-dev
 
@@ -61,79 +97,40 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/_deps
-          key: al-core-${{ runner.os }}-${{ matrix.build_type }}-${{ hashFiles('IMAS_CORE_VERSION') }}
+          key: al-core-${{ runner.os }}-Release-${{ hashFiles('IMAS_CORE_VERSION') }}
 
-      - name: Format
-        run: cargo fmt --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Configure
+      - name: Configure with real IMAS-Core
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
             -DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON
 
       - name: Build
         run: cmake --build build
 
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
+      - name: Test drift and real-Core seams
+        run: ctest --test-dir build --output-on-failure --no-tests=error
 
-      # The download above proved IMAS_CORE_DOWNLOAD_DEPENDENCIES; this
-      # proves the *default* acquisition mode (installed-package lookup),
-      # which nothing else here exercises, against the very IMAS-Core just
-      # built — cmake --install works against any subdirectory's own build
-      # tree, EXCLUDE_FROM_ALL notwithstanding. imas_print_version is built
-      # explicitly first: EXCLUDE_FROM_ALL means nothing pulled it into the
-      # default build above, but IMAS-Core's own install() rule for it runs
-      # unconditionally.
-      - name: Install the acquired IMAS-Core (for the default-mode check below)
-        if: matrix.build_type == 'Release'
+      # The download above proves IMAS_CORE_DOWNLOAD_DEPENDENCIES; this
+      # proves the default installed-package lookup against the Core just
+      # built. EXCLUDE_FROM_ALL requires imas_print_version explicitly.
+      - name: Install the acquired IMAS-Core
         run: |
           cmake --build build --target imas_print_version
           cmake --install build/_deps/al-core-build --prefix "$PWD/al-core-dist"
 
-      - name: Configure, build and test the default (installed-lookup) acquisition mode
-        if: matrix.build_type == 'Release'
+      - name: Configure, build and test installed IMAS-Core lookup
         run: |
-          cmake -S . -B build-installed-mode -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+          cmake -S . -B build-installed-mode -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$PWD/al-core-dist"
           cmake --build build-installed-mode
-          ctest --test-dir build-installed-mode --output-on-failure
+          ctest --test-dir build-installed-mode --output-on-failure --no-tests=error
 
       - name: Install
         run: cmake --install build --prefix "$PWD/dist"
 
-      - name: Check the installed package is consumable via pkg-config
+      - name: Check the installed package is consumable
         run: |
           set -euo pipefail
-          # Locate the .pc rather than assuming a libdir: GNUInstallDirs picks
-          # lib, lib64 or a multiarch path depending on the distribution.
-          pc=$(find dist -name imas-mvdd-loader.pc | head -1)
-          test -n "$pc" || { echo "no pkg-config file installed"; exit 1; }
-          test -f dist/include/imas_mvdd_loader.h
-          pc_dir=$(dirname "$pc")
-          read -r -a pkg_flags <<< "$(PKG_CONFIG_PATH="$pc_dir" \
-            pkg-config --print-errors --cflags --libs imas-mvdd-loader)"
-          cc tests/consumer/main.c -o build/pkg-config-consumer "${pkg_flags[@]}"
-          libdir=$(PKG_CONFIG_PATH="$pc_dir" \
-            pkg-config --variable=libdir imas-mvdd-loader)
           core=$(find "$PWD/build/_deps/al-core-build" -type f -name 'libal.so*' | head -1)
           test -n "$core"
-          LD_LIBRARY_PATH="$libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-            IMAS_CORE_LIBRARY="$core" \
-            ./build/pkg-config-consumer
-
-      - name: Check the installed package is consumable via find_package
-        # tests/consumer is a throwaway downstream CMake project: it only
-        # sees the installed tree (dist/), never this repo's source or
-        # build tree, proving find_package works the way a real consumer
-        # would use it.
-        run: |
-          set -euo pipefail
-          cmake -S tests/consumer -B build-consumer -DCMAKE_PREFIX_PATH="$PWD/dist"
-          cmake --build build-consumer
-          core=$(find "$PWD/build/_deps/al-core-build" -type f -name 'libal.so*' | head -1)
-          test -n "$core"
-          IMAS_CORE_LIBRARY="$core" ./build-consumer/consumer_smoke
+          bash tests/check-installed-package.sh build dist "$core"

@@ -17,6 +17,8 @@ include(GNUInstallDirs)
 
 option(IMAS_MVDD_BUILD_TESTS "Build and register the test suite" ON)
 option(IMAS_MVDD_CARGO_OFFLINE "Pass --offline to cargo (build nodes without network)" OFF)
+option(IMAS_MVDD_REAL_CORE_TESTS
+    "Acquire IMAS-Core and build the drift and real-Core seam tests" ON)
 
 set(IMAS_MVDD_PACKAGE imas-mvdd-loader)   # cargo package name
 set(IMAS_MVDD_LIB_NAME imas_mvdd_loader)  # resulting library / header name
@@ -44,11 +46,11 @@ set(IMAS_CORE_DRIFT_VERSION
 # IMAS-Core acquisition
 #
 # The shim never links against IMAS-Core; it resolves it at runtime (see
-# docs/adr/0001-runtime-binding-not-linking.md). CMake still has to acquire
-# a real IMAS-Core in the build tree, so the test suite has one to run the
-# tracer (tests/runtime_binding_test.c) against, not only the recording
-# stub — a build that quietly tests nothing against real IMAS-Core is worse
-# than one that fails, so there is no skip-if-missing path.
+# docs/adr/0001-runtime-binding-not-linking.md). The default profile still
+# acquires real IMAS-Core so a missing prerequisite fails at configure time.
+# CI's explicit IMAS_MVDD_REAL_CORE_TESTS=OFF profile is the one exception:
+# it registers only the fast recording-stub seams, never a silently reduced
+# version of the real-Core suite.
 #
 # Three modes, matching the option vocabulary IMAS-Fortran's AL core
 # acquisition module already established (its top-level CMakeLists.txt),
@@ -91,7 +93,20 @@ set(IMAS_CORE_GIT_TAG "${IMAS_CORE_VERSION}"
 
 set(IMAS_CORE_MODULE_HINT "module load IMAS-Core/${IMAS_CORE_VERSION}")
 
-if(IMAS_CORE_DOWNLOAD_DEPENDENCIES)
+if(NOT IMAS_MVDD_REAL_CORE_TESTS AND
+        (IMAS_CORE_DOWNLOAD_DEPENDENCIES OR IMAS_CORE_DEVELOPMENT_LAYOUT))
+    message(FATAL_ERROR
+        "IMAS_MVDD_REAL_CORE_TESTS=OFF selects the recording-stub-only test "
+        "profile and cannot be combined with an IMAS-Core acquisition mode")
+endif()
+if(NOT IMAS_MVDD_REAL_CORE_TESTS AND NOT IMAS_MVDD_BUILD_TESTS)
+    message(FATAL_ERROR
+        "IMAS_MVDD_REAL_CORE_TESTS=OFF requires IMAS_MVDD_BUILD_TESTS=ON; "
+        "the recording-stub profile must not silently register no tests")
+endif()
+
+if(IMAS_MVDD_REAL_CORE_TESTS)
+    if(IMAS_CORE_DOWNLOAD_DEPENDENCIES)
     message(STATUS
         "Acquiring IMAS-Core: downloading ${IMAS_CORE_GIT_REPOSITORY} @ ${IMAS_CORE_GIT_TAG}")
     include(FetchContent)
@@ -105,7 +120,7 @@ if(IMAS_CORE_DOWNLOAD_DEPENDENCIES)
     endif()
     set(IMAS_CORE_AL_TARGET al)
     set(IMAS_CORE_BUILT_FROM_SOURCE TRUE)
-elseif(IMAS_CORE_DEVELOPMENT_LAYOUT)
+    elseif(IMAS_CORE_DEVELOPMENT_LAYOUT)
     set(IMAS_CORE_DEV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../IMAS-Core")
     if(NOT EXISTS "${IMAS_CORE_DEV_DIR}/CMakeLists.txt")
         message(FATAL_ERROR
@@ -118,7 +133,7 @@ elseif(IMAS_CORE_DEVELOPMENT_LAYOUT)
         EXCLUDE_FROM_ALL)
     set(IMAS_CORE_AL_TARGET al)
     set(IMAS_CORE_BUILT_FROM_SOURCE TRUE)
-else()
+    else()
     find_package(al-core CONFIG)
     if(NOT al-core_FOUND)
         message(FATAL_ERROR
@@ -135,6 +150,10 @@ else()
     message(STATUS "Acquiring IMAS-Core: found installed package (al-core_DIR=${al-core_DIR})")
     set(IMAS_CORE_AL_TARGET al-core::al)
     set(IMAS_CORE_BUILT_FROM_SOURCE FALSE)
+    endif()
+else()
+    message(STATUS
+        "IMAS-Core acquisition disabled: recording-stub-only test profile")
 endif()
 
 if(CMAKE_CONFIGURATION_TYPES)
@@ -269,10 +288,28 @@ set_target_properties(imas_mvdd_loader PROPERTIES
 if(IMAS_MVDD_BUILD_TESTS)
     enable_testing()
 
-    get_target_property(_imas_core_include_dirs ${IMAS_CORE_AL_TARGET}
-        INTERFACE_INCLUDE_DIRECTORIES)
-    if(NOT _imas_core_include_dirs)
-        message(FATAL_ERROR "${IMAS_CORE_AL_TARGET} does not publish IMAS-Core headers")
+    add_test(NAME ci-workflow
+        COMMAND "${CMAKE_COMMAND}"
+            "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_ci_workflow.cmake")
+
+    # The recording stub is the fast profile's runtime dependency and remains
+    # part of the full profile so the two complementary seam suites stay honest.
+    add_library(recording_stub SHARED
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/stub/recording_stub.c")
+    # Matches the shim's bare-soname fallback (src/resolve.rs) so the
+    # bare-soname scenario below can exercise the loader's normal search
+    # path instead of the explicit override.
+    set_target_properties(recording_stub PROPERTIES OUTPUT_NAME al)
+    target_compile_definitions(recording_stub PRIVATE
+        "RECORDING_STUB_DEFAULT_VERSION=\"${IMAS_CORE_VERSION}\"")
+
+    if(IMAS_MVDD_REAL_CORE_TESTS)
+        get_target_property(_imas_core_include_dirs ${IMAS_CORE_AL_TARGET}
+            INTERFACE_INCLUDE_DIRECTORIES)
+        if(NOT _imas_core_include_dirs)
+            message(FATAL_ERROR "${IMAS_CORE_AL_TARGET} does not publish IMAS-Core headers")
+        endif()
     endif()
 
     add_test(NAME rust-unit
@@ -285,9 +322,15 @@ if(IMAS_MVDD_BUILD_TESTS)
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
     add_test(NAME abi-smoke COMMAND abi_smoke)
+    if(IMAS_MVDD_REAL_CORE_TESTS)
+        set(_abi_smoke_core_target ${IMAS_CORE_AL_TARGET})
+    else()
+        set(_abi_smoke_core_target recording_stub)
+    endif()
     set_tests_properties(abi-smoke PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:${IMAS_CORE_AL_TARGET}>")
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:${_abi_smoke_core_target}>")
 
+    if(IMAS_MVDD_REAL_CORE_TESTS)
     # Keep the runtime-bound surface honest mechanically: after filtering to
     # IMAS-Core's public C ABI, the shim and Core must export the same names.
     # This deliberately catches a missing new symbol or any leftover shim-only
@@ -324,6 +367,7 @@ if(IMAS_MVDD_BUILD_TESTS)
             "-DSHIM_INCLUDE_DIR=${IMAS_MVDD_STAGED_INCLUDE_DIR}"
             "-DCORE_INCLUDE_DIRS=${_imas_core_include_dirs}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_abi_mismatch.cmake")
+    endif()
 
     # --- Runtime-binding test: proves the architecture (issue #3) ---------
     #
@@ -337,15 +381,6 @@ if(IMAS_MVDD_BUILD_TESTS)
     # shim's and the stub's) to choose between — exactly the ambiguity
     # runtime binding exists to avoid. runtime_binding_test only dlopen's the stub
     # itself, purely to read back its recorded state.
-    add_library(recording_stub SHARED
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/stub/recording_stub.c")
-    # Matches the shim's bare-soname fallback (src/resolve.rs) so the
-    # bare-soname scenario below can exercise the loader's normal search
-    # path instead of the explicit override.
-    set_target_properties(recording_stub PROPERTIES OUTPUT_NAME al)
-    target_compile_definitions(recording_stub PRIVATE
-        "RECORDING_STUB_DEFAULT_VERSION=\"${IMAS_CORE_VERSION}\"")
-
     add_executable(runtime_binding_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_binding_test.c")
     target_link_libraries(runtime_binding_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
@@ -407,7 +442,8 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(runtime-binding-bare-soname PROPERTIES ENVIRONMENT
         "${_runtime_binding_search_path_var}=$<TARGET_FILE_DIR:recording_stub>")
 
-    # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
+    if(IMAS_MVDD_REAL_CORE_TESTS)
+        # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
     #
     # The same shim call as scenario_success, but against the IMAS-Core
     # acquired above instead of the recording stub: al_context_info must
@@ -462,6 +498,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(runtime-binding-real-core-forwarding PROPERTIES
         ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:${IMAS_CORE_AL_TARGET}>"
         LABELS real-core)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
