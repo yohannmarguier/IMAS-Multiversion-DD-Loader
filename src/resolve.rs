@@ -422,36 +422,72 @@ pub(crate) fn get_dd_version() -> *const c_char {
     }
 }
 
+// Version-pinned values from IMAS-Core's al_const.h. TIMERANGE_OP and
+// FLEXBUFFERS_BACKEND deliberately have no entries: upstream's const2str map
+// omits them too (see the functionality inventory).
+const NO_BACKEND_ID: c_int = 10;
+const ASCII_BACKEND_ID: c_int = 11;
+const MDSPLUS_BACKEND_ID: c_int = 12;
+const HDF5_BACKEND_ID: c_int = 13;
+const MEMORY_BACKEND_ID: c_int = 14;
+const UDA_BACKEND_ID: c_int = 15;
+const GLOBAL_OP_ID: c_int = 20;
+const SLICE_OP_ID: c_int = 21;
+const READ_OP_ID: c_int = 30;
+const WRITE_OP_ID: c_int = 31;
+const REPLACE_OP_ID: c_int = 32;
+const UNDEFINED_INTERP_ID: c_int = 0;
+const CLOSEST_INTERP_ID: c_int = 1;
+const PREVIOUS_INTERP_ID: c_int = 2;
+const LINEAR_INTERP_ID: c_int = 3;
+const UNDEFINED_TIME_ID: c_int = -999;
+const OPEN_PULSE_ID: c_int = 40;
+const FORCE_OPEN_PULSE_ID: c_int = 41;
+const CREATE_PULSE_ID: c_int = 42;
+const FORCE_CREATE_PULSE_ID: c_int = 43;
+const CLOSE_PULSE_ID: c_int = 44;
+const ERASE_PULSE_ID: c_int = 45;
+const CHAR_DATA_ID: c_int = 50;
+const INTEGER_DATA_ID: c_int = 51;
+const DOUBLE_DATA_ID: c_int = 52;
+const COMPLEX_DATA_ID: c_int = 53;
+const ASCII_SERIALIZER_PROTOCOL_ID: c_int = 60;
+const FLEXBUFFERS_SERIALIZER_PROTOCOL_ID: c_int = 61;
+const UNKNOWN_ERR_ID: c_int = -1;
+const CONTEXT_ERR_ID: c_int = -2;
+const BACKEND_ERR_ID: c_int = -3;
+const LOWLEVEL_ERR_ID: c_int = -4;
+
 fn fallback_const2str(id: c_int) -> *const c_char {
     let name = match id {
-        10 => b"NO_BACKEND\0".as_slice(),
-        11 => b"ASCII_BACKEND\0".as_slice(),
-        12 => b"MDSPLUS_BACKEND\0".as_slice(),
-        13 => b"HDF5_BACKEND\0".as_slice(),
-        14 => b"MEMORY_BACKEND\0".as_slice(),
-        15 => b"UDA_BACKEND\0".as_slice(),
-        20 => b"GLOBAL_OP\0".as_slice(),
-        21 => b"SLICE_OP\0".as_slice(),
-        30 => b"READ_OP\0".as_slice(),
-        31 => b"WRITE_OP\0".as_slice(),
-        32 => b"REPLACE_OP\0".as_slice(),
-        0 => b"UNDEFINED_INTERP\0".as_slice(),
-        1 => b"CLOSEST_INTERP\0".as_slice(),
-        2 => b"PREVIOUS_INTERP\0".as_slice(),
-        3 => b"LINEAR_INTERP\0".as_slice(),
-        -999 => b"UNDEFINED_TIME\0".as_slice(),
-        40 => b"OPEN_PULSE\0".as_slice(),
-        41 => b"FORCE_OPEN_PULSE\0".as_slice(),
-        42 => b"CREATE_PULSE\0".as_slice(),
-        43 => b"FORCE_CREATE_PULSE\0".as_slice(),
-        44 => b"CLOSE_PULSE\0".as_slice(),
-        45 => b"ERASE_PULSE\0".as_slice(),
-        50 => b"CHAR_DATA\0".as_slice(),
-        51 => b"INTEGER_DATA\0".as_slice(),
-        52 => b"DOUBLE_DATA\0".as_slice(),
-        53 => b"COMPLEX_DATA\0".as_slice(),
-        60 => b"ASCII_SERIALIZER_PROTOCOL\0".as_slice(),
-        61 => b"FLEXBUFFERS_SERIALIZER_PROTOCOL\0".as_slice(),
+        NO_BACKEND_ID => b"NO_BACKEND\0".as_slice(),
+        ASCII_BACKEND_ID => b"ASCII_BACKEND\0".as_slice(),
+        MDSPLUS_BACKEND_ID => b"MDSPLUS_BACKEND\0".as_slice(),
+        HDF5_BACKEND_ID => b"HDF5_BACKEND\0".as_slice(),
+        MEMORY_BACKEND_ID => b"MEMORY_BACKEND\0".as_slice(),
+        UDA_BACKEND_ID => b"UDA_BACKEND\0".as_slice(),
+        GLOBAL_OP_ID => b"GLOBAL_OP\0".as_slice(),
+        SLICE_OP_ID => b"SLICE_OP\0".as_slice(),
+        READ_OP_ID => b"READ_OP\0".as_slice(),
+        WRITE_OP_ID => b"WRITE_OP\0".as_slice(),
+        REPLACE_OP_ID => b"REPLACE_OP\0".as_slice(),
+        UNDEFINED_INTERP_ID => b"UNDEFINED_INTERP\0".as_slice(),
+        CLOSEST_INTERP_ID => b"CLOSEST_INTERP\0".as_slice(),
+        PREVIOUS_INTERP_ID => b"PREVIOUS_INTERP\0".as_slice(),
+        LINEAR_INTERP_ID => b"LINEAR_INTERP\0".as_slice(),
+        UNDEFINED_TIME_ID => b"UNDEFINED_TIME\0".as_slice(),
+        OPEN_PULSE_ID => b"OPEN_PULSE\0".as_slice(),
+        FORCE_OPEN_PULSE_ID => b"FORCE_OPEN_PULSE\0".as_slice(),
+        CREATE_PULSE_ID => b"CREATE_PULSE\0".as_slice(),
+        FORCE_CREATE_PULSE_ID => b"FORCE_CREATE_PULSE\0".as_slice(),
+        CLOSE_PULSE_ID => b"CLOSE_PULSE\0".as_slice(),
+        ERASE_PULSE_ID => b"ERASE_PULSE\0".as_slice(),
+        CHAR_DATA_ID => b"CHAR_DATA\0".as_slice(),
+        INTEGER_DATA_ID => b"INTEGER_DATA\0".as_slice(),
+        DOUBLE_DATA_ID => b"DOUBLE_DATA\0".as_slice(),
+        COMPLEX_DATA_ID => b"COMPLEX_DATA\0".as_slice(),
+        ASCII_SERIALIZER_PROTOCOL_ID => b"ASCII_SERIALIZER_PROTOCOL\0".as_slice(),
+        FLEXBUFFERS_SERIALIZER_PROTOCOL_ID => b"FLEXBUFFERS_SERIALIZER_PROTOCOL\0".as_slice(),
         _ => b"\0".as_slice(),
     };
     static_c_str(name)
@@ -459,10 +495,10 @@ fn fallback_const2str(id: c_int) -> *const c_char {
 
 fn fallback_err2str(id: c_int) -> *const c_char {
     let name = match id {
-        -1 => b"UNKNOWN_ERR\0".as_slice(),
-        -2 => b"CONTEXT_ERR\0".as_slice(),
-        -3 => b"BACKEND_ERR\0".as_slice(),
-        -4 => b"LOWLEVEL_ERR\0".as_slice(),
+        UNKNOWN_ERR_ID => b"UNKNOWN_ERR\0".as_slice(),
+        CONTEXT_ERR_ID => b"CONTEXT_ERR\0".as_slice(),
+        BACKEND_ERR_ID => b"BACKEND_ERR\0".as_slice(),
+        LOWLEVEL_ERR_ID => b"LOWLEVEL_ERR\0".as_slice(),
         _ => b"\0".as_slice(),
     };
     static_c_str(name)
