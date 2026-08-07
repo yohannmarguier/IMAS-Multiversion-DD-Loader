@@ -19,11 +19,9 @@ use crate::{MAX_ERR_MSG_LEN, al_status_t};
 /// resolution order.
 const CORE_LIBRARY_ENV_VAR: &str = "IMAS_CORE_LIBRARY";
 
-/// IMAS-Core version this shim was built against. Real acquisition-time
-/// pinning (CMake fetching and threading through a specific tag) arrives
-/// with the ITER-style acquisition work tracked in issue #1; this constant
-/// stands in until that lands.
-const BUILT_AGAINST_VERSION: &str = "1.0.0";
+/// Supported IMAS-Core release, sourced by `build.rs` from the repository's
+/// `IMAS_CORE_VERSION` pin.
+const BUILT_AGAINST_VERSION: &str = env!("IMAS_CORE_VERSION");
 
 type ContextInfoFn = unsafe extern "C" fn(c_int, *mut *mut c_char) -> al_status_t;
 type GetAlVersionFn = unsafe extern "C" fn() -> *const c_char;

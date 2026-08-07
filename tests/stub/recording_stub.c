@@ -9,6 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef RECORDING_STUB_DEFAULT_VERSION
+#error "RECORDING_STUB_DEFAULT_VERSION must come from IMAS_CORE_VERSION"
+#endif
+
 typedef struct {
     int code;
     char message[256];
@@ -37,15 +41,14 @@ al_status_t al_context_info(int ctx, char **info) {
     return status;
 }
 
-/* Defaults to the version runtime_binding_test.c and src/resolve.rs both expect the
- * shim to be built against ("1.0.0"); RECORDING_STUB_VERSION lets a test
- * scenario simulate a different IMAS-Core. */
+/* Defaults to the repository's supported IMAS-Core release;
+ * RECORDING_STUB_VERSION lets a test simulate a different release. */
 const char *getALVersion(void) {
     if (getenv("RECORDING_STUB_NULL_VERSION") != NULL) {
         return NULL;
     }
     const char *version_override = getenv("RECORDING_STUB_VERSION");
-    return version_override != NULL ? version_override : "1.0.0";
+    return version_override != NULL ? version_override : RECORDING_STUB_DEFAULT_VERSION;
 }
 
 /* Introspection accessors below: not part of the mirrored IMAS-Core ABI.

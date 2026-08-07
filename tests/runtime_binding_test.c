@@ -18,11 +18,8 @@
  * because resolution is cached for the process's lifetime: a scenario that
  * needs a fresh resolution needs a fresh process, not a fresh setenv().
  *
- * The version literals below ("1.0.0", "2.0.0") must agree with
- * BUILT_AGAINST_VERSION in src/resolve.rs and the recording stub's default
- * in tests/stub/recording_stub.c -- kept as plain literals here rather than
- * a shared symbol, so the shim doesn't grow a permanent public export for a
- * test-only need. */
+ * The supported and deliberately incompatible versions are supplied from
+ * CMake's reading of IMAS_CORE_VERSION, the same pin consumed by build.rs. */
 
 #include <dlfcn.h>
 #include <stdio.h>
@@ -33,6 +30,12 @@
 
 #ifndef RECORDING_STUB_PATH
 #error "RECORDING_STUB_PATH must be defined by the build (see CMakeLists.txt)"
+#endif
+#ifndef SUPPORTED_CORE_VERSION
+#error "SUPPORTED_CORE_VERSION must come from IMAS_CORE_VERSION"
+#endif
+#ifndef INCOMPATIBLE_CORE_VERSION
+#error "INCOMPATIBLE_CORE_VERSION must be defined by the build"
 #endif
 
 typedef int (*int_accessor_fn)(void);
@@ -98,8 +101,8 @@ static void scenario_version_mismatch(void) {
     al_status_t status = al_context_info(1, &info);
 
     CHECK(status.code != 0);
-    CHECK(strstr(status.message, "1.0.0") != NULL); /* built-against version */
-    CHECK(strstr(status.message, "2.0.0") != NULL); /* stub's reported version */
+    CHECK(strstr(status.message, SUPPORTED_CORE_VERSION) != NULL);
+    CHECK(strstr(status.message, INCOMPATIBLE_CORE_VERSION) != NULL);
     CHECK(strstr(status.message, "IMAS_CORE_LIBRARY") != NULL);
     /* The mismatch must fail resolution before ever forwarding the call. */
     CHECK(call_count() == 0);

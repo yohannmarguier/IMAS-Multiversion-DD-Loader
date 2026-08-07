@@ -55,6 +55,7 @@ Use a single-config generator (Ninja, Unix Makefiles) and set
 ```
 CMakeLists.txt          drives cargo-c; owns install and tests
 Cargo.toml              crate-type + [package.metadata.capi]
+IMAS_CORE_VERSION       supported IMAS-Core release used by the runtime compatibility gate
 cbindgen.toml           generated-header settings
 src/lib.rs              the mirrored C ABI
 src/resolve.rs          runtime resolution of IMAS-Core: path/version checks, al_context_info
