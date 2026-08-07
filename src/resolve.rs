@@ -9,7 +9,7 @@
 //! `docs/adr/0001-runtime-binding-not-linking.md`.
 
 use std::env;
-use std::ffi::{CStr, c_char, c_int};
+use std::ffi::{CStr, c_char, c_double, c_int, c_void};
 use std::sync::OnceLock;
 
 use crate::dl::Library;
@@ -26,11 +26,75 @@ const BUILT_AGAINST_VERSION: &str = env!("IMAS_CORE_VERSION");
 type ContextInfoFn = unsafe extern "C" fn(c_int, *mut *mut c_char) -> al_status_t;
 type GetAlVersionFn = unsafe extern "C" fn() -> *const c_char;
 
+type BeginDataentryActionFn = unsafe extern "C" fn(*const c_char, c_int, *mut c_int) -> al_status_t;
+type ClosePulseFn = unsafe extern "C" fn(c_int, c_int) -> al_status_t;
+type BeginGlobalActionFn =
+    unsafe extern "C" fn(c_int, *const c_char, *const c_char, c_int, *mut c_int) -> al_status_t;
+type BeginSliceActionFn =
+    unsafe extern "C" fn(c_int, *const c_char, c_int, c_double, c_int, *mut c_int) -> al_status_t;
+type BeginTimerangeActionFn = unsafe extern "C" fn(
+    c_int,
+    *const c_char,
+    c_int,
+    c_double,
+    c_double,
+    *const c_double,
+    *const c_int,
+    c_int,
+    *mut c_int,
+) -> al_status_t;
+type BeginArraystructActionFn = unsafe extern "C" fn(
+    c_int,
+    *const c_char,
+    *const c_char,
+    *mut c_int,
+    *mut c_int,
+) -> al_status_t;
+type EndActionFn = unsafe extern "C" fn(c_int) -> al_status_t;
+type ReadDataFn = unsafe extern "C" fn(
+    c_int,
+    *const c_char,
+    *const c_char,
+    *mut *mut c_void,
+    c_int,
+    c_int,
+    *mut c_int,
+) -> al_status_t;
+type WriteDataFn = unsafe extern "C" fn(
+    c_int,
+    *const c_char,
+    *const c_char,
+    *mut c_void,
+    c_int,
+    c_int,
+    *mut c_int,
+) -> al_status_t;
+type DeleteDataFn = unsafe extern "C" fn(c_int, *const c_char) -> al_status_t;
+type IterateOverArraystructFn = unsafe extern "C" fn(c_int, c_int) -> al_status_t;
+type GetOccurrencesFn =
+    unsafe extern "C" fn(c_int, *const c_char, *mut *mut c_int, *mut c_int) -> al_status_t;
+type ListFilledPathsFn =
+    unsafe extern "C" fn(c_int, *const c_char, *mut *mut *mut c_char, *mut c_int) -> al_status_t;
+
 struct CoreBinding {
-    // Kept alive for the process's lifetime: dropping it would unmap
-    // `context_info`. Never read again once resolution succeeds.
+    // Kept alive for the process's lifetime: dropping it would unmap the
+    // resolved function pointers below. Never read again once resolution
+    // succeeds.
     _library: Library,
     context_info: ContextInfoFn,
+    begin_dataentry_action: BeginDataentryActionFn,
+    close_pulse: ClosePulseFn,
+    begin_global_action: BeginGlobalActionFn,
+    begin_slice_action: BeginSliceActionFn,
+    begin_timerange_action: BeginTimerangeActionFn,
+    begin_arraystruct_action: BeginArraystructActionFn,
+    end_action: EndActionFn,
+    read_data: ReadDataFn,
+    write_data: WriteDataFn,
+    delete_data: DeleteDataFn,
+    iterate_over_arraystruct: IterateOverArraystructFn,
+    get_occurrences: GetOccurrencesFn,
+    list_filled_paths: ListFilledPathsFn,
     // Retained with the binding so tolerated compatibility drift remains
     // recorded for the process lifetime after its diagnostic is emitted.
     _version_drift: Option<VersionDrift>,
@@ -95,10 +159,44 @@ fn resolve() -> Result<CoreBinding, al_status_t> {
 
     let context_info: ContextInfoFn =
         unsafe { resolve_symbol(&library, &path, "al_context_info") }?;
+    let begin_dataentry_action: BeginDataentryActionFn =
+        unsafe { resolve_symbol(&library, &path, "al_begin_dataentry_action") }?;
+    let close_pulse: ClosePulseFn = unsafe { resolve_symbol(&library, &path, "al_close_pulse") }?;
+    let begin_global_action: BeginGlobalActionFn =
+        unsafe { resolve_symbol(&library, &path, "al_begin_global_action") }?;
+    let begin_slice_action: BeginSliceActionFn =
+        unsafe { resolve_symbol(&library, &path, "al_begin_slice_action") }?;
+    let begin_timerange_action: BeginTimerangeActionFn =
+        unsafe { resolve_symbol(&library, &path, "al_begin_timerange_action") }?;
+    let begin_arraystruct_action: BeginArraystructActionFn =
+        unsafe { resolve_symbol(&library, &path, "al_begin_arraystruct_action") }?;
+    let end_action: EndActionFn = unsafe { resolve_symbol(&library, &path, "al_end_action") }?;
+    let read_data: ReadDataFn = unsafe { resolve_symbol(&library, &path, "al_read_data") }?;
+    let write_data: WriteDataFn = unsafe { resolve_symbol(&library, &path, "al_write_data") }?;
+    let delete_data: DeleteDataFn = unsafe { resolve_symbol(&library, &path, "al_delete_data") }?;
+    let iterate_over_arraystruct: IterateOverArraystructFn =
+        unsafe { resolve_symbol(&library, &path, "al_iterate_over_arraystruct") }?;
+    let get_occurrences: GetOccurrencesFn =
+        unsafe { resolve_symbol(&library, &path, "al_get_occurrences") }?;
+    let list_filled_paths: ListFilledPathsFn =
+        unsafe { resolve_symbol(&library, &path, "al_list_filled_paths") }?;
 
     Ok(CoreBinding {
         _library: library,
         context_info,
+        begin_dataentry_action,
+        close_pulse,
+        begin_global_action,
+        begin_slice_action,
+        begin_timerange_action,
+        begin_arraystruct_action,
+        end_action,
+        read_data,
+        write_data,
+        delete_data,
+        iterate_over_arraystruct,
+        get_occurrences,
+        list_filled_paths,
         _version_drift: version_drift,
     })
 }
@@ -214,6 +312,259 @@ fn write_truncated(buffer: &mut [c_char; MAX_ERR_MSG_LEN], message: &str) {
 pub(crate) unsafe fn context_info(ctx: c_int, info: *mut *mut c_char) -> al_status_t {
     match core() {
         Ok(binding) => unsafe { (binding.context_info)(ctx, info) },
+        Err(status) => *status,
+    }
+}
+
+/// Forwards to IMAS-Core's real `al_begin_dataentry_action`, resolving
+/// IMAS-Core lazily on first use.
+///
+/// # Safety
+/// `uri` must be a valid, NUL-terminated C string. `dectxID` must be a
+/// valid, writable `*mut c_int`, matching IMAS-Core's own contract.
+pub(crate) unsafe fn begin_dataentry_action(
+    uri: *const c_char,
+    mode: c_int,
+    dectx_id: *mut c_int,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.begin_dataentry_action)(uri, mode, dectx_id) },
+        Err(status) => *status,
+    }
+}
+
+/// Forwards to IMAS-Core's real `al_close_pulse`, resolving IMAS-Core
+/// lazily on first use.
+pub(crate) fn close_pulse(pulse_ctx: c_int, mode: c_int) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.close_pulse)(pulse_ctx, mode) },
+        Err(status) => *status,
+    }
+}
+
+/// Forwards to IMAS-Core's real `al_begin_global_action`, resolving
+/// IMAS-Core lazily on first use.
+///
+/// # Safety
+/// `dataobjectname` and `datapath` must be valid, NUL-terminated C strings,
+/// or null where IMAS-Core's own contract allows it. `octxID` must be a
+/// valid, writable `*mut c_int`.
+pub(crate) unsafe fn begin_global_action(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    datapath: *const c_char,
+    rwmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.begin_global_action)(pctx_id, dataobjectname, datapath, rwmode, octx_id)
+        },
+        Err(status) => *status,
+    }
+}
+
+/// Forwards to IMAS-Core's real `al_begin_slice_action`, resolving
+/// IMAS-Core lazily on first use.
+///
+/// # Safety
+/// `dataobjectname` must be a valid, NUL-terminated C string, or null where
+/// IMAS-Core's own contract allows it. `octxID` must be a valid, writable
+/// `*mut c_int`.
+pub(crate) unsafe fn begin_slice_action(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    rwmode: c_int,
+    time: c_double,
+    interpmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.begin_slice_action)(pctx_id, dataobjectname, rwmode, time, interpmode, octx_id)
+        },
+        Err(status) => *status,
+    }
+}
+
+/// Forwards to IMAS-Core's real `al_begin_timerange_action`, resolving
+/// IMAS-Core lazily on first use.
+///
+/// # Safety
+/// `dataobjectname` must be a valid, NUL-terminated C string, or null where
+/// IMAS-Core's own contract allows it. `dtime_buffer` and `dtime_shape`
+/// must together describe a valid buffer, or be null/empty. `octxID` must
+/// be a valid, writable `*mut c_int`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) unsafe fn begin_timerange_action(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    rwmode: c_int,
+    tmin: c_double,
+    tmax: c_double,
+    dtime_buffer: *const c_double,
+    dtime_shape: *const c_int,
+    interpmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.begin_timerange_action)(
+                pctx_id,
+                dataobjectname,
+                rwmode,
+                tmin,
+                tmax,
+                dtime_buffer,
+                dtime_shape,
+                interpmode,
+                octx_id,
+            )
+        },
+        Err(status) => *status,
+    }
+}
+
+/// Forwards to IMAS-Core's real `al_begin_arraystruct_action`, resolving
+/// IMAS-Core lazily on first use.
+///
+/// # Safety
+/// `path` and `timebase` must be valid, NUL-terminated C strings, or null
+/// where IMAS-Core's own contract allows it. `size` and `actxID` must be
+/// valid, writable `*mut c_int`.
+pub(crate) unsafe fn begin_arraystruct_action(
+    ctx_id: c_int,
+    path: *const c_char,
+    timebase: *const c_char,
+    size: *mut c_int,
+    actx_id: *mut c_int,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.begin_arraystruct_action)(ctx_id, path, timebase, size, actx_id)
+        },
+        Err(status) => *status,
+    }
+}
+
+/// Forwards to IMAS-Core's real `al_end_action`, resolving IMAS-Core
+/// lazily on first use.
+pub(crate) fn end_action(ctx_id: c_int) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.end_action)(ctx_id) },
+        Err(status) => *status,
+    }
+}
+
+/// Forwards to IMAS-Core's real `al_read_data`, resolving IMAS-Core lazily
+/// on first use.
+///
+/// # Safety
+/// `field` and `timebase` must be valid, NUL-terminated C strings, or null
+/// where IMAS-Core's own contract allows it. `data` and `size` must be
+/// valid, writable pointers, matching IMAS-Core's own contract for this
+/// function.
+pub(crate) unsafe fn read_data(
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.read_data)(ctx_id, field, timebase, data, datatype, dim, size)
+        },
+        Err(status) => *status,
+    }
+}
+
+/// Forwards to IMAS-Core's real `al_write_data`, resolving IMAS-Core
+/// lazily on first use.
+///
+/// # Safety
+/// `field` and `timebase` must be valid, NUL-terminated C strings, or null
+/// where IMAS-Core's own contract allows it. `data` and `size` must be
+/// valid pointers, matching IMAS-Core's own contract for this function.
+pub(crate) unsafe fn write_data(
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.write_data)(ctx_id, field, timebase, data, datatype, dim, size)
+        },
+        Err(status) => *status,
+    }
+}
+
+/// Forwards to IMAS-Core's real `al_delete_data`, resolving IMAS-Core
+/// lazily on first use.
+///
+/// # Safety
+/// `path` must be a valid, NUL-terminated C string, or null where
+/// IMAS-Core's own contract allows it.
+pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.delete_data)(ctx, path) },
+        Err(status) => *status,
+    }
+}
+
+/// Forwards to IMAS-Core's real `al_iterate_over_arraystruct`, resolving
+/// IMAS-Core lazily on first use.
+pub(crate) fn iterate_over_arraystruct(aosctx: c_int, step: c_int) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.iterate_over_arraystruct)(aosctx, step) },
+        Err(status) => *status,
+    }
+}
+
+/// Forwards to IMAS-Core's real `al_get_occurrences`, resolving IMAS-Core
+/// lazily on first use.
+///
+/// # Safety
+/// `ids_name` must be a valid, NUL-terminated C string. `occurrences_list`
+/// and `size` must be valid, writable pointers, matching IMAS-Core's own
+/// contract for this function.
+pub(crate) unsafe fn get_occurrences(
+    pctx_id: c_int,
+    ids_name: *const c_char,
+    occurrences_list: *mut *mut c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.get_occurrences)(pctx_id, ids_name, occurrences_list, size)
+        },
+        Err(status) => *status,
+    }
+}
+
+/// Forwards to IMAS-Core's real `al_list_filled_paths`, resolving
+/// IMAS-Core lazily on first use.
+///
+/// # Safety
+/// `dataobjectname` must be a valid, NUL-terminated C string. `path_list`
+/// and `size` must be valid, writable pointers, matching IMAS-Core's own
+/// contract for this function.
+pub(crate) unsafe fn list_filled_paths(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    path_list: *mut *mut *mut c_char,
+    size: *mut c_int,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.list_filled_paths)(pctx_id, dataobjectname, path_list, size)
+        },
         Err(status) => *status,
     }
 }

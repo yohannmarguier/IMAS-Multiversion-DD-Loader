@@ -11,7 +11,9 @@
 #![allow(non_camel_case_types)]
 
 use std::ffi::c_char;
+use std::ffi::c_double;
 use std::ffi::c_int;
+use std::ffi::c_void;
 
 mod dl;
 mod resolve;
@@ -76,6 +78,232 @@ pub unsafe extern "C" fn imas_mvdd_loader_status_clear(status: *mut al_status_t)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn al_context_info(ctx: c_int, info: *mut *mut c_char) -> al_status_t {
     unsafe { resolve::context_info(ctx, info) }
+}
+
+/// Mirrors IMAS-Core's `al_begin_dataentry_action` exactly and forwards
+/// unchanged. Opens a pulse addressed by `uri` and reports the resulting
+/// context id in `*dectxID`.
+///
+/// # Safety
+/// `uri` must be a valid, NUL-terminated C string. `dectxID` must be a
+/// valid, writable `*mut c_int`, matching IMAS-Core's own contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_begin_dataentry_action(
+    uri: *const c_char,
+    mode: c_int,
+    dectx_id: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::begin_dataentry_action(uri, mode, dectx_id) }
+}
+
+/// Mirrors IMAS-Core's `al_close_pulse` exactly and forwards unchanged.
+#[unsafe(no_mangle)]
+pub extern "C" fn al_close_pulse(pulse_ctx: c_int, mode: c_int) -> al_status_t {
+    resolve::close_pulse(pulse_ctx, mode)
+}
+
+/// Mirrors IMAS-Core's `al_begin_global_action` exactly and forwards
+/// unchanged. `dataobjectname` and `datapath` are seam arguments: this
+/// ticket forwards them verbatim, DD path translation is future work.
+///
+/// # Safety
+/// `dataobjectname` and `datapath` must be valid, NUL-terminated C
+/// strings, or null where IMAS-Core's own contract allows it. `octxID`
+/// must be a valid, writable `*mut c_int`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_begin_global_action(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    datapath: *const c_char,
+    rwmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::begin_global_action(pctx_id, dataobjectname, datapath, rwmode, octx_id) }
+}
+
+/// Mirrors IMAS-Core's `al_begin_slice_action` exactly and forwards
+/// unchanged. `dataobjectname` is a seam argument: this ticket forwards it
+/// verbatim, DD path translation is future work.
+///
+/// # Safety
+/// `dataobjectname` must be a valid, NUL-terminated C string, or null
+/// where IMAS-Core's own contract allows it. `octxID` must be a valid,
+/// writable `*mut c_int`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_begin_slice_action(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    rwmode: c_int,
+    time: c_double,
+    interpmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    unsafe {
+        resolve::begin_slice_action(pctx_id, dataobjectname, rwmode, time, interpmode, octx_id)
+    }
+}
+
+/// Mirrors IMAS-Core's `al_begin_timerange_action` exactly and forwards
+/// unchanged. `dataobjectname` is a seam argument: this ticket forwards it
+/// verbatim, DD path translation is future work.
+///
+/// # Safety
+/// `dataobjectname` must be a valid, NUL-terminated C string, or null
+/// where IMAS-Core's own contract allows it. `dtime_buffer` and
+/// `dtime_shape` must together describe a valid buffer, or be null/empty.
+/// `octxID` must be a valid, writable `*mut c_int`.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_begin_timerange_action(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    rwmode: c_int,
+    tmin: c_double,
+    tmax: c_double,
+    dtime_buffer: *const c_double,
+    dtime_shape: *const c_int,
+    interpmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    unsafe {
+        resolve::begin_timerange_action(
+            pctx_id,
+            dataobjectname,
+            rwmode,
+            tmin,
+            tmax,
+            dtime_buffer,
+            dtime_shape,
+            interpmode,
+            octx_id,
+        )
+    }
+}
+
+/// Mirrors IMAS-Core's `al_begin_arraystruct_action` exactly and forwards
+/// unchanged. `path` and `timebase` are seam arguments: this ticket
+/// forwards them verbatim, DD path translation is future work.
+///
+/// # Safety
+/// `path` and `timebase` must be valid, NUL-terminated C strings, or null
+/// where IMAS-Core's own contract allows it. `size` and `actxID` must be
+/// valid, writable `*mut c_int`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_begin_arraystruct_action(
+    ctx_id: c_int,
+    path: *const c_char,
+    timebase: *const c_char,
+    size: *mut c_int,
+    actx_id: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::begin_arraystruct_action(ctx_id, path, timebase, size, actx_id) }
+}
+
+/// Mirrors IMAS-Core's `al_end_action` exactly and forwards unchanged.
+#[unsafe(no_mangle)]
+pub extern "C" fn al_end_action(ctx_id: c_int) -> al_status_t {
+    resolve::end_action(ctx_id)
+}
+
+/// Mirrors IMAS-Core's `al_read_data` exactly and forwards unchanged.
+/// `field` and `timebase` are seam arguments: this ticket forwards them
+/// verbatim, DD path translation is future work.
+///
+/// # Safety
+/// `field` and `timebase` must be valid, NUL-terminated C strings, or null
+/// where IMAS-Core's own contract allows it. `data` and `size` must be
+/// valid, writable pointers, matching IMAS-Core's own contract for this
+/// function.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_read_data(
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::read_data(ctx_id, field, timebase, data, datatype, dim, size) }
+}
+
+/// Mirrors IMAS-Core's `al_write_data` exactly and forwards unchanged.
+/// `field` and `timebase` are seam arguments: this ticket forwards them
+/// verbatim, DD path translation is future work.
+///
+/// # Safety
+/// `field` and `timebase` must be valid, NUL-terminated C strings, or null
+/// where IMAS-Core's own contract allows it. `data` and `size` must be
+/// valid pointers, matching IMAS-Core's own contract for this function.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_write_data(
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::write_data(ctx_id, field, timebase, data, datatype, dim, size) }
+}
+
+/// Mirrors IMAS-Core's `al_delete_data` exactly and forwards unchanged.
+/// `path` is a seam argument: this ticket forwards it verbatim, DD path
+/// translation is future work.
+///
+/// # Safety
+/// `path` must be a valid, NUL-terminated C string, or null where
+/// IMAS-Core's own contract allows it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_delete_data(ctx: c_int, path: *const c_char) -> al_status_t {
+    unsafe { resolve::delete_data(ctx, path) }
+}
+
+/// Mirrors IMAS-Core's `al_iterate_over_arraystruct` exactly and forwards
+/// unchanged.
+#[unsafe(no_mangle)]
+pub extern "C" fn al_iterate_over_arraystruct(aosctx: c_int, step: c_int) -> al_status_t {
+    resolve::iterate_over_arraystruct(aosctx, step)
+}
+
+/// Mirrors IMAS-Core's `al_get_occurrences` exactly and forwards
+/// unchanged. `ids_name` is a seam argument: this ticket forwards it
+/// verbatim, DD path translation is future work.
+///
+/// # Safety
+/// `ids_name` must be a valid, NUL-terminated C string. `occurrences_list`
+/// and `size` must be valid, writable pointers, matching IMAS-Core's own
+/// contract for this function. On success the caller owns
+/// `*occurrences_list` per IMAS-Core's documented contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_get_occurrences(
+    pctx_id: c_int,
+    ids_name: *const c_char,
+    occurrences_list: *mut *mut c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::get_occurrences(pctx_id, ids_name, occurrences_list, size) }
+}
+
+/// Mirrors IMAS-Core's `al_list_filled_paths` exactly and forwards
+/// unchanged. `dataobjectname` is a seam argument on the way down, and the
+/// returned `*path_list` is the main up-conversion seam — this ticket
+/// forwards both verbatim, DD path translation is future work.
+///
+/// # Safety
+/// `dataobjectname` must be a valid, NUL-terminated C string. `path_list`
+/// and `size` must be valid, writable pointers, matching IMAS-Core's own
+/// contract for this function. On success the caller owns `*path_list` and
+/// every string in it, per IMAS-Core's documented contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_list_filled_paths(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    path_list: *mut *mut *mut c_char,
+    size: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::list_filled_paths(pctx_id, dataobjectname, path_list, size) }
 }
 
 #[cfg(test)]

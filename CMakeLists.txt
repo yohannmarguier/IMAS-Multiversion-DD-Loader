@@ -236,6 +236,10 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(runtime-binding-missing-library PROPERTIES ENVIRONMENT
         "IMAS_CORE_LIBRARY=${CMAKE_CURRENT_BINARY_DIR}/does-not-exist.so")
 
+    add_test(NAME runtime-binding-verbatim-forwarding COMMAND runtime_binding_test verbatim-forwarding)
+    set_tests_properties(runtime-binding-verbatim-forwarding PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
     add_test(NAME runtime-binding-bare-soname COMMAND runtime_binding_test bare-soname)
     if(APPLE)
         set(_runtime_binding_search_path_var DYLD_LIBRARY_PATH)
