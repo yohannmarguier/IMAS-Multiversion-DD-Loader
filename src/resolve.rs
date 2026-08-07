@@ -201,6 +201,18 @@ fn core() -> Result<&'static CoreBinding, &'static al_status_t> {
     resolution().as_ref().map_err(ResolutionError::status)
 }
 
+// Every status-returning ABI function uses the same resolution failure
+// channel. Keep that plumbing in one place while leaving each named forwarder
+// available as the future path/value-conversion seam.
+macro_rules! forward_status {
+    ($function:ident($($argument:expr),* $(,)?)) => {
+        match core() {
+            Ok(binding) => unsafe { (binding.$function)($($argument),*) },
+            Err(status) => *status,
+        }
+    };
+}
+
 // `al_status_t` is the ABI struct itself, not an internal error type boxed
 // away for convenience — returning it by value from `Err` is the point.
 #[allow(clippy::result_large_err)]
@@ -359,10 +371,7 @@ fn resolve() -> Result<CoreBinding, ResolutionError> {
 }
 
 pub(crate) unsafe fn get_backend_id(ctx: c_int, backend_id: *mut c_int) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.get_backend_id)(ctx, backend_id) },
-        Err(status) => *status,
-    }
+    forward_status!(get_backend_id(ctx, backend_id))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -376,14 +385,9 @@ pub(crate) unsafe fn build_uri_from_legacy_parameters(
     options: *const c_char,
     uri: *mut *mut c_char,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.build_uri_from_legacy_parameters)(
-                backend_id, pulse, run, user, tokamak, version, options, uri,
-            )
-        },
-        Err(status) => *status,
-    }
+    forward_status!(build_uri_from_legacy_parameters(
+        backend_id, pulse, run, user, tokamak, version, options, uri,
+    ))
 }
 
 pub(crate) fn const2str(id: c_int) -> *const c_char {
@@ -617,10 +621,7 @@ fn write_truncated(buffer: &mut [c_char; MAX_ERR_MSG_LEN], message: &str) {
 /// `info` must be a valid, writable `*mut *mut c_char`, or null, matching
 /// IMAS-Core's own contract for this function.
 pub(crate) unsafe fn context_info(ctx: c_int, info: *mut *mut c_char) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.context_info)(ctx, info) },
-        Err(status) => *status,
-    }
+    forward_status!(context_info(ctx, info))
 }
 
 /// Forwards to IMAS-Core's real `al_begin_dataentry_action`, resolving
@@ -634,19 +635,13 @@ pub(crate) unsafe fn begin_dataentry_action(
     mode: c_int,
     dectx_id: *mut c_int,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.begin_dataentry_action)(uri, mode, dectx_id) },
-        Err(status) => *status,
-    }
+    forward_status!(begin_dataentry_action(uri, mode, dectx_id))
 }
 
 /// Forwards to IMAS-Core's real `al_close_pulse`, resolving IMAS-Core
 /// lazily on first use.
 pub(crate) fn close_pulse(pulse_ctx: c_int, mode: c_int) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.close_pulse)(pulse_ctx, mode) },
-        Err(status) => *status,
-    }
+    forward_status!(close_pulse(pulse_ctx, mode))
 }
 
 /// Forwards to IMAS-Core's real `al_begin_global_action`, resolving
@@ -663,12 +658,13 @@ pub(crate) unsafe fn begin_global_action(
     rwmode: c_int,
     octx_id: *mut c_int,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.begin_global_action)(pctx_id, dataobjectname, datapath, rwmode, octx_id)
-        },
-        Err(status) => *status,
-    }
+    forward_status!(begin_global_action(
+        pctx_id,
+        dataobjectname,
+        datapath,
+        rwmode,
+        octx_id,
+    ))
 }
 
 /// Forwards to IMAS-Core's real `al_begin_slice_action`, resolving
@@ -686,12 +682,14 @@ pub(crate) unsafe fn begin_slice_action(
     interpmode: c_int,
     octx_id: *mut c_int,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.begin_slice_action)(pctx_id, dataobjectname, rwmode, time, interpmode, octx_id)
-        },
-        Err(status) => *status,
-    }
+    forward_status!(begin_slice_action(
+        pctx_id,
+        dataobjectname,
+        rwmode,
+        time,
+        interpmode,
+        octx_id,
+    ))
 }
 
 /// Forwards to IMAS-Core's real `al_begin_timerange_action`, resolving
@@ -714,22 +712,17 @@ pub(crate) unsafe fn begin_timerange_action(
     interpmode: c_int,
     octx_id: *mut c_int,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.begin_timerange_action)(
-                pctx_id,
-                dataobjectname,
-                rwmode,
-                tmin,
-                tmax,
-                dtime_buffer,
-                dtime_shape,
-                interpmode,
-                octx_id,
-            )
-        },
-        Err(status) => *status,
-    }
+    forward_status!(begin_timerange_action(
+        pctx_id,
+        dataobjectname,
+        rwmode,
+        tmin,
+        tmax,
+        dtime_buffer,
+        dtime_shape,
+        interpmode,
+        octx_id,
+    ))
 }
 
 /// Forwards to IMAS-Core's real `al_begin_arraystruct_action`, resolving
@@ -746,21 +739,15 @@ pub(crate) unsafe fn begin_arraystruct_action(
     size: *mut c_int,
     actx_id: *mut c_int,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.begin_arraystruct_action)(ctx_id, path, timebase, size, actx_id)
-        },
-        Err(status) => *status,
-    }
+    forward_status!(begin_arraystruct_action(
+        ctx_id, path, timebase, size, actx_id,
+    ))
 }
 
 /// Forwards to IMAS-Core's real `al_end_action`, resolving IMAS-Core
 /// lazily on first use.
 pub(crate) fn end_action(ctx_id: c_int) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.end_action)(ctx_id) },
-        Err(status) => *status,
-    }
+    forward_status!(end_action(ctx_id))
 }
 
 /// Forwards to IMAS-Core's real `al_read_data`, resolving IMAS-Core lazily
@@ -780,12 +767,9 @@ pub(crate) unsafe fn read_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.read_data)(ctx_id, field, timebase, data, datatype, dim, size)
-        },
-        Err(status) => *status,
-    }
+    forward_status!(read_data(
+        ctx_id, field, timebase, data, datatype, dim, size,
+    ))
 }
 
 /// Forwards to IMAS-Core's real `al_write_data`, resolving IMAS-Core
@@ -804,12 +788,9 @@ pub(crate) unsafe fn write_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.write_data)(ctx_id, field, timebase, data, datatype, dim, size)
-        },
-        Err(status) => *status,
-    }
+    forward_status!(write_data(
+        ctx_id, field, timebase, data, datatype, dim, size,
+    ))
 }
 
 /// Forwards to IMAS-Core's real `al_delete_data`, resolving IMAS-Core
@@ -819,19 +800,13 @@ pub(crate) unsafe fn write_data(
 /// `path` must be a valid, NUL-terminated C string, or null where
 /// IMAS-Core's own contract allows it.
 pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.delete_data)(ctx, path) },
-        Err(status) => *status,
-    }
+    forward_status!(delete_data(ctx, path))
 }
 
 /// Forwards to IMAS-Core's real `al_iterate_over_arraystruct`, resolving
 /// IMAS-Core lazily on first use.
 pub(crate) fn iterate_over_arraystruct(aosctx: c_int, step: c_int) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.iterate_over_arraystruct)(aosctx, step) },
-        Err(status) => *status,
-    }
+    forward_status!(iterate_over_arraystruct(aosctx, step))
 }
 
 /// Forwards to IMAS-Core's real `al_get_occurrences`, resolving IMAS-Core
@@ -847,12 +822,7 @@ pub(crate) unsafe fn get_occurrences(
     occurrences_list: *mut *mut c_int,
     size: *mut c_int,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.get_occurrences)(pctx_id, ids_name, occurrences_list, size)
-        },
-        Err(status) => *status,
-    }
+    forward_status!(get_occurrences(pctx_id, ids_name, occurrences_list, size,))
 }
 
 /// Forwards to IMAS-Core's real `al_list_filled_paths`, resolving
@@ -868,77 +838,48 @@ pub(crate) unsafe fn list_filled_paths(
     path_list: *mut *mut *mut c_char,
     size: *mut c_int,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.list_filled_paths)(pctx_id, dataobjectname, path_list, size)
-        },
-        Err(status) => *status,
-    }
+    forward_status!(list_filled_paths(pctx_id, dataobjectname, path_list, size,))
 }
 
 pub(crate) unsafe fn register_plugin(plugin_name: *const c_char) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.register_plugin)(plugin_name) },
-        Err(status) => *status,
-    }
+    forward_status!(register_plugin(plugin_name))
 }
 
 pub(crate) unsafe fn unregister_plugin(plugin_name: *const c_char) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.unregister_plugin)(plugin_name) },
-        Err(status) => *status,
-    }
+    forward_status!(unregister_plugin(plugin_name))
 }
 
 pub(crate) unsafe fn bind_plugin(
     field_path: *const c_char,
     plugin_name: *const c_char,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.bind_plugin)(field_path, plugin_name) },
-        Err(status) => *status,
-    }
+    forward_status!(bind_plugin(field_path, plugin_name))
 }
 
 pub(crate) unsafe fn unbind_plugin(
     field_path: *const c_char,
     plugin_name: *const c_char,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.unbind_plugin)(field_path, plugin_name) },
-        Err(status) => *status,
-    }
+    forward_status!(unbind_plugin(field_path, plugin_name))
 }
 
 pub(crate) fn bind_readback_plugins(ctx_id: c_int) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.bind_readback_plugins)(ctx_id) },
-        Err(status) => *status,
-    }
+    forward_status!(bind_readback_plugins(ctx_id))
 }
 
 pub(crate) fn unbind_readback_plugins(ctx_id: c_int) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.unbind_readback_plugins)(ctx_id) },
-        Err(status) => *status,
-    }
+    forward_status!(unbind_readback_plugins(ctx_id))
 }
 
 pub(crate) unsafe fn is_plugin_registered(
     plugin_name: *const c_char,
     is_registered: *mut bool,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.is_plugin_registered)(plugin_name, is_registered) },
-        Err(status) => *status,
-    }
+    forward_status!(is_plugin_registered(plugin_name, is_registered))
 }
 
 pub(crate) fn write_plugins_metadata(ctx_id: c_int) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.write_plugins_metadata)(ctx_id) },
-        Err(status) => *status,
-    }
+    forward_status!(write_plugins_metadata(ctx_id))
 }
 
 pub(crate) unsafe fn setvalue_parameter_plugin(
@@ -949,19 +890,14 @@ pub(crate) unsafe fn setvalue_parameter_plugin(
     data: *mut c_void,
     plugin_name: *const c_char,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.setvalue_parameter_plugin)(
-                parameter_name,
-                datatype,
-                dim,
-                size,
-                data,
-                plugin_name,
-            )
-        },
-        Err(status) => *status,
-    }
+    forward_status!(setvalue_parameter_plugin(
+        parameter_name,
+        datatype,
+        dim,
+        size,
+        data,
+        plugin_name,
+    ))
 }
 
 pub(crate) unsafe fn setvalue_int_scalar_parameter_plugin(
@@ -969,16 +905,11 @@ pub(crate) unsafe fn setvalue_int_scalar_parameter_plugin(
     parameter_value: c_int,
     plugin_name: *const c_char,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.setvalue_int_scalar_parameter_plugin)(
-                parameter_name,
-                parameter_value,
-                plugin_name,
-            )
-        },
-        Err(status) => *status,
-    }
+    forward_status!(setvalue_int_scalar_parameter_plugin(
+        parameter_name,
+        parameter_value,
+        plugin_name,
+    ))
 }
 
 pub(crate) unsafe fn setvalue_double_scalar_parameter_plugin(
@@ -986,16 +917,11 @@ pub(crate) unsafe fn setvalue_double_scalar_parameter_plugin(
     parameter_value: c_double,
     plugin_name: *const c_char,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.setvalue_double_scalar_parameter_plugin)(
-                parameter_name,
-                parameter_value,
-                plugin_name,
-            )
-        },
-        Err(status) => *status,
-    }
+    forward_status!(setvalue_double_scalar_parameter_plugin(
+        parameter_name,
+        parameter_value,
+        plugin_name,
+    ))
 }
 
 pub(crate) unsafe fn plugin_begin_global_action(
@@ -1005,12 +931,13 @@ pub(crate) unsafe fn plugin_begin_global_action(
     rwmode: c_int,
     octx_id: *mut c_int,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.plugin_begin_global_action)(pctx_id, dataobjectname, datapath, rwmode, octx_id)
-        },
-        Err(status) => *status,
-    }
+    forward_status!(plugin_begin_global_action(
+        pctx_id,
+        dataobjectname,
+        datapath,
+        rwmode,
+        octx_id,
+    ))
 }
 
 pub(crate) unsafe fn plugin_begin_slice_action(
@@ -1021,19 +948,14 @@ pub(crate) unsafe fn plugin_begin_slice_action(
     interpmode: c_int,
     octx_id: *mut c_int,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.plugin_begin_slice_action)(
-                pctx_id,
-                dataobjectname,
-                rwmode,
-                time,
-                interpmode,
-                octx_id,
-            )
-        },
-        Err(status) => *status,
-    }
+    forward_status!(plugin_begin_slice_action(
+        pctx_id,
+        dataobjectname,
+        rwmode,
+        time,
+        interpmode,
+        octx_id,
+    ))
 }
 
 pub(crate) unsafe fn plugin_begin_arraystruct_action(
@@ -1043,19 +965,13 @@ pub(crate) unsafe fn plugin_begin_arraystruct_action(
     size: *mut c_int,
     actx_id: *mut c_int,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.plugin_begin_arraystruct_action)(ctx_id, path, timebase, size, actx_id)
-        },
-        Err(status) => *status,
-    }
+    forward_status!(plugin_begin_arraystruct_action(
+        ctx_id, path, timebase, size, actx_id,
+    ))
 }
 
 pub(crate) fn plugin_end_action(ctx_id: c_int) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe { (binding.plugin_end_action)(ctx_id) },
-        Err(status) => *status,
-    }
+    forward_status!(plugin_end_action(ctx_id))
 }
 
 pub(crate) unsafe fn plugin_read_data(
@@ -1067,12 +983,9 @@ pub(crate) unsafe fn plugin_read_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.plugin_read_data)(ctx_id, field, timebase, data, datatype, dim, size)
-        },
-        Err(status) => *status,
-    }
+    forward_status!(plugin_read_data(
+        ctx_id, field, timebase, data, datatype, dim, size,
+    ))
 }
 
 pub(crate) unsafe fn plugin_write_data(
@@ -1084,12 +997,9 @@ pub(crate) unsafe fn plugin_write_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
-    match core() {
-        Ok(binding) => unsafe {
-            (binding.plugin_write_data)(ctx_id, field, timebase, data, datatype, dim, size)
-        },
-        Err(status) => *status,
-    }
+    forward_status!(plugin_write_data(
+        ctx_id, field, timebase, data, datatype, dim, size,
+    ))
 }
 
 #[cfg(test)]
