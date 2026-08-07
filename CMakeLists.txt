@@ -279,3 +279,35 @@ execute_process(
     WORKING_DIRECTORY \"${CMAKE_CURRENT_SOURCE_DIR}\"
     COMMAND_ERROR_IS_FATAL ANY)
 ")
+
+# ---------------------------------------------------------------------------
+# CMake package config (find_package)
+#
+# cargo-c produces the pkg-config file but has no equivalent for a CMake
+# package config, so it is authored directly (cmake/imas-mvdd-loaderConfig.cmake.in)
+# and installed in the same lib/cmake/<name>/ layout IMAS-Core uses, next to
+# the pkg-config file cargo-c already installs under lib/pkgconfig/.
+# ---------------------------------------------------------------------------
+
+include(CMakePackageConfigHelpers)
+
+set(IMAS_MVDD_PACKAGE_CONFIG_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/${IMAS_MVDD_PACKAGE}")
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/imas-mvdd-loaderConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}Config.cmake"
+    INSTALL_DESTINATION "${IMAS_MVDD_PACKAGE_CONFIG_DIR}"
+    PATH_VARS CMAKE_INSTALL_INCLUDEDIR CMAKE_INSTALL_LIBDIR)
+
+# SameMajorVersion: the same compatibility promise the runtime version gate
+# above already enforces against IMAS-Core itself (minor/patch drift
+# tolerated, major mismatch rejected) — the shim's own package follows suit.
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}ConfigVersion.cmake"
+    VERSION "${PROJECT_VERSION}"
+    COMPATIBILITY SameMajorVersion)
+
+install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}Config.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}ConfigVersion.cmake"
+    DESTINATION "${IMAS_MVDD_PACKAGE_CONFIG_DIR}")
