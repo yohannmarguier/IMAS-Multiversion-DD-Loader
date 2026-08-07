@@ -36,6 +36,9 @@
 #ifndef INCOMPATIBLE_CORE_VERSION
 #error "INCOMPATIBLE_CORE_VERSION must be defined by the build"
 #endif
+#ifndef SHIM_LIBRARY_PATH
+#error "SHIM_LIBRARY_PATH must be defined by the build"
+#endif
 
 typedef int (*int_accessor_fn)(void);
 typedef double (*double_accessor_fn)(void);
@@ -49,6 +52,12 @@ typedef const void *(*ptr_accessor_fn)(void);
                     #condition);                                                \
             exit(EXIT_FAILURE);                                                 \
         }                                                                       \
+    } while (0)
+
+#define CHECK_PLUGIN_CALL(count, symbol)                                        \
+    do {                                                                        \
+        CHECK(call_count() == (count));                                         \
+        CHECK(strcmp(last_symbol(), (symbol)) == 0);                            \
     } while (0)
 
 static void *dlsym_or_die(void *handle, const char *name) {
@@ -520,12 +529,142 @@ static void scenario_verbatim_forwarding(void) {
            "stub unmodified\n");
 }
 
+/* Issue #7's public ABI seam. This is intentionally written against the
+ * generated shim header: missing declarations are a build failure, just as
+ * they would be for an HLI. The recording-stub assertions are added with the
+ * implementation below. */
+static void scenario_plugin_forwarding(void) {
+    void *stub = open_stub_for_introspection();
+    int_accessor_fn call_count =
+        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_plugin_call_count");
+    str_accessor_fn last_symbol =
+        (str_accessor_fn)dlsym_or_die(stub, "recording_stub_plugin_last_symbol");
+    str_accessor_fn first_string =
+        (str_accessor_fn)dlsym_or_die(stub, "recording_stub_plugin_first_string");
+    str_accessor_fn second_string =
+        (str_accessor_fn)dlsym_or_die(stub, "recording_stub_plugin_second_string");
+    int_accessor_fn last_ctx =
+        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_plugin_last_ctx");
+    int_accessor_fn first_int =
+        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_plugin_first_int");
+    int_accessor_fn second_int =
+        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_plugin_second_int");
+    double_accessor_fn double_value =
+        (double_accessor_fn)dlsym_or_die(stub, "recording_stub_plugin_double");
+    ptr_accessor_fn pointer_value =
+        (ptr_accessor_fn)dlsym_or_die(stub, "recording_stub_plugin_pointer");
+    ptr_accessor_fn size_pointer =
+        (ptr_accessor_fn)dlsym_or_die(stub, "recording_stub_plugin_size_pointer");
+    bool is_registered = false;
+    int size = 2;
+    int values[2] = {17, 29};
+    int opctx = -1;
+    int aosctx = -1;
+    void *read_data = NULL;
+    double write_data = 3.5;
+
+    CHECK(call_count() == 0);
+    CHECK(al_register_plugin("recording-plugin").code == 0);
+    CHECK_PLUGIN_CALL(1, "al_register_plugin");
+    CHECK(strcmp(first_string(), "recording-plugin") == 0);
+    CHECK(al_unregister_plugin("recording-plugin").code == 0);
+    CHECK_PLUGIN_CALL(2, "al_unregister_plugin");
+    CHECK(strcmp(first_string(), "recording-plugin") == 0);
+    CHECK(al_bind_plugin("equilibrium/time", "recording-plugin").code == 0);
+    CHECK_PLUGIN_CALL(3, "al_bind_plugin");
+    CHECK(strcmp(first_string(), "equilibrium/time") == 0);
+    CHECK(strcmp(second_string(), "recording-plugin") == 0);
+    CHECK(al_unbind_plugin("equilibrium/time", "recording-plugin").code == 0);
+    CHECK_PLUGIN_CALL(4, "al_unbind_plugin");
+    CHECK(strcmp(first_string(), "equilibrium/time") == 0);
+    CHECK(strcmp(second_string(), "recording-plugin") == 0);
+    CHECK(al_bind_readback_plugins(701).code == 0);
+    CHECK_PLUGIN_CALL(5, "al_bind_readback_plugins");
+    CHECK(last_ctx() == 701);
+    CHECK(al_unbind_readback_plugins(702).code == 0);
+    CHECK_PLUGIN_CALL(6, "al_unbind_readback_plugins");
+    CHECK(last_ctx() == 702);
+    CHECK(al_is_plugin_registered("recording-plugin", &is_registered).code == 0);
+    CHECK_PLUGIN_CALL(7, "al_is_plugin_registered");
+    CHECK(is_registered);
+    CHECK(al_write_plugins_metadata(703).code == 0);
+    CHECK_PLUGIN_CALL(8, "al_write_plugins_metadata");
+    CHECK(last_ctx() == 703);
+    CHECK(al_setvalue_parameter_plugin("coefficients", 2, 1, &size, values,
+                                       "recording-plugin").code == 0);
+    CHECK_PLUGIN_CALL(9, "al_setvalue_parameter_plugin");
+    CHECK(strcmp(first_string(), "coefficients") == 0);
+    CHECK(strcmp(second_string(), "recording-plugin") == 0);
+    CHECK(first_int() == 2 && second_int() == 1 && pointer_value() == values);
+    CHECK(size_pointer() == &size);
+    CHECK(al_setvalue_int_scalar_parameter_plugin("iterations", 37,
+                                                   "recording-plugin").code == 0);
+    CHECK_PLUGIN_CALL(10, "al_setvalue_int_scalar_parameter_plugin");
+    CHECK(first_int() == 37 && strcmp(first_string(), "iterations") == 0);
+    CHECK(strcmp(second_string(), "recording-plugin") == 0);
+    CHECK(al_setvalue_double_scalar_parameter_plugin("tolerance", 1.25,
+                                                      "recording-plugin").code == 0);
+    CHECK_PLUGIN_CALL(11, "al_setvalue_double_scalar_parameter_plugin");
+    CHECK(double_value() == 1.25 && strcmp(first_string(), "tolerance") == 0);
+    CHECK(strcmp(second_string(), "recording-plugin") == 0);
+    CHECK(al_plugin_begin_global_action(704, "equilibrium", "profiles", 2, &opctx).code == 0);
+    CHECK_PLUGIN_CALL(12, "al_plugin_begin_global_action");
+    CHECK(last_ctx() == 704 && strcmp(first_string(), "equilibrium") == 0);
+    CHECK(strcmp(second_string(), "profiles") == 0 && first_int() == 2);
+    CHECK(opctx == 5001);
+    CHECK(al_plugin_begin_slice_action(705, "core_profiles", 1, 2.5, 3, &opctx).code == 0);
+    CHECK_PLUGIN_CALL(13, "al_plugin_begin_slice_action");
+    CHECK(last_ctx() == 705 && first_int() == 1 && second_int() == 3 && double_value() == 2.5);
+    CHECK(strcmp(first_string(), "core_profiles") == 0 && second_string() == NULL);
+    CHECK(opctx == 5002);
+    CHECK(al_plugin_begin_arraystruct_action(706, "profiles_1d", "time", &size, &aosctx)
+              .code == 0);
+    CHECK_PLUGIN_CALL(14, "al_plugin_begin_arraystruct_action");
+    CHECK(last_ctx() == 706 && pointer_value() == &size);
+    CHECK(strcmp(first_string(), "profiles_1d") == 0 && strcmp(second_string(), "time") == 0);
+    CHECK(size == 5003);
+    CHECK(aosctx == 5004);
+    CHECK(al_plugin_end_action(707).code == 0);
+    CHECK_PLUGIN_CALL(15, "al_plugin_end_action");
+    CHECK(last_ctx() == 707);
+    CHECK(al_plugin_read_data(708, "temperature", "time", &read_data, 3, 1, &size).code == 0);
+    CHECK_PLUGIN_CALL(16, "al_plugin_read_data");
+    CHECK(last_ctx() == 708 && first_int() == 3 && second_int() == 1);
+    CHECK(strcmp(first_string(), "temperature") == 0 && strcmp(second_string(), "time") == 0);
+    CHECK(size_pointer() == &size);
+    CHECK(read_data != NULL);
+    CHECK(size == 5005);
+    CHECK(al_plugin_write_data(709, "temperature", "time", &write_data, 3, 0, NULL).code == 0);
+    CHECK_PLUGIN_CALL(17, "al_plugin_write_data");
+    CHECK(last_ctx() == 709 && pointer_value() == &write_data);
+    CHECK(first_int() == 3 && second_int() == 0);
+    CHECK(strcmp(first_string(), "temperature") == 0 && strcmp(second_string(), "time") == 0);
+    CHECK(size_pointer() == NULL);
+    CHECK(call_count() == 17);
+
+    printf("runtime_binding_test plugin-forwarding: every exported plugin symbol reached the stub\n");
+}
+
+static void scenario_plugin_timerange_omitted(void) {
+    void *shim = dlopen(SHIM_LIBRARY_PATH, RTLD_NOW | RTLD_LOCAL);
+    if (shim == NULL) {
+        fprintf(stderr, "failed to dlopen the shim: %s\n", dlerror());
+        abort();
+    }
+    dlerror();
+    CHECK(dlsym(shim, "al_plugin_begin_timerange_action") == NULL);
+    CHECK(dlerror() != NULL);
+    dlclose(shim);
+
+    printf("runtime_binding_test plugin-timerange-omitted: matches IMAS-Core's unlinkable ABI\n");
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr,
                 "usage: %s "
                 "<success|version-drift|version-mismatch|null-version|missing-library|"
-                "bare-soname|verbatim-forwarding|real-core>\n",
+                "bare-soname|verbatim-forwarding|plugin-forwarding|plugin-timerange-omitted|real-core>\n",
                 argv[0]);
         return 2;
     }
@@ -547,6 +686,10 @@ int main(int argc, char **argv) {
         scenario_bare_soname();
     } else if (strcmp(scenario, "verbatim-forwarding") == 0) {
         scenario_verbatim_forwarding();
+    } else if (strcmp(scenario, "plugin-forwarding") == 0) {
+        scenario_plugin_forwarding();
+    } else if (strcmp(scenario, "plugin-timerange-omitted") == 0) {
+        scenario_plugin_timerange_omitted();
     } else {
         fprintf(stderr, "unknown scenario: %s\n", scenario);
         return 2;

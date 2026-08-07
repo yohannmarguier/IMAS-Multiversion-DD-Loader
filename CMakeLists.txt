@@ -313,6 +313,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     target_link_libraries(runtime_binding_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
     target_compile_definitions(runtime_binding_test PRIVATE
         "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\""
+        "SHIM_LIBRARY_PATH=\"$<TARGET_FILE:imas_mvdd_loader>\""
         "SUPPORTED_CORE_VERSION=\"${IMAS_CORE_VERSION}\""
         "INCOMPATIBLE_CORE_VERSION=\"${IMAS_CORE_INCOMPATIBLE_VERSION}\"")
     add_dependencies(runtime_binding_test imas_mvdd_capi recording_stub)
@@ -346,6 +347,13 @@ if(IMAS_MVDD_BUILD_TESTS)
     add_test(NAME runtime-binding-verbatim-forwarding COMMAND runtime_binding_test verbatim-forwarding)
     set_tests_properties(runtime-binding-verbatim-forwarding PROPERTIES ENVIRONMENT
         "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+    add_test(NAME runtime-binding-plugin-forwarding COMMAND runtime_binding_test plugin-forwarding)
+    set_tests_properties(runtime-binding-plugin-forwarding PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+    add_test(NAME runtime-binding-plugin-timerange-omitted
+        COMMAND runtime_binding_test plugin-timerange-omitted)
 
     add_test(NAME runtime-binding-bare-soname COMMAND runtime_binding_test bare-soname)
     if(APPLE)

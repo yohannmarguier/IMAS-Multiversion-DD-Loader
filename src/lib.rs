@@ -309,6 +309,246 @@ pub unsafe extern "C" fn al_list_filled_paths(
     unsafe { resolve::list_filled_paths(pctx_id, dataobjectname, path_list, size) }
 }
 
+// Plugin registration and configuration deliberately forward without guard
+// rails. In particular, IMAS-Core's three parameter setters null-dereference
+// on an unregistered plugin name; fixing that here would make the shim's ABI
+// behaviour differ from the Core it mirrors (issue #7).
+
+/// Mirrors IMAS-Core's `al_register_plugin` exactly and forwards unchanged.
+/// IMAS-Core's failed plugin-library `dlopen` can proceed to a crash in an
+/// `NDEBUG` build; that upstream defect is preserved by forwarding unchanged
+/// (issue #7).
+///
+/// # Safety
+/// `plugin_name` must be a valid, NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_register_plugin(plugin_name: *const c_char) -> al_status_t {
+    unsafe { resolve::register_plugin(plugin_name) }
+}
+
+/// Mirrors IMAS-Core's `al_unregister_plugin` exactly and forwards unchanged.
+/// IMAS-Core only removes a currently-bound plugin; the shim preserves that
+/// upstream defect by forwarding without intervention (issue #7).
+///
+/// # Safety
+/// `plugin_name` must be a valid, NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_unregister_plugin(plugin_name: *const c_char) -> al_status_t {
+    unsafe { resolve::unregister_plugin(plugin_name) }
+}
+
+/// Mirrors IMAS-Core's `al_bind_plugin` exactly and forwards unchanged.
+///
+/// # Safety
+/// `field_path` and `plugin_name` must be valid, NUL-terminated C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_bind_plugin(
+    field_path: *const c_char,
+    plugin_name: *const c_char,
+) -> al_status_t {
+    unsafe { resolve::bind_plugin(field_path, plugin_name) }
+}
+
+/// Mirrors IMAS-Core's `al_unbind_plugin` exactly and forwards unchanged.
+/// Its silent no-op for an unbound path is an upstream behaviour preserved by
+/// this thin forwarding layer (issue #7).
+///
+/// # Safety
+/// `field_path` and `plugin_name` must be valid, NUL-terminated C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_unbind_plugin(
+    field_path: *const c_char,
+    plugin_name: *const c_char,
+) -> al_status_t {
+    unsafe { resolve::unbind_plugin(field_path, plugin_name) }
+}
+
+/// Mirrors IMAS-Core's `al_bind_readback_plugins` exactly and forwards unchanged.
+#[unsafe(no_mangle)]
+pub extern "C" fn al_bind_readback_plugins(ctx_id: c_int) -> al_status_t {
+    resolve::bind_readback_plugins(ctx_id)
+}
+
+/// Mirrors IMAS-Core's `al_unbind_readback_plugins` exactly and forwards unchanged.
+#[unsafe(no_mangle)]
+pub extern "C" fn al_unbind_readback_plugins(ctx_id: c_int) -> al_status_t {
+    resolve::unbind_readback_plugins(ctx_id)
+}
+
+/// Mirrors IMAS-Core's `al_is_plugin_registered` exactly and forwards unchanged.
+///
+/// # Safety
+/// `plugin_name` must be a valid, NUL-terminated C string and `is_registered`
+/// must be a valid, writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_is_plugin_registered(
+    plugin_name: *const c_char,
+    is_registered: *mut bool,
+) -> al_status_t {
+    unsafe { resolve::is_plugin_registered(plugin_name, is_registered) }
+}
+
+/// Mirrors IMAS-Core's `al_write_plugins_metadata` exactly and forwards unchanged.
+#[unsafe(no_mangle)]
+pub extern "C" fn al_write_plugins_metadata(ctx_id: c_int) -> al_status_t {
+    resolve::write_plugins_metadata(ctx_id)
+}
+
+/// Mirrors IMAS-Core's generic plugin parameter setter exactly and forwards unchanged.
+///
+/// # Safety
+/// All pointers must meet IMAS-Core's parameter-setter contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_setvalue_parameter_plugin(
+    parameter_name: *const c_char,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+    data: *mut c_void,
+    plugin_name: *const c_char,
+) -> al_status_t {
+    unsafe {
+        resolve::setvalue_parameter_plugin(parameter_name, datatype, dim, size, data, plugin_name)
+    }
+}
+
+/// Mirrors IMAS-Core's integer plugin parameter setter exactly and forwards unchanged.
+///
+/// # Safety
+/// `parameter_name` and `plugin_name` must be valid, NUL-terminated C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_setvalue_int_scalar_parameter_plugin(
+    parameter_name: *const c_char,
+    parameter_value: c_int,
+    plugin_name: *const c_char,
+) -> al_status_t {
+    unsafe {
+        resolve::setvalue_int_scalar_parameter_plugin(parameter_name, parameter_value, plugin_name)
+    }
+}
+
+/// Mirrors IMAS-Core's double plugin parameter setter exactly and forwards unchanged.
+///
+/// # Safety
+/// `parameter_name` and `plugin_name` must be valid, NUL-terminated C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_setvalue_double_scalar_parameter_plugin(
+    parameter_name: *const c_char,
+    parameter_value: c_double,
+    plugin_name: *const c_char,
+) -> al_status_t {
+    unsafe {
+        resolve::setvalue_double_scalar_parameter_plugin(
+            parameter_name,
+            parameter_value,
+            plugin_name,
+        )
+    }
+}
+
+// Deliberately no `al_plugin_begin_timerange_action`: IMAS-Core's public
+// header declares a plain-C symbol with `const double *dtime_shape`, but its
+// implementation takes `const int *` and therefore exports only a C++-mangled
+// symbol. Exporting it here would let a plugin compile against the shim yet
+// fail to link against real IMAS-Core (issue #7).
+
+/// Mirrors IMAS-Core's plugin reentry global-action function exactly.
+///
+/// # Safety
+/// String and output pointers must meet IMAS-Core's action-lifecycle contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_plugin_begin_global_action(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    datapath: *const c_char,
+    rwmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    unsafe {
+        resolve::plugin_begin_global_action(pctx_id, dataobjectname, datapath, rwmode, octx_id)
+    }
+}
+
+/// Mirrors IMAS-Core's plugin reentry slice-action function exactly.
+///
+/// # Safety
+/// String and output pointers must meet IMAS-Core's action-lifecycle contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_plugin_begin_slice_action(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    rwmode: c_int,
+    time: c_double,
+    interpmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    unsafe {
+        resolve::plugin_begin_slice_action(
+            pctx_id,
+            dataobjectname,
+            rwmode,
+            time,
+            interpmode,
+            octx_id,
+        )
+    }
+}
+
+/// Mirrors IMAS-Core's plugin reentry arraystruct-action function exactly.
+///
+/// # Safety
+/// String and output pointers must meet IMAS-Core's action-lifecycle contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_plugin_begin_arraystruct_action(
+    ctx_id: c_int,
+    path: *const c_char,
+    timebase: *const c_char,
+    size: *mut c_int,
+    actx_id: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::plugin_begin_arraystruct_action(ctx_id, path, timebase, size, actx_id) }
+}
+
+/// Mirrors IMAS-Core's plugin reentry end-action function exactly.
+#[unsafe(no_mangle)]
+pub extern "C" fn al_plugin_end_action(ctx_id: c_int) -> al_status_t {
+    resolve::plugin_end_action(ctx_id)
+}
+
+/// Mirrors IMAS-Core's plugin reentry read-data function exactly.
+///
+/// # Safety
+/// All pointers must meet IMAS-Core's data-access contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_plugin_read_data(
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::plugin_read_data(ctx_id, field, timebase, data, datatype, dim, size) }
+}
+
+/// Mirrors IMAS-Core's plugin reentry write-data function exactly.
+///
+/// # Safety
+/// All pointers must meet IMAS-Core's data-access contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_plugin_write_data(
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::plugin_write_data(ctx_id, field, timebase, data, datatype, dim, size) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

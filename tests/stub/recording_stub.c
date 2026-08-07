@@ -385,6 +385,228 @@ al_status_t al_list_filled_paths(int pctxID, const char *dataobjectname, char **
     return ok_status();
 }
 
+/* --- Plugin ABI family (issue #7) ----------------------------------------- */
+
+static int g_plugin_call_count = 0;
+static const char *g_plugin_last_symbol = NULL;
+static const char *g_plugin_first_string = NULL;
+static const char *g_plugin_second_string = NULL;
+static int g_plugin_last_ctx = 0;
+static int g_plugin_first_int = 0;
+static int g_plugin_second_int = 0;
+static double g_plugin_double = 0.0;
+static const void *g_plugin_pointer = NULL;
+static const void *g_plugin_size_pointer = NULL;
+
+static void record_plugin_call(const char *symbol, int ctx, const char *first, const char *second) {
+    g_plugin_call_count++;
+    g_plugin_last_symbol = symbol;
+    g_plugin_last_ctx = ctx;
+    g_plugin_first_string = first;
+    g_plugin_second_string = second;
+    g_plugin_first_int = 0;
+    g_plugin_second_int = 0;
+    g_plugin_double = 0.0;
+    g_plugin_pointer = NULL;
+    g_plugin_size_pointer = NULL;
+}
+
+al_status_t al_register_plugin(const char *plugin_name) {
+    record_plugin_call("al_register_plugin", 0, plugin_name, NULL);
+    (void)plugin_name;
+    return ok_status();
+}
+
+al_status_t al_unregister_plugin(const char *plugin_name) {
+    record_plugin_call("al_unregister_plugin", 0, plugin_name, NULL);
+    (void)plugin_name;
+    return ok_status();
+}
+
+al_status_t al_bind_plugin(const char *field_path, const char *plugin_name) {
+    record_plugin_call("al_bind_plugin", 0, field_path, plugin_name);
+    (void)field_path;
+    (void)plugin_name;
+    return ok_status();
+}
+
+al_status_t al_unbind_plugin(const char *field_path, const char *plugin_name) {
+    record_plugin_call("al_unbind_plugin", 0, field_path, plugin_name);
+    (void)field_path;
+    (void)plugin_name;
+    return ok_status();
+}
+
+al_status_t al_bind_readback_plugins(int ctx_id) {
+    record_plugin_call("al_bind_readback_plugins", ctx_id, NULL, NULL);
+    (void)ctx_id;
+    return ok_status();
+}
+
+al_status_t al_unbind_readback_plugins(int ctx_id) {
+    record_plugin_call("al_unbind_readback_plugins", ctx_id, NULL, NULL);
+    (void)ctx_id;
+    return ok_status();
+}
+
+al_status_t al_is_plugin_registered(const char *plugin_name, _Bool *is_registered) {
+    record_plugin_call("al_is_plugin_registered", 0, plugin_name, NULL);
+    (void)plugin_name;
+    if (is_registered != NULL) {
+        *is_registered = 1;
+    }
+    return ok_status();
+}
+
+al_status_t al_write_plugins_metadata(int ctx_id) {
+    record_plugin_call("al_write_plugins_metadata", ctx_id, NULL, NULL);
+    (void)ctx_id;
+    return ok_status();
+}
+
+al_status_t al_setvalue_parameter_plugin(const char *parameter_name, int datatype, int dim,
+                                         int *size, void *data, const char *plugin_name) {
+    record_plugin_call("al_setvalue_parameter_plugin", 0, parameter_name, plugin_name);
+    g_plugin_first_int = datatype;
+    g_plugin_second_int = dim;
+    g_plugin_pointer = data;
+    g_plugin_size_pointer = size;
+    (void)parameter_name;
+    (void)datatype;
+    (void)dim;
+    (void)size;
+    (void)data;
+    (void)plugin_name;
+    return ok_status();
+}
+
+al_status_t al_setvalue_int_scalar_parameter_plugin(const char *parameter_name,
+                                                     int parameter_value,
+                                                     const char *plugin_name) {
+    record_plugin_call("al_setvalue_int_scalar_parameter_plugin", 0, parameter_name, plugin_name);
+    g_plugin_first_int = parameter_value;
+    (void)parameter_name;
+    (void)parameter_value;
+    (void)plugin_name;
+    return ok_status();
+}
+
+al_status_t al_setvalue_double_scalar_parameter_plugin(const char *parameter_name,
+                                                        double parameter_value,
+                                                        const char *plugin_name) {
+    record_plugin_call("al_setvalue_double_scalar_parameter_plugin", 0, parameter_name, plugin_name);
+    g_plugin_double = parameter_value;
+    (void)parameter_name;
+    (void)parameter_value;
+    (void)plugin_name;
+    return ok_status();
+}
+
+al_status_t al_plugin_begin_global_action(int pctx_id, const char *dataobjectname,
+                                          const char *datapath, int rwmode, int *octx_id) {
+    record_plugin_call("al_plugin_begin_global_action", pctx_id, dataobjectname, datapath);
+    g_plugin_first_int = rwmode;
+    (void)pctx_id;
+    (void)dataobjectname;
+    (void)datapath;
+    (void)rwmode;
+    if (octx_id != NULL) {
+        *octx_id = 5001;
+    }
+    return ok_status();
+}
+
+al_status_t al_plugin_begin_slice_action(int pctx_id, const char *dataobjectname, int rwmode,
+                                         double time, int interpmode, int *octx_id) {
+    record_plugin_call("al_plugin_begin_slice_action", pctx_id, dataobjectname, NULL);
+    g_plugin_first_int = rwmode;
+    g_plugin_second_int = interpmode;
+    g_plugin_double = time;
+    (void)pctx_id;
+    (void)dataobjectname;
+    (void)rwmode;
+    (void)time;
+    (void)interpmode;
+    if (octx_id != NULL) {
+        *octx_id = 5002;
+    }
+    return ok_status();
+}
+
+al_status_t al_plugin_begin_arraystruct_action(int ctx_id, const char *path,
+                                               const char *timebase, int *size, int *actx_id) {
+    record_plugin_call("al_plugin_begin_arraystruct_action", ctx_id, path, timebase);
+    g_plugin_pointer = size;
+    g_plugin_size_pointer = size;
+    (void)ctx_id;
+    (void)path;
+    (void)timebase;
+    if (size != NULL) {
+        *size = 5003;
+    }
+    if (actx_id != NULL) {
+        *actx_id = 5004;
+    }
+    return ok_status();
+}
+
+al_status_t al_plugin_end_action(int ctx_id) {
+    record_plugin_call("al_plugin_end_action", ctx_id, NULL, NULL);
+    (void)ctx_id;
+    return ok_status();
+}
+
+al_status_t al_plugin_read_data(int ctx_id, const char *field, const char *timebase, void **data,
+                                int datatype, int dim, int *size) {
+    record_plugin_call("al_plugin_read_data", ctx_id, field, timebase);
+    g_plugin_first_int = datatype;
+    g_plugin_second_int = dim;
+    g_plugin_size_pointer = size;
+    static char plugin_read_buffer[] = "recording-stub: plugin read data payload";
+    (void)ctx_id;
+    (void)field;
+    (void)timebase;
+    (void)datatype;
+    (void)dim;
+    if (data != NULL) {
+        *data = plugin_read_buffer;
+    }
+    if (size != NULL) {
+        size[0] = 5005;
+    }
+    return ok_status();
+}
+
+al_status_t al_plugin_write_data(int ctx_id, const char *field, const char *timebase, void *data,
+                                 int datatype, int dim, int *size) {
+    record_plugin_call("al_plugin_write_data", ctx_id, field, timebase);
+    g_plugin_first_int = datatype;
+    g_plugin_second_int = dim;
+    g_plugin_pointer = data;
+    g_plugin_size_pointer = size;
+    (void)ctx_id;
+    (void)field;
+    (void)timebase;
+    (void)data;
+    (void)datatype;
+    (void)dim;
+    (void)size;
+    return ok_status();
+}
+
+int recording_stub_plugin_call_count(void) {
+    return g_plugin_call_count;
+}
+const char *recording_stub_plugin_last_symbol(void) { return g_plugin_last_symbol; }
+const char *recording_stub_plugin_first_string(void) { return g_plugin_first_string; }
+const char *recording_stub_plugin_second_string(void) { return g_plugin_second_string; }
+int recording_stub_plugin_last_ctx(void) { return g_plugin_last_ctx; }
+int recording_stub_plugin_first_int(void) { return g_plugin_first_int; }
+int recording_stub_plugin_second_int(void) { return g_plugin_second_int; }
+double recording_stub_plugin_double(void) { return g_plugin_double; }
+const void *recording_stub_plugin_pointer(void) { return g_plugin_pointer; }
+const void *recording_stub_plugin_size_pointer(void) { return g_plugin_size_pointer; }
+
 /* Introspection accessors below: not part of the mirrored IMAS-Core ABI.
  * tests/runtime_binding_test.c dlsym's these directly rather than linking this stub —
  * see CMakeLists.txt for why. */

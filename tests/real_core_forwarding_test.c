@@ -134,6 +134,36 @@ static void check_arraystruct_read(int pulse_ctx) {
     CHECK_OK(al_end_action(op_ctx));
 }
 
+/* The reentry calls bypass plugin dispatch and talk to the backend directly.
+ * They are therefore safe to exercise without shipping a test plugin. The
+ * other eleven issue-#7 symbols are resolved by the shim's all-or-nothing
+ * binding before the first call in this process, so this real-Core tracer
+ * also fails if any of their real symbols are absent. */
+static void check_plugin_reentry(int pulse_ctx) {
+    int op_ctx = -1;
+    int value = 314;
+    CHECK_OK(al_plugin_begin_global_action(pulse_ctx, "plugin_probe", "", WRITE_OP, &op_ctx));
+    CHECK_OK(al_plugin_write_data(op_ctx, "leaf", "", &value, INTEGER_DATA, 0, NULL));
+    CHECK_OK(al_plugin_end_action(op_ctx));
+
+    /* Starting and ending the slice proves the reentry's lifecycle path;
+     * the recording stub exercises its data-read sibling with controlled
+     * buffers. The real-Core test's initial binding resolves all seventeen
+     * issue-#7 symbols before any of these calls. */
+    CHECK_OK(al_plugin_begin_slice_action(pulse_ctx, "magnetics", READ_OP, 1.4,
+                                          CLOSEST_INTERP, &op_ctx));
+    CHECK_OK(al_plugin_end_action(op_ctx));
+
+    int size = 1;
+    int aos_ctx = -1;
+    CHECK_OK(al_plugin_begin_global_action(pulse_ctx, "plugin_aos", "", WRITE_OP, &op_ctx));
+    CHECK_OK(al_plugin_begin_arraystruct_action(op_ctx, "elements", "", &size, &aos_ctx));
+    value = 271;
+    CHECK_OK(al_plugin_write_data(aos_ctx, "value", "", &value, INTEGER_DATA, 0, NULL));
+    CHECK_OK(al_plugin_end_action(aos_ctx));
+    CHECK_OK(al_plugin_end_action(op_ctx));
+}
+
 int main(void) {
     CHECK(getenv("IMAS_CORE_LIBRARY") != NULL);
 
@@ -191,6 +221,7 @@ int main(void) {
     check_slice_read(pulse_ctx);
     check_timerange_read(pulse_ctx);
     check_arraystruct_read(pulse_ctx);
+    check_plugin_reentry(pulse_ctx);
 
     /* Isolate the documented HDF5 delete behavior from the data above. */
     CHECK_OK(al_begin_global_action(pulse_ctx, "delete_probe", "", WRITE_OP, &op_ctx));
@@ -202,10 +233,12 @@ int main(void) {
     remove_temp_file(pulse_dir, "magnetics.h5");
     remove_temp_file(pulse_dir, "magnetics_2.h5");
     remove_temp_file(pulse_dir, "delete_probe.h5");
+    remove_temp_file(pulse_dir, "plugin_probe.h5");
+    remove_temp_file(pulse_dir, "plugin_aos.h5");
     remove_temp_file(pulse_dir, "master.h5");
     CHECK(rmdir(pulse_dir) == 0);
     CHECK(rmdir(temp_dir) == 0);
 
-    printf("real_core_forwarding_test: all issue-6 symbols completed a real HDF5 lifecycle\n");
+    printf("real_core_forwarding_test: issue-6 and plugin-reentry symbols completed a real HDF5 lifecycle\n");
     return EXIT_SUCCESS;
 }

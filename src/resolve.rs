@@ -76,6 +76,22 @@ type GetOccurrencesFn =
     unsafe extern "C" fn(c_int, *const c_char, *mut *mut c_int, *mut c_int) -> al_status_t;
 type ListFilledPathsFn =
     unsafe extern "C" fn(c_int, *const c_char, *mut *mut *mut c_char, *mut c_int) -> al_status_t;
+type PluginNameFn = unsafe extern "C" fn(*const c_char) -> al_status_t;
+type BindPluginFn = unsafe extern "C" fn(*const c_char, *const c_char) -> al_status_t;
+type PluginContextFn = unsafe extern "C" fn(c_int) -> al_status_t;
+type IsPluginRegisteredFn = unsafe extern "C" fn(*const c_char, *mut bool) -> al_status_t;
+type SetvalueParameterPluginFn = unsafe extern "C" fn(
+    *const c_char,
+    c_int,
+    c_int,
+    *mut c_int,
+    *mut c_void,
+    *const c_char,
+) -> al_status_t;
+type SetvalueIntScalarParameterPluginFn =
+    unsafe extern "C" fn(*const c_char, c_int, *const c_char) -> al_status_t;
+type SetvalueDoubleScalarParameterPluginFn =
+    unsafe extern "C" fn(*const c_char, c_double, *const c_char) -> al_status_t;
 
 struct CoreBinding {
     // Kept alive for the process's lifetime: dropping it would unmap the
@@ -96,6 +112,23 @@ struct CoreBinding {
     iterate_over_arraystruct: IterateOverArraystructFn,
     get_occurrences: GetOccurrencesFn,
     list_filled_paths: ListFilledPathsFn,
+    register_plugin: PluginNameFn,
+    unregister_plugin: PluginNameFn,
+    bind_plugin: BindPluginFn,
+    unbind_plugin: BindPluginFn,
+    bind_readback_plugins: PluginContextFn,
+    unbind_readback_plugins: PluginContextFn,
+    is_plugin_registered: IsPluginRegisteredFn,
+    write_plugins_metadata: PluginContextFn,
+    setvalue_parameter_plugin: SetvalueParameterPluginFn,
+    setvalue_int_scalar_parameter_plugin: SetvalueIntScalarParameterPluginFn,
+    setvalue_double_scalar_parameter_plugin: SetvalueDoubleScalarParameterPluginFn,
+    plugin_begin_global_action: BeginGlobalActionFn,
+    plugin_begin_slice_action: BeginSliceActionFn,
+    plugin_begin_arraystruct_action: BeginArraystructActionFn,
+    plugin_end_action: EndActionFn,
+    plugin_read_data: ReadDataFn,
+    plugin_write_data: WriteDataFn,
     // Retained with the binding so tolerated compatibility drift remains
     // recorded for the process lifetime after its diagnostic is emitted.
     _version_drift: Option<VersionDrift>,
@@ -181,6 +214,44 @@ fn resolve() -> Result<CoreBinding, al_status_t> {
         unsafe { resolve_symbol(&library, &path, "al_get_occurrences") }?;
     let list_filled_paths: ListFilledPathsFn =
         unsafe { resolve_symbol(&library, &path, "al_list_filled_paths") }?;
+    let register_plugin: PluginNameFn =
+        unsafe { resolve_symbol(&library, &path, "al_register_plugin") }?;
+    let unregister_plugin: PluginNameFn =
+        unsafe { resolve_symbol(&library, &path, "al_unregister_plugin") }?;
+    let bind_plugin: BindPluginFn = unsafe { resolve_symbol(&library, &path, "al_bind_plugin") }?;
+    let unbind_plugin: BindPluginFn =
+        unsafe { resolve_symbol(&library, &path, "al_unbind_plugin") }?;
+    let bind_readback_plugins: PluginContextFn =
+        unsafe { resolve_symbol(&library, &path, "al_bind_readback_plugins") }?;
+    let unbind_readback_plugins: PluginContextFn =
+        unsafe { resolve_symbol(&library, &path, "al_unbind_readback_plugins") }?;
+    let is_plugin_registered: IsPluginRegisteredFn =
+        unsafe { resolve_symbol(&library, &path, "al_is_plugin_registered") }?;
+    let write_plugins_metadata: PluginContextFn =
+        unsafe { resolve_symbol(&library, &path, "al_write_plugins_metadata") }?;
+    let setvalue_parameter_plugin: SetvalueParameterPluginFn =
+        unsafe { resolve_symbol(&library, &path, "al_setvalue_parameter_plugin") }?;
+    let setvalue_int_scalar_parameter_plugin: SetvalueIntScalarParameterPluginFn =
+        unsafe { resolve_symbol(&library, &path, "al_setvalue_int_scalar_parameter_plugin") }?;
+    let setvalue_double_scalar_parameter_plugin: SetvalueDoubleScalarParameterPluginFn = unsafe {
+        resolve_symbol(
+            &library,
+            &path,
+            "al_setvalue_double_scalar_parameter_plugin",
+        )
+    }?;
+    let plugin_begin_global_action: BeginGlobalActionFn =
+        unsafe { resolve_symbol(&library, &path, "al_plugin_begin_global_action") }?;
+    let plugin_begin_slice_action: BeginSliceActionFn =
+        unsafe { resolve_symbol(&library, &path, "al_plugin_begin_slice_action") }?;
+    let plugin_begin_arraystruct_action: BeginArraystructActionFn =
+        unsafe { resolve_symbol(&library, &path, "al_plugin_begin_arraystruct_action") }?;
+    let plugin_end_action: EndActionFn =
+        unsafe { resolve_symbol(&library, &path, "al_plugin_end_action") }?;
+    let plugin_read_data: ReadDataFn =
+        unsafe { resolve_symbol(&library, &path, "al_plugin_read_data") }?;
+    let plugin_write_data: WriteDataFn =
+        unsafe { resolve_symbol(&library, &path, "al_plugin_write_data") }?;
 
     Ok(CoreBinding {
         _library: library,
@@ -198,6 +269,23 @@ fn resolve() -> Result<CoreBinding, al_status_t> {
         iterate_over_arraystruct,
         get_occurrences,
         list_filled_paths,
+        register_plugin,
+        unregister_plugin,
+        bind_plugin,
+        unbind_plugin,
+        bind_readback_plugins,
+        unbind_readback_plugins,
+        is_plugin_registered,
+        write_plugins_metadata,
+        setvalue_parameter_plugin,
+        setvalue_int_scalar_parameter_plugin,
+        setvalue_double_scalar_parameter_plugin,
+        plugin_begin_global_action,
+        plugin_begin_slice_action,
+        plugin_begin_arraystruct_action,
+        plugin_end_action,
+        plugin_read_data,
+        plugin_write_data,
         _version_drift: version_drift,
     })
 }
@@ -565,6 +653,222 @@ pub(crate) unsafe fn list_filled_paths(
     match core() {
         Ok(binding) => unsafe {
             (binding.list_filled_paths)(pctx_id, dataobjectname, path_list, size)
+        },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) unsafe fn register_plugin(plugin_name: *const c_char) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.register_plugin)(plugin_name) },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) unsafe fn unregister_plugin(plugin_name: *const c_char) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.unregister_plugin)(plugin_name) },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) unsafe fn bind_plugin(
+    field_path: *const c_char,
+    plugin_name: *const c_char,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.bind_plugin)(field_path, plugin_name) },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) unsafe fn unbind_plugin(
+    field_path: *const c_char,
+    plugin_name: *const c_char,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.unbind_plugin)(field_path, plugin_name) },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) fn bind_readback_plugins(ctx_id: c_int) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.bind_readback_plugins)(ctx_id) },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) fn unbind_readback_plugins(ctx_id: c_int) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.unbind_readback_plugins)(ctx_id) },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) unsafe fn is_plugin_registered(
+    plugin_name: *const c_char,
+    is_registered: *mut bool,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.is_plugin_registered)(plugin_name, is_registered) },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) fn write_plugins_metadata(ctx_id: c_int) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.write_plugins_metadata)(ctx_id) },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) unsafe fn setvalue_parameter_plugin(
+    parameter_name: *const c_char,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+    data: *mut c_void,
+    plugin_name: *const c_char,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.setvalue_parameter_plugin)(
+                parameter_name,
+                datatype,
+                dim,
+                size,
+                data,
+                plugin_name,
+            )
+        },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) unsafe fn setvalue_int_scalar_parameter_plugin(
+    parameter_name: *const c_char,
+    parameter_value: c_int,
+    plugin_name: *const c_char,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.setvalue_int_scalar_parameter_plugin)(
+                parameter_name,
+                parameter_value,
+                plugin_name,
+            )
+        },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) unsafe fn setvalue_double_scalar_parameter_plugin(
+    parameter_name: *const c_char,
+    parameter_value: c_double,
+    plugin_name: *const c_char,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.setvalue_double_scalar_parameter_plugin)(
+                parameter_name,
+                parameter_value,
+                plugin_name,
+            )
+        },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) unsafe fn plugin_begin_global_action(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    datapath: *const c_char,
+    rwmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.plugin_begin_global_action)(pctx_id, dataobjectname, datapath, rwmode, octx_id)
+        },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) unsafe fn plugin_begin_slice_action(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    rwmode: c_int,
+    time: c_double,
+    interpmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.plugin_begin_slice_action)(
+                pctx_id,
+                dataobjectname,
+                rwmode,
+                time,
+                interpmode,
+                octx_id,
+            )
+        },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) unsafe fn plugin_begin_arraystruct_action(
+    ctx_id: c_int,
+    path: *const c_char,
+    timebase: *const c_char,
+    size: *mut c_int,
+    actx_id: *mut c_int,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.plugin_begin_arraystruct_action)(ctx_id, path, timebase, size, actx_id)
+        },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) fn plugin_end_action(ctx_id: c_int) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe { (binding.plugin_end_action)(ctx_id) },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) unsafe fn plugin_read_data(
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.plugin_read_data)(ctx_id, field, timebase, data, datatype, dim, size)
+        },
+        Err(status) => *status,
+    }
+}
+
+pub(crate) unsafe fn plugin_write_data(
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    match core() {
+        Ok(binding) => unsafe {
+            (binding.plugin_write_data)(ctx_id, field, timebase, data, datatype, dim, size)
         },
         Err(status) => *status,
     }
