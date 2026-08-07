@@ -187,6 +187,8 @@ static void scenario_missing_library(void) {
 }
 
 static void scenario_real_core(void) {
+    CHECK(getenv("IMAS_CORE_LIBRARY") == NULL);
+
     /* Unlike the other scenarios, this one runs against a real, acquired
      * IMAS-Core (see CMakeLists.txt's IMAS-Core acquisition section), not
      * the recording stub, so there is no introspection handle to open:

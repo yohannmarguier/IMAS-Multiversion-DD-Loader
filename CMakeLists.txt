@@ -245,6 +245,23 @@ set(CARGO_STAGE_ARGS
     --libdir "${IMAS_MVDD_STAGE_DIR}/lib"
     --includedir "${IMAS_MVDD_STAGE_DIR}/include")
 
+# The shim opens IMAS-Core by bare soname. Give only the build-tree cdylib an
+# RPATH to the acquired Core so tests and in-tree consumers need no override or
+# loader-path environment setup. build.rs tracks this private environment
+# variable and the install rule explicitly unsets it, forcing cargo to relink
+# the installed cdylib without the build-machine path.
+set(IMAS_MVDD_CARGO_STAGE_COMMAND
+    "${CMAKE_COMMAND}" -E env --unset=MAKEFLAGS --unset=MFLAGS)
+if(IMAS_MVDD_REAL_CORE_TESTS)
+    list(APPEND IMAS_MVDD_CARGO_STAGE_COMMAND
+        "IMAS_CORE_BUILD_RPATH=$<TARGET_FILE_DIR:${IMAS_CORE_AL_TARGET}>")
+else()
+    list(APPEND IMAS_MVDD_CARGO_STAGE_COMMAND
+        --unset=IMAS_CORE_BUILD_RPATH)
+endif()
+list(APPEND IMAS_MVDD_CARGO_STAGE_COMMAND
+    -- "${CARGO_EXECUTABLE}" cinstall ${CARGO_COMMON_ARGS} ${CARGO_STAGE_ARGS})
+
 set(IMAS_MVDD_STAGED_INCLUDE_DIR "${IMAS_MVDD_STAGE_DIR}/include")
 set(IMAS_MVDD_STAGED_HEADER "${IMAS_MVDD_STAGED_INCLUDE_DIR}/${IMAS_MVDD_LIB_NAME}.h")
 set(IMAS_MVDD_STAGED_LIBRARY
@@ -260,7 +277,7 @@ file(GLOB_RECURSE IMAS_MVDD_RUST_SOURCES CONFIGURE_DEPENDS
 
 add_custom_command(
     OUTPUT "${IMAS_MVDD_STAGED_LIBRARY}" "${IMAS_MVDD_STAGED_HEADER}"
-    COMMAND "${CARGO_EXECUTABLE}" cinstall ${CARGO_COMMON_ARGS} ${CARGO_STAGE_ARGS}
+    COMMAND ${IMAS_MVDD_CARGO_STAGE_COMMAND}
     DEPENDS
         ${IMAS_MVDD_RUST_SOURCES}
         "${CMAKE_CURRENT_SOURCE_DIR}/build.rs"
@@ -308,7 +325,12 @@ if(IMAS_MVDD_BUILD_TESTS)
     # Matches the shim's bare-soname fallback (src/resolve.rs) so the
     # bare-soname scenario below can exercise the loader's normal search
     # path instead of the explicit override.
-    set_target_properties(recording_stub PROPERTIES OUTPUT_NAME al)
+    # Keep the bare-soname fixture out of the test working directory. On
+    # macOS, dlopen checks that directory before LC_RPATH; leaving libal there
+    # would make the real-Core tests silently bind the stub.
+    set_target_properties(recording_stub PROPERTIES
+        OUTPUT_NAME al
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/stub")
     target_compile_definitions(recording_stub PRIVATE
         "RECORDING_STUB_DEFAULT_VERSION=\"${IMAS_CORE_VERSION}\"")
 
@@ -329,14 +351,15 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_target_properties(abi_smoke PROPERTIES
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
-    add_test(NAME abi-smoke COMMAND abi_smoke)
     if(IMAS_MVDD_REAL_CORE_TESTS)
-        set(_abi_smoke_core_target ${IMAS_CORE_AL_TARGET})
+        add_test(NAME abi-smoke
+            COMMAND "${CMAKE_COMMAND}" -E env
+                --unset=IMAS_CORE_LIBRARY -- $<TARGET_FILE:abi_smoke>)
     else()
-        set(_abi_smoke_core_target recording_stub)
+        add_test(NAME abi-smoke COMMAND abi_smoke)
+        set_tests_properties(abi-smoke PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
     endif()
-    set_tests_properties(abi-smoke PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:${_abi_smoke_core_target}>")
 
     if(IMAS_MVDD_REAL_CORE_TESTS)
     # Keep the runtime-bound surface honest mechanically: after filtering to
@@ -459,11 +482,11 @@ if(IMAS_MVDD_BUILD_TESTS)
     # is the one value real IMAS-Core answers deterministically without any
     # context ever having been opened (al_lowlevel.cpp's "NULL context"
     # branch), which is what makes this runnable with no fixture beyond the
-    # acquired library itself. No environment setup is needed: CMake points
-    # IMAS_CORE_LIBRARY at whichever acquisition mode succeeded.
-    add_test(NAME runtime-binding-real-core COMMAND runtime_binding_test real-core)
-    set_tests_properties(runtime-binding-real-core PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:${IMAS_CORE_AL_TARGET}>")
+    # acquired library itself. Explicitly remove the override so this test
+    # proves the shim's build-only RPATH finds Core by bare soname.
+    add_test(NAME runtime-binding-real-core
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:runtime_binding_test> real-core)
     if(IMAS_CORE_BUILT_FROM_SOURCE)
         # Built from source, EXCLUDE_FROM_ALL: nothing else pulls it into the
         # default build target, so the test binary that needs it must.
@@ -502,9 +525,9 @@ if(IMAS_MVDD_BUILD_TESTS)
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
     add_test(NAME runtime-binding-real-core-forwarding
-        COMMAND real_core_forwarding_test)
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:real_core_forwarding_test>)
     set_tests_properties(runtime-binding-real-core-forwarding PROPERTIES
-        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:${IMAS_CORE_AL_TARGET}>"
         LABELS real-core)
     endif()
 endif()
@@ -528,7 +551,7 @@ foreach(dir LIBDIR INCLUDEDIR)
 endforeach()
 
 install(CODE "
-set(_cargo_cmd [==[${CARGO_EXECUTABLE};cinstall;${CARGO_COMMON_ARGS}]==])
+set(_cargo_cmd [==[${CMAKE_COMMAND};-E;env;--unset=MAKEFLAGS;--unset=MFLAGS;--unset=IMAS_CORE_BUILD_RPATH;--;${CARGO_EXECUTABLE};cinstall;${CARGO_COMMON_ARGS}]==])
 list(APPEND _cargo_cmd
     --prefix \"\${CMAKE_INSTALL_PREFIX}\"
     --libdir \"${IMAS_MVDD_INSTALL_LIBDIR}\"

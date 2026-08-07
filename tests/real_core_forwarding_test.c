@@ -266,7 +266,7 @@ static void check_plugin_management(int pulse_ctx, const char *log_path) {
 }
 
 int main(void) {
-    CHECK(getenv("IMAS_CORE_LIBRARY") != NULL);
+    CHECK(getenv("IMAS_CORE_LIBRARY") == NULL);
 
     char temp_dir[] = "/tmp/imas-mvdd-real-core-XXXXXX";
     CHECK(mkdtemp(temp_dir) != NULL);
