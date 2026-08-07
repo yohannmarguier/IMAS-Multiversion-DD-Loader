@@ -148,6 +148,25 @@ static void scenario_unresolvable(void) {
     printf("tracer-bullet-context-info: unresolvable scenario passed\n");
 }
 
+static void scenario_bare_soname(void) {
+    /* CTest sets the platform loader path before process start. Do not open
+     * the stub for introspection until after the shim has resolved it: this
+     * ensures the shim itself must locate IMAS-Core by its bare soname. */
+    unsetenv("IMAS_MVDD_LOADER_CORE_LIBRARY");
+
+    char *info = NULL;
+    al_status_t status = al_context_info(11, &info);
+    assert(status.code == 0);
+    free(info);
+
+    open_stub_introspection();
+    assert(stub_last_ctx() == 11);
+    assert(stub_call_count() == 1);
+    assert(stub_version_query_count() == 1);
+
+    printf("tracer-bullet-context-info: bare-soname scenario passed\n");
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr, "usage: %s <success|minor-drift|major-mismatch|unresolvable>\n", argv[0]);
@@ -163,6 +182,8 @@ int main(int argc, char **argv) {
         scenario_major_mismatch();
     } else if (strcmp(scenario, "unresolvable") == 0) {
         scenario_unresolvable();
+    } else if (strcmp(scenario, "bare-soname") == 0) {
+        scenario_bare_soname();
     } else {
         fprintf(stderr, "unknown scenario: %s\n", scenario);
         return 2;

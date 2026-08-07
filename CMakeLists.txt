@@ -181,6 +181,9 @@ if(IMAS_MVDD_BUILD_TESTS)
     # docs/adr/0001-runtime-binding-not-linking.md).
     add_library(recording_stub SHARED
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/support/recording_stub.c")
+    # Give the stub IMAS-Core's real bare soname so the fallback scenario can
+    # exercise the dynamic loader search path rather than the override.
+    set_target_properties(recording_stub PROPERTIES OUTPUT_NAME al)
 
     add_executable(tracer_bullet_context_info
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/tracer_bullet_context_info.c")
@@ -195,6 +198,18 @@ if(IMAS_MVDD_BUILD_TESTS)
         add_test(NAME tracer-bullet-context-info-${scenario}
             COMMAND tracer_bullet_context_info ${scenario})
     endforeach()
+    add_test(NAME tracer-bullet-context-info-bare-soname
+        COMMAND tracer_bullet_context_info bare-soname)
+    if(APPLE)
+        set(_imas_mvdd_loader_path_variable DYLD_LIBRARY_PATH)
+    elseif(UNIX)
+        set(_imas_mvdd_loader_path_variable LD_LIBRARY_PATH)
+    endif()
+    if(DEFINED _imas_mvdd_loader_path_variable)
+        set_tests_properties(tracer-bullet-context-info-bare-soname PROPERTIES
+            ENVIRONMENT
+                "${_imas_mvdd_loader_path_variable}=$<TARGET_FILE_DIR:recording_stub>")
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
