@@ -94,23 +94,26 @@ pub unsafe extern "C" fn al_build_uri_from_legacy_parameters(
 }
 
 /// Mirrors IMAS-Core's constant-to-string helper exactly and forwards
-/// unchanged. It returns null only if IMAS-Core could not be resolved; IMAS-
-/// Core's own return value, including its empty string for unknown constants,
-/// is otherwise returned verbatim.
+/// unchanged. On a major-version mismatch, the shim supplies IMAS-Core's
+/// pinned lookup table instead of querying the incompatible library further.
+/// It returns null only if IMAS-Core could not be opened or bootstrapped.
 #[unsafe(no_mangle)]
 pub extern "C" fn const2str(id: c_int) -> *const c_char {
     resolve::const2str(id)
 }
 
 /// Mirrors IMAS-Core's error-code-to-string helper exactly and forwards
-/// unchanged. It returns null only if IMAS-Core could not be resolved.
+/// unchanged. On a major-version mismatch, the shim supplies IMAS-Core's
+/// pinned lookup table instead of querying the incompatible library further.
+/// It returns null only if IMAS-Core could not be opened or bootstrapped.
 #[unsafe(no_mangle)]
 pub extern "C" fn err2str(id: c_int) -> *const c_char {
     resolve::err2str(id)
 }
 
 /// Mirrors IMAS-Core's access-layer version accessor exactly and forwards
-/// unchanged. It returns null only if IMAS-Core could not be resolved.
+/// unchanged. On a major-version mismatch it returns the bootstrap version;
+/// it returns null only if IMAS-Core could not be opened or bootstrapped.
 #[unsafe(no_mangle)]
 pub extern "C" fn getALVersion() -> *const c_char {
     resolve::get_al_version()
@@ -118,8 +121,10 @@ pub extern "C" fn getALVersion() -> *const c_char {
 
 /// Mirrors IMAS-Core's deliberately deprecated DD-version accessor exactly.
 /// Its sentinel `"!!DEPRECATED!!"` is forwarded rather than replaced with a
-/// version inferred by the shim. It returns null only if IMAS-Core could not
-/// be resolved.
+/// version inferred by the shim. On a major-version mismatch, the shim
+/// returns that fixed sentinel without querying the incompatible library
+/// further. It returns null only if IMAS-Core could not be opened or
+/// bootstrapped.
 #[unsafe(no_mangle)]
 pub extern "C" fn getDDVersion() -> *const c_char {
     resolve::get_dd_version()

@@ -10,7 +10,7 @@
 //! `docs/adr/0001-runtime-binding-not-linking.md`.
 
 use std::env;
-use std::ffi::{CStr, c_char, c_double, c_int, c_void};
+use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::OnceLock;
 
 use crate::dl::Library;
@@ -167,18 +167,44 @@ impl VersionDrift {
     }
 }
 
-static CORE: OnceLock<Result<CoreBinding, al_status_t>> = OnceLock::new();
+enum ResolutionError {
+    Unavailable(al_status_t),
+    VersionMismatch {
+        status: al_status_t,
+        detected_version: CString,
+    },
+}
+
+impl ResolutionError {
+    fn status(&self) -> &al_status_t {
+        match self {
+            Self::Unavailable(status) | Self::VersionMismatch { status, .. } => status,
+        }
+    }
+}
+
+impl From<al_status_t> for ResolutionError {
+    fn from(status: al_status_t) -> Self {
+        Self::Unavailable(status)
+    }
+}
+
+static CORE: OnceLock<Result<CoreBinding, ResolutionError>> = OnceLock::new();
 
 /// Resolves IMAS-Core, once, memoized for the process's lifetime. A process
 /// that never calls a mirrored ABI function never runs this.
-fn core() -> &'static Result<CoreBinding, al_status_t> {
+fn resolution() -> &'static Result<CoreBinding, ResolutionError> {
     CORE.get_or_init(resolve)
+}
+
+fn core() -> Result<&'static CoreBinding, &'static al_status_t> {
+    resolution().as_ref().map_err(ResolutionError::status)
 }
 
 // `al_status_t` is the ABI struct itself, not an internal error type boxed
 // away for convenience — returning it by value from `Err` is the point.
 #[allow(clippy::result_large_err)]
-fn resolve() -> Result<CoreBinding, al_status_t> {
+fn resolve() -> Result<CoreBinding, ResolutionError> {
     let path = library_path(env::var(CORE_LIBRARY_ENV_VAR).ok().as_deref());
 
     let library = Library::open(&path).map_err(|underlying| {
@@ -197,14 +223,24 @@ fn resolve() -> Result<CoreBinding, al_status_t> {
     if found_version.is_null() {
         return Err(failure(&format!(
             "IMAS-Core library '{path}' returned a null pointer from 'getALVersion'"
-        )));
+        ))
+        .into());
     }
-    let found_version = unsafe { CStr::from_ptr(found_version) }
-        .to_string_lossy()
-        .into_owned();
-
-    let version_drift = check_major_version(BUILT_AGAINST_VERSION, &found_version)
-        .map_err(|detail| failure(&detail))?;
+    let found_version = unsafe { CStr::from_ptr(found_version) };
+    let found_version_text = found_version.to_string_lossy();
+    let version_drift = match check_major_version(BUILT_AGAINST_VERSION, &found_version_text) {
+        Ok(version_drift) => version_drift,
+        Err(detail) => {
+            return Err(ResolutionError::VersionMismatch {
+                status: failure(&detail),
+                // A CStr cannot contain interior NUL bytes, so copying its
+                // contents into a CString is infallible. Retaining the copy
+                // keeps getALVersion's mismatch result valid indefinitely.
+                detected_version: CString::new(found_version.to_bytes())
+                    .expect("CStr values cannot contain interior NUL bytes"),
+            });
+        }
+    };
     if let Some(drift) = &version_drift {
         drift.record();
     }
@@ -351,32 +387,89 @@ pub(crate) unsafe fn build_uri_from_legacy_parameters(
 }
 
 pub(crate) fn const2str(id: c_int) -> *const c_char {
-    string_lookup(id, |binding| binding.const2str)
+    match resolution() {
+        Ok(binding) => unsafe { (binding.const2str)(id) },
+        // The ADR deliberately keeps these diagnostics useful when the
+        // mismatched library's ABI cannot safely be queried further.
+        Err(ResolutionError::VersionMismatch { .. }) => fallback_const2str(id),
+        Err(ResolutionError::Unavailable(_)) => std::ptr::null(),
+    }
 }
 
 pub(crate) fn err2str(id: c_int) -> *const c_char {
-    string_lookup(id, |binding| binding.err2str)
+    match resolution() {
+        Ok(binding) => unsafe { (binding.err2str)(id) },
+        Err(ResolutionError::VersionMismatch { .. }) => fallback_err2str(id),
+        Err(ResolutionError::Unavailable(_)) => std::ptr::null(),
+    }
 }
 
 pub(crate) fn get_al_version() -> *const c_char {
-    match core() {
+    match resolution() {
         Ok(binding) => unsafe { (binding.get_al_version)() },
-        Err(_) => std::ptr::null(),
+        Err(ResolutionError::VersionMismatch {
+            detected_version, ..
+        }) => detected_version.as_ptr(),
+        Err(ResolutionError::Unavailable(_)) => std::ptr::null(),
     }
 }
 
 pub(crate) fn get_dd_version() -> *const c_char {
-    match core() {
+    match resolution() {
         Ok(binding) => unsafe { (binding.get_dd_version)() },
-        Err(_) => std::ptr::null(),
+        Err(ResolutionError::VersionMismatch { .. }) => static_c_str(b"!!DEPRECATED!!\0"),
+        Err(ResolutionError::Unavailable(_)) => std::ptr::null(),
     }
 }
 
-fn string_lookup(id: c_int, lookup: impl FnOnce(&CoreBinding) -> StringLookupFn) -> *const c_char {
-    match core() {
-        Ok(binding) => unsafe { lookup(binding)(id) },
-        Err(_) => std::ptr::null(),
-    }
+fn fallback_const2str(id: c_int) -> *const c_char {
+    let name = match id {
+        10 => b"NO_BACKEND\0".as_slice(),
+        11 => b"ASCII_BACKEND\0".as_slice(),
+        12 => b"MDSPLUS_BACKEND\0".as_slice(),
+        13 => b"HDF5_BACKEND\0".as_slice(),
+        14 => b"MEMORY_BACKEND\0".as_slice(),
+        15 => b"UDA_BACKEND\0".as_slice(),
+        20 => b"GLOBAL_OP\0".as_slice(),
+        21 => b"SLICE_OP\0".as_slice(),
+        30 => b"READ_OP\0".as_slice(),
+        31 => b"WRITE_OP\0".as_slice(),
+        32 => b"REPLACE_OP\0".as_slice(),
+        0 => b"UNDEFINED_INTERP\0".as_slice(),
+        1 => b"CLOSEST_INTERP\0".as_slice(),
+        2 => b"PREVIOUS_INTERP\0".as_slice(),
+        3 => b"LINEAR_INTERP\0".as_slice(),
+        -999 => b"UNDEFINED_TIME\0".as_slice(),
+        40 => b"OPEN_PULSE\0".as_slice(),
+        41 => b"FORCE_OPEN_PULSE\0".as_slice(),
+        42 => b"CREATE_PULSE\0".as_slice(),
+        43 => b"FORCE_CREATE_PULSE\0".as_slice(),
+        44 => b"CLOSE_PULSE\0".as_slice(),
+        45 => b"ERASE_PULSE\0".as_slice(),
+        50 => b"CHAR_DATA\0".as_slice(),
+        51 => b"INTEGER_DATA\0".as_slice(),
+        52 => b"DOUBLE_DATA\0".as_slice(),
+        53 => b"COMPLEX_DATA\0".as_slice(),
+        60 => b"ASCII_SERIALIZER_PROTOCOL\0".as_slice(),
+        61 => b"FLEXBUFFERS_SERIALIZER_PROTOCOL\0".as_slice(),
+        _ => b"\0".as_slice(),
+    };
+    static_c_str(name)
+}
+
+fn fallback_err2str(id: c_int) -> *const c_char {
+    let name = match id {
+        -1 => b"UNKNOWN_ERR\0".as_slice(),
+        -2 => b"CONTEXT_ERR\0".as_slice(),
+        -3 => b"BACKEND_ERR\0".as_slice(),
+        -4 => b"LOWLEVEL_ERR\0".as_slice(),
+        _ => b"\0".as_slice(),
+    };
+    static_c_str(name)
+}
+
+fn static_c_str(value: &'static [u8]) -> *const c_char {
+    value.as_ptr().cast()
 }
 
 /// The explicit override if set, else a bare soname resolved through the

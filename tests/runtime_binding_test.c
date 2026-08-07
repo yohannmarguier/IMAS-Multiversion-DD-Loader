@@ -133,6 +133,8 @@ static void scenario_version_drift(void) {
 static void scenario_version_mismatch(void) {
     void *stub = open_stub_for_introspection();
     int_accessor_fn call_count = (int_accessor_fn)dlsym_or_die(stub, "recording_stub_call_count");
+    int_accessor_fn utility_call_count =
+        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_utility_call_count");
 
     char *info = NULL;
     al_status_t status = al_context_info(1, &info);
@@ -143,8 +145,17 @@ static void scenario_version_mismatch(void) {
     CHECK(strstr(status.message, "IMAS_CORE_LIBRARY") != NULL);
     /* The mismatch must fail resolution before ever forwarding the call. */
     CHECK(call_count() == 0);
+    CHECK(utility_call_count() == 0);
 
-    printf("runtime_binding_test version-mismatch: resolution failed before forwarding\n");
+    /* These diagnostics have no status channel. The ADR requires the shim
+     * to serve them without resolving any further mismatched-Core symbol. */
+    CHECK(strcmp(getALVersion(), INCOMPATIBLE_CORE_VERSION) == 0);
+    CHECK(strcmp(const2str(13), "HDF5_BACKEND") == 0);
+    CHECK(strcmp(err2str(-3), "BACKEND_ERR") == 0);
+    CHECK(strcmp(getDDVersion(), "!!DEPRECATED!!") == 0);
+    CHECK(utility_call_count() == 0);
+
+    printf("runtime_binding_test version-mismatch: operations failed and diagnostics stayed local\n");
 }
 
 static void scenario_null_version(void) {
