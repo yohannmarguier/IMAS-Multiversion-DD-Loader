@@ -159,6 +159,14 @@ if(IMAS_MVDD_BUILD_TESTS)
 
     add_test(NAME abi-smoke COMMAND abi_smoke)
 
+    # The public header must be limited to the mirrored IMAS-Core ABI. The
+    # private dlopen/dlsym declarations Rust needs to implement the shim must
+    # never leak through cbindgen to C consumers.
+    add_test(NAME generated-header-public-surface
+        COMMAND "${CMAKE_COMMAND}"
+            "-DHEADER=${IMAS_MVDD_STAGED_HEADER}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/assert_public_header.cmake")
+
     # A fake IMAS-Core for the tracer-bullet test below: exports
     # al_context_info and getALVersion under their real names, records what
     # it received. Deliberately NOT linked into that test executable: doing

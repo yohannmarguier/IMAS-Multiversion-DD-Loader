@@ -13,6 +13,7 @@ use std::ffi::c_char;
 use std::ffi::c_int;
 
 mod binding;
+/// cbindgen:ignore
 #[cfg(unix)]
 mod dl;
 
