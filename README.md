@@ -7,12 +7,13 @@ pkg-config file — are produced by [cargo-c]; CMake drives cargo-c rather than
 compiling anything itself, so consumers depend on this project the way they
 depend on IMAS-Core.
 
-**Status: runtime binding proven on one symbol.** The build is complete and
-verified end to end. `al_context_info` proves the runtime-binding
-architecture (`src/resolve.rs`, `src/dl.rs`) — the shim resolves IMAS-Core
-lazily via `dlopen`/`dlsym`, version-checks it, and forwards the call — but
-every other mirrored ABI entry point, and all DD path/version conversion, is
-still unimplemented.
+**Status: runtime binding proven on fourteen symbols; no conversion logic
+yet.** `al_context_info` and thirteen data-entry, action-lifecycle and
+data-operation functions use the runtime-binding architecture
+(`src/resolve.rs`, `src/dl.rs`): the shim resolves IMAS-Core lazily via
+`dlopen`/`dlsym`, version-checks it, and forwards each call unchanged. Every
+other mirrored ABI entry point, and all DD path/version conversion, is still
+unimplemented.
 
 ## Toolchain
 
@@ -46,6 +47,8 @@ packaging use.
 |---|---|---|
 | `IMAS_MVDD_BUILD_TESTS` | `ON` | Build the C test suites and register them with ctest |
 | `IMAS_MVDD_CARGO_OFFLINE` | `OFF` | Pass `--offline` to cargo, for build nodes without network |
+| `IMAS_MVDD_REAL_CORE_LIBRARY` | empty | Optional path to a real IMAS-Core `libal` for the forwarding integration test |
+| `IMAS_MVDD_REAL_CORE_INCLUDE_DIR` | empty | Directory containing that Core's `al_const.h` and `al_defs.h`; set together with the library |
 
 Use a single-config generator (Ninja, Unix Makefiles) and set
 `CMAKE_BUILD_TYPE`; multi-config generators are rejected at configure time.
@@ -59,10 +62,11 @@ IMAS_CORE_VERSION       supported IMAS-Core release used by the runtime compatib
 cbindgen.toml           generated-header settings
 cmake/imas-mvdd-loaderConfig.cmake.in  find_package template, hand-authored
 src/lib.rs              the mirrored C ABI
-src/resolve.rs          runtime resolution of IMAS-Core: path/version checks, al_context_info
+src/resolve.rs          runtime resolution of IMAS-Core: path/version checks and mirrored symbols
 src/dl.rs               minimal dlopen/dlsym/dlerror bindings
 tests/abi_smoke.c       links C against the generated header
-tests/runtime_binding_test.c  drives al_context_info against the recording stub
+tests/runtime_binding_test.c  drives forwarding against the recording stub
+tests/real_core_forwarding_test.c  optional legal HDF5 lifecycle against real IMAS-Core
 tests/stub/             recording stub standing in for IMAS-Core in the runtime-binding test
 tests/consumer/         throwaway downstream project proving find_package on the installed tree
 scripts/iter-env.sh     ITER cluster module loads
@@ -118,17 +122,28 @@ next to the equivalent `pkg-config` check.
   header and the built shared library. This is the one that proves the ABI
   pipeline is intact end to end: cbindgen emitted a usable header, cargo-c
   produced a linkable library, and the struct layouts agree on both sides.
-- `runtime-binding-*` — six scenarios (`success`, `version-drift-tolerated`,
-  `version-mismatch`, `null-version`, `missing-library`, `bare-soname`) drive the shim's
-  exported `al_context_info` against a recording stub (`tests/stub/`) that
-  stands in for IMAS-Core, proving the runtime-binding architecture end to
-  end (see `docs/adr/0001-runtime-binding-not-linking.md`).
+- `runtime-binding-*` — seven default scenarios (`success`,
+  `version-drift-tolerated`, `version-mismatch`, `null-version`,
+  `missing-library`, `verbatim-forwarding`, `bare-soname`) drive the shim
+  against a recording stub (`tests/stub/`). The forwarding scenario exercises
+  all thirteen data-entry, action-lifecycle and data-operation symbols and
+  verifies that arguments and results cross the boundary unchanged.
+- `runtime-binding-real-core-forwarding` — optional; drives those same
+  thirteen symbols through a legal temporary HDF5 lifecycle against a real
+  IMAS-Core. Enable it by configuring with both
+  `IMAS_MVDD_REAL_CORE_LIBRARY=/path/to/libal` and
+  `IMAS_MVDD_REAL_CORE_INCLUDE_DIR=/path/to/include`.
 - `tests/consumer/` isn't registered with ctest — it needs an installed tree
   to configure against, so CI drives it directly after the install step.
 
+The recording-stub and real-Core cases complement each other: the stub exposes
+what arrived at the boundary, while the real-Core case proves that the shim's
+calls form a valid lifecycle accepted by the actual implementation. See
+`docs/adr/0001-runtime-binding-not-linking.md`.
+
 CI (`.github/workflows/ci.yml`) runs fmt, clippy and the whole CMake path —
-build, `ctest`, install, then a `pkg-config` query and a `find_package`
-consumer build against the installed tree — for both `Debug` and `Release`,
-pinned to the cluster's Rust and cargo-c versions so it guards the MSRV too.
+build, `ctest`, install, then `pkg-config` and `find_package` consumer builds
+against the installed tree — for both `Debug` and `Release`, pinned to the
+cluster's Rust and cargo-c versions so it guards the MSRV too.
 
 [cargo-c]: https://github.com/lu-zero/cargo-c
