@@ -299,9 +299,9 @@ configure_package_config_file(
     INSTALL_DESTINATION "${IMAS_MVDD_PACKAGE_CONFIG_DIR}"
     PATH_VARS CMAKE_INSTALL_INCLUDEDIR CMAKE_INSTALL_LIBDIR)
 
-# SameMajorVersion: the same compatibility promise the runtime version gate
-# above already enforces against IMAS-Core itself (minor/patch drift
-# tolerated, major mismatch rejected) — the shim's own package follows suit.
+# SameMajorVersion keeps package requests within the ABI's supported major
+# version. CMake also requires the installed package to be no older than the
+# requested version, following its conventional directional package policy.
 write_basic_package_version_file(
     "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}ConfigVersion.cmake"
     VERSION "${PROJECT_VERSION}"
