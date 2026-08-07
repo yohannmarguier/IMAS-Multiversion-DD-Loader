@@ -1,6 +1,7 @@
 /.idea
 /target
 /build*
+!/build.rs
 /dist
 /graphify-out
 /.claude

@@ -18,6 +18,25 @@ option(IMAS_MVDD_CARGO_OFFLINE "Pass --offline to cargo (build nodes without net
 set(IMAS_MVDD_PACKAGE imas-mvdd-loader)   # cargo package name
 set(IMAS_MVDD_LIB_NAME imas_mvdd_loader)  # resulting library / header name
 
+# One committed pin feeds the Rust compatibility gate and both sides of the
+# recording-stub test. Keeping the value out of those sources prevents a test
+# fixture from drifting away from the release the shim actually supports.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/IMAS_CORE_VERSION"
+    IMAS_CORE_VERSION LIMIT_COUNT 1)
+if(NOT IMAS_CORE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR
+        "IMAS_CORE_VERSION must contain a numeric major.minor.patch release")
+endif()
+string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\." _imas_core_version_match
+    "${IMAS_CORE_VERSION}")
+set(IMAS_CORE_SUPPORTED_MAJOR "${CMAKE_MATCH_1}")
+set(IMAS_CORE_SUPPORTED_MINOR "${CMAKE_MATCH_2}")
+math(EXPR IMAS_CORE_INCOMPATIBLE_MAJOR "${IMAS_CORE_SUPPORTED_MAJOR} + 1")
+math(EXPR IMAS_CORE_DRIFT_MINOR "${IMAS_CORE_SUPPORTED_MINOR} + 1")
+set(IMAS_CORE_INCOMPATIBLE_VERSION "${IMAS_CORE_INCOMPATIBLE_MAJOR}.0.0")
+set(IMAS_CORE_DRIFT_VERSION
+    "${IMAS_CORE_SUPPORTED_MAJOR}.${IMAS_CORE_DRIFT_MINOR}.0")
+
 if(CMAKE_CONFIGURATION_TYPES)
     message(FATAL_ERROR
         "Multi-config generators are not supported: cargo has a single "
@@ -125,6 +144,8 @@ add_custom_command(
     COMMAND "${CARGO_EXECUTABLE}" cinstall ${CARGO_COMMON_ARGS} ${CARGO_STAGE_ARGS}
     DEPENDS
         ${IMAS_MVDD_RUST_SOURCES}
+        "${CMAKE_CURRENT_SOURCE_DIR}/build.rs"
+        "${CMAKE_CURRENT_SOURCE_DIR}/IMAS_CORE_VERSION"
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
         "${CMAKE_CURRENT_SOURCE_DIR}/cbindgen.toml"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -158,6 +179,71 @@ if(IMAS_MVDD_BUILD_TESTS)
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
     add_test(NAME abi-smoke COMMAND abi_smoke)
+
+    # --- Runtime-binding test: proves the architecture (issue #3) ---------
+    #
+    # A recording stub stands in for IMAS-Core: it exports the ABI symbols
+    # the shim resolves at runtime (al_context_info, getALVersion) and
+    # records what it received, so assertions can be made directly on what
+    # crossed the boundary instead of inferring it from a data round trip.
+    #
+    # The stub is deliberately never linked into runtime_binding_test: doing so would
+    # give the linker two candidate definitions of al_context_info (the
+    # shim's and the stub's) to choose between — exactly the ambiguity
+    # runtime binding exists to avoid. runtime_binding_test only dlopen's the stub
+    # itself, purely to read back its recorded state.
+    add_library(recording_stub SHARED
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/stub/recording_stub.c")
+    # Matches the shim's bare-soname fallback (src/resolve.rs) so the
+    # bare-soname scenario below can exercise the loader's normal search
+    # path instead of the explicit override.
+    set_target_properties(recording_stub PROPERTIES OUTPUT_NAME al)
+    target_compile_definitions(recording_stub PRIVATE
+        "RECORDING_STUB_DEFAULT_VERSION=\"${IMAS_CORE_VERSION}\"")
+
+    add_executable(runtime_binding_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_binding_test.c")
+    target_link_libraries(runtime_binding_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
+    target_compile_definitions(runtime_binding_test PRIVATE
+        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\""
+        "SUPPORTED_CORE_VERSION=\"${IMAS_CORE_VERSION}\""
+        "INCOMPATIBLE_CORE_VERSION=\"${IMAS_CORE_INCOMPATIBLE_VERSION}\"")
+    add_dependencies(runtime_binding_test imas_mvdd_capi recording_stub)
+    set_target_properties(runtime_binding_test PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    add_test(NAME runtime-binding-success COMMAND runtime_binding_test success)
+    set_tests_properties(runtime-binding-success PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+    add_test(NAME runtime-binding-version-drift-tolerated
+        COMMAND runtime_binding_test version-drift)
+    set_tests_properties(runtime-binding-version-drift-tolerated PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_VERSION=${IMAS_CORE_DRIFT_VERSION}"
+        PASS_REGULAR_EXPRESSION
+            "tolerating IMAS-Core version drift.*built against ${IMAS_CORE_VERSION}, found ${IMAS_CORE_DRIFT_VERSION}")
+
+    add_test(NAME runtime-binding-version-mismatch COMMAND runtime_binding_test version-mismatch)
+    set_tests_properties(runtime-binding-version-mismatch PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_VERSION=${IMAS_CORE_INCOMPATIBLE_VERSION}")
+
+    add_test(NAME runtime-binding-null-version COMMAND runtime_binding_test null-version)
+    set_tests_properties(runtime-binding-null-version PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_NULL_VERSION=1")
+
+    add_test(NAME runtime-binding-missing-library COMMAND runtime_binding_test missing-library)
+    set_tests_properties(runtime-binding-missing-library PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=${CMAKE_CURRENT_BINARY_DIR}/does-not-exist.so")
+
+    add_test(NAME runtime-binding-bare-soname COMMAND runtime_binding_test bare-soname)
+    if(APPLE)
+        set(_runtime_binding_search_path_var DYLD_LIBRARY_PATH)
+    else()
+        set(_runtime_binding_search_path_var LD_LIBRARY_PATH)
+    endif()
+    set_tests_properties(runtime-binding-bare-soname PROPERTIES ENVIRONMENT
+        "${_runtime_binding_search_path_var}=$<TARGET_FILE_DIR:recording_stub>")
 endif()
 
 # ---------------------------------------------------------------------------

@@ -1,15 +1,20 @@
 //! IMAS-Multiversion-DD-Loader — C ABI surface.
 //!
 //! This crate re-exports IMAS-Core's public C ABI verbatim and interposes on
-//! the path-bearing entry points. Only the scaffolding is here so far: the
-//! shared constants and `al_status_t`, plus two symbols that let the build
-//! pipeline (cargo-c → header → C consumer) be verified end to end.
+//! the path-bearing entry points. The shared constants and `al_status_t` are
+//! here, and the runtime-binding architecture is proven end to end on one
+//! symbol, `al_context_info` (see `src/resolve.rs` and
+//! `docs/adr/0001-runtime-binding-not-linking.md`). Every other mirrored
+//! entry point, and all DD path/version conversion, is still unimplemented.
 
 // The mirrored ABI dictates the names; matching IMAS-Core exactly is the point.
 #![allow(non_camel_case_types)]
 
 use std::ffi::c_char;
 use std::ffi::c_int;
+
+mod dl;
+mod resolve;
 
 /// Length of `al_status_t::message`, mirroring IMAS-Core's `MAX_ERR_MSG_LEN`.
 pub const MAX_ERR_MSG_LEN: usize = 256;
@@ -56,6 +61,21 @@ pub unsafe extern "C" fn imas_mvdd_loader_status_clear(status: *mut al_status_t)
         return;
     }
     unsafe { *status = al_status_t::default() };
+}
+
+/// Mirrors IMAS-Core's `al_context_info` exactly — same name, same
+/// signature. Resolves IMAS-Core lazily on first call (see
+/// `resolve::context_info`) and forwards every call to the real
+/// implementation; a process that never calls this never requires
+/// IMAS-Core to be present.
+///
+/// # Safety
+/// `info` must be a valid, writable `*mut *mut c_char`, or null, matching
+/// IMAS-Core's own contract for this function. On success the caller owns
+/// `*info` and must free it, per IMAS-Core's documented contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn al_context_info(ctx: c_int, info: *mut *mut c_char) -> al_status_t {
+    unsafe { resolve::context_info(ctx, info) }
 }
 
 #[cfg(test)]
