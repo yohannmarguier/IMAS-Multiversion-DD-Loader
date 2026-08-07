@@ -1,0 +1,78 @@
+name: CI
+
+# The point of this workflow is to keep the CMake path exercised. Day to day
+# you run `cargo test`; nothing else re-runs cargo-c, regenerates the header,
+# or compiles the C smoke test — and unexercised build glue rots silently.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Both pinned to the ITER cluster modules, so CI guards the exact versions
+  # this project deploys against rather than whatever is newest.
+  RUST_VERSION: 1.88.0
+  CARGO_C_VERSION: 0.10.15
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both build types: Debug and Release map to different cargo profiles,
+        # and a mismatch there is silent — it produced a wrong-profile build
+        # once already.
+        build_type: [Debug, Release]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal -c rustfmt -c clippy
+          rustup default "$RUST_VERSION"
+
+      - name: Install cargo-c ${{ env.CARGO_C_VERSION }}
+        run: |
+          curl -fsSL "https://github.com/lu-zero/cargo-c/releases/download/v${CARGO_C_VERSION}/cargo-c-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C "$HOME/.cargo/bin"
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Install
+        run: cmake --install build --prefix "$PWD/dist"
+
+      - name: Check the installed package is consumable
+        run: |
+          set -euo pipefail
+          # Locate the .pc rather than assuming a libdir: GNUInstallDirs picks
+          # lib, lib64 or a multiarch path depending on the distribution.
+          pc=$(find dist -name imas-mvdd-loader.pc | head -1)
+          test -n "$pc" || { echo "no pkg-config file installed"; exit 1; }
+          test -f dist/include/imas_mvdd_loader.h
+          PKG_CONFIG_PATH=$(dirname "$pc") \
+            pkg-config --print-errors --cflags --libs imas-mvdd-loader

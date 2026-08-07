@@ -70,10 +70,28 @@ reflect where the artefacts actually land. `DESTDIR` is honoured.
 
 ## Tests
 
-- `rust-unit` — `cargo test` over the workspace.
+- `rust-unit` — `cargo test` over the crate.
 - `abi-smoke` — compiles and runs `tests/abi_smoke.c` against the generated
   header and the built shared library. This is the test that proves the ABI
   pipeline is intact end to end: cbindgen emitted a usable header, cargo-c
   produced a linkable library, and the struct layouts agree on both sides.
+
+## CI
+
+`.github/workflows/ci.yml` runs fmt, clippy, and the full CMake path — build,
+`ctest`, `cmake --install`, then a `pkg-config` query against the installed
+tree — for **both** `Debug` and `Release`.
+
+It exists because the CMake path is not the day-to-day dev loop. `cargo test`
+never re-runs cargo-c, never regenerates the header, and never compiles the C
+smoke test; build glue that nobody exercises degrades without anyone noticing.
+The `Debug`/`Release` matrix is there for the same reason — the two map to
+different cargo profiles, and that mapping has already been silently wrong
+once.
+
+Rust and cargo-c are pinned in the workflow `env:` to the same versions as the
+ITER cluster modules, so CI also guards the MSRV rather than tracking whatever
+is newest. cargo-c is installed from its upstream prebuilt release, which
+takes seconds instead of the several minutes `cargo install cargo-c` needs.
 
 [cargo-c]: https://github.com/lu-zero/cargo-c

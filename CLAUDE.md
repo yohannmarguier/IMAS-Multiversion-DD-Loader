@@ -18,6 +18,12 @@ $ cmake --install build --prefix /path/to/prefix
 $ cargo fmt && cargo clippy --all-targets          # lint, no CMake wrapper
 ```
 
+CI (`.github/workflows/ci.yml`) runs fmt, clippy and the whole CMake path for
+both `Debug` and `Release`, pinned to the cluster's Rust/cargo-c versions. It
+is the only thing keeping the CMake path honest — `cargo test` alone never
+re-runs cargo-c, never regenerates the header, and never compiles the C smoke
+test.
+
 See `docs/BUILDING.md` for options, layout and why install re-runs cargo-c
 instead of copying the staged tree.
 
