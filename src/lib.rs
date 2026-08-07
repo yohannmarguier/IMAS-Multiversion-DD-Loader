@@ -2,10 +2,11 @@
 //!
 //! This crate re-exports IMAS-Core's public C ABI verbatim and interposes on
 //! the path-bearing entry points. The shared constants and `al_status_t` are
-//! here, and the runtime-binding architecture is proven end to end on one
-//! symbol, `al_context_info` (see `src/resolve.rs` and
-//! `docs/adr/0001-runtime-binding-not-linking.md`). Every other mirrored
-//! entry point, and all DD path/version conversion, is still unimplemented.
+//! here, and the runtime-binding architecture (see `src/resolve.rs` and
+//! `docs/adr/0001-runtime-binding-not-linking.md`) is proven end to end on
+//! `al_context_info` plus the thirteen data-entry, action-lifecycle and
+//! data-operation symbols below. Every other mirrored entry point, and all
+//! DD path/version conversion, is still unimplemented.
 
 // The mirrored ABI dictates the names; matching IMAS-Core exactly is the point.
 #![allow(non_camel_case_types)]
@@ -274,8 +275,10 @@ pub extern "C" fn al_iterate_over_arraystruct(aosctx: c_int, step: c_int) -> al_
 /// # Safety
 /// `ids_name` must be a valid, NUL-terminated C string. `occurrences_list`
 /// and `size` must be valid, writable pointers, matching IMAS-Core's own
-/// contract for this function. On success the caller owns
-/// `*occurrences_list` per IMAS-Core's documented contract.
+/// contract for this function. Whether the caller must free
+/// `*occurrences_list` is not stated in IMAS-Core's own documentation
+/// (flagged, unresolved, in the functionality inventory) — this function
+/// forwards it unexamined either way.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn al_get_occurrences(
     pctx_id: c_int,

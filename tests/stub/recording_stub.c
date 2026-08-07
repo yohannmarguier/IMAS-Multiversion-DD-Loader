@@ -223,8 +223,6 @@ static char *g_read_field = NULL;
 static char *g_read_timebase = NULL;
 static int g_read_datatype = 0;
 static int g_read_dim = 0;
-static int g_read_status_code = 0;
-static char g_read_status_message[256];
 static char g_read_buffer[] = "recording-stub: read data payload";
 
 al_status_t al_read_data(int ctxID, const char *field, const char *timebase, void **data,
@@ -265,9 +263,6 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
         status = ok_status();
         strncpy(status.message, "recording-stub: read ok", sizeof status.message - 1);
     }
-    g_read_status_code = status.code;
-    memset(g_read_status_message, 0, sizeof g_read_status_message);
-    strncpy(g_read_status_message, status.message, sizeof g_read_status_message - 1);
     return status;
 }
 

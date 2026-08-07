@@ -1,10 +1,11 @@
 //! Runtime resolution of IMAS-Core.
 //!
-//! Proven end to end on one symbol, `al_context_info` (issue #3): the shim
-//! carries no link-time dependency on IMAS-Core. On first use it opens
-//! IMAS-Core with local symbol visibility and resolves each function's
-//! address through that specific library handle, so the shim's own
-//! globally visible exports are never in the lookup scope and can't
+//! Proven end to end on `al_context_info` (issue #3), then extended to the
+//! data-entry, action-lifecycle and data-operation symbols below (issue
+//! #6): the shim carries no link-time dependency on IMAS-Core. On first use
+//! it opens IMAS-Core with local symbol visibility and resolves each
+//! function's address through that specific library handle, so the shim's
+//! own globally visible exports are never in the lookup scope and can't
 //! capture its outbound calls. See
 //! `docs/adr/0001-runtime-binding-not-linking.md`.
 
