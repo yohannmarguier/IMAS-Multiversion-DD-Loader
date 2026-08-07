@@ -348,8 +348,6 @@ al_status_t al_get_occurrences(int pctxID, const char *ids_name, int **occurrenc
 static int g_filled_paths_call_count = 0;
 static int g_filled_paths_pctx_id = 0;
 static char *g_filled_paths_dataobjectname = NULL;
-static char *g_filled_paths_values[2];
-static char *g_filled_paths_list[2];
 
 al_status_t al_list_filled_paths(int pctxID, const char *dataobjectname, char ***path_list,
                                   int *size) {
@@ -358,15 +356,28 @@ al_status_t al_list_filled_paths(int pctxID, const char *dataobjectname, char **
     free(g_filled_paths_dataobjectname);
     g_filled_paths_dataobjectname = record_str(dataobjectname);
 
-    free(g_filled_paths_values[0]);
-    free(g_filled_paths_values[1]);
-    g_filled_paths_values[0] = record_str("ids/path/one");
-    g_filled_paths_values[1] = record_str("ids/path/two");
-    g_filled_paths_list[0] = g_filled_paths_values[0];
-    g_filled_paths_list[1] = g_filled_paths_values[1];
-
     if (path_list != NULL) {
-        *path_list = g_filled_paths_list;
+        char **list = malloc(2 * sizeof *list);
+        if (list == NULL) {
+            al_status_t status = ok_status();
+            status.code = -1;
+            strncpy(status.message, "recording-stub: allocation failed",
+                    sizeof status.message - 1);
+            return status;
+        }
+        list[0] = record_str("ids/path/one");
+        list[1] = record_str("ids/path/two");
+        if (list[0] == NULL || list[1] == NULL) {
+            free(list[0]);
+            free(list[1]);
+            free(list);
+            al_status_t status = ok_status();
+            status.code = -1;
+            strncpy(status.message, "recording-stub: allocation failed",
+                    sizeof status.message - 1);
+            return status;
+        }
+        *path_list = list;
     }
     if (size != NULL) {
         *size = 2;

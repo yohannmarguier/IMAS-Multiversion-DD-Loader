@@ -493,6 +493,10 @@ static void scenario_verbatim_forwarding(void) {
         CHECK(path_list != NULL);
         CHECK(strcmp(path_list[0], "ids/path/one") == 0);
         CHECK(strcmp(path_list[1], "ids/path/two") == 0);
+        for (int i = 0; i < size; ++i) {
+            free(path_list[i]);
+        }
+        free(path_list);
     }
 
     printf("runtime_binding_test verbatim-forwarding: every seam and lifecycle call reached the "
