@@ -3,12 +3,9 @@
 project(imas-mvdd-loader
     VERSION 0.1.0
     DESCRIPTION "Middleware shim between the IMAS HLIs and IMAS-Core"
-    # CXX is never compiled here: this project stays C at the ABI boundary
-    # (see docs/adr/0001-runtime-binding-not-linking.md). It is enabled
-    # anyway because find_package(al-core CONFIG)'s find_dependency(Boost)
-    # requires a C++ compiler to be configured in the *consuming* project,
-    # not just IMAS-Core's own build — Boost's CMake package checks
-    # CMAKE_CXX_COMPILER_LOADED unconditionally.
+    # The shipped ABI remains C, but tests compile C++ for the real-header
+    # signature checker and a loadable plugin fixture. find_package(al-core
+    # CONFIG)'s find_dependency(Boost) also requires a configured C++ compiler.
     LANGUAGES C CXX)
 
 include(GNUInstallDirs)
@@ -287,6 +284,18 @@ if(IMAS_MVDD_BUILD_TESTS)
 
     add_test(NAME abi-smoke COMMAND abi_smoke)
 
+    # Runtime dlsym cannot type-check the hand-written signatures. Compile both
+    # public headers into one translation unit and compare every mirrored
+    # function's parameter types plus al_status_t's layout (ADR 0001).
+    add_executable(real_core_abi_check
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_abi_check.cpp")
+    target_include_directories(real_core_abi_check PRIVATE
+        "${IMAS_MVDD_STAGE_DIR}/include")
+    target_link_libraries(real_core_abi_check PRIVATE ${IMAS_CORE_AL_TARGET})
+    target_compile_features(real_core_abi_check PRIVATE cxx_std_17)
+    add_dependencies(real_core_abi_check imas_mvdd_capi)
+    add_test(NAME real-core-abi COMMAND real_core_abi_check)
+
     # --- Runtime-binding test: proves the architecture (issue #3) ---------
     #
     # A recording stub stands in for IMAS-Core: it exports the ABI symbols
@@ -385,7 +394,8 @@ if(IMAS_MVDD_BUILD_TESTS)
 
     # A real-Core run cannot use the recording stub's private accessors or
     # fabricated context IDs. When an installed/built IMAS-Core is supplied,
-    # drive all issue-#6 symbols through a legal temporary HDF5 lifecycle.
+    # drive all issue-#6 and issue-#7 symbols through a legal temporary HDF5
+    # lifecycle, using a loadable fixture for plugin-management calls.
     if(IMAS_MVDD_REAL_CORE_LIBRARY OR IMAS_MVDD_REAL_CORE_INCLUDE_DIR)
         if(NOT IMAS_MVDD_REAL_CORE_LIBRARY OR NOT IMAS_MVDD_REAL_CORE_INCLUDE_DIR)
             message(FATAL_ERROR
@@ -397,7 +407,11 @@ if(IMAS_MVDD_BUILD_TESTS)
                 "IMAS_MVDD_REAL_CORE_LIBRARY does not exist: "
                 "${IMAS_MVDD_REAL_CORE_LIBRARY}")
         endif()
-        foreach(_real_core_header al_const.h al_defs.h)
+        foreach(_real_core_header
+                al_const.h
+                al_defs.h
+                al_lowlevel.h
+                access_layer_plugin.h)
             if(NOT EXISTS "${IMAS_MVDD_REAL_CORE_INCLUDE_DIR}/${_real_core_header}")
                 message(FATAL_ERROR
                     "IMAS_MVDD_REAL_CORE_INCLUDE_DIR does not contain "
@@ -405,12 +419,28 @@ if(IMAS_MVDD_BUILD_TESTS)
             endif()
         endforeach()
 
+        add_library(real_core_test_plugin MODULE
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_test_plugin.cpp")
+        target_include_directories(real_core_test_plugin PRIVATE
+            "${IMAS_MVDD_REAL_CORE_INCLUDE_DIR}")
+        target_compile_features(real_core_test_plugin PRIVATE cxx_std_17)
+        set_target_properties(real_core_test_plugin PROPERTIES
+            PREFIX ""
+            OUTPUT_NAME "mvddtest_plugin"
+            SUFFIX ".so"
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
+
         add_executable(real_core_forwarding_test
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_forwarding_test.c")
         target_include_directories(real_core_forwarding_test PRIVATE
             "${IMAS_MVDD_REAL_CORE_INCLUDE_DIR}")
+        target_compile_definitions(real_core_forwarding_test PRIVATE
+            "REAL_CORE_TEST_PLUGIN_DIR=\"$<TARGET_FILE_DIR:real_core_test_plugin>\""
+            "REAL_CORE_TEST_PLUGIN_NAME=\"mvddtest\"")
         target_link_libraries(real_core_forwarding_test PRIVATE imas_mvdd_loader)
-        add_dependencies(real_core_forwarding_test imas_mvdd_capi)
+        add_dependencies(real_core_forwarding_test
+            imas_mvdd_capi
+            real_core_test_plugin)
         set_target_properties(real_core_forwarding_test PROPERTIES
             BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 

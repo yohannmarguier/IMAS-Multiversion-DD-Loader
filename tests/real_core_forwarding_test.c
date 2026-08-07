@@ -1,5 +1,5 @@
-/* Optional integration test for issue #6: exercise every newly mirrored
- * symbol through the shim against a real IMAS-Core libal. Unlike the
+/* Optional integration test for issues #6 and #7: exercise every newly
+ * mirrored symbol through the shim against a real IMAS-Core libal. Unlike the
  * recording-stub test, this test uses only the public C ABI and legal context
  * lifecycles. CMake registers it only when matching Core headers and library
  * are supplied explicitly. */
@@ -18,6 +18,13 @@
 
 #include <al_const.h>
 #include <imas_mvdd_loader.h>
+
+#ifndef REAL_CORE_TEST_PLUGIN_DIR
+#error "REAL_CORE_TEST_PLUGIN_DIR must name the directory containing the fixture plugin"
+#endif
+#ifndef REAL_CORE_TEST_PLUGIN_NAME
+#error "REAL_CORE_TEST_PLUGIN_NAME must name the fixture plugin"
+#endif
 
 #define CHECK(condition)                                                        \
     do {                                                                        \
@@ -61,6 +68,25 @@ static void remove_temp_file(const char *pulse_dir, const char *name) {
     int path_length = snprintf(path, sizeof path, "%s/%s", pulse_dir, name);
     CHECK(path_length > 0 && (size_t)path_length < sizeof path);
     CHECK(unlink(path) == 0 || errno == ENOENT);
+}
+
+static int file_contains(const char *path, const char *needle) {
+    FILE *file = fopen(path, "r");
+    CHECK(file != NULL);
+    char contents[1024] = {0};
+    size_t size = fread(contents, 1, sizeof contents - 1, file);
+    CHECK(!ferror(file));
+    CHECK(fclose(file) == 0);
+    contents[size] = '\0';
+    return strstr(contents, needle) != NULL;
+}
+
+static void check_logged_parameter(const char *path, const char *name, int datatype,
+                                   const char *value) {
+    char expected[256];
+    int length = snprintf(expected, sizeof expected, "%s|%d|0|%s", name, datatype, value);
+    CHECK(length > 0 && (size_t)length < sizeof expected);
+    CHECK(file_contains(path, expected));
 }
 
 static void write_int_scalar(int ctx, const char *field, int value) {
@@ -134,11 +160,7 @@ static void check_arraystruct_read(int pulse_ctx) {
     CHECK_OK(al_end_action(op_ctx));
 }
 
-/* The reentry calls bypass plugin dispatch and talk to the backend directly.
- * They are therefore safe to exercise without shipping a test plugin. The
- * other eleven issue-#7 symbols are resolved by the shim's all-or-nothing
- * binding before the first call in this process, so this real-Core tracer
- * also fails if any of their real symbols are absent. */
+/* The reentry calls bypass plugin dispatch and talk to the backend directly. */
 static void check_plugin_reentry(int pulse_ctx) {
     int op_ctx = -1;
     int value = 314;
@@ -146,10 +168,17 @@ static void check_plugin_reentry(int pulse_ctx) {
     CHECK_OK(al_plugin_write_data(op_ctx, "leaf", "", &value, INTEGER_DATA, 0, NULL));
     CHECK_OK(al_plugin_end_action(op_ctx));
 
-    /* Starting and ending the slice proves the reentry's lifecycle path;
-     * the recording stub exercises its data-read sibling with controlled
-     * buffers. The real-Core test's initial binding resolves all seventeen
-     * issue-#7 symbols before any of these calls. */
+    CHECK_OK(al_plugin_begin_global_action(pulse_ctx, "plugin_probe", "", READ_OP, &op_ctx));
+    int read_value = -1;
+    int read_shape[MAXDIM] = {0};
+    void *read_buffer = &read_value;
+    CHECK_OK(al_plugin_read_data(op_ctx, "leaf", "", &read_buffer, INTEGER_DATA, 0,
+                                 read_shape));
+    CHECK(read_value == 314);
+    CHECK_OK(al_plugin_end_action(op_ctx));
+
+    /* Starting and ending the slice proves that reentry lifecycle independently
+     * of the global-action read/write path above. */
     CHECK_OK(al_plugin_begin_slice_action(pulse_ctx, "magnetics", READ_OP, 1.4,
                                           CLOSEST_INTERP, &op_ctx));
     CHECK_OK(al_plugin_end_action(op_ctx));
@@ -162,6 +191,57 @@ static void check_plugin_reentry(int pulse_ctx) {
     CHECK_OK(al_plugin_write_data(aos_ctx, "value", "", &value, INTEGER_DATA, 0, NULL));
     CHECK_OK(al_plugin_end_action(aos_ctx));
     CHECK_OK(al_plugin_end_action(op_ctx));
+}
+
+/* Drive all eleven plugin-management/configuration exports across the shim's
+ * real-Core boundary. The loadable fixture makes registration legal and logs
+ * the setter arguments so this checks forwarding, not only symbol presence. */
+static void check_plugin_management(int pulse_ctx, const char *log_path) {
+    CHECK(setenv("IMAS_AL_ENABLE_PLUGINS", "TRUE", 1) == 0);
+    CHECK(setenv("IMAS_AL_PLUGINS", REAL_CORE_TEST_PLUGIN_DIR, 1) == 0);
+    CHECK(setenv("IMAS_MVDD_TEST_PLUGIN_LOG", log_path, 1) == 0);
+
+    bool registered = true;
+    CHECK_OK(al_is_plugin_registered(REAL_CORE_TEST_PLUGIN_NAME, &registered));
+    CHECK(!registered);
+    CHECK_OK(al_register_plugin(REAL_CORE_TEST_PLUGIN_NAME));
+    CHECK_OK(al_is_plugin_registered(REAL_CORE_TEST_PLUGIN_NAME, &registered));
+    CHECK(registered);
+
+    int generic_value = 7;
+    CHECK_OK(al_setvalue_parameter_plugin("generic", INTEGER_DATA, 0, NULL,
+                                          &generic_value, REAL_CORE_TEST_PLUGIN_NAME));
+    CHECK_OK(al_setvalue_int_scalar_parameter_plugin("integer", 42,
+                                                      REAL_CORE_TEST_PLUGIN_NAME));
+    CHECK_OK(al_setvalue_double_scalar_parameter_plugin("double", 1.5,
+                                                         REAL_CORE_TEST_PLUGIN_NAME));
+    check_logged_parameter(log_path, "generic", INTEGER_DATA, "7");
+    check_logged_parameter(log_path, "integer", INTEGER_DATA, "42");
+    check_logged_parameter(log_path, "double", DOUBLE_DATA, "1.5");
+
+    const char *bound_path = "plugin_metadata:0/leaf";
+    CHECK_OK(al_bind_plugin(bound_path, REAL_CORE_TEST_PLUGIN_NAME));
+
+    int op_ctx = -1;
+    CHECK_OK(al_begin_global_action(pulse_ctx, "plugin_metadata", "", WRITE_OP, &op_ctx));
+    CHECK_OK(al_write_plugins_metadata(op_ctx));
+    CHECK_OK(al_end_action(op_ctx));
+
+    CHECK_OK(al_begin_global_action(pulse_ctx, "plugin_metadata", "", READ_OP, &op_ctx));
+    CHECK_OK(al_bind_readback_plugins(op_ctx));
+    CHECK_OK(al_unbind_readback_plugins(op_ctx));
+    CHECK_OK(al_end_action(op_ctx));
+
+    CHECK_OK(al_unbind_plugin(bound_path, REAL_CORE_TEST_PLUGIN_NAME));
+    /* A second bind fails if unbind was accidentally forwarded elsewhere. */
+    CHECK_OK(al_bind_plugin(bound_path, REAL_CORE_TEST_PLUGIN_NAME));
+    CHECK_OK(al_unregister_plugin(REAL_CORE_TEST_PLUGIN_NAME));
+    CHECK_OK(al_is_plugin_registered(REAL_CORE_TEST_PLUGIN_NAME, &registered));
+    CHECK(!registered);
+
+    CHECK(unsetenv("IMAS_MVDD_TEST_PLUGIN_LOG") == 0);
+    CHECK(unsetenv("IMAS_AL_PLUGINS") == 0);
+    CHECK(unsetenv("IMAS_AL_ENABLE_PLUGINS") == 0);
 }
 
 int main(void) {
@@ -223,6 +303,11 @@ int main(void) {
     check_arraystruct_read(pulse_ctx);
     check_plugin_reentry(pulse_ctx);
 
+    char plugin_log[1024];
+    int plugin_log_length = snprintf(plugin_log, sizeof plugin_log, "%s/plugin.log", temp_dir);
+    CHECK(plugin_log_length > 0 && (size_t)plugin_log_length < sizeof plugin_log);
+    check_plugin_management(pulse_ctx, plugin_log);
+
     /* Isolate the documented HDF5 delete behavior from the data above. */
     CHECK_OK(al_begin_global_action(pulse_ctx, "delete_probe", "", WRITE_OP, &op_ctx));
     write_int_scalar(op_ctx, "leaf", 1);
@@ -235,10 +320,12 @@ int main(void) {
     remove_temp_file(pulse_dir, "delete_probe.h5");
     remove_temp_file(pulse_dir, "plugin_probe.h5");
     remove_temp_file(pulse_dir, "plugin_aos.h5");
+    remove_temp_file(pulse_dir, "plugin_metadata.h5");
     remove_temp_file(pulse_dir, "master.h5");
+    CHECK(unlink(plugin_log) == 0);
     CHECK(rmdir(pulse_dir) == 0);
     CHECK(rmdir(temp_dir) == 0);
 
-    printf("real_core_forwarding_test: issue-6 and plugin-reentry symbols completed a real HDF5 lifecycle\n");
+    printf("real_core_forwarding_test: issue-6 and all issue-7 symbols crossed real IMAS-Core\n");
     return EXIT_SUCCESS;
 }

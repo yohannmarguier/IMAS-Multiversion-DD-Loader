@@ -7,14 +7,16 @@ pkg-config file — are produced by [cargo-c]; CMake drives cargo-c rather than
 compiling anything itself, so consumers depend on this project the way they
 depend on IMAS-Core.
 
-**Status: runtime binding proven on fourteen symbols; no conversion logic
-yet.** `al_context_info` and thirteen data-entry, action-lifecycle and
-data-operation functions use the runtime-binding architecture
-(`src/resolve.rs`, `src/dl.rs`): the shim resolves IMAS-Core lazily via
+**Status: runtime binding proven on thirty-one callable symbols; no conversion
+logic yet.** `al_context_info`, thirteen data-entry/action-lifecycle/data-operation
+functions, and seventeen plugin-management/reentry functions use the
+runtime-binding architecture (`src/resolve.rs`, `src/dl.rs`): the shim resolves IMAS-Core lazily via
 `dlopen`/`dlsym`, version-checks it, and forwards each call unchanged.
-`al_context_info` is also exercised against a real, CMake-acquired IMAS-Core.
-Every other mirrored ABI entry point, and all DD path/version conversion, is
-still unimplemented.
+`al_plugin_begin_timerange_action` is deliberately absent because IMAS-Core's
+public declaration is unlinkable upstream. The signatures are checked against
+IMAS-Core's real header, and the forwarding seams are exercised against both a
+recording stub and a real Core. Every other mirrored ABI entry point, and all
+DD path/version conversion, is still unimplemented.
 
 ## Toolchain
 
@@ -76,8 +78,10 @@ src/lib.rs              the mirrored C ABI
 src/resolve.rs          runtime resolution of IMAS-Core: path/version checks and mirrored symbols
 src/dl.rs               minimal dlopen/dlsym/dlerror bindings
 tests/abi_smoke.c       links C against the generated header
+tests/real_core_abi_check.cpp  compares generated declarations with IMAS-Core's real header
 tests/runtime_binding_test.c  drives forwarding against the recording stub and al_context_info against real IMAS-Core
 tests/real_core_forwarding_test.c  optional legal HDF5 lifecycle against real IMAS-Core
+tests/real_core_test_plugin.cpp  loadable fixture for real-Core plugin seam tests
 tests/stub/             recording stub standing in for IMAS-Core in the runtime-binding test
 tests/consumer/         throwaway downstream project proving find_package on the installed tree
 scripts/iter-env.sh     ITER cluster module loads
@@ -133,18 +137,24 @@ next to the equivalent `pkg-config` check.
   header and the built shared library. This is the one that proves the ABI
   pipeline is intact end to end: cbindgen emitted a usable header, cargo-c
   produced a linkable library, and the struct layouts agree on both sides.
-- `runtime-binding-*` — eight default scenarios (`success`,
+- `real-core-abi` — compiles the generated header and IMAS-Core's real
+  `al_lowlevel.h` into one C++ translation unit. It checks every mirrored
+  parameter list plus `al_status_t` layout and the shared ABI constants.
+- `runtime-binding-*` — ten default scenarios (`success`,
   `version-drift-tolerated`, `version-mismatch`, `null-version`,
-  `missing-library`, `verbatim-forwarding`, `bare-soname`, `real-core`) drive
-  the shim through its exported C ABI. The first seven run against a recording
-  stub (`tests/stub/`); `verbatim-forwarding` exercises all thirteen
+  `missing-library`, `verbatim-forwarding`, `plugin-forwarding`,
+  `plugin-timerange-omitted`, `bare-soname`, `real-core`) drive the shim through
+  its exported C ABI. Seven run against a recording stub (`tests/stub/`);
+  `verbatim-forwarding` exercises all thirteen
   data-entry, action-lifecycle and data-operation symbols and verifies that
-  arguments and results cross the boundary unchanged. `real-core` runs
-  `al_context_info` against the IMAS-Core CMake acquired for this build and
-  checks its independently known `NULL context` result.
-- `runtime-binding-real-core-forwarding` — optional; drives those same
-  thirteen symbols through a legal temporary HDF5 lifecycle against a real
-  IMAS-Core. Enable it by configuring with both
+  arguments and results cross the boundary unchanged; `plugin-forwarding`
+  does the same for all seventeen callable plugin symbols, while
+  `plugin-timerange-omitted` pins the deliberately missing export. `real-core`
+  checks `al_context_info` against the CMake-acquired IMAS-Core.
+- `runtime-binding-real-core-forwarding` — optional; drives the thirteen data
+  seams and all seventeen callable plugin seams through a legal temporary HDF5
+  lifecycle against a real IMAS-Core. Its loadable fixture verifies plugin
+  registration, binding and parameter values end to end. Enable it with both
   `IMAS_MVDD_REAL_CORE_LIBRARY=/path/to/libal` and
   `IMAS_MVDD_REAL_CORE_INCLUDE_DIR=/path/to/include`.
 - `tests/consumer/` isn't registered with ctest — it needs an installed tree
