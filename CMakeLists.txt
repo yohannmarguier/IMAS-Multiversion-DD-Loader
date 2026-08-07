@@ -14,6 +14,8 @@ include(GNUInstallDirs)
 
 option(IMAS_MVDD_BUILD_TESTS "Build and register the test suite" ON)
 option(IMAS_MVDD_CARGO_OFFLINE "Pass --offline to cargo (build nodes without network)" OFF)
+set(IMAS_MVDD_EXPECTED_AL_VERSION "1.0.0" CACHE STRING
+    "IMAS-Core version this shim is built to call")
 
 set(IMAS_MVDD_PACKAGE imas-mvdd-loader)   # cargo package name
 set(IMAS_MVDD_LIB_NAME imas_mvdd_loader)  # resulting library / header name
@@ -122,7 +124,9 @@ file(GLOB_RECURSE IMAS_MVDD_RUST_SOURCES CONFIGURE_DEPENDS
 
 add_custom_command(
     OUTPUT "${IMAS_MVDD_STAGED_LIBRARY}" "${IMAS_MVDD_STAGED_HEADER}"
-    COMMAND "${CARGO_EXECUTABLE}" cinstall ${CARGO_COMMON_ARGS} ${CARGO_STAGE_ARGS}
+    COMMAND "${CMAKE_COMMAND}" -E env
+        "IMAS_MVDD_EXPECTED_AL_VERSION=${IMAS_MVDD_EXPECTED_AL_VERSION}"
+        "${CARGO_EXECUTABLE}" cinstall ${CARGO_COMMON_ARGS} ${CARGO_STAGE_ARGS}
     DEPENDS
         ${IMAS_MVDD_RUST_SOURCES}
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"

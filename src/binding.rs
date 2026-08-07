@@ -40,11 +40,14 @@ fn default_core_library_name() -> String {
     "libal.so".to_string()
 }
 
-/// IMAS-Core AL version this shim was developed against. Only the major
-/// component is enforced — see docs/adr/0001-runtime-binding-not-linking.md's
-/// "runtime version check" consequence. Placeholder until a concrete
-/// IMAS-Core release is pinned.
-pub(crate) const EXPECTED_AL_VERSION: &str = "1.0.0";
+/// IMAS-Core AL version this shim was built to call. CMake passes this from
+/// `IMAS_MVDD_EXPECTED_AL_VERSION` to cargo-c, so a deployed shim gates the
+/// library it was configured for rather than a source-code placeholder. The
+/// fallback keeps direct `cargo test` usable with the recording stub.
+pub(crate) const EXPECTED_AL_VERSION: &str = match option_env!("IMAS_MVDD_EXPECTED_AL_VERSION") {
+    Some(version) => version,
+    None => "1.0.0",
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VersionOutcome {
