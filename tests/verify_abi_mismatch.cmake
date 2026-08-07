@@ -38,8 +38,17 @@ execute_process(
     RESULT_VARIABLE build_result
     OUTPUT_VARIABLE build_output
     ERROR_VARIABLE build_error)
+set(build_diagnostic "${build_output}${build_error}")
 if(build_result EQUAL 0)
     message(FATAL_ERROR
         "The ABI checker accepted an intentionally mismatched MAXDIM.\n"
-        "${build_output}${build_error}")
+        "${build_diagnostic}")
+endif()
+
+string(FIND "${build_diagnostic}" "ABI constant mismatch: MAXDIM"
+    expected_diagnostic_position)
+if(expected_diagnostic_position EQUAL -1)
+    message(FATAL_ERROR
+        "The intentional ABI-mismatch build failed for an unexpected reason; "
+        "the injected MAXDIM assertion was not reported.\n${build_diagnostic}")
 endif()
