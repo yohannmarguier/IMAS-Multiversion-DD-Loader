@@ -73,6 +73,7 @@ Use a single-config generator (Ninja, Unix Makefiles) and set
 
 ```
 CMakeLists.txt          drives cargo-c; owns install, package config and tests
+.github/actions/setup-toolchain/action.yml  shared pinned CI toolchain setup
 Cargo.toml              crate-type + [package.metadata.capi]
 IMAS_CORE_VERSION       supported IMAS-Core release used by the runtime compatibility gate
 cbindgen.toml           generated-header settings
@@ -140,8 +141,9 @@ next to the equivalent `pkg-config` check.
 
 - `rust-unit` — `cargo test` over the crate.
 - `ci-workflow` — guards the fast/full job split, unrestricted push trigger,
-  pinned toolchains, explicit test profiles, install checks, and
-  `--no-tests=error` coverage gate.
+  shared pinned-toolchain setup, explicit test profiles, install checks, and
+  `--no-tests=error` coverage gate; its rejection test proves comments or later
+  jobs cannot satisfy another job's responsibilities.
 - `abi-smoke` — compiles and runs `tests/abi_smoke.c` against the generated
   header and built shared library. It forwards to the recording stub in the
   fast profile and CMake-acquired IMAS-Core in the full profile.

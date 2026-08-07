@@ -36,15 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust ${{ env.RUST_VERSION }}
-        run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal -c rustfmt -c clippy
-          rustup default "$RUST_VERSION"
-
-      - name: Install cargo-c ${{ env.CARGO_C_VERSION }}
-        run: |
-          curl -fsSL "https://github.com/lu-zero/cargo-c/releases/download/v${CARGO_C_VERSION}/cargo-c-x86_64-unknown-linux-musl.tar.gz" \
-            | tar -xz -C "$HOME/.cargo/bin"
+      - uses: ./.github/actions/setup-toolchain
 
       - name: Format
         run: cargo fmt --check
@@ -80,15 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust ${{ env.RUST_VERSION }}
-        run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal -c rustfmt -c clippy
-          rustup default "$RUST_VERSION"
-
-      - name: Install cargo-c ${{ env.CARGO_C_VERSION }}
-        run: |
-          curl -fsSL "https://github.com/lu-zero/cargo-c/releases/download/v${CARGO_C_VERSION}/cargo-c-x86_64-unknown-linux-musl.tar.gz" \
-            | tar -xz -C "$HOME/.cargo/bin"
+      - uses: ./.github/actions/setup-toolchain
 
       - name: Install IMAS-Core build dependencies
         run: sudo apt-get update && sudo apt-get install -y libboost-filesystem-dev libhdf5-dev

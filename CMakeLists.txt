@@ -291,7 +291,15 @@ if(IMAS_MVDD_BUILD_TESTS)
     add_test(NAME ci-workflow
         COMMAND "${CMAKE_COMMAND}"
             "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
+            "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_ci_workflow.cmake")
+    add_test(NAME ci-workflow-guard-rejects-misplaced-commands
+        COMMAND "${CMAKE_COMMAND}"
+            "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
+            "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
+            "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/check_ci_workflow.cmake"
+            "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_ci_workflow_guard.cmake")
 
     # The recording stub is the fast profile's runtime dependency and remains
     # part of the full profile so the two complementary seam suites stay honest.
