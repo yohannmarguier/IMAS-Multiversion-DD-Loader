@@ -199,6 +199,10 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(runtime-binding-version-mismatch PROPERTIES ENVIRONMENT
         "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_VERSION=2.0.0")
 
+    add_test(NAME runtime-binding-null-version COMMAND runtime_binding_test null-version)
+    set_tests_properties(runtime-binding-null-version PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_NULL_VERSION=1")
+
     add_test(NAME runtime-binding-missing-library COMMAND runtime_binding_test missing-library)
     set_tests_properties(runtime-binding-missing-library PROPERTIES ENVIRONMENT
         "IMAS_CORE_LIBRARY=${CMAKE_CURRENT_BINARY_DIR}/does-not-exist.so")

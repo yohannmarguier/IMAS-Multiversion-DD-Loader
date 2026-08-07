@@ -107,6 +107,22 @@ static void scenario_version_mismatch(void) {
     printf("runtime_binding_test version-mismatch: resolution failed before forwarding\n");
 }
 
+static void scenario_null_version(void) {
+    void *stub = open_stub_for_introspection();
+    int_accessor_fn call_count = (int_accessor_fn)dlsym_or_die(stub, "recording_stub_call_count");
+
+    char *info = NULL;
+    al_status_t status = al_context_info(1, &info);
+
+    CHECK(status.code != 0);
+    CHECK(strstr(status.message, "getALVersion") != NULL);
+    CHECK(strstr(status.message, "null") != NULL);
+    CHECK(strstr(status.message, "IMAS_CORE_LIBRARY") != NULL);
+    CHECK(call_count() == 0);
+
+    printf("runtime_binding_test null-version: resolution failed safely\n");
+}
+
 static void scenario_missing_library(void) {
     char *info = NULL;
     al_status_t status = al_context_info(1, &info);
@@ -138,7 +154,9 @@ static void scenario_bare_soname(void) {
 
 int main(int argc, char **argv) {
     if (argc != 2) {
-        fprintf(stderr, "usage: %s <success|version-mismatch|missing-library|bare-soname>\n", argv[0]);
+        fprintf(stderr,
+                "usage: %s <success|version-mismatch|null-version|missing-library|bare-soname>\n",
+                argv[0]);
         return 2;
     }
 
@@ -147,6 +165,8 @@ int main(int argc, char **argv) {
         scenario_success();
     } else if (strcmp(scenario, "version-mismatch") == 0) {
         scenario_version_mismatch();
+    } else if (strcmp(scenario, "null-version") == 0) {
+        scenario_null_version();
     } else if (strcmp(scenario, "missing-library") == 0) {
         scenario_missing_library();
     } else if (strcmp(scenario, "bare-soname") == 0) {

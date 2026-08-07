@@ -41,6 +41,9 @@ al_status_t al_context_info(int ctx, char **info) {
  * shim to be built against ("1.0.0"); RECORDING_STUB_VERSION lets a test
  * scenario simulate a different IMAS-Core. */
 const char *getALVersion(void) {
+    if (getenv("RECORDING_STUB_NULL_VERSION") != NULL) {
+        return NULL;
+    }
     const char *version_override = getenv("RECORDING_STUB_VERSION");
     return version_override != NULL ? version_override : "1.0.0";
 }

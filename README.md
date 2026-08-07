@@ -77,8 +77,8 @@ that the C smoke test and in-tree consumers link against.
   header and the built shared library. This is the one that proves the ABI
   pipeline is intact end to end: cbindgen emitted a usable header, cargo-c
   produced a linkable library, and the struct layouts agree on both sides.
-- `runtime-binding-*` — five scenarios (`success`, `version-drift-tolerated`,
-  `version-mismatch`, `missing-library`, `bare-soname`) drive the shim's
+- `runtime-binding-*` — six scenarios (`success`, `version-drift-tolerated`,
+  `version-mismatch`, `null-version`, `missing-library`, `bare-soname`) drive the shim's
   exported `al_context_info` against a recording stub (`tests/stub/`) that
   stands in for IMAS-Core, proving the runtime-binding architecture end to
   end (see `docs/adr/0001-runtime-binding-not-linking.md`).

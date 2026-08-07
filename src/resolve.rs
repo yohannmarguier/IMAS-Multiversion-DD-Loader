@@ -61,7 +61,13 @@ fn resolve() -> Result<CoreBinding, al_status_t> {
     // may disagree, so nothing past this point can be trusted.
     let get_al_version: GetAlVersionFn =
         unsafe { resolve_symbol(&library, &path, "getALVersion") }?;
-    let found_version = unsafe { CStr::from_ptr(get_al_version()) }
+    let found_version = unsafe { get_al_version() };
+    if found_version.is_null() {
+        return Err(failure(&format!(
+            "IMAS-Core library '{path}' returned a null pointer from 'getALVersion'"
+        )));
+    }
+    let found_version = unsafe { CStr::from_ptr(found_version) }
         .to_string_lossy()
         .into_owned();
 
