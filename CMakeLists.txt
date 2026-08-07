@@ -327,10 +327,10 @@ if(IMAS_MVDD_BUILD_TESTS)
 
     # --- Runtime-binding test: proves the architecture (issue #3) ---------
     #
-    # A recording stub stands in for IMAS-Core: it exports the ABI symbols
-    # the shim resolves at runtime (al_context_info, getALVersion) and
-    # records what it received, so assertions can be made directly on what
-    # crossed the boundary instead of inferring it from a data round trip.
+    # A recording stub stands in for IMAS-Core: it exports the complete
+    # runtime-bound utility, data, and plugin surface and records what it
+    # received, so assertions can be made directly on what crossed the
+    # boundary instead of inferring it from a data round trip.
     #
     # The stub is deliberately never linked into runtime_binding_test: doing so would
     # give the linker two candidate definitions of al_context_info (the
