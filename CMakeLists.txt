@@ -3,9 +3,9 @@
 project(imas-mvdd-loader
     VERSION 0.1.0
     DESCRIPTION "Middleware shim between the IMAS HLIs and IMAS-Core"
-    # The shipped ABI remains C, but tests compile C++ for the real-header
-    # signature checker and a loadable plugin fixture. find_package(al-core
-    # CONFIG)'s find_dependency(Boost) also requires a configured C++ compiler.
+    # The shipped ABI remains C, but tests compile C++ for a loadable plugin
+    # fixture. find_package(al-core CONFIG)'s find_dependency(Boost) also
+    # requires a configured C++ compiler.
     LANGUAGES C CXX)
 
 include(GNUInstallDirs)
@@ -299,17 +299,17 @@ if(IMAS_MVDD_BUILD_TESTS)
             "-DNM_EXECUTABLE=${CMAKE_NM}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_exports.cmake")
 
-    # Runtime dlsym cannot type-check the hand-written signatures. Compile both
-    # public headers into one translation unit and compare every mirrored
-    # function's parameter types plus al_status_t's layout. C++ is necessary
-    # here: IMAS-Core and the shim independently declare anonymous status
-    # structs, so C sees their otherwise identical return types as distinct.
+    # Runtime dlsym cannot type-check the hand-written signatures. Compile each
+    # public header in its own C translation unit against one shared contract;
+    # keeping the anonymous status structs separate lets C compare their
+    # layouts and every mirrored function type without declaration collisions.
     add_executable(real_core_abi_check
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_abi_check.cpp")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_abi_core_check.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_abi_shim_check.c")
     target_include_directories(real_core_abi_check PRIVATE
         "${IMAS_MVDD_STAGE_DIR}/include")
     target_link_libraries(real_core_abi_check PRIVATE ${IMAS_CORE_AL_TARGET})
-    target_compile_features(real_core_abi_check PRIVATE cxx_std_17)
+    target_compile_features(real_core_abi_check PRIVATE c_std_11)
     add_dependencies(real_core_abi_check imas_mvdd_capi)
     add_test(NAME real-core-abi COMMAND real_core_abi_check)
 

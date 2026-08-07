@@ -78,7 +78,7 @@ src/lib.rs              the mirrored C ABI
 src/resolve.rs          runtime resolution of IMAS-Core: path/version checks and mirrored symbols
 src/dl.rs               minimal dlopen/dlsym/dlerror bindings
 tests/abi_smoke.c       links C against the generated header
-tests/real_core_abi_check.cpp  compares generated declarations with IMAS-Core's real header
+tests/real_core_abi_*_check.c  compares generated declarations with IMAS-Core's real header
 tests/runtime_binding_test.c  drives forwarding against the recording stub and the basic ABI seam against real IMAS-Core
 tests/check_exports.cmake     mechanically compares the shim's exported C ABI with IMAS-Core's
 tests/real_core_forwarding_test.c  required legal HDF5 forwarding coverage against real IMAS-Core
@@ -140,8 +140,8 @@ next to the equivalent `pkg-config` check.
 - `real-core-export-list` — mechanically compares the filtered public C
   exports of IMAS-Core and the shim with `nm`.
 - `real-core-abi` — compiles the generated header and IMAS-Core's real
-  `al_lowlevel.h` into one C++ translation unit. It checks every mirrored
-  parameter list plus `al_status_t` layout and the shared ABI constants;
+  `al_lowlevel.h` in separate C translation units against one shared contract.
+  It checks every mirrored parameter list plus `al_status_t` layout and the shared ABI constants;
   `real-core-abi-rejects-mismatch` proves a modified shim header is rejected.
 - `runtime-binding-*` — default scenarios drive the shim through its exported
   C ABI. The recording-stub scenarios include `utility-forwarding`, which
