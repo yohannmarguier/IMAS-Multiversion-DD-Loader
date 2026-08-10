@@ -105,48 +105,106 @@ type SetvalueIntScalarParameterPluginFn =
 type SetvalueDoubleScalarParameterPluginFn =
     unsafe extern "C" fn(*const c_char, c_double, *const c_char) -> al_status_t;
 
-struct CoreBinding {
-    // Kept alive for the process's lifetime: dropping it would unmap the
-    // resolved function pointers below. Never read again once resolution
-    // succeeds.
-    _library: Library,
-    context_info: ContextInfoFn,
-    get_backend_id: GetBackendIdFn,
-    build_uri_from_legacy_parameters: BuildUriFromLegacyParametersFn,
-    const2str: StringLookupFn,
-    err2str: StringLookupFn,
-    get_al_version: VersionAccessorFn,
-    get_dd_version: VersionAccessorFn,
-    begin_dataentry_action: BeginDataentryActionFn,
-    close_pulse: ClosePulseFn,
-    begin_global_action: BeginGlobalActionFn,
-    begin_slice_action: BeginSliceActionFn,
-    begin_timerange_action: BeginTimerangeActionFn,
-    begin_arraystruct_action: BeginArraystructActionFn,
-    end_action: EndActionFn,
-    read_data: ReadDataFn,
-    write_data: WriteDataFn,
-    delete_data: DeleteDataFn,
-    iterate_over_arraystruct: IterateOverArraystructFn,
-    get_occurrences: GetOccurrencesFn,
-    list_filled_paths: ListFilledPathsFn,
-    register_plugin: PluginNameFn,
-    unregister_plugin: PluginNameFn,
-    bind_plugin: BindPluginFn,
-    unbind_plugin: BindPluginFn,
-    bind_readback_plugins: PluginContextFn,
-    unbind_readback_plugins: PluginContextFn,
-    is_plugin_registered: IsPluginRegisteredFn,
-    write_plugins_metadata: PluginContextFn,
-    setvalue_parameter_plugin: SetvalueParameterPluginFn,
-    setvalue_int_scalar_parameter_plugin: SetvalueIntScalarParameterPluginFn,
-    setvalue_double_scalar_parameter_plugin: SetvalueDoubleScalarParameterPluginFn,
-    plugin_begin_global_action: BeginGlobalActionFn,
-    plugin_begin_slice_action: BeginSliceActionFn,
-    plugin_begin_arraystruct_action: BeginArraystructActionFn,
-    plugin_end_action: EndActionFn,
-    plugin_read_data: ReadDataFn,
-    plugin_write_data: WriteDataFn,
+// Declares the whole binding from one manifest: each entry names a field, the
+// ABI signature it holds, and the IMAS-Core symbol it resolves from.
+//
+// Every symbol used to appear three times in this file — once as a
+// `CoreBinding` field, once as a `let` in `resolve()`, and once more in the
+// struct literal — so adding one export meant three coordinated edits in
+// lockstep and a missed one was a compile error at best, a field bound to the
+// wrong symbol at worst. The C side of the project already resolves this with
+// a single X-macro manifest (`tests/abi_symbols.def`, and now
+// `tests/abi_fallback_constants.def`); this is that idiom's Rust counterpart.
+//
+// `bootstrap` holds symbols resolved before the manifest runs. `getALVersion`
+// is the only one: the ADR requires its version report to be checked before
+// any other IMAS-Core symbol is resolved, so it is passed in already resolved
+// rather than listed below.
+macro_rules! core_binding {
+    (
+        bootstrap { $($bootstrap_field:ident: $bootstrap_type:ty,)* }
+        resolved { $($field:ident: $field_type:ty = $symbol:literal,)* }
+    ) => {
+        struct CoreBinding {
+            // Kept alive for the process's lifetime: dropping it would unmap
+            // the resolved function pointers below. Never read again once
+            // resolution succeeds.
+            _library: Library,
+            $($bootstrap_field: $bootstrap_type,)*
+            $($field: $field_type,)*
+        }
+
+        impl CoreBinding {
+            /// Resolves every manifest symbol from an already-opened library,
+            /// failing on the first one the library does not provide.
+            ///
+            /// # Safety
+            /// Each manifest entry must pair a symbol that really exists in
+            /// `library` with the signature that symbol really has.
+            #[allow(clippy::result_large_err)]
+            unsafe fn bind(
+                library: Library,
+                path: &str,
+                $($bootstrap_field: $bootstrap_type,)*
+            ) -> Result<Self, al_status_t> {
+                Ok(Self {
+                    $($field: unsafe { resolve_symbol(&library, path, $symbol) }?,)*
+                    $($bootstrap_field,)*
+                    // Initialised last on purpose: every field above borrows
+                    // `library`, and this field moves it.
+                    _library: library,
+                })
+            }
+        }
+    };
+}
+
+core_binding! {
+    bootstrap {
+        get_al_version: VersionAccessorFn,
+    }
+    resolved {
+        context_info: ContextInfoFn = "al_context_info",
+        get_backend_id: GetBackendIdFn = "al_get_backendID",
+        build_uri_from_legacy_parameters: BuildUriFromLegacyParametersFn =
+            "al_build_uri_from_legacy_parameters",
+        const2str: StringLookupFn = "const2str",
+        err2str: StringLookupFn = "err2str",
+        get_dd_version: VersionAccessorFn = "getDDVersion",
+        begin_dataentry_action: BeginDataentryActionFn = "al_begin_dataentry_action",
+        close_pulse: ClosePulseFn = "al_close_pulse",
+        begin_global_action: BeginGlobalActionFn = "al_begin_global_action",
+        begin_slice_action: BeginSliceActionFn = "al_begin_slice_action",
+        begin_timerange_action: BeginTimerangeActionFn = "al_begin_timerange_action",
+        begin_arraystruct_action: BeginArraystructActionFn = "al_begin_arraystruct_action",
+        end_action: EndActionFn = "al_end_action",
+        read_data: ReadDataFn = "al_read_data",
+        write_data: WriteDataFn = "al_write_data",
+        delete_data: DeleteDataFn = "al_delete_data",
+        iterate_over_arraystruct: IterateOverArraystructFn = "al_iterate_over_arraystruct",
+        get_occurrences: GetOccurrencesFn = "al_get_occurrences",
+        list_filled_paths: ListFilledPathsFn = "al_list_filled_paths",
+        register_plugin: PluginNameFn = "al_register_plugin",
+        unregister_plugin: PluginNameFn = "al_unregister_plugin",
+        bind_plugin: BindPluginFn = "al_bind_plugin",
+        unbind_plugin: BindPluginFn = "al_unbind_plugin",
+        bind_readback_plugins: PluginContextFn = "al_bind_readback_plugins",
+        unbind_readback_plugins: PluginContextFn = "al_unbind_readback_plugins",
+        is_plugin_registered: IsPluginRegisteredFn = "al_is_plugin_registered",
+        write_plugins_metadata: PluginContextFn = "al_write_plugins_metadata",
+        setvalue_parameter_plugin: SetvalueParameterPluginFn = "al_setvalue_parameter_plugin",
+        setvalue_int_scalar_parameter_plugin: SetvalueIntScalarParameterPluginFn =
+            "al_setvalue_int_scalar_parameter_plugin",
+        setvalue_double_scalar_parameter_plugin: SetvalueDoubleScalarParameterPluginFn =
+            "al_setvalue_double_scalar_parameter_plugin",
+        plugin_begin_global_action: BeginGlobalActionFn = "al_plugin_begin_global_action",
+        plugin_begin_slice_action: BeginSliceActionFn = "al_plugin_begin_slice_action",
+        plugin_begin_arraystruct_action: BeginArraystructActionFn =
+            "al_plugin_begin_arraystruct_action",
+        plugin_end_action: EndActionFn = "al_plugin_end_action",
+        plugin_read_data: ReadDataFn = "al_plugin_read_data",
+        plugin_write_data: WriteDataFn = "al_plugin_write_data",
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -254,116 +312,11 @@ fn resolve() -> Result<CoreBinding, ResolutionError> {
         }
     }
 
-    let context_info: ContextInfoFn =
-        unsafe { resolve_symbol(&library, &path, "al_context_info") }?;
-    let get_backend_id: GetBackendIdFn =
-        unsafe { resolve_symbol(&library, &path, "al_get_backendID") }?;
-    let build_uri_from_legacy_parameters: BuildUriFromLegacyParametersFn =
-        unsafe { resolve_symbol(&library, &path, "al_build_uri_from_legacy_parameters") }?;
-    let const2str: StringLookupFn = unsafe { resolve_symbol(&library, &path, "const2str") }?;
-    let err2str: StringLookupFn = unsafe { resolve_symbol(&library, &path, "err2str") }?;
-    let get_dd_version: VersionAccessorFn =
-        unsafe { resolve_symbol(&library, &path, "getDDVersion") }?;
-    let begin_dataentry_action: BeginDataentryActionFn =
-        unsafe { resolve_symbol(&library, &path, "al_begin_dataentry_action") }?;
-    let close_pulse: ClosePulseFn = unsafe { resolve_symbol(&library, &path, "al_close_pulse") }?;
-    let begin_global_action: BeginGlobalActionFn =
-        unsafe { resolve_symbol(&library, &path, "al_begin_global_action") }?;
-    let begin_slice_action: BeginSliceActionFn =
-        unsafe { resolve_symbol(&library, &path, "al_begin_slice_action") }?;
-    let begin_timerange_action: BeginTimerangeActionFn =
-        unsafe { resolve_symbol(&library, &path, "al_begin_timerange_action") }?;
-    let begin_arraystruct_action: BeginArraystructActionFn =
-        unsafe { resolve_symbol(&library, &path, "al_begin_arraystruct_action") }?;
-    let end_action: EndActionFn = unsafe { resolve_symbol(&library, &path, "al_end_action") }?;
-    let read_data: ReadDataFn = unsafe { resolve_symbol(&library, &path, "al_read_data") }?;
-    let write_data: WriteDataFn = unsafe { resolve_symbol(&library, &path, "al_write_data") }?;
-    let delete_data: DeleteDataFn = unsafe { resolve_symbol(&library, &path, "al_delete_data") }?;
-    let iterate_over_arraystruct: IterateOverArraystructFn =
-        unsafe { resolve_symbol(&library, &path, "al_iterate_over_arraystruct") }?;
-    let get_occurrences: GetOccurrencesFn =
-        unsafe { resolve_symbol(&library, &path, "al_get_occurrences") }?;
-    let list_filled_paths: ListFilledPathsFn =
-        unsafe { resolve_symbol(&library, &path, "al_list_filled_paths") }?;
-    let register_plugin: PluginNameFn =
-        unsafe { resolve_symbol(&library, &path, "al_register_plugin") }?;
-    let unregister_plugin: PluginNameFn =
-        unsafe { resolve_symbol(&library, &path, "al_unregister_plugin") }?;
-    let bind_plugin: BindPluginFn = unsafe { resolve_symbol(&library, &path, "al_bind_plugin") }?;
-    let unbind_plugin: BindPluginFn =
-        unsafe { resolve_symbol(&library, &path, "al_unbind_plugin") }?;
-    let bind_readback_plugins: PluginContextFn =
-        unsafe { resolve_symbol(&library, &path, "al_bind_readback_plugins") }?;
-    let unbind_readback_plugins: PluginContextFn =
-        unsafe { resolve_symbol(&library, &path, "al_unbind_readback_plugins") }?;
-    let is_plugin_registered: IsPluginRegisteredFn =
-        unsafe { resolve_symbol(&library, &path, "al_is_plugin_registered") }?;
-    let write_plugins_metadata: PluginContextFn =
-        unsafe { resolve_symbol(&library, &path, "al_write_plugins_metadata") }?;
-    let setvalue_parameter_plugin: SetvalueParameterPluginFn =
-        unsafe { resolve_symbol(&library, &path, "al_setvalue_parameter_plugin") }?;
-    let setvalue_int_scalar_parameter_plugin: SetvalueIntScalarParameterPluginFn =
-        unsafe { resolve_symbol(&library, &path, "al_setvalue_int_scalar_parameter_plugin") }?;
-    let setvalue_double_scalar_parameter_plugin: SetvalueDoubleScalarParameterPluginFn = unsafe {
-        resolve_symbol(
-            &library,
-            &path,
-            "al_setvalue_double_scalar_parameter_plugin",
-        )
-    }?;
-    let plugin_begin_global_action: BeginGlobalActionFn =
-        unsafe { resolve_symbol(&library, &path, "al_plugin_begin_global_action") }?;
-    let plugin_begin_slice_action: BeginSliceActionFn =
-        unsafe { resolve_symbol(&library, &path, "al_plugin_begin_slice_action") }?;
-    let plugin_begin_arraystruct_action: BeginArraystructActionFn =
-        unsafe { resolve_symbol(&library, &path, "al_plugin_begin_arraystruct_action") }?;
-    let plugin_end_action: EndActionFn =
-        unsafe { resolve_symbol(&library, &path, "al_plugin_end_action") }?;
-    let plugin_read_data: ReadDataFn =
-        unsafe { resolve_symbol(&library, &path, "al_plugin_read_data") }?;
-    let plugin_write_data: WriteDataFn =
-        unsafe { resolve_symbol(&library, &path, "al_plugin_write_data") }?;
-
-    Ok(CoreBinding {
-        _library: library,
-        context_info,
-        get_backend_id,
-        build_uri_from_legacy_parameters,
-        const2str,
-        err2str,
-        get_al_version,
-        get_dd_version,
-        begin_dataentry_action,
-        close_pulse,
-        begin_global_action,
-        begin_slice_action,
-        begin_timerange_action,
-        begin_arraystruct_action,
-        end_action,
-        read_data,
-        write_data,
-        delete_data,
-        iterate_over_arraystruct,
-        get_occurrences,
-        list_filled_paths,
-        register_plugin,
-        unregister_plugin,
-        bind_plugin,
-        unbind_plugin,
-        bind_readback_plugins,
-        unbind_readback_plugins,
-        is_plugin_registered,
-        write_plugins_metadata,
-        setvalue_parameter_plugin,
-        setvalue_int_scalar_parameter_plugin,
-        setvalue_double_scalar_parameter_plugin,
-        plugin_begin_global_action,
-        plugin_begin_slice_action,
-        plugin_begin_arraystruct_action,
-        plugin_end_action,
-        plugin_read_data,
-        plugin_write_data,
-    })
+    // SAFETY: every manifest entry pairs an IMAS-Core symbol name with the
+    // signature transcribed for it above, and the drift check
+    // (tests/real_core_abi_contract.h) holds that transcription to IMAS-Core's
+    // real header.
+    Ok(unsafe { CoreBinding::bind(library, &path, get_al_version) }?)
 }
 
 pub(crate) unsafe fn get_backend_id(ctx: c_int, backend_id: *mut c_int) -> al_status_t {
