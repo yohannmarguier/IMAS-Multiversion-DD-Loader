@@ -9,3 +9,11 @@ header = """
  * IMAS-Multiversion-DD-Loader: mirrors the IMAS-Core public C ABI. */"""
 
 [defines]
+
+[export]
+# The shim resolves IMAS-Core via its own hand-rolled dlopen/dlsym/dlerror
+# declarations (src/dl.rs). cbindgen scans `extern "C"` foreign-function
+# blocks regardless of module privacy, so without this they leak into the
+# public header even though nothing exports them — the shim only imports
+# them from libc/libdl.
+exclude = ["dlopen", "dlsym", "dlerror"]

@@ -1,0 +1,15 @@
+# Runtime binding to IMAS-Core instead of linking against it
+
+The shim re-exports IMAS-Core's public C ABI verbatim, so it both *defines* and *calls* symbols like `al_read_data`. A conventional link would resolve the shim's own outbound call straight back to its own definition: the OS loader's rule is that the first definition encountered in load order wins, and the shim is loaded ahead of IMAS-Core, so the result is unbounded recursion rather than a call into IMAS-Core. We decided the shim carries no link-time dependency on IMAS-Core at all: it opens IMAS-Core with local symbol visibility and resolves every outbound call explicitly through the returned library handle (`dlopen(..., RTLD_LOCAL)` and `dlsym(handle, ...)` on POSIX). The handle-scoped lookup, not local visibility alone, selects IMAS-Core's definition instead of the shim's export.
+
+## Considered Options
+
+- **Symbol renaming** — export the mirrored functions under different names and rename them back at the HLI boundary. Rejected: breaks the project's core premise of verbatim ABI re-export, and pushes the problem onto every consumer.
+- **Preload interposition** (`LD_PRELOAD`-style) — let the shim intercept calls made by an unmodified binary. Rejected: fragile, platform-specific, and invisible in a normal build's link line — nothing in an HLI's build would show that interposition is happening.
+- **Abandoning verbatim mirroring** — give the shim its own distinct API and require every HLI to adapt to it. Rejected: multiplies the integration cost across five HLIs instead of concentrating it once, in the shim.
+- **Runtime binding via handle-scoped symbol lookup** — chosen. It preserves verbatim mirroring and requires no HLI-side API change. Each function pointer is resolved from the IMAS-Core library handle, so the shim's globally visible export is outside that lookup scope.
+
+## Consequences
+
+- No linker validates that the shim's hand-written signatures agree with IMAS-Core's real ones. The `real-core-abi` CMake test therefore compiles IMAS-Core's `al_lowlevel.h` and the shim's generated header in one C++ translation unit, comparing every mirrored parameter list, the `al_status_t` layout and shared ABI constants. Its paired negative test modifies a copy of the shim header and expects the ordinary comparison to reject it. `abi-smoke` separately checks that the generated header and built shim remain consumable together.
+- Because there is no link-time record of which IMAS-Core the shim was built against, initialization must resolve `getALVersion()` as the bootstrap symbol and compare IMAS-Core's own library version (not a DD version) with the version the shim supports before resolving any other IMAS-Core symbol. A mismatch prevents all operational forwarding: functions returning `al_status_t` report it through that status. The four `const char *` introspection functions cannot use the status channel: `getALVersion()` returns the detected version, while `const2str()`, `err2str()`, and the deliberately deprecated `getDDVersion()` are served by the shim without resolving further symbols from the mismatched library.
