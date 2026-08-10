@@ -5,31 +5,40 @@ If it has to been modified, apply the same changes to AGENTS.md.
 
 ## Repository state
 
-**Runtime binding proven on one symbol; no conversion logic yet.** The build system is verified end to end, and `src/resolve.rs` / `src/dl.rs` prove the runtime-binding architecture (see `docs/adr/0001-runtime-binding-not-linking.md`) on `al_context_info`: the shim opens IMAS-Core with local symbol visibility via hand-rolled `dlopen`/`dlsym` bindings, checks `getALVersion()` against the version it was built against, and forwards the call — verified by `tests/runtime_binding_test.c` against a recording stub (`tests/stub/`) standing in for IMAS-Core. Every other mirrored ABI entry point, and all DD path/version translation, is still unimplemented.
+**Runtime binding proven, all 37 linkable IMAS-Core C exports forwarded; no conversion logic yet.** The build system is verified end to end, and `src/resolve.rs` / `src/dl.rs` prove the runtime-binding architecture (see `docs/adr/0001-runtime-binding-not-linking.md`): the shim opens IMAS-Core with local symbol visibility via hand-rolled `dlopen`/`dlsym` bindings, checks `getALVersion()` against the version it was built against, and forwards the call — verified by `tests/runtime_binding_test.c` against a recording stub (`tests/stub/`) standing in for IMAS-Core and against a real, CMake-acquired IMAS-Core. `al_context_info`, the utility/version accessors, the thirteen data-entry/action-lifecycle/data-operation symbols, and the seventeen plugin registration, binding, metadata, parameter-setter and reentry symbols forward unchanged this way. The 38th public header declaration, `al_plugin_begin_timerange_action`, is deliberately absent because it is unlinkable upstream; `al_begin_array_struct_action` is not an IMAS-Core symbol (the real name is `al_begin_arraystruct_action`). The export list is compared mechanically with IMAS-Core's. DD path/version translation remains unimplemented.
 
 Single crate at the repo root. Keep it that way until `imas-core-sys` lands — cargo allows only one package per `links` value, so the crate binding `libal` must be separate, and that is the moment to add `[workspace]` to `Cargo.toml` plus a `crates/` directory. Nothing moves when that happens.
 
-**Language: Rust.** The C ABI artefacts (shared library, cbindgen-generated header, pkg-config file) are produced by [cargo-c]; CMake drives cargo-c rather than compiling anything itself. Toolchain on the ITER cluster comes from modules `Rust/1.88.0-GCCcore-14.3.0` and `cargo-c/0.10.15-GCCcore-14.3.0` — `source scripts/iter-env.sh`.
+**Language: Rust.** The C ABI artefacts (shared library, cbindgen-generated header, pkg-config file) are produced by [cargo-c]; CMake drives cargo-c rather than compiling anything itself. Toolchain on the ITER cluster comes from modules `Rust/1.88.0-GCCcore-14.3.0`, `cargo-c/0.10.15-GCCcore-14.3.0` and `IMAS-Core/5.7.1` — `source scripts/iter-env.sh`.
+
+Real IMAS-Core is required by the default configure profile. CMake acquires it
+in one of three modes (installed package lookup by default, development layout,
+or download-and-build). CI's explicit `IMAS_MVDD_REAL_CORE_TESTS=OFF` profile
+is the only stub-only path; it registers the recording-stub seams without
+silently reducing the real-Core suite. See CMakeLists.txt's IMAS-Core
+acquisition section for the option names and `IMAS_CORE_LIBRARY`-free test
+wiring.
 
 ```console
 $ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release   # Debug → cargo `dev` profile
 $ cmake --build build
-$ ctest --test-dir build --output-on-failure       # rust-unit + abi-smoke
+$ ctest --test-dir build --output-on-failure       # rust-unit + abi-smoke + tracer (stub and real IMAS-Core)
 $ cmake --install build --prefix /path/to/prefix
 $ cargo fmt && cargo clippy --all-targets          # lint, no CMake wrapper
 ```
 
-CI (`.github/workflows/ci.yml`) runs fmt, clippy and the whole CMake path for
-both `Debug` and `Release`, pinned to the cluster's Rust/cargo-c versions. It
-is the only thing keeping the CMake path honest — `cargo test` alone never
-re-runs cargo-c, never regenerates the header, and never compiles the C smoke
-test.
+CI (`.github/workflows/ci.yml`) has a fast recording-stub job for fmt, clippy,
+both CMake configurations, install and downstream consumption, plus a full job
+on pull requests and `main` pushes that downloads and caches the pinned
+IMAS-Core build before the drift and real-Core seams. It is the only thing
+keeping the CMake path honest — `cargo test` alone never re-runs cargo-c, never
+regenerates the header, and never compiles the C smoke test.
 
 `README.md` carries the build options and layout. The *why* behind the build
 lives in comments next to what it explains — `CMakeLists.txt` for the staging
-tree, the install path and the multi-config refusal, `Cargo.toml` for the
-`capi` feature and the workspace question. Keep it there rather than restating
-it in prose that can drift.
+tree, the install path, the multi-config refusal and the IMAS-Core
+acquisition modes, `Cargo.toml` for the `capi` feature and the workspace
+question. Keep it there rather than restating it in prose that can drift.
 
 [cargo-c]: https://github.com/lu-zero/cargo-c
 
@@ -42,7 +51,7 @@ Reference documents:
 
 ## What this project is
 
-A **middleware shim between the IMAS HLIs and IMAS-Core**:
+A **shim between the IMAS HLIs and IMAS-Core**:
 
 ```
 HLI (imas-python, imas-Fortran, imas-CPP, imas-Matlab, imas-Java)

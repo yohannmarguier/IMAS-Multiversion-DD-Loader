@@ -1,9 +1,12 @@
-    cmake_minimum_required(VERSION 3.20)
+    cmake_minimum_required(VERSION 3.21)
 
 project(imas-mvdd-loader
     VERSION 0.1.0
-    DESCRIPTION "Middleware shim between the IMAS HLIs and IMAS-Core"
-    LANGUAGES C)
+    DESCRIPTION "Shim between the IMAS HLIs and IMAS-Core"
+    # The shipped ABI remains C, but tests compile C++ for a loadable plugin
+    # fixture. find_package(al-core CONFIG)'s find_dependency(Boost) also
+    # requires a configured C++ compiler.
+    LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 
@@ -14,6 +17,8 @@ include(GNUInstallDirs)
 
 option(IMAS_MVDD_BUILD_TESTS "Build and register the test suite" ON)
 option(IMAS_MVDD_CARGO_OFFLINE "Pass --offline to cargo (build nodes without network)" OFF)
+option(IMAS_MVDD_REAL_CORE_TESTS
+    "Acquire IMAS-Core and build the drift and real-Core seam tests" ON)
 
 set(IMAS_MVDD_PACKAGE imas-mvdd-loader)   # cargo package name
 set(IMAS_MVDD_LIB_NAME imas_mvdd_loader)  # resulting library / header name
@@ -36,6 +41,120 @@ math(EXPR IMAS_CORE_DRIFT_MINOR "${IMAS_CORE_SUPPORTED_MINOR} + 1")
 set(IMAS_CORE_INCOMPATIBLE_VERSION "${IMAS_CORE_INCOMPATIBLE_MAJOR}.0.0")
 set(IMAS_CORE_DRIFT_VERSION
     "${IMAS_CORE_SUPPORTED_MAJOR}.${IMAS_CORE_DRIFT_MINOR}.0")
+
+# ---------------------------------------------------------------------------
+# IMAS-Core acquisition
+#
+# The shim never links against IMAS-Core; it resolves it at runtime (see
+# docs/adr/0001-runtime-binding-not-linking.md). The default profile still
+# acquires real IMAS-Core so a missing prerequisite fails at configure time.
+# CI's explicit IMAS_MVDD_REAL_CORE_TESTS=OFF profile is the one exception:
+# it registers only the fast recording-stub seams, never a silently reduced
+# version of the real-Core suite.
+#
+# Three modes, matching the option vocabulary IMAS-Fortran's AL core
+# acquisition module already established (its top-level CMakeLists.txt),
+# so a reviewer from that team can read this with knowledge they already
+# have:
+#   - installed (default): find_package(al-core CONFIG) against a
+#     pre-installed IMAS-Core. Deliberately its CMake package — introduced
+#     in IMAS-Core 5.7.1 — rather than its pkg-config file: the .pc file's
+#     Libs line carries a GNU-ld-only flag that breaks on macOS.
+#   - development layout (-D IMAS_CORE_DEVELOPMENT_LAYOUT=ON): build a
+#     sibling checkout at ../IMAS-Core.
+#   - download and build (-D IMAS_CORE_DOWNLOAD_DEPENDENCIES=ON): fetch and
+#     build IMAS_CORE_GIT_TAG.
+#
+# Both build modes add IMAS-Core with EXCLUDE_FROM_ALL: its own install()
+# rules must never run as part of installing this shim, or installing the
+# shim would deposit a second copy of IMAS-Core into the prefix.
+# ---------------------------------------------------------------------------
+
+option(IMAS_CORE_DOWNLOAD_DEPENDENCIES
+    "Download and build IMAS-Core at IMAS_CORE_GIT_TAG instead of finding an installed one" OFF)
+option(IMAS_CORE_DEVELOPMENT_LAYOUT
+    "Build IMAS-Core from a sibling checkout at ../IMAS-Core instead of finding an installed one" OFF)
+if(IMAS_CORE_DEVELOPMENT_LAYOUT AND IMAS_CORE_DOWNLOAD_DEPENDENCIES)
+    message(STATUS
+        "IMAS_CORE_DEVELOPMENT_LAYOUT=ON: setting IMAS_CORE_DOWNLOAD_DEPENDENCIES=OFF")
+    set(IMAS_CORE_DOWNLOAD_DEPENDENCIES OFF CACHE BOOL
+        "Download and build IMAS-Core at IMAS_CORE_GIT_TAG instead of finding an installed one"
+        FORCE)
+endif()
+
+set(IMAS_CORE_GIT_REPOSITORY "https://github.com/iterorganization/IMAS-Core.git"
+    CACHE STRING "Git repository of IMAS-Core, for IMAS_CORE_DOWNLOAD_DEPENDENCIES")
+# Defaults to the pin above rather than a floating branch: nothing here
+# links against IMAS-Core for a linker to validate signatures against, so a
+# drifted upstream would corrupt memory silently at runtime instead of
+# failing the build, and CI would stop being reproducible across days.
+set(IMAS_CORE_GIT_TAG "${IMAS_CORE_VERSION}"
+    CACHE STRING "Git tag of IMAS-Core, for IMAS_CORE_DOWNLOAD_DEPENDENCIES")
+
+set(IMAS_CORE_MODULE_HINT "module load IMAS-Core/${IMAS_CORE_VERSION}")
+
+if(NOT IMAS_MVDD_REAL_CORE_TESTS AND
+        (IMAS_CORE_DOWNLOAD_DEPENDENCIES OR IMAS_CORE_DEVELOPMENT_LAYOUT))
+    message(FATAL_ERROR
+        "IMAS_MVDD_REAL_CORE_TESTS=OFF selects the recording-stub-only test "
+        "profile and cannot be combined with an IMAS-Core acquisition mode")
+endif()
+if(NOT IMAS_MVDD_REAL_CORE_TESTS AND NOT IMAS_MVDD_BUILD_TESTS)
+    message(FATAL_ERROR
+        "IMAS_MVDD_REAL_CORE_TESTS=OFF requires IMAS_MVDD_BUILD_TESTS=ON; "
+        "the recording-stub profile must not silently register no tests")
+endif()
+
+if(IMAS_MVDD_REAL_CORE_TESTS)
+    if(IMAS_CORE_DOWNLOAD_DEPENDENCIES)
+    message(STATUS
+        "Acquiring IMAS-Core: downloading ${IMAS_CORE_GIT_REPOSITORY} @ ${IMAS_CORE_GIT_TAG}")
+    include(FetchContent)
+    FetchContent_Declare(al-core
+        GIT_REPOSITORY "${IMAS_CORE_GIT_REPOSITORY}"
+        GIT_TAG        "${IMAS_CORE_GIT_TAG}")
+    FetchContent_GetProperties(al-core)
+    if(NOT al-core_POPULATED)
+        FetchContent_Populate(al-core)
+        add_subdirectory("${al-core_SOURCE_DIR}" "${al-core_BINARY_DIR}" EXCLUDE_FROM_ALL)
+    endif()
+    set(IMAS_CORE_AL_TARGET al)
+    set(IMAS_CORE_BUILT_FROM_SOURCE TRUE)
+    elseif(IMAS_CORE_DEVELOPMENT_LAYOUT)
+    set(IMAS_CORE_DEV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../IMAS-Core")
+    if(NOT EXISTS "${IMAS_CORE_DEV_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "IMAS_CORE_DEVELOPMENT_LAYOUT=ON but '${IMAS_CORE_DEV_DIR}' has no "
+            "CMakeLists.txt. This mode expects a sibling checkout of IMAS-Core "
+            "next to this repository.")
+    endif()
+    message(STATUS "Acquiring IMAS-Core: development layout at ${IMAS_CORE_DEV_DIR}")
+    add_subdirectory("${IMAS_CORE_DEV_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/al-core-build"
+        EXCLUDE_FROM_ALL)
+    set(IMAS_CORE_AL_TARGET al)
+    set(IMAS_CORE_BUILT_FROM_SOURCE TRUE)
+    else()
+    find_package(al-core CONFIG)
+    if(NOT al-core_FOUND)
+        message(FATAL_ERROR
+            "IMAS-Core was not found (find_package(al-core CONFIG)). This project "
+            "requires IMAS-Core to configure - pick one of:\n"
+            "  1. installed (default): point CMAKE_PREFIX_PATH (or al-core_DIR) at "
+            "an install prefix\n     containing lib/cmake/al-core/al-coreConfig.cmake "
+            "(IMAS-Core >= 5.7.1).\n     On the ITER cluster: ${IMAS_CORE_MODULE_HINT}\n"
+            "  2. development layout: -D IMAS_CORE_DEVELOPMENT_LAYOUT=ON, with a "
+            "sibling checkout\n     at ../IMAS-Core\n"
+            "  3. download and build: -D IMAS_CORE_DOWNLOAD_DEPENDENCIES=ON, fetches "
+            "${IMAS_CORE_GIT_REPOSITORY}\n     at ${IMAS_CORE_GIT_TAG}\n")
+    endif()
+    message(STATUS "Acquiring IMAS-Core: found installed package (al-core_DIR=${al-core_DIR})")
+    set(IMAS_CORE_AL_TARGET al-core::al)
+    set(IMAS_CORE_BUILT_FROM_SOURCE FALSE)
+    endif()
+else()
+    message(STATUS
+        "IMAS-Core acquisition disabled: recording-stub-only test profile")
+endif()
 
 if(CMAKE_CONFIGURATION_TYPES)
     message(FATAL_ERROR
@@ -126,6 +245,23 @@ set(CARGO_STAGE_ARGS
     --libdir "${IMAS_MVDD_STAGE_DIR}/lib"
     --includedir "${IMAS_MVDD_STAGE_DIR}/include")
 
+# The shim opens IMAS-Core by bare soname. Give only the build-tree cdylib an
+# RPATH to the acquired Core so tests and in-tree consumers need no override or
+# loader-path environment setup. build.rs tracks this private environment
+# variable and the install rule explicitly unsets it, forcing cargo to relink
+# the installed cdylib without the build-machine path.
+set(IMAS_MVDD_CARGO_STAGE_COMMAND
+    "${CMAKE_COMMAND}" -E env --unset=MAKEFLAGS --unset=MFLAGS)
+if(IMAS_MVDD_REAL_CORE_TESTS)
+    list(APPEND IMAS_MVDD_CARGO_STAGE_COMMAND
+        "IMAS_CORE_BUILD_RPATH=$<TARGET_FILE_DIR:${IMAS_CORE_AL_TARGET}>")
+else()
+    list(APPEND IMAS_MVDD_CARGO_STAGE_COMMAND
+        --unset=IMAS_CORE_BUILD_RPATH)
+endif()
+list(APPEND IMAS_MVDD_CARGO_STAGE_COMMAND
+    -- "${CARGO_EXECUTABLE}" cinstall ${CARGO_COMMON_ARGS} ${CARGO_STAGE_ARGS})
+
 set(IMAS_MVDD_STAGED_INCLUDE_DIR "${IMAS_MVDD_STAGE_DIR}/include")
 set(IMAS_MVDD_STAGED_HEADER "${IMAS_MVDD_STAGED_INCLUDE_DIR}/${IMAS_MVDD_LIB_NAME}.h")
 set(IMAS_MVDD_STAGED_LIBRARY
@@ -141,7 +277,7 @@ file(GLOB_RECURSE IMAS_MVDD_RUST_SOURCES CONFIGURE_DEPENDS
 
 add_custom_command(
     OUTPUT "${IMAS_MVDD_STAGED_LIBRARY}" "${IMAS_MVDD_STAGED_HEADER}"
-    COMMAND "${CARGO_EXECUTABLE}" cinstall ${CARGO_COMMON_ARGS} ${CARGO_STAGE_ARGS}
+    COMMAND ${IMAS_MVDD_CARGO_STAGE_COMMAND}
     DEPENDS
         ${IMAS_MVDD_RUST_SOURCES}
         "${CMAKE_CURRENT_SOURCE_DIR}/build.rs"
@@ -169,6 +305,57 @@ set_target_properties(imas_mvdd_loader PROPERTIES
 if(IMAS_MVDD_BUILD_TESTS)
     enable_testing()
 
+    add_test(NAME ci-workflow
+        COMMAND "${CMAKE_COMMAND}"
+            "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
+            "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_ci_workflow.cmake")
+    add_test(NAME ci-workflow-guard-rejects-misplaced-commands
+        COMMAND "${CMAKE_COMMAND}"
+            "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
+            "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
+            "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/check_ci_workflow.cmake"
+            "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_ci_workflow_guard.cmake")
+
+    # Scripts run with `cmake -P` inherit no policies, so each one must pin its
+    # own version. CMake 4.x defaults those policies to NEW and CMake 3.x does
+    # not, which once let an unpinned `IN_LIST` pass locally and fail only on
+    # CI. Checking the pin here turns that skew into a local test failure.
+    add_test(NAME script-policy-versions
+        COMMAND "${CMAKE_COMMAND}"
+            "-DSCRIPT_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_script_policies.cmake")
+    add_test(NAME script-policy-guard-rejects-unpinned-scripts
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/check_script_policies.cmake"
+            "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_script_policy_guard.cmake")
+
+    # The recording stub is the fast profile's runtime dependency and remains
+    # part of the full profile so the two complementary seam suites stay honest.
+    add_library(recording_stub SHARED
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/stub/recording_stub.c")
+    # Matches the shim's bare-soname fallback (src/resolve.rs) so the
+    # bare-soname scenario below can exercise the loader's normal search
+    # path instead of the explicit override.
+    # Keep the bare-soname fixture out of the test working directory. On
+    # macOS, dlopen checks that directory before LC_RPATH; leaving libal there
+    # would make the real-Core tests silently bind the stub.
+    set_target_properties(recording_stub PROPERTIES
+        OUTPUT_NAME al
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/stub")
+    target_compile_definitions(recording_stub PRIVATE
+        "RECORDING_STUB_DEFAULT_VERSION=\"${IMAS_CORE_VERSION}\"")
+
+    if(IMAS_MVDD_REAL_CORE_TESTS)
+        get_target_property(_imas_core_include_dirs ${IMAS_CORE_AL_TARGET}
+            INTERFACE_INCLUDE_DIRECTORIES)
+        if(NOT _imas_core_include_dirs)
+            message(FATAL_ERROR "${IMAS_CORE_AL_TARGET} does not publish IMAS-Core headers")
+        endif()
+    endif()
+
     add_test(NAME rust-unit
         COMMAND "${CARGO_EXECUTABLE}" test ${CARGO_COMMON_ARGS})
 
@@ -178,34 +365,73 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_target_properties(abi_smoke PROPERTIES
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
-    add_test(NAME abi-smoke COMMAND abi_smoke)
+    if(IMAS_MVDD_REAL_CORE_TESTS)
+        add_test(NAME abi-smoke
+            COMMAND "${CMAKE_COMMAND}" -E env
+                --unset=IMAS_CORE_LIBRARY -- $<TARGET_FILE:abi_smoke>)
+    else()
+        add_test(NAME abi-smoke COMMAND abi_smoke)
+        set_tests_properties(abi-smoke PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+    endif()
+
+    if(IMAS_MVDD_REAL_CORE_TESTS)
+    # Keep the runtime-bound surface honest mechanically: after filtering to
+    # IMAS-Core's public C ABI, the shim and Core must export the same names.
+    # This deliberately catches a missing new symbol or any leftover shim-only
+    # scaffolding without maintaining a second handwritten symbol list.
+    add_test(NAME real-core-export-list
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCORE_LIBRARY=$<TARGET_FILE:${IMAS_CORE_AL_TARGET}>"
+            "-DSHIM_LIBRARY=$<TARGET_FILE:imas_mvdd_loader>"
+            "-DNM_EXECUTABLE=${CMAKE_NM}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_exports.cmake")
+
+    # Runtime dlsym cannot type-check the hand-written signatures. Compile each
+    # public header in its own C translation unit against one shared contract;
+    # keeping the anonymous status structs separate lets C compare their
+    # layouts and every mirrored function type without declaration collisions.
+    add_executable(real_core_abi_check
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_abi_core_check.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_abi_shim_check.c")
+    target_include_directories(real_core_abi_check PRIVATE
+        "${IMAS_MVDD_STAGE_DIR}/include")
+    target_link_libraries(real_core_abi_check PRIVATE ${IMAS_CORE_AL_TARGET})
+    target_compile_features(real_core_abi_check PRIVATE c_std_11)
+    add_dependencies(real_core_abi_check imas_mvdd_capi)
+    add_test(NAME real-core-abi COMMAND real_core_abi_check)
+
+    # Compile the checker against a copy of the generated header with a
+    # deliberately wrong shared constant. This guards the guard: a successful
+    # nested build is a test failure, while the expected compiler rejection
+    # demonstrates that the ordinary ABI comparison catches drift loudly.
+    add_test(NAME real-core-abi-rejects-mismatch
+        COMMAND "${CMAKE_COMMAND}"
+            "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DSHIM_INCLUDE_DIR=${IMAS_MVDD_STAGED_INCLUDE_DIR}"
+            "-DCORE_INCLUDE_DIRS=${_imas_core_include_dirs}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_abi_mismatch.cmake")
+    endif()
 
     # --- Runtime-binding test: proves the architecture (issue #3) ---------
     #
-    # A recording stub stands in for IMAS-Core: it exports the ABI symbols
-    # the shim resolves at runtime (al_context_info, getALVersion) and
-    # records what it received, so assertions can be made directly on what
-    # crossed the boundary instead of inferring it from a data round trip.
+    # A recording stub stands in for IMAS-Core: it exports the complete
+    # runtime-bound utility, data, and plugin surface and records what it
+    # received, so assertions can be made directly on what crossed the
+    # boundary instead of inferring it from a data round trip.
     #
     # The stub is deliberately never linked into runtime_binding_test: doing so would
     # give the linker two candidate definitions of al_context_info (the
     # shim's and the stub's) to choose between — exactly the ambiguity
     # runtime binding exists to avoid. runtime_binding_test only dlopen's the stub
     # itself, purely to read back its recorded state.
-    add_library(recording_stub SHARED
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/stub/recording_stub.c")
-    # Matches the shim's bare-soname fallback (src/resolve.rs) so the
-    # bare-soname scenario below can exercise the loader's normal search
-    # path instead of the explicit override.
-    set_target_properties(recording_stub PROPERTIES OUTPUT_NAME al)
-    target_compile_definitions(recording_stub PRIVATE
-        "RECORDING_STUB_DEFAULT_VERSION=\"${IMAS_CORE_VERSION}\"")
-
     add_executable(runtime_binding_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_binding_test.c")
     target_link_libraries(runtime_binding_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
     target_compile_definitions(runtime_binding_test PRIVATE
         "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\""
+        "SHIM_LIBRARY_PATH=\"$<TARGET_FILE:imas_mvdd_loader>\""
         "SUPPORTED_CORE_VERSION=\"${IMAS_CORE_VERSION}\""
         "INCOMPATIBLE_CORE_VERSION=\"${IMAS_CORE_INCOMPATIBLE_VERSION}\"")
     add_dependencies(runtime_binding_test imas_mvdd_capi recording_stub)
@@ -236,6 +462,22 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(runtime-binding-missing-library PROPERTIES ENVIRONMENT
         "IMAS_CORE_LIBRARY=${CMAKE_CURRENT_BINARY_DIR}/does-not-exist.so")
 
+    add_test(NAME runtime-binding-verbatim-forwarding COMMAND runtime_binding_test verbatim-forwarding)
+    set_tests_properties(runtime-binding-verbatim-forwarding PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+    add_test(NAME runtime-binding-plugin-forwarding COMMAND runtime_binding_test plugin-forwarding)
+    set_tests_properties(runtime-binding-plugin-forwarding PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+    add_test(NAME runtime-binding-plugin-timerange-omitted
+        COMMAND runtime_binding_test plugin-timerange-omitted)
+
+    add_test(NAME runtime-binding-utility-forwarding
+        COMMAND runtime_binding_test utility-forwarding)
+    set_tests_properties(runtime-binding-utility-forwarding PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
     add_test(NAME runtime-binding-bare-soname COMMAND runtime_binding_test bare-soname)
     if(APPLE)
         set(_runtime_binding_search_path_var DYLD_LIBRARY_PATH)
@@ -244,6 +486,64 @@ if(IMAS_MVDD_BUILD_TESTS)
     endif()
     set_tests_properties(runtime-binding-bare-soname PROPERTIES ENVIRONMENT
         "${_runtime_binding_search_path_var}=$<TARGET_FILE_DIR:recording_stub>")
+
+    if(IMAS_MVDD_REAL_CORE_TESTS)
+        # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
+    #
+    # The same shim call as scenario_success, but against the IMAS-Core
+    # acquired above instead of the recording stub: al_context_info must
+    # reach a real implementation, not only a substitute for one. ctxID 0
+    # is the one value real IMAS-Core answers deterministically without any
+    # context ever having been opened (al_lowlevel.cpp's "NULL context"
+    # branch), which is what makes this runnable with no fixture beyond the
+    # acquired library itself. Explicitly remove the override so this test
+    # proves the shim's build-only RPATH finds Core by bare soname.
+    add_test(NAME runtime-binding-real-core
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:runtime_binding_test> real-core)
+    if(IMAS_CORE_BUILT_FROM_SOURCE)
+        # Built from source, EXCLUDE_FROM_ALL: nothing else pulls it into the
+        # default build target, so the test binary that needs it must.
+        add_dependencies(runtime_binding_test ${IMAS_CORE_AL_TARGET})
+    endif()
+
+    # A real-Core run cannot use the recording stub's private accessors or
+    # fabricated context IDs. The acquired Core target already provides the
+    # matching headers and library in every acquisition mode, so drive all
+    # data, plugin, utility, and version seams through a legal HDF5 lifecycle
+    # unconditionally rather than making this coverage opt-in.
+    add_library(real_core_test_plugin MODULE
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_test_plugin.cpp")
+    target_include_directories(real_core_test_plugin PRIVATE ${_imas_core_include_dirs})
+    target_compile_features(real_core_test_plugin PRIVATE cxx_std_17)
+    set_target_properties(real_core_test_plugin PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "mvddtest_plugin"
+        SUFFIX ".so"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
+
+    add_executable(real_core_forwarding_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_forwarding_test.c")
+    target_include_directories(real_core_forwarding_test PRIVATE ${_imas_core_include_dirs})
+    target_compile_definitions(real_core_forwarding_test PRIVATE
+        "REAL_CORE_TEST_PLUGIN_DIR=\"$<TARGET_FILE_DIR:real_core_test_plugin>\""
+        "REAL_CORE_TEST_PLUGIN_NAME=\"mvddtest\"")
+    target_link_libraries(real_core_forwarding_test PRIVATE imas_mvdd_loader)
+    add_dependencies(real_core_forwarding_test
+        imas_mvdd_capi
+        real_core_test_plugin)
+    if(IMAS_CORE_BUILT_FROM_SOURCE)
+        add_dependencies(real_core_test_plugin ${IMAS_CORE_AL_TARGET})
+    endif()
+    set_target_properties(real_core_forwarding_test PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    add_test(NAME runtime-binding-real-core-forwarding
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:real_core_forwarding_test>)
+    set_tests_properties(runtime-binding-real-core-forwarding PROPERTIES
+        LABELS real-core)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -265,7 +565,7 @@ foreach(dir LIBDIR INCLUDEDIR)
 endforeach()
 
 install(CODE "
-set(_cargo_cmd [==[${CARGO_EXECUTABLE};cinstall;${CARGO_COMMON_ARGS}]==])
+set(_cargo_cmd [==[${CMAKE_COMMAND};-E;env;--unset=MAKEFLAGS;--unset=MFLAGS;--unset=IMAS_CORE_BUILD_RPATH;--;${CARGO_EXECUTABLE};cinstall;${CARGO_COMMON_ARGS}]==])
 list(APPEND _cargo_cmd
     --prefix \"\${CMAKE_INSTALL_PREFIX}\"
     --libdir \"${IMAS_MVDD_INSTALL_LIBDIR}\"
@@ -279,3 +579,35 @@ execute_process(
     WORKING_DIRECTORY \"${CMAKE_CURRENT_SOURCE_DIR}\"
     COMMAND_ERROR_IS_FATAL ANY)
 ")
+
+# ---------------------------------------------------------------------------
+# CMake package config (find_package)
+#
+# cargo-c produces the pkg-config file but has no equivalent for a CMake
+# package config, so it is authored directly (cmake/imas-mvdd-loaderConfig.cmake.in)
+# and installed in the same lib/cmake/<name>/ layout IMAS-Core uses, next to
+# the pkg-config file cargo-c already installs under lib/pkgconfig/.
+# ---------------------------------------------------------------------------
+
+include(CMakePackageConfigHelpers)
+
+set(IMAS_MVDD_PACKAGE_CONFIG_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/${IMAS_MVDD_PACKAGE}")
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/imas-mvdd-loaderConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}Config.cmake"
+    INSTALL_DESTINATION "${IMAS_MVDD_PACKAGE_CONFIG_DIR}"
+    PATH_VARS CMAKE_INSTALL_INCLUDEDIR CMAKE_INSTALL_LIBDIR)
+
+# SameMajorVersion keeps package requests within the ABI's supported major
+# version. CMake also requires the installed package to be no older than the
+# requested version, following its conventional directional package policy.
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}ConfigVersion.cmake"
+    VERSION "${PROJECT_VERSION}"
+    COMPATIBILITY SameMajorVersion)
+
+install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}Config.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}ConfigVersion.cmake"
+    DESTINATION "${IMAS_MVDD_PACKAGE_CONFIG_DIR}")

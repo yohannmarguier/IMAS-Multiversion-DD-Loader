@@ -9,6 +9,12 @@
 module load Rust/1.88.0-GCCcore-14.3.0
 module load cargo-c/0.10.15-GCCcore-14.3.0
 
+# Satisfies the default installed-package acquisition mode (CMakeLists.txt)
+# and, via LD_LIBRARY_PATH, the shim's runtime bare-soname resolution (see
+# docs/adr/0001-runtime-binding-not-linking.md). Either toolchain flavour
+# works: runtime binding has no C++ ABI coupling to the module's build.
+module load IMAS-Core/5.7.1
+
 # CMake and a C compiler are also required. If they are not already in the
 # environment on your login/build node, load the site modules for them here.
 
