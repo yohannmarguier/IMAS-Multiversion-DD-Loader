@@ -140,19 +140,19 @@ macro_rules! core_binding {
             ///
             /// # Safety
             /// Each manifest entry must pair a symbol that really exists in
-            /// `library` with the signature that symbol really has.
+            /// the resolver's library with the signature that symbol really
+            /// has.
             #[allow(clippy::result_large_err)]
             unsafe fn bind(
-                library: Library,
-                path: &str,
+                resolver: SymbolResolver,
                 $($bootstrap_field: $bootstrap_type,)*
             ) -> Result<Self, al_status_t> {
                 Ok(Self {
-                    $($field: unsafe { resolve_symbol(&library, path, $symbol) }?,)*
+                    $($field: unsafe { resolver.resolve($symbol) }?,)*
                     $($bootstrap_field,)*
                     // Initialised last on purpose: every field above borrows
-                    // `library`, and this field moves it.
-                    _library: library,
+                    // the resolver, and this field consumes it.
+                    _library: resolver.into_library(),
                 })
             }
         }
@@ -272,24 +272,19 @@ macro_rules! forward_status {
 // away for convenience — returning it by value from `Err` is the point.
 #[allow(clippy::result_large_err)]
 fn resolve() -> Result<CoreBinding, ResolutionError> {
-    let path = library_path(env::var(CORE_LIBRARY_ENV_VAR).ok().as_deref());
-
-    let library = Library::open(&path).map_err(|underlying| {
-        failure(&format!(
-            "failed to open IMAS-Core library '{path}': {underlying}"
-        ))
-    })?;
+    let resolver =
+        SymbolResolver::open(library_path(env::var(CORE_LIBRARY_ENV_VAR).ok().as_deref()))?;
 
     // getALVersion is the bootstrap symbol: it must be resolved, and its
     // report checked, before any other IMAS-Core symbol is resolved at all
     // (see the ADR's Consequences) — a major mismatch means the ABI itself
     // may disagree, so nothing past this point can be trusted.
-    let get_al_version: VersionAccessorFn =
-        unsafe { resolve_symbol(&library, &path, "getALVersion") }?;
+    let get_al_version: VersionAccessorFn = unsafe { resolver.resolve("getALVersion") }?;
     let found_version = unsafe { get_al_version() };
     if found_version.is_null() {
         return Err(failure(&format!(
-            "IMAS-Core library '{path}' returned a null pointer from 'getALVersion'"
+            "IMAS-Core library '{}' returned a null pointer from 'getALVersion'",
+            resolver.path()
         ))
         .into());
     }
@@ -316,7 +311,7 @@ fn resolve() -> Result<CoreBinding, ResolutionError> {
     // signature transcribed for it above, and the drift check
     // (tests/real_core_abi_contract.h) holds that transcription to IMAS-Core's
     // real header.
-    Ok(unsafe { CoreBinding::bind(library, &path, get_al_version) }?)
+    Ok(unsafe { CoreBinding::bind(resolver, get_al_version) }?)
 }
 
 pub(crate) unsafe fn get_backend_id(ctx: c_int, backend_id: *mut c_int) -> al_status_t {
@@ -479,27 +474,58 @@ fn bare_soname() -> String {
     )
 }
 
-/// # Safety
-/// The caller is responsible for `symbol_name` in `library` really having
-/// signature `F`.
-#[allow(clippy::result_large_err)]
-unsafe fn resolve_symbol<F: Copy>(
-    library: &Library,
-    library_path: &str,
-    symbol_name: &str,
-) -> Result<F, al_status_t> {
-    let address = unsafe { library.symbol(symbol_name) }.map_err(|underlying| {
-        failure(&format!(
-            "IMAS-Core library '{library_path}' has no '{symbol_name}': {underlying}"
-        ))
-    })?;
-    if address.is_null() {
-        return Err(failure(&format!(
-            "IMAS-Core library '{library_path}' resolved '{symbol_name}' to a null address"
-        )));
+/// An opened IMAS-Core together with the path it was opened from.
+///
+/// The two are never useful apart: the path's only job after `dlopen` is to
+/// name the library in the resolution-failure messages, so every lookup needs
+/// both and passing them as a pair invited them to drift out of step.
+struct SymbolResolver {
+    library: Library,
+    path: String,
+}
+
+impl SymbolResolver {
+    /// Opens `path` into a private symbol scope, keeping it for diagnostics.
+    #[allow(clippy::result_large_err)]
+    fn open(path: String) -> Result<Self, al_status_t> {
+        let library = Library::open(&path).map_err(|underlying| {
+            failure(&format!(
+                "failed to open IMAS-Core library '{path}': {underlying}"
+            ))
+        })?;
+        Ok(Self { library, path })
     }
-    // SAFETY: forwarded to this function's own safety contract on `F`.
-    Ok(unsafe { std::mem::transmute_copy(&address) })
+
+    /// The path this library was opened from.
+    fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Surrenders the opened library, which must outlive every function
+    /// pointer resolved from it.
+    fn into_library(self) -> Library {
+        self.library
+    }
+
+    /// # Safety
+    /// The caller is responsible for `symbol_name` in this library really
+    /// having signature `F`.
+    #[allow(clippy::result_large_err)]
+    unsafe fn resolve<F: Copy>(&self, symbol_name: &str) -> Result<F, al_status_t> {
+        let path = &self.path;
+        let address = unsafe { self.library.symbol(symbol_name) }.map_err(|underlying| {
+            failure(&format!(
+                "IMAS-Core library '{path}' has no '{symbol_name}': {underlying}"
+            ))
+        })?;
+        if address.is_null() {
+            return Err(failure(&format!(
+                "IMAS-Core library '{path}' resolved '{symbol_name}' to a null address"
+            )));
+        }
+        // SAFETY: forwarded to this method's own safety contract on `F`.
+        Ok(unsafe { std::mem::transmute_copy(&address) })
+    }
 }
 
 /// Compares the version this shim was built against with the version a
