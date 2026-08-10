@@ -10,4 +10,9 @@ CHECK_ABI_STATUS_LAYOUT();
 #include "abi_symbols.def"
 #undef IMAS_ABI_SYMBOL
 
-int main(void) { return 0; }
+/* Defined in real_core_abi_core_check.c, which alone includes IMAS-Core's
+ * real al_const.h and can call its real const2str/err2str. Runs the
+ * runtime half of the fallback-table check documented there. */
+int check_fallback_strings(void);
+
+int main(void) { return check_fallback_strings(); }

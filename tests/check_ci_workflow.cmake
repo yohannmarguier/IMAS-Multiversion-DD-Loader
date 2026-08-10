@@ -22,47 +22,75 @@ endfunction()
 read_file_lines("${WORKFLOW_FILE}" workflow_lines)
 read_file_lines("${TOOLCHAIN_ACTION_FILE}" toolchain_action_lines)
 
-# Return the non-comment contents of one top-level job. Bounding the slice at
-# the next job keeps a command in a comment or another job from satisfying the
-# contract for the requested job.
-function(read_job job_name output_variable)
-    set(in_jobs FALSE)
-    set(in_requested_job FALSE)
-    set(found_requested_job FALSE)
-    set(job_lines)
+# Return the raw (unstripped) lines nested under a mapping key at `indent`
+# inside `lines_variable` (e.g. "" for a top-level key, "  " for one level
+# in), stopping at the next sibling key at that indent. Scanning starts
+# immediately unless `gate_line` is non-empty, in which case lines up to and
+# including that exact line are skipped first — used to bound job-name
+# matching to inside "jobs:" without also matching a same-named key
+# elsewhere. Keeping indentation (rather than stripping it here) lets a
+# caller recurse into a further-nested key, as the push-trigger check below
+# does for "on:" -> "push:"; callers that only need flat containment checks
+# should follow up with flatten_block().
+function(read_raw_block lines_variable indent key_name gate_line not_found_message output_variable)
+    if(gate_line STREQUAL "")
+        set(gated TRUE)
+    else()
+        set(gated FALSE)
+    endif()
+    set(in_block FALSE)
+    set(found_block FALSE)
+    set(block_lines)
 
-    foreach(line IN LISTS workflow_lines)
-        if(line STREQUAL "jobs:")
-            set(in_jobs TRUE)
+    foreach(line IN LISTS ${lines_variable})
+        if(NOT gated)
+            if(line STREQUAL "${gate_line}")
+                set(gated TRUE)
+            endif()
             continue()
         endif()
-        if(NOT in_jobs)
-            continue()
-        endif()
 
-        if(line MATCHES "^  ([A-Za-z0-9_-]+):[ \t]*$")
-            if(in_requested_job)
+        if(line MATCHES "^${indent}([A-Za-z0-9_-]+):[ \t]*$")
+            if(in_block)
                 break()
             endif()
-            if(CMAKE_MATCH_1 STREQUAL job_name)
-                set(in_requested_job TRUE)
-                set(found_requested_job TRUE)
+            if(CMAKE_MATCH_1 STREQUAL key_name)
+                set(in_block TRUE)
+                set(found_block TRUE)
             endif()
             continue()
         endif()
 
-        if(in_requested_job)
-            string(STRIP "${line}" stripped_line)
-            if(NOT stripped_line STREQUAL "" AND
-                    NOT stripped_line MATCHES "^#")
-                list(APPEND job_lines "${stripped_line}")
-            endif()
+        if(in_block)
+            list(APPEND block_lines "${line}")
         endif()
     endforeach()
 
-    if(NOT found_requested_job)
-        message(FATAL_ERROR "CI workflow must define a ${job_name} job")
+    if(NOT found_block)
+        message(FATAL_ERROR "${not_found_message}")
     endif()
+    set("${output_variable}" "${block_lines}" PARENT_SCOPE)
+endfunction()
+
+# Strip and drop blank/comment lines from a raw block, for callers that only
+# need a flat containment check (require_line/IN_LIST) rather than further
+# nested-key parsing.
+function(flatten_block lines_variable output_variable)
+    set(flat_lines)
+    foreach(raw_line IN LISTS ${lines_variable})
+        string(STRIP "${raw_line}" stripped_line)
+        if(NOT stripped_line STREQUAL "" AND
+                NOT stripped_line MATCHES "^#")
+            list(APPEND flat_lines "${stripped_line}")
+        endif()
+    endforeach()
+    set("${output_variable}" "${flat_lines}" PARENT_SCOPE)
+endfunction()
+
+function(read_job job_name output_variable)
+    read_raw_block(workflow_lines "  " "${job_name}" "jobs:"
+        "CI workflow must define a ${job_name} job" job_raw_lines)
+    flatten_block(job_raw_lines job_lines)
     set("${output_variable}" "${job_lines}" PARENT_SCOPE)
 endfunction()
 
@@ -73,47 +101,16 @@ function(require_line container line description)
 endfunction()
 
 function(require_file_line lines_variable line description)
-    set(stripped_lines)
-    foreach(raw_line IN LISTS ${lines_variable})
-        string(STRIP "${raw_line}" stripped_line)
-        if(NOT stripped_line STREQUAL "" AND
-                NOT stripped_line MATCHES "^#")
-            list(APPEND stripped_lines "${stripped_line}")
-        endif()
-    endforeach()
+    flatten_block(${lines_variable} stripped_lines)
     if(NOT "${line}" IN_LIST stripped_lines)
         message(FATAL_ERROR "CI ${lines_variable} must ${description}")
     endif()
 endfunction()
 
 function(read_top_level_mapping mapping_name output_variable)
-    set(in_mapping FALSE)
-    set(found_mapping FALSE)
-    set(mapping_lines)
-
-    foreach(line IN LISTS workflow_lines)
-        if(line MATCHES "^([A-Za-z0-9_-]+):[ \t]*$")
-            if(in_mapping)
-                break()
-            endif()
-            if(CMAKE_MATCH_1 STREQUAL mapping_name)
-                set(in_mapping TRUE)
-                set(found_mapping TRUE)
-            endif()
-            continue()
-        endif()
-        if(in_mapping)
-            string(STRIP "${line}" stripped_line)
-            if(NOT stripped_line STREQUAL "" AND
-                    NOT stripped_line MATCHES "^#")
-                list(APPEND mapping_lines "${stripped_line}")
-            endif()
-        endif()
-    endforeach()
-
-    if(NOT found_mapping)
-        message(FATAL_ERROR "CI workflow must define a top-level ${mapping_name} mapping")
-    endif()
+    read_raw_block(workflow_lines "" "${mapping_name}" ""
+        "CI workflow must define a top-level ${mapping_name} mapping" mapping_raw_lines)
+    flatten_block(mapping_raw_lines mapping_lines)
     set("${output_variable}" "${mapping_lines}" PARENT_SCOPE)
 endfunction()
 
@@ -140,6 +137,8 @@ foreach(job IN ITEMS fast_job full_job)
         "install the shim")
     require_line(${job} "bash tests/check-installed-package.sh build dist \"$core\""
         "exercise both installed-package consumption interfaces")
+    require_line(${job} "run: bash tests/check-staged-install.sh build"
+        "verify a staged (DESTDIR) install as well as a plain prefix")
 endforeach()
 
 if("-DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON" IN_LIST fast_job)
@@ -166,32 +165,16 @@ require_file_line(toolchain_action_lines
     "| tar -xz -C \"$HOME/.cargo/bin\""
     "install the pinned cargo-c archive")
 
-# The fast job is useful only if branch pushes cannot bypass it. Inspect only
-# the push trigger's mapping so an unrelated pull_request filter is permitted.
-set(in_push FALSE)
-set(found_push FALSE)
-foreach(line IN LISTS workflow_lines)
-    if(line STREQUAL "jobs:")
-        break()
-    endif()
-    if(line STREQUAL "  push:")
-        set(in_push TRUE)
-        set(found_push TRUE)
-        continue()
-    endif()
-    if(in_push AND line MATCHES "^  [A-Za-z0-9_-]+:")
-        set(in_push FALSE)
-    endif()
-    if(in_push)
-        string(STRIP "${line}" stripped_line)
-        if(stripped_line STREQUAL "" OR stripped_line MATCHES "^#")
-            continue()
-        endif()
-        if(stripped_line MATCHES "^branches(-ignore)?:")
-            message(FATAL_ERROR "CI workflow must run for pushes to every branch")
-        endif()
+# The fast job is useful only if branch pushes cannot bypass it. Bound the
+# search to "on:" -> "push:" specifically, so an unrelated pull_request
+# filter elsewhere in the workflow is permitted.
+read_raw_block(workflow_lines "" "on" ""
+    "CI workflow must define a top-level on mapping" on_raw_lines)
+read_raw_block(on_raw_lines "  " "push" ""
+    "CI workflow must define a push trigger" push_raw_lines)
+flatten_block(push_raw_lines push_lines)
+foreach(line IN LISTS push_lines)
+    if(line MATCHES "^branches(-ignore)?:")
+        message(FATAL_ERROR "CI workflow must run for pushes to every branch")
     endif()
 endforeach()
-if(NOT found_push)
-    message(FATAL_ERROR "CI workflow must define a push trigger")
-endif()

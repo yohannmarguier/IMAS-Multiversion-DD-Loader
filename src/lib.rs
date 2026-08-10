@@ -392,6 +392,8 @@ pub unsafe extern "C" fn al_unregister_plugin(plugin_name: *const c_char) -> al_
 }
 
 /// Mirrors IMAS-Core's `al_bind_plugin` exactly and forwards unchanged.
+/// `field_path` is a seam argument: this ticket forwards it verbatim, DD path
+/// translation is future work.
 ///
 /// # Safety
 /// `field_path` and `plugin_name` must be valid, NUL-terminated C strings.
@@ -404,6 +406,8 @@ pub unsafe extern "C" fn al_bind_plugin(
 }
 
 /// Mirrors IMAS-Core's `al_unbind_plugin` exactly and forwards unchanged.
+/// `field_path` is a seam argument: this ticket forwards it verbatim, DD path
+/// translation is future work.
 /// Its silent no-op for an unbound path is an upstream behaviour preserved by
 /// this thin forwarding layer (issue #7).
 ///
@@ -506,7 +510,14 @@ pub unsafe extern "C" fn al_setvalue_double_scalar_parameter_plugin(
 // symbol. Exporting it here would let a plugin compile against the shim yet
 // fail to link against real IMAS-Core (issue #7).
 
+// The plugin reentry twins below carry the same path arguments as their
+// non-`al_plugin_` counterparts (CLAUDE.md's seam table), so each is a seam
+// too — a plugin re-entering the ABI must get the same translation an HLI
+// does, or the two would disagree about which DD version a path is written in.
+
 /// Mirrors IMAS-Core's plugin reentry global-action function exactly.
+/// `dataobjectname` and `datapath` are seam arguments: this ticket forwards
+/// them verbatim, DD path translation is future work.
 ///
 /// # Safety
 /// String and output pointers must meet IMAS-Core's action-lifecycle contract.
@@ -524,6 +535,8 @@ pub unsafe extern "C" fn al_plugin_begin_global_action(
 }
 
 /// Mirrors IMAS-Core's plugin reentry slice-action function exactly.
+/// `dataobjectname` is a seam argument: this ticket forwards it verbatim, DD
+/// path translation is future work.
 ///
 /// # Safety
 /// String and output pointers must meet IMAS-Core's action-lifecycle contract.
@@ -549,6 +562,8 @@ pub unsafe extern "C" fn al_plugin_begin_slice_action(
 }
 
 /// Mirrors IMAS-Core's plugin reentry arraystruct-action function exactly.
+/// `path` and `timebase` are seam arguments: this ticket forwards them
+/// verbatim, DD path translation is future work.
 ///
 /// # Safety
 /// String and output pointers must meet IMAS-Core's action-lifecycle contract.
@@ -570,6 +585,8 @@ pub extern "C" fn al_plugin_end_action(ctx_id: c_int) -> al_status_t {
 }
 
 /// Mirrors IMAS-Core's plugin reentry read-data function exactly.
+/// `field` and `timebase` are seam arguments: this ticket forwards them
+/// verbatim, DD path translation is future work.
 ///
 /// # Safety
 /// All pointers must meet IMAS-Core's data-access contract.
@@ -587,6 +604,8 @@ pub unsafe extern "C" fn al_plugin_read_data(
 }
 
 /// Mirrors IMAS-Core's plugin reentry write-data function exactly.
+/// `field` and `timebase` are seam arguments: this ticket forwards them
+/// verbatim, DD path translation is future work.
 ///
 /// # Safety
 /// All pointers must meet IMAS-Core's data-access contract.
