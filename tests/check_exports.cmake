@@ -1,3 +1,9 @@
+# Script-mode CMake takes its policy version from this call alone. Without it
+# CMake 3.x leaves CMP0057 unset, so `IN_LIST` below is not an operator and the
+# test dies on "Unknown arguments specified"; CMake 4.x defaults the policy to
+# NEW and hides the breakage, so the failure only ever shows up on CI.
+cmake_minimum_required(VERSION 3.21)
+
 # Compare the public C exports mechanically rather than maintaining a
 # second handwritten manifest. Both nm variants used by CI are accepted:
 # Mach-O prepends an underscore to C names, ELF does not.

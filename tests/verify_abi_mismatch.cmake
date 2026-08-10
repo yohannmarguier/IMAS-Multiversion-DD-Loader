@@ -1,3 +1,8 @@
+# Pin the policy version like every other script this suite runs with -P, so a
+# later edit reaching for a policy-gated command behaves the same under the
+# CMake 3.x on CI as under a 4.x local toolchain.
+cmake_minimum_required(VERSION 3.21)
+
 if(NOT DEFINED CMAKE_COMMAND OR NOT DEFINED TEST_SOURCE_DIR OR
    NOT DEFINED TEST_BINARY_DIR OR NOT DEFINED SHIM_INCLUDE_DIR OR
    NOT DEFINED CORE_INCLUDE_DIRS)
