@@ -65,6 +65,9 @@ jobs:
           test -n "$core"
           bash tests/check-installed-package.sh build dist "$core"
 
+      - name: Check a staged (DESTDIR) install
+        run: bash tests/check-staged-install.sh build
+
   full:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -118,3 +121,6 @@ jobs:
           core=$(find "$PWD/build/_deps/al-core-build" -type f -name 'libal.so*' | head -1)
           test -n "$core"
           bash tests/check-installed-package.sh build dist "$core"
+
+      - name: Check a staged (DESTDIR) install
+        run: bash tests/check-staged-install.sh build

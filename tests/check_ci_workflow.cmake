@@ -137,6 +137,8 @@ foreach(job IN ITEMS fast_job full_job)
         "install the shim")
     require_line(${job} "bash tests/check-installed-package.sh build dist \"$core\""
         "exercise both installed-package consumption interfaces")
+    require_line(${job} "run: bash tests/check-staged-install.sh build"
+        "verify a staged (DESTDIR) install as well as a plain prefix")
 endforeach()
 
 if("-DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON" IN_LIST fast_job)
