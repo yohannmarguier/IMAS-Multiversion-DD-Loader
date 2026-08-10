@@ -543,10 +543,12 @@ static void scenario_verbatim_forwarding(void) {
            "stub unmodified\n");
 }
 
-/* Issue #7's public ABI seam. This is intentionally written against the
+/* Issue #7's plugin ABI surface. This is intentionally written against the
  * generated shim header: missing declarations are a build failure, just as
  * they would be for an HLI. The recording-stub assertions are added with the
- * implementation below. */
+ * implementation below. Only al_bind_plugin/al_unbind_plugin and the
+ * al_plugin_* reentry twins are seams (they carry fieldPath); the rest of
+ * this family forwards verbatim with no path argument. */
 static void scenario_plugin_forwarding(void) {
     void *stub = open_stub_for_introspection();
     int_accessor_fn call_count =
@@ -673,9 +675,11 @@ static void scenario_plugin_timerange_omitted(void) {
     printf("runtime_binding_test plugin-timerange-omitted: matches IMAS-Core's unlinkable ABI\n");
 }
 
-/* Issue #8's utility and version ABI seam. The stub records every argument
- * and returns distinct values, so this verifies the generated header and the
- * runtime forwarding boundary without coupling to resolver internals. */
+/* Issue #8's utility and version ABI surface. None of these symbols carry a
+ * DD path or IDS name, so they are plain forwards, not seams. The stub
+ * records every argument and returns distinct values, so this verifies the
+ * generated header and the runtime forwarding boundary without coupling to
+ * resolver internals. */
 static void scenario_utility_forwarding(void) {
     void *stub = open_stub_for_introspection();
     int_accessor_fn call_count =
