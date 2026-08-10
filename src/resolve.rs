@@ -147,9 +147,6 @@ struct CoreBinding {
     plugin_end_action: EndActionFn,
     plugin_read_data: ReadDataFn,
     plugin_write_data: WriteDataFn,
-    // Retained with the binding so tolerated compatibility drift remains
-    // recorded for the process lifetime after its diagnostic is emitted.
-    _version_drift: Option<VersionDrift>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -240,8 +237,11 @@ fn resolve() -> Result<CoreBinding, ResolutionError> {
     }
     let found_version = unsafe { CStr::from_ptr(found_version) };
     let found_version_text = found_version.to_string_lossy();
-    let version_drift = match check_major_version(BUILT_AGAINST_VERSION, &found_version_text) {
-        Ok(version_drift) => version_drift,
+    // Tolerated drift is a one-off diagnostic, not state: nothing downstream
+    // branches on it, so it is reported here and not carried any further.
+    match check_major_version(BUILT_AGAINST_VERSION, &found_version_text) {
+        Ok(Some(drift)) => drift.record(),
+        Ok(None) => {}
         Err(detail) => {
             return Err(ResolutionError::VersionMismatch {
                 status: failure(&detail),
@@ -252,9 +252,6 @@ fn resolve() -> Result<CoreBinding, ResolutionError> {
                     .expect("CStr values cannot contain interior NUL bytes"),
             });
         }
-    };
-    if let Some(drift) = &version_drift {
-        drift.record();
     }
 
     let context_info: ContextInfoFn =
@@ -366,7 +363,6 @@ fn resolve() -> Result<CoreBinding, ResolutionError> {
         plugin_end_action,
         plugin_read_data,
         plugin_write_data,
-        _version_drift: version_drift,
     })
 }
 
