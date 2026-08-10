@@ -318,6 +318,20 @@ if(IMAS_MVDD_BUILD_TESTS)
             "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_ci_workflow_guard.cmake")
 
+    # Scripts run with `cmake -P` inherit no policies, so each one must pin its
+    # own version. CMake 4.x defaults those policies to NEW and CMake 3.x does
+    # not, which once let an unpinned `IN_LIST` pass locally and fail only on
+    # CI. Checking the pin here turns that skew into a local test failure.
+    add_test(NAME script-policy-versions
+        COMMAND "${CMAKE_COMMAND}"
+            "-DSCRIPT_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_script_policies.cmake")
+    add_test(NAME script-policy-guard-rejects-unpinned-scripts
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/check_script_policies.cmake"
+            "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_script_policy_guard.cmake")
+
     # The recording stub is the fast profile's runtime dependency and remains
     # part of the full profile so the two complementary seam suites stay honest.
     add_library(recording_stub SHARED
