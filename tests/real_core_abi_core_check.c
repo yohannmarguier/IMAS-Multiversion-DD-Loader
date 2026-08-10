@@ -61,5 +61,43 @@ int check_fallback_strings(void) {
                 const2str((int)UNDEFINED_TIME));
         failures++;
     }
+
+    /* The other half of the fallback contract: what happens to an id the map
+     * has no entry for. src/resolve.rs's fallback tables answer "" there, and
+     * that is only faithful because al_const.cpp looks the id up and returns
+     * "" on a miss rather than NULL, a placeholder, or a thrown exception. The
+     * entries above pin every id that *is* mapped; nothing pinned the miss,
+     * which is the arm every unrecognised id in the field takes.
+     *
+     * TIMERANGE_OP and FLEXBUFFERS_BACKEND are the documented cases: real,
+     * defined IMAS-Core constants that alconst::constmap deliberately omits.
+     * FLEXBUFFERS_BACKEND is a member of a C++ enum with no C-visible
+     * spelling, so it appears here by value. */
+    static const struct {
+        const char *name;
+        int id;
+    } unmapped_ids[] = {
+        {"TIMERANGE_OP", TIMERANGE_OP},
+        {"FLEXBUFFERS_BACKEND", BACKEND_ID_0 + 6},
+        {"an id no IMAS-Core vocabulary allocates", 987654},
+    };
+    for (size_t i = 0; i < sizeof unmapped_ids / sizeof unmapped_ids[0]; i++) {
+        const char *mapped_name = const2str(unmapped_ids[i].id);
+        if (mapped_name == NULL || strcmp(mapped_name, "") != 0) {
+            fprintf(stderr,
+                    "const2str(%s) must be \"\" for an unmapped id: got %s\n",
+                    unmapped_ids[i].name,
+                    mapped_name == NULL ? "NULL" : mapped_name);
+            failures++;
+        }
+        const char *mapped_error = err2str(unmapped_ids[i].id);
+        if (mapped_error == NULL || strcmp(mapped_error, "") != 0) {
+            fprintf(stderr,
+                    "err2str(%s) must be \"\" for an unmapped id: got %s\n",
+                    unmapped_ids[i].name,
+                    mapped_error == NULL ? "NULL" : mapped_error);
+            failures++;
+        }
+    }
     return failures;
 }

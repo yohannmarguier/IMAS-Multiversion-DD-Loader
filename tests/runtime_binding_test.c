@@ -155,6 +155,21 @@ static void scenario_version_mismatch(void) {
     CHECK(strcmp(getDDVersion(), "!!DEPRECATED!!") == 0);
     CHECK(utility_call_count() == 0);
 
+    /* An id the upstream map has no entry for must come back as an empty
+     * string, not NULL and not a placeholder: that is what real IMAS-Core does
+     * on a map miss (al_const.cpp), so it is what the shim's fallback tables
+     * have to do to stay a mirror. Ids are spelled numerically because these
+     * are IMAS-Core's constants and this test only sees the shim's header:
+     * 22 is TIMERANGE_OP and 16 is FLEXBUFFERS_BACKEND, both real constants
+     * that alconst::constmap deliberately omits. real_core_abi_core_check.c
+     * holds the same two against the genuine const2str/err2str. */
+    CHECK(const2str(22) != NULL && strcmp(const2str(22), "") == 0);
+    CHECK(const2str(16) != NULL && strcmp(const2str(16), "") == 0);
+    CHECK(err2str(987654) != NULL && strcmp(err2str(987654), "") == 0);
+    /* Still served locally: an unmapped id must not become a reason to reach
+     * into the mismatched library after all. */
+    CHECK(utility_call_count() == 0);
+
     printf("runtime_binding_test version-mismatch: operations failed and diagnostics stayed local\n");
 }
 
