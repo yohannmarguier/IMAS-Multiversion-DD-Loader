@@ -256,9 +256,15 @@ fn core() -> Result<&'static CoreBinding, &'static al_status_t> {
     resolution().as_ref().map_err(ResolutionError::status)
 }
 
-// Every status-returning ABI function uses the same resolution failure
-// channel. Keep that plumbing in one place while leaving each named forwarder
-// available as the future path/value-conversion seam.
+// Every status-returning ABI function reports an unresolvable IMAS-Core the
+// same way, so that plumbing lives here rather than in all 37 exports.
+//
+// The named forwarders below exist for that reason alone. They are *not* all
+// prospective conversion seams: CONTEXT.md reserves "seam" for an ABI entry
+// point carrying a DD path or IDS name, which is 16 of the 37 (CLAUDE.md
+// tabulates them). The rest are plain forwards with nothing to interpose on,
+// and calling them seams-in-waiting made the word mean "function", which is
+// how seven genuine seams came to carry no marking at all.
 macro_rules! forward_status {
     ($function:ident($($argument:expr),* $(,)?)) => {
         match core() {
