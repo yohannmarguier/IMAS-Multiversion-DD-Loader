@@ -70,6 +70,10 @@ A conversion rule for one requested DD path, or for a defined set of related DD 
 **value transformation**:
 A required change to data values during conversion, such as a COCOS sign change or a unit conversion. It is distinct from DD-path translation and is explicit and machine-readable in a path-level rule.
 
+**fidelity verdict**:
+The conversion outcome classification retained by the shim: **exact**, **potentially lossy, unverified**, **certainly lossy**, or **unmappable**. A potentially lossy verdict describes a rule whose loss condition was not checked during the read; it does not assert that data was discarded.
+_Avoid_: using "lossy" without saying whether loss is potential or certain.
+
 **precedence**:
 The explicit priority of a source path within one path-level rule. A lower number has higher priority. XML element order has no meaning, and duplicate precedence numbers are invalid.
 
