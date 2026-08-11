@@ -17,7 +17,7 @@ An ABI entry point carrying a DD path or IDS name, hence needing translation rat
 _Avoid_: conversion point, hook, interception point.
 
 **HLI DD version**:
-The DD version an HLI was built against, in which its DD paths are expressed. A compile-time constant of the calling binary for the compiled HLIs, so the shim learns it by being told, never by discovery. See `docs/adr/0002-hli-dd-version-entry-point.md`.
+The DD version an HLI was built against, in which its DD paths are expressed. A compile-time constant of the calling binary for the compiled HLIs, so the shim learns it by being told, never by discovery. See `docs/adr/0005-hli-dd-version-entry-point.md`.
 _Avoid_: HLI_V, caller version, source version, client version.
 
 **stored DD version**:
