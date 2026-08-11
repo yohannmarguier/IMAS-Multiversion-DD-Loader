@@ -39,6 +39,16 @@ _Avoid_: extra symbol, extension, custom API, private API — they are public an
 The stable logical key of an IDS, such as `equilibrium`. It selects the same IDS across DD versions and is not a DD path that the shim translates.
 _Avoid_: source IDS name, stored IDS name, IDS path.
 
+**DD-version stamp**:
+The optional, stored declaration of the DD version used for an IDS occurrence: `ids_properties/version_put/data_dictionary`. It is metadata about the occurrence's stored representation, not part of its scientific payload.
+_Avoid_: version field, DD version, stamp — use the full term where the meaning could be unclear.
+
+**stamped IDS occurrence**:
+An IDS occurrence whose DD-version stamp is present and can therefore identify the stored DD version.
+
+**unstamped IDS occurrence**:
+An IDS occurrence whose DD-version stamp is absent. Its stored DD version is not identified by that metadata alone; handling it is a conversion-policy decision.
+
 **conversion-map artifact**:
 An XML file that states the DD conversion rules for one adjacent DD-version step. It is a supported interface for both the shim and the IMAS Data Dictionary XSLT ecosystem.
 
