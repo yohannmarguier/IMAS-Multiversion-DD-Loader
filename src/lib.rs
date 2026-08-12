@@ -15,6 +15,7 @@ use std::ffi::c_double;
 use std::ffi::c_int;
 use std::ffi::c_void;
 
+mod dd_version;
 mod dl;
 mod resolve;
 
