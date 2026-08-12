@@ -148,9 +148,9 @@ fn parse_development(raw: &str, base_str: &str, rest: &str) -> Result<DdVersion,
         .split_once('-')
         .ok_or_else(|| format!("'{raw}' is missing the '-N-gHASH' development suffix"))?;
 
-    if distance_str.is_empty() || !distance_str.bytes().all(|b| b.is_ascii_digit()) {
+    if !is_canonical_decimal(distance_str) {
         return Err(format!(
-            "'{raw}' has a non-numeric development commit distance"
+            "'{raw}' has a non-canonical development commit distance"
         ));
     }
     let distance: u64 = distance_str
@@ -206,14 +206,21 @@ fn parse_triple(input: &str) -> Result<(u32, u32, u32), String> {
 }
 
 fn parse_component(component: &str, whole: &str) -> Result<u32, String> {
-    if component.is_empty() || !component.bytes().all(|b| b.is_ascii_digit()) {
+    if !is_canonical_decimal(component) {
         return Err(format!(
-            "'{whole}' has a non-numeric version component '{component}'"
+            "'{whole}' has a non-canonical version component '{component}'"
         ));
     }
     component
         .parse()
         .map_err(|_| format!("'{whole}' has an out-of-range version component '{component}'"))
+}
+
+/// A non-empty run of ASCII digits with no leading zero (unless it is
+/// exactly `"0"`) — the spelling every real DD tag and Git commit distance
+/// uses. Rejects `""`, `"04"`, `"-1"`, and anything non-numeric.
+fn is_canonical_decimal(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && (s == "0" || !s.starts_with('0'))
 }
 
 #[cfg(test)]
@@ -242,9 +249,18 @@ mod tests {
 
     #[test]
     fn every_version_in_the_known_35_version_chain_is_accepted() {
-        assert_eq!(KNOWN_RELEASES.len(), 35);
-        for &(major, minor, patch) in KNOWN_RELEASES {
-            let text = format!("{major}.{minor}.{patch}");
+        // The 35-version DD chain (3.22.0 … 4.1.1), typed out independently
+        // of `KNOWN_RELEASES` so a transcription error in that table shows
+        // up here rather than being validated against itself.
+        const CHAIN: &[&str] = &[
+            "3.22.0", "3.23.0", "3.23.1", "3.23.2", "3.23.3", "3.24.0", "3.25.0", "3.26.0",
+            "3.27.0", "3.28.0", "3.28.1", "3.29.0", "3.30.0", "3.31.0", "3.32.0", "3.32.1",
+            "3.33.0", "3.34.0", "3.35.0", "3.36.0", "3.37.0", "3.37.1", "3.37.2", "3.38.0",
+            "3.38.1", "3.39.0", "3.40.0", "3.40.1", "3.41.0", "3.42.0", "3.42.1", "3.42.2",
+            "4.0.0", "4.1.0", "4.1.1",
+        ];
+        assert_eq!(CHAIN.len(), 35);
+        for &text in CHAIN {
             assert!(
                 text.parse::<DdVersion>().is_ok(),
                 "expected '{text}' to be accepted as a known release"
@@ -319,6 +335,23 @@ mod tests {
     #[test]
     fn arbitrary_text_is_rejected() {
         assert!("not-a-version".parse::<DdVersion>().is_err());
+    }
+
+    #[test]
+    fn a_leading_zero_version_component_is_rejected() {
+        assert!("04.1.1".parse::<DdVersion>().is_err());
+        assert!("4.01.1".parse::<DdVersion>().is_err());
+        assert!("4.1.01".parse::<DdVersion>().is_err());
+    }
+
+    #[test]
+    fn a_leading_zero_commit_distance_is_rejected() {
+        assert!("4.1.1-007-g8eaa5f1".parse::<DdVersion>().is_err());
+    }
+
+    #[test]
+    fn a_zero_version_component_is_accepted() {
+        assert!("4.0.0".parse::<DdVersion>().is_ok());
     }
 
     #[test]
