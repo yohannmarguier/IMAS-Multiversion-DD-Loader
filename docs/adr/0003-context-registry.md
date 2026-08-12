@@ -4,6 +4,8 @@ The shim has one context registry for active contexts whose stored DD version di
 
 Each record stores its resolved absolute HLI DD path, its conversion-map reference, its pulse context ID, and, when applicable, its parent context ID. The record holds its own resolved data, so a read takes one lookup. A parent context helps construct a child record, but it does not own that child's lifecycle.
 
+A root record also carries a loss log (ADR 0012). A non-exact read under a child context follows the parent links up at record time and appends to the root record's log, so no query walks the hierarchy at read time. The registry's existing lock covers the log, and the log dies with its root record.
+
 After a successful `al_end_action`, the registry removes only that context's record. `al_close_pulse` does not change the registry because it does not release an IMAS-Core context ID. Conversion maps are shared by `(IDS name, stored DD version, HLI DD version)` and exist only while one or more records use them.
 
 The context registry owns its lock and exposes the only API for its state. A read API returns a copied record snapshot and a safe shared map reference, then releases the lock before the shim calls IMAS-Core or transforms data. The shim does not make concurrent close and read operations on the same IMAS-Core context safe; callers must keep that lifecycle valid.

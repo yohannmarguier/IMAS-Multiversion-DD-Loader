@@ -37,7 +37,7 @@ Fixing a value on its first use for the life of the process: an identical later 
 _Avoid_: lock, freeze, pin, cache, memoise.
 
 **shim-owned export**:
-A public symbol this project defines rather than mirrors from IMAS-Core, carrying the `imas_mvdd_` prefix and listed explicitly in the export-drift check. `imas_mvdd_set_hli_dd_version` is the first.
+A public symbol this project defines rather than mirrors from IMAS-Core, carrying the `imas_mvdd_` prefix and listed explicitly in the export-drift check. There are three: `imas_mvdd_set_hli_dd_version`, `imas_mvdd_context_loss_count` and `imas_mvdd_context_loss_at`. None of them allocates memory that crosses the boundary.
 _Avoid_: extra symbol, extension, custom API, private API — they are public and supported.
 **IDS name**:
 The stable logical key of an IDS, such as `equilibrium`. It selects the same IDS across DD versions and is not a DD path that the shim translates.
@@ -77,6 +77,18 @@ A required change to data values during conversion, such as a COCOS sign change 
 **fidelity verdict**:
 The conversion outcome classification retained by the shim: **exact**, **potentially lossy, unverified**, **certainly lossy**, or **unmappable**. A potentially lossy verdict describes a rule whose loss condition was not checked during the read; it does not assert that data was discarded.
 _Avoid_: using "lossy" without saying whether loss is potential or certain.
+
+**loss log**:
+The list of non-exact reads recorded on a root context record: for each, the DD path as the HLI asked for it and its fidelity verdict. It is the only channel by which loss reaches the caller, because a successful read is forced to `al_status_t.code == 0`. The HLI drains it before `al_end_action` ends the context; it does not outlive the context. See `docs/adr/0012-loss-reaches-the-caller-by-a-context-log.md`.
+_Avoid_: report, journal, accumulator, diagnostics — and never call it an error channel; the reads it records succeeded.
+
+**read outcome**:
+Which of three things one `al_read_data` call did: **failure** (`code != 0`), **not-found** (`code == 0` with a null data pointer), or **data**. One shim classifier function decides it, and nothing else in the shim compares the data pointer to null.
+_Avoid_: treating not-found as an error, or as data; and never confuse this with `Backend::readData`'s `int` convention, which sits below the C ABI and never reaches the shim.
+
+**refusal**:
+A shim-originated failure returned instead of calling IMAS-Core or instead of returning converted data, carrying the shim-owned code `IMAS_MVDD_CONVERSION_ERROR` (`-1000`). The shim reserves `-1000` to `-1099` and allocates only `-1000`; every other failure propagates IMAS-Core's own code unchanged.
+_Avoid_: error, rejection, failure when the shim specifically is the origin.
 
 **precedence**:
 The explicit priority of a source path within one path-level rule. A lower number has higher priority. XML element order has no meaning, and duplicate precedence numbers are invalid.
