@@ -54,7 +54,7 @@ Reference documents:
 A **shim between the IMAS HLIs and IMAS-Core**:
 
 ```
-HLI (imas-python, imas-Fortran, imas-CPP, imas-Matlab, imas-Java)
+HLI (imas-Fortran, imas-CPP; imas-Matlab and imas-Java not yet judged)
         │  compiled/configured against DD version V
         ▼
 IMAS-Multiversion-DD-Loader   ← this project: mirrors IMAS-Core's public C ABI
@@ -62,6 +62,8 @@ IMAS-Multiversion-DD-Loader   ← this project: mirrors IMAS-Core's public C ABI
         ▼
 IMAS-Core (libal)             ← low-level access layer, stores IDSs written under DD version W
 ```
+
+**imas-python is not a client** — it converts DD versions itself and holds one DD version per `DBEntry` rather than one per process, so the shim's version latch does not apply to it and stacking the two would convert twice. The criterion is the client's shape, not its language: any caller of the C ABI holding one DD version for the life of the process and not converting on its own is a client, whatever it is written in. See `docs/adr/0005-hli-dd-version-entry-point.md`.
 
 The core idea: **this project re-exports IMAS-Core's public C ABI verbatim** — same function names, same signatures, same `al_status_t` contract — and interposes between the mirrored functions. An HLI set up for DD 4.1.1 can then read an IDS stored under an earlier DD by having its path arguments rewritten on the way down and results rewritten on the way back up.
 
