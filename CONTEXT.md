@@ -17,8 +17,12 @@ An ABI entry point where the shim applies conversion policy, such as context reg
 _Avoid_: conversion point, hook, interception point.
 
 **HLI DD version**:
-The DD version an HLI was built against, in which its DD paths are expressed. A compile-time constant of the calling binary for the compiled HLIs, so the shim learns it by being told, never by discovery. See `docs/adr/0005-hli-dd-version-entry-point.md`.
+The DD version an HLI was built against, in which its DD paths are expressed. A compile-time constant of the calling binary for the compiled HLIs, so the shim learns it by being told, never by discovery. Being compiled is how those HLIs come to hold one version for the life of the process; holding one is the requirement, not being compiled. See `docs/adr/0005-hli-dd-version-entry-point.md`.
 _Avoid_: HLI_V, caller version, source version, client version.
+
+**self-converting HLI**:
+An HLI that performs DD-version conversion itself and is therefore not a client of the shim — imas-python is the known case. The shim neither detects nor refuses one; the passthrough default means such an HLI is served by never turning the shim on.
+_Avoid_: incompatible HLI, unsupported HLI, non-compiled HLI — the source language is not the criterion.
 
 **stored DD version**:
 The DD version an IDS was written under, read from `ids_properties/version_put/data_dictionary`. The other end of every conversion.
