@@ -13,11 +13,11 @@ from being scattered across individual forwarding functions.
 | `al_begin_global_action` | Forward the IDS name unchanged. Open the operation context, read its version stamp before returning to the HLI, then register the IDS occurrence. Translate `datapath` when the occurrence version is already known; on its first use, forward it unchanged. |
 | `al_begin_slice_action`, `al_begin_timerange_action` | Apply the same version-discovery and occurrence-registration rule as global action. Forward the IDS name unchanged. |
 | `al_begin_arraystruct_action` | Translate `path` and `timebase` before calling IMAS-Core. On success, register the AoS context. |
-| `al_iterate_over_arraystruct` | Forward first. Update the AoS current element only on success. |
+| `al_iterate_over_arraystruct` | Forward unchanged. The registry stores no AoS current-element state. |
 | `al_read_data` | Resolve and translate `field` and `timebase` when versions differ. Convert returned values before the HLI receives them. If no stored version is available, forward unchanged and do not convert. |
 | `al_write_data`, `al_delete_data` | If known versions differ, return failure without calling IMAS-Core. Otherwise forward unchanged. |
-| `al_end_action` | On success, remove its record and records below it. |
-| `al_close_pulse` | On success, remove the data-entry record and all records below it. |
+| `al_end_action` | On success, remove only that context's record. Parent contexts do not own child-context lifetimes. |
+| `al_close_pulse` | Forward unchanged. It releases no context ID and therefore does not mutate the registry. |
 | `al_get_occurrences` | Forward unchanged. IDS names are stable. |
 | `al_list_filled_paths` | Out of scope. Forward unchanged. |
 | `al_bind_plugin`, `al_unbind_plugin` | Out of scope. Forward the field path unchanged because no IDS occurrence supplies a stored DD version. |
