@@ -340,13 +340,12 @@ pub extern "C" fn al_end_action(ctx_id: c_int) -> al_status_t {
 
 /// Mirrors IMAS-Core's `al_read_data` exactly. When `ctxID` carries no live
 /// conversion record, this is a plain forward, unchanged from before issue
-/// #54. Otherwise `field` is resolved through the record's conversion map
-/// and translated to the stored spelling before IMAS-Core is called — for an
-/// explicit `renamed`/identity outcome with no value transformation and no
-/// `merged`/`split` candidates; every other outcome refuses rather than
-/// guess (see `src/resolve.rs`). `timebase` is always forwarded unchanged
-/// (issue #56). IMAS-Core's returned allocation is forwarded exactly as
-/// received: the shim neither substitutes nor frees it.
+/// #54. Otherwise `field` and `timebase` are resolved independently through
+/// the record's conversion map and translated to the stored spelling before
+/// IMAS-Core is called. A no-source outcome returns normal success with a
+/// null data pointer; refusals still stop before IMAS-Core (see
+/// `src/resolve.rs`). IMAS-Core's returned allocation is forwarded exactly
+/// as received: the shim neither substitutes nor frees it.
 ///
 /// # Safety
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null

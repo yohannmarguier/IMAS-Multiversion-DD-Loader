@@ -703,6 +703,76 @@ if(IMAS_MVDD_BUILD_TESTS)
         PROPERTIES ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_TIMERANGE_FAIL=1")
 
+    # --- Issue #56: ordinary read-path outcomes through the public C ABI ---
+    add_executable(read_path_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/read_path_test.c")
+    target_link_libraries(read_path_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
+    target_compile_definitions(read_path_test PRIVATE
+        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+    add_dependencies(read_path_test imas_mvdd_capi recording_stub)
+    set_target_properties(read_path_test PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    add_test(NAME read-path-translates-field-and-timebase-independently
+        COMMAND read_path_test translates-field-and-timebase-independently)
+    set_tests_properties(read-path-translates-field-and-timebase-independently PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME read-path-forward-direction-translates-and-reports-no-source
+        COMMAND read_path_test forward-direction-translates-and-reports-no-source)
+    set_tests_properties(read-path-forward-direction-translates-and-reports-no-source PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME read-path-identity-rule-returns-data
+        COMMAND read_path_test identity-rule-returns-data)
+    set_tests_properties(read-path-identity-rule-returns-data PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME read-path-no-source-returns-null-without-core-call
+        COMMAND read_path_test no-source-returns-null-without-core-call)
+    set_tests_properties(read-path-no-source-returns-null-without-core-call PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME read-path-resolves-relative-field-and-absolute-timebase
+        COMMAND read_path_test resolves-relative-field-and-absolute-timebase)
+    set_tests_properties(read-path-resolves-relative-field-and-absolute-timebase PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME read-path-matching-context-bypasses-conversion
+        COMMAND read_path_test matching-context-bypasses-conversion)
+    set_tests_properties(read-path-matching-context-bypasses-conversion PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME read-path-unknown-context-bypasses-conversion
+        COMMAND read_path_test unknown-context-bypasses-conversion)
+    set_tests_properties(read-path-unknown-context-bypasses-conversion PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME read-path-unstamped-context-bypasses-conversion
+        COMMAND read_path_test unstamped-context-bypasses-conversion)
+    set_tests_properties(read-path-unstamped-context-bypasses-conversion PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+
+    add_test(NAME read-path-conversion-disabled-bypasses-conversion
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
+            $<TARGET_FILE:read_path_test> conversion-disabled-bypasses-conversion)
+    set_tests_properties(read-path-conversion-disabled-bypasses-conversion PROPERTIES
+        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+    add_test(NAME read-path-core-failure-propagates-unchanged
+        COMMAND read_path_test core-failure-propagates-unchanged)
+    set_tests_properties(read-path-core-failure-propagates-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_FAIL=1")
+
     if(IMAS_MVDD_REAL_CORE_TESTS)
         # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
     #
