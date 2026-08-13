@@ -358,6 +358,52 @@ static int g_read_dim = 0;
 static char g_read_buffer[] = "recording-stub: read data payload";
 static double g_read_double_buffer = 1.5;
 
+#define RECORDING_STUB_CSV_CAPACITY 16
+static double g_read_double_values[RECORDING_STUB_CSV_CAPACITY];
+static int g_read_size_override[RECORDING_STUB_CSV_CAPACITY];
+
+/* RECORDING_STUB_READ_DOUBLE_VALUES and RECORDING_STUB_READ_SIZE_CSV give a
+ * test the array shapes value-transform execution (issue #59) actually needs
+ * to validate: an element count and per-element content that a single fixed
+ * scalar cannot express. Both parse a comma-separated list into one of these
+ * static buffers so returned storage outlives the call without malloc/free
+ * bookkeeping, mirroring `g_read_double_buffer`'s ownership. */
+static int parse_csv_doubles(const char *csv, double *out, int capacity) {
+    if (csv == NULL) {
+        return 0;
+    }
+    char buffer[256];
+    strncpy(buffer, csv, sizeof buffer - 1);
+    buffer[sizeof buffer - 1] = '\0';
+
+    int count = 0;
+    char *cursor = buffer;
+    char *token = strtok(cursor, ",");
+    while (token != NULL && count < capacity) {
+        out[count++] = strtod(token, NULL);
+        token = strtok(NULL, ",");
+    }
+    return count;
+}
+
+static int parse_csv_ints(const char *csv, int *out, int capacity) {
+    if (csv == NULL) {
+        return 0;
+    }
+    char buffer[256];
+    strncpy(buffer, csv, sizeof buffer - 1);
+    buffer[sizeof buffer - 1] = '\0';
+
+    int count = 0;
+    char *cursor = buffer;
+    char *token = strtok(cursor, ",");
+    while (token != NULL && count < capacity) {
+        out[count++] = (int)strtol(token, NULL, 10);
+        token = strtok(NULL, ",");
+    }
+    return count;
+}
+
 #define VERSION_STAMP_FIELD "ids_properties/version_put/data_dictionary"
 
 /* RECORDING_STUB_STAMP_VERSION lets a test control the DD-version stamp
@@ -439,13 +485,37 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
         return status;
     }
 
+    const char *double_values_csv = getenv("RECORDING_STUB_READ_DOUBLE_VALUES");
+    int double_values_count =
+        parse_csv_doubles(double_values_csv, g_read_double_values, RECORDING_STUB_CSV_CAPACITY);
+
     if (data != NULL) {
-        *data = getenv("RECORDING_STUB_READ_DOUBLE") != NULL
-                    ? (void *)&g_read_double_buffer
-                    : (void *)g_read_buffer;
+        if (double_values_csv != NULL) {
+            *data = (void *)g_read_double_values;
+        } else {
+            *data = getenv("RECORDING_STUB_READ_DOUBLE") != NULL ? (void *)&g_read_double_buffer
+                                                                  : (void *)g_read_buffer;
+        }
     }
     if (size != NULL) {
-        size[0] = getenv("RECORDING_STUB_READ_DOUBLE") != NULL ? 1 : 4004;
+        if (double_values_csv != NULL) {
+            size[0] = double_values_count;
+        } else {
+            size[0] = getenv("RECORDING_STUB_READ_DOUBLE") != NULL ? 1 : 4004;
+        }
+    }
+
+    /* RECORDING_STUB_READ_SIZE_CSV overrides every extent IMAS-Core reports
+     * back, independently of which data buffer above was selected. It exists
+     * so a test can present a shape whose dimension product is invalid or
+     * overflows without needing a buffer that large — the guard under test
+     * must refuse before it would ever read that many elements. */
+    const char *size_csv = getenv("RECORDING_STUB_READ_SIZE_CSV");
+    if (size != NULL && size_csv != NULL) {
+        int size_count = parse_csv_ints(size_csv, g_read_size_override, RECORDING_STUB_CSV_CAPACITY);
+        for (int i = 0; i < size_count; ++i) {
+            size[i] = g_read_size_override[i];
+        }
     }
 
     al_status_t status;

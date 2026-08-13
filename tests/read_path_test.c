@@ -247,6 +247,79 @@ static void scenario_unsupported_sign_flip_types_refuse_without_core_call(void) 
            "and complex reads were refused before IMAS-Core\\n");
 }
 
+static void scenario_sign_flip_array_negates_values_and_preserves_empty_double(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    int size[1] = {0};
+    void *data = NULL;
+
+    CHECK(al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
+                       52 /* DOUBLE_DATA */, 1, size)
+              .code == 0);
+    CHECK(data != NULL);
+    CHECK(size[0] == 4);
+    double *values = (double *)data;
+    CHECK(values[0] == -1.5);
+    CHECK(values[1] == -9e40); /* EMPTY_DOUBLE stays untouched */
+    CHECK(values[2] == -3.2);
+    CHECK(values[3] == 4.0);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 1);
+    check_stub_paths("time_slice/profiles_1d/psi", "");
+
+    printf("read_path_test sign-flip-array-negates-values-and-preserves-empty-double: every "
+           "real element was negated and the EMPTY_DOUBLE sentinel was left unchanged\\n");
+}
+
+static void scenario_sign_flip_rank_exceeding_maxdim_refuses_without_core_call(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    void *data = (void *)1;
+    int size[8] = {73, 73, 73, 73, 73, 73, 73, 73};
+
+    al_status_t status = al_read_data(operation_ctx, "time_slice/boundary/psi", "", &data,
+                                      52 /* DOUBLE_DATA */, 8 /* rank exceeds MAXDIM == 7 */, size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(strcmp(status.message,
+                 "IMAS-MVDD: value-transform execution requires DOUBLE_DATA and a rank no "
+                 "greater than MAXDIM; "
+                 "DD path: time_slice/boundary/psi; HLI DD version: 4.1.1; stored DD version: "
+                 "3.39.0") == 0);
+    CHECK(data == (void *)1);
+    for (int i = 0; i < 8; ++i) {
+        CHECK(size[i] == 73);
+    }
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
+
+    printf("read_path_test sign-flip-rank-exceeding-maxdim-refuses-without-core-call: a "
+           "rank-8 sign-flip read was refused before IMAS-Core was ever called\\n");
+}
+
+static void scenario_sign_flip_invalid_shape_refuses_without_modifying_buffer(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    void *data = NULL;
+    int size[3] = {0, 0, 0};
+
+    /* Three extents just under INT_MAX overflow the dimension-product
+     * multiplication on the third factor; the one real element the stub
+     * actually returns must still come back unflipped. */
+    al_status_t status = al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
+                                      52 /* DOUBLE_DATA */, 3, size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(strcmp(status.message,
+                 "IMAS-MVDD: value-transform execution received an invalid array shape; "
+                 "DD path: time_slice/profiles_1d/psi; HLI DD version: 4.1.1; stored DD "
+                 "version: 3.39.0") == 0);
+    CHECK(data != NULL);
+    CHECK(*(double *)data == 1.5);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 1);
+
+    printf("read_path_test sign-flip-invalid-shape-refuses-without-modifying-buffer: an "
+           "overflowing dimension product was refused without flipping any element\\n");
+}
+
 static void scenario_resolves_relative_field_and_absolute_timebase(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int size = -1;
@@ -352,6 +425,9 @@ int main(int argc, char **argv) {
                 "rank-changing-retype-refuses-without-core-call|"
                 "unit-redefinition-refuses-without-core-call|"
                 "unsupported-sign-flip-types-refuse-without-core-call|"
+                "sign-flip-array-negates-values-and-preserves-empty-double|"
+                "sign-flip-rank-exceeding-maxdim-refuses-without-core-call|"
+                "sign-flip-invalid-shape-refuses-without-modifying-buffer|"
                 "resolves-relative-field-and-absolute-timebase|"
                 "matching-context-bypasses-conversion|unknown-context-bypasses-conversion|"
                 "unstamped-context-bypasses-conversion|conversion-disabled-bypasses-conversion|"
@@ -400,6 +476,18 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "unsupported-sign-flip-types-refuse-without-core-call") == 0) {
         scenario_unsupported_sign_flip_types_refuse_without_core_call();
+        return 0;
+    }
+    if (strcmp(argv[1], "sign-flip-array-negates-values-and-preserves-empty-double") == 0) {
+        scenario_sign_flip_array_negates_values_and_preserves_empty_double();
+        return 0;
+    }
+    if (strcmp(argv[1], "sign-flip-rank-exceeding-maxdim-refuses-without-core-call") == 0) {
+        scenario_sign_flip_rank_exceeding_maxdim_refuses_without_core_call();
+        return 0;
+    }
+    if (strcmp(argv[1], "sign-flip-invalid-shape-refuses-without-modifying-buffer") == 0) {
+        scenario_sign_flip_invalid_shape_refuses_without_modifying_buffer();
         return 0;
     }
     if (strcmp(argv[1], "resolves-relative-field-and-absolute-timebase") == 0) {

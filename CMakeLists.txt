@@ -773,6 +773,20 @@ if(IMAS_MVDD_BUILD_TESTS)
         unit-redefinition-refuses-without-core-call)
     add_read_path_refusal_test(read-path-unsupported-sign-flip-types-refuse-without-core-call
         unsupported-sign-flip-types-refuse-without-core-call)
+    add_read_path_refusal_test(read-path-sign-flip-rank-exceeding-maxdim-refuses-without-core-call
+        sign-flip-rank-exceeding-maxdim-refuses-without-core-call)
+
+    add_test(NAME read-path-sign-flip-array-negates-values-and-preserves-empty-double
+        COMMAND read_path_test sign-flip-array-negates-values-and-preserves-empty-double)
+    set_tests_properties(read-path-sign-flip-array-negates-values-and-preserves-empty-double PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-9e40,3.2,-4.0")
+
+    add_test(NAME read-path-sign-flip-invalid-shape-refuses-without-modifying-buffer
+        COMMAND read_path_test sign-flip-invalid-shape-refuses-without-modifying-buffer)
+    set_tests_properties(read-path-sign-flip-invalid-shape-refuses-without-modifying-buffer PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_DOUBLE=1;RECORDING_STUB_READ_SIZE_CSV=2147483647,2147483647,2147483647")
 
     add_test(NAME read-path-resolves-relative-field-and-absolute-timebase
         COMMAND read_path_test resolves-relative-field-and-absolute-timebase)
