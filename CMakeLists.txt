@@ -737,6 +737,24 @@ if(IMAS_MVDD_BUILD_TESTS)
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
 
+    add_test(NAME read-path-rank-changing-retype-refuses-without-core-call
+        COMMAND read_path_test rank-changing-retype-refuses-without-core-call)
+    set_tests_properties(read-path-rank-changing-retype-refuses-without-core-call PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME read-path-unit-redefinition-refuses-without-core-call
+        COMMAND read_path_test unit-redefinition-refuses-without-core-call)
+    set_tests_properties(read-path-unit-redefinition-refuses-without-core-call PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME read-path-unsupported-sign-flip-types-refuse-without-core-call
+        COMMAND read_path_test unsupported-sign-flip-types-refuse-without-core-call)
+    set_tests_properties(read-path-unsupported-sign-flip-types-refuse-without-core-call PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
     add_test(NAME read-path-resolves-relative-field-and-absolute-timebase
         COMMAND read_path_test resolves-relative-field-and-absolute-timebase)
     set_tests_properties(read-path-resolves-relative-field-and-absolute-timebase PROPERTIES

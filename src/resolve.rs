@@ -1116,13 +1116,27 @@ pub(crate) unsafe fn read_data(
     let translated_field = match resolve_read_path(&record, field) {
         ReadPath::Forward => None,
         ReadPath::Translated(path) => Some(path),
-        ReadPath::Refusal(message) => return crate::conversion_refusal(&message),
+        ReadPath::Refusal { reason, dd_path } => {
+            return crate::read_conversion_refusal(
+                &reason,
+                &dd_path,
+                &record.hli_version,
+                &record.stored_version,
+            );
+        }
         ReadPath::NoSource => return no_source_read(data),
     };
     let translated_timebase = match resolve_read_path(&record, timebase) {
         ReadPath::Forward => None,
         ReadPath::Translated(path) => Some(path),
-        ReadPath::Refusal(message) => return crate::conversion_refusal(&message),
+        ReadPath::Refusal { reason, dd_path } => {
+            return crate::read_conversion_refusal(
+                &reason,
+                &dd_path,
+                &record.hli_version,
+                &record.stored_version,
+            );
+        }
         ReadPath::NoSource => return no_source_read(data),
     };
 
@@ -1165,7 +1179,7 @@ enum ReadPath {
     /// The artifact says no stored counterpart exists.
     NoSource,
     /// The artifact or this seam deliberately declines to serve the path.
-    Refusal(String),
+    Refusal { reason: String, dd_path: String },
 }
 
 /// Resolves one field-like argument independently, preserving the caller's
@@ -1191,7 +1205,10 @@ fn resolve_read_path(
     };
 
     match explanation.outcome {
-        Outcome::Refusal(reason) => ReadPath::Refusal(refusal_reason_message(reason)),
+        Outcome::Refusal(reason) => ReadPath::Refusal {
+            reason: refusal_reason_message(reason),
+            dd_path: hli_absolute,
+        },
         Outcome::NoSource => ReadPath::NoSource,
         Outcome::Path {
             resolved_path,
@@ -1199,31 +1216,37 @@ fn resolve_read_path(
             candidates,
         } => {
             if !candidates.is_empty() {
-                return ReadPath::Refusal(
-                    "reading a merged/split path is not yet implemented (issue #57)".to_string(),
-                );
+                return ReadPath::Refusal {
+                    reason: "reading a merged/split path is not yet implemented (issue #57)"
+                        .to_string(),
+                    dd_path: hli_absolute,
+                };
             }
             if value_transformation != ValueTransformation::None {
-                return ReadPath::Refusal(
-                    "value-transform execution is not yet implemented (issue #59)".to_string(),
-                );
+                return ReadPath::Refusal {
+                    reason: "value-transform execution is not yet implemented (issue #59)"
+                        .to_string(),
+                    dd_path: hli_absolute,
+                };
             }
             let translated = if is_absolute {
                 format!("/{resolved_path}")
             } else {
                 let Some(translated) = strip_anchor(&record.resolved_path, &resolved_path) else {
-                    return ReadPath::Refusal(
-                        "translating this context's own anchor path is not yet implemented (issue #61)"
+                    return ReadPath::Refusal {
+                        reason: "translating this context's own anchor path is not yet implemented (issue #61)"
                             .to_string(),
-                    );
+                        dd_path: hli_absolute,
+                    };
                 };
                 translated
             };
             match CString::new(translated) {
                 Ok(path) => ReadPath::Translated(path),
-                Err(_) => {
-                    ReadPath::Refusal("translated field contains an interior NUL byte".to_string())
-                }
+                Err(_) => ReadPath::Refusal {
+                    reason: "translated field contains an interior NUL byte".to_string(),
+                    dd_path: hli_absolute,
+                },
             }
         }
     }
@@ -1258,10 +1281,8 @@ fn strip_anchor(anchor: &str, resolved_path: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// A short, stable description of one [`RefusalReason`]. Full refusal-
-/// message formatting (naming the DD path and both versions, with
-/// CLAUDE.md's fixed truncation order) is issue #58's contract; this seam
-/// only needs `conversion_refusal`'s existing `IMAS-MVDD:`-prefixed wrapper.
+/// A short, stable description of one [`RefusalReason`]. The read seam adds
+/// the DD path and both DD versions through `read_conversion_refusal`.
 fn refusal_reason_message(reason: RefusalReason) -> String {
     match reason {
         RefusalReason::UnservableRetype => {
