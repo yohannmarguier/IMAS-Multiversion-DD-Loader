@@ -36,6 +36,15 @@ function(all_exported_symbols library output_variable)
         endif()
         list(POP_BACK nm_fields candidate)
 
+        # `nm -g` also prints undefined imports. They are not exports of the
+        # library being inspected, so exclude them before comparing public
+        # ABI surfaces. The remaining field immediately before the symbol is
+        # nm's one-letter kind on both Mach-O and ELF.
+        list(POP_BACK nm_fields symbol_kind)
+        if(symbol_kind STREQUAL "U")
+            continue()
+        endif()
+
         # Mach-O prepends one underscore to C symbols; ELF does not. Avoid an
         # anchored regular expression here because its repeated-match behavior
         # changed under CMake policy CMP0186.
@@ -72,18 +81,15 @@ function(mirrored_abi_exports library output_variable)
     set("${output_variable}" "${exports}" PARENT_SCOPE)
 endfunction()
 
-# The shim-owned surface (ADR 0005 consequence): every public export outside
-# the mirrored set must carry this prefix and appear on the declared
-# owned-exports manifest, or this check must fail.
+# The shim-owned surface (ADR 0005 consequence): it is the complete set of
+# shim exports outside the mirrored surface. Each must carry the `imas_mvdd_`
+# prefix and appear on the declared owned-exports manifest, so no unrelated
+# public export can escape this check.
 function(owned_abi_exports library output_variable)
     all_exported_symbols("${library}" all_symbols)
-    set(exports)
-    foreach(symbol IN LISTS all_symbols)
-        string(SUBSTRING "${symbol}" 0 10 symbol_prefix)
-        if(symbol_prefix STREQUAL "imas_mvdd_")
-            list(APPEND exports "${symbol}")
-        endif()
-    endforeach()
+    mirrored_abi_exports("${library}" mirrored_exports)
+    set(exports "${all_symbols}")
+    list(REMOVE_ITEM exports ${mirrored_exports})
     list(REMOVE_DUPLICATES exports)
     list(SORT exports)
     set("${output_variable}" "${exports}" PARENT_SCOPE)
@@ -114,7 +120,7 @@ file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/owned_exports.def" owned_manifest_lines
     REGEX "^IMAS_MVDD_OWNED_EXPORT\\(")
 set(owned_manifest_exports)
 foreach(line IN LISTS owned_manifest_lines)
-    if(NOT line MATCHES "^IMAS_MVDD_OWNED_EXPORT\\(([A-Za-z0-9_]+)\\)$")
+    if(NOT line MATCHES "^IMAS_MVDD_OWNED_EXPORT\\((imas_mvdd_[A-Za-z0-9_]+)\\)$")
         message(FATAL_ERROR "Malformed owned-export manifest entry: ${line}")
     endif()
     list(APPEND owned_manifest_exports "${CMAKE_MATCH_1}")
