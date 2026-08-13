@@ -14,9 +14,12 @@ foreach(required_variable CORE_LIBRARY SHIM_LIBRARY NM_EXECUTABLE)
     endif()
 endforeach()
 
-function(public_abi_exports library output_variable)
+function(all_exported_symbols library output_variable)
     execute_process(
-        COMMAND "${NM_EXECUTABLE}" -g "${library}"
+        # Both nm variants used by CI spell “defined symbols only” as `-U`:
+        # GNU nm otherwise prints imports such as GLIBC functions, while
+        # Apple's spelling produces the same defined external-symbol set.
+        COMMAND "${NM_EXECUTABLE}" -g -U "${library}"
         RESULT_VARIABLE nm_result
         OUTPUT_VARIABLE nm_output
         ERROR_VARIABLE nm_error)
@@ -25,7 +28,7 @@ function(public_abi_exports library output_variable)
     endif()
 
     string(REPLACE "\n" ";" nm_lines "${nm_output}")
-    set(exports)
+    set(symbols)
     foreach(line IN LISTS nm_lines)
         # The last whitespace-delimited field is nm's unmangled symbol name.
         # Extracting it first prevents a C++ mangled symbol that happens to
@@ -45,6 +48,19 @@ function(public_abi_exports library output_variable)
         else()
             set(symbol "${candidate}")
         endif()
+        list(APPEND symbols "${symbol}")
+    endforeach()
+    set("${output_variable}" "${symbols}" PARENT_SCOPE)
+endfunction()
+
+# The mirrored IMAS-Core surface: the `al_` prefix plus four named
+# exceptions. Deliberately excludes the `imas_mvdd_` prefix (see
+# owned_abi_exports below) so a shim-owned export can never inflate this set
+# and hide inside the mirrored-coverage comparison (ADR 0005).
+function(mirrored_abi_exports library output_variable)
+    all_exported_symbols("${library}" all_symbols)
+    set(exports)
+    foreach(symbol IN LISTS all_symbols)
         string(SUBSTRING "${symbol}" 0 3 symbol_prefix)
         if(symbol_prefix STREQUAL "al_" OR
                 symbol STREQUAL "const2str" OR
@@ -59,8 +75,23 @@ function(public_abi_exports library output_variable)
     set("${output_variable}" "${exports}" PARENT_SCOPE)
 endfunction()
 
-public_abi_exports("${CORE_LIBRARY}" core_exports)
-public_abi_exports("${SHIM_LIBRARY}" shim_exports)
+# The shim-owned surface (ADR 0005 consequence): it is the complete set of
+# shim exports outside the mirrored surface. Each must carry the `imas_mvdd_`
+# prefix and appear on the declared owned-exports manifest, so no unrelated
+# public export can escape this check.
+function(owned_abi_exports library output_variable)
+    all_exported_symbols("${library}" all_symbols)
+    mirrored_abi_exports("${library}" mirrored_exports)
+    set(exports "${all_symbols}")
+    list(REMOVE_ITEM exports ${mirrored_exports})
+    list(REMOVE_DUPLICATES exports)
+    list(SORT exports)
+    set("${output_variable}" "${exports}" PARENT_SCOPE)
+endfunction()
+
+mirrored_abi_exports("${CORE_LIBRARY}" core_exports)
+mirrored_abi_exports("${SHIM_LIBRARY}" shim_mirrored_exports)
+owned_abi_exports("${SHIM_LIBRARY}" shim_owned_exports)
 
 # Keep the signature checker's X-macro manifest tied to the real exported
 # surface. The strict entry shape makes a malformed or multiline symbol entry
@@ -78,18 +109,43 @@ endforeach()
 list(REMOVE_DUPLICATES manifest_exports)
 list(SORT manifest_exports)
 
-if(NOT "${core_exports}" STREQUAL "${shim_exports}")
+# Read the declared owned-exports manifest the same mechanical way.
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/owned_exports.def" owned_manifest_lines
+    REGEX "^IMAS_MVDD_OWNED_EXPORT\\(")
+set(owned_manifest_exports)
+foreach(line IN LISTS owned_manifest_lines)
+    if(NOT line MATCHES "^IMAS_MVDD_OWNED_EXPORT\\((imas_mvdd_[A-Za-z0-9_]+)\\)$")
+        message(FATAL_ERROR "Malformed owned-export manifest entry: ${line}")
+    endif()
+    list(APPEND owned_manifest_exports "${CMAKE_MATCH_1}")
+endforeach()
+list(REMOVE_DUPLICATES owned_manifest_exports)
+list(SORT owned_manifest_exports)
+
+# Assertion 1: every IMAS-Core symbol is present in the shim, and the shim
+# introduces no extra symbol under IMAS-Core's own `al_`/exception surface.
+if(NOT "${core_exports}" STREQUAL "${shim_mirrored_exports}")
     message(FATAL_ERROR
-        "IMAS-Core public C exports differ from the shim.\n"
+        "IMAS-Core public C exports differ from the shim's mirrored surface.\n"
         "Core: ${core_exports}\n"
-        "Shim: ${shim_exports}")
+        "Shim (mirrored): ${shim_mirrored_exports}")
 endif()
 
-if(NOT "${manifest_exports}" STREQUAL "${shim_exports}")
+if(NOT "${manifest_exports}" STREQUAL "${shim_mirrored_exports}")
     message(FATAL_ERROR
-        "ABI signature manifest differs from the shim exports.\n"
+        "ABI signature manifest differs from the shim's mirrored exports.\n"
         "Manifest: ${manifest_exports}\n"
-        "Shim: ${shim_exports}")
+        "Shim (mirrored): ${shim_mirrored_exports}")
+endif()
+
+# Assertion 2: every extra shim symbol outside the mirrored surface appears
+# on the explicit, declared owned-exports list — never a same-namespace
+# addition that would otherwise pass assertion 1 unnoticed.
+if(NOT "${shim_owned_exports}" STREQUAL "${owned_manifest_exports}")
+    message(FATAL_ERROR
+        "Shim-owned exports differ from the declared owned-exports manifest.\n"
+        "Shim (owned): ${shim_owned_exports}\n"
+        "Manifest: ${owned_manifest_exports}")
 endif()
 
 # IMAS-Core has no plain-C `al_plugin_begin_timerange_action` symbol despite
@@ -97,7 +153,7 @@ endif()
 # `al_begin_arraystruct_action` (without a second underscore). The shim must
 # not add either alias while mirroring that surface (issues #7 and #8).
 foreach(documented_omission al_plugin_begin_timerange_action al_begin_array_struct_action)
-    if("${documented_omission}" IN_LIST shim_exports)
+    if("${documented_omission}" IN_LIST shim_mirrored_exports)
         message(FATAL_ERROR "shim must not export ${documented_omission}")
     endif()
 endforeach()

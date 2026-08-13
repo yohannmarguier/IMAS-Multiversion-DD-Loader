@@ -487,6 +487,59 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(runtime-binding-bare-soname PROPERTIES ENVIRONMENT
         "${_runtime_binding_search_path_var}=$<TARGET_FILE_DIR:recording_stub>")
 
+    # --- HLI DD version latch test: the setter and its environment fallback
+    # (issue #45, ADR 0005) ---
+    #
+    # LATCH is a single process-wide OnceLock, so each scenario needs its own
+    # fresh process exactly like runtime_binding_test's scenarios do; ctest
+    # gives each add_test its own process already.
+    find_package(Threads REQUIRED)
+    add_executable(hli_dd_version_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/hli_dd_version_test.c")
+    target_link_libraries(hli_dd_version_test PRIVATE
+        imas_mvdd_loader ${CMAKE_DL_LIBS} Threads::Threads)
+    target_compile_definitions(hli_dd_version_test PRIVATE
+        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+    add_dependencies(hli_dd_version_test imas_mvdd_capi recording_stub)
+    set_target_properties(hli_dd_version_test PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    add_test(NAME hli-dd-version-setter-accepts-valid-version
+        COMMAND hli_dd_version_test setter-accepts-valid-version)
+    add_test(NAME hli-dd-version-setter-accepts-identical-repeat
+        COMMAND hli_dd_version_test setter-accepts-identical-repeat)
+    add_test(NAME hli-dd-version-setter-rejects-conflicting-repeat
+        COMMAND hli_dd_version_test setter-rejects-conflicting-repeat)
+    add_test(NAME hli-dd-version-setter-rejects-invalid-version
+        COMMAND hli_dd_version_test setter-rejects-invalid-version)
+    add_test(NAME hli-dd-version-setter-rejects-null-version
+        COMMAND hli_dd_version_test setter-rejects-null-version)
+    add_test(NAME hli-dd-version-concurrent-identical-setters-all-succeed
+        COMMAND hli_dd_version_test concurrent-identical-setters-all-succeed)
+
+    add_test(NAME hli-dd-version-setter-precedes-environment
+        COMMAND hli_dd_version_test setter-precedes-environment)
+    set_tests_properties(hli-dd-version-setter-precedes-environment PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=not-a-version")
+
+    add_test(NAME hli-dd-version-valid-environment-latches-on-first-open
+        COMMAND hli_dd_version_test valid-environment-latches-on-first-open)
+    set_tests_properties(hli-dd-version-valid-environment-latches-on-first-open PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+
+    add_test(NAME hli-dd-version-invalid-environment-fails-first-open
+        COMMAND hli_dd_version_test invalid-environment-fails-first-open)
+    set_tests_properties(hli-dd-version-invalid-environment-fails-first-open PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=not-a-version")
+
+    add_test(NAME hli-dd-version-unset-first-open-then-setter-refused
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
+            $<TARGET_FILE:hli_dd_version_test> unset-first-open-then-setter-refused)
+    set_tests_properties(hli-dd-version-unset-first-open-then-setter-refused PROPERTIES
+        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
     if(IMAS_MVDD_REAL_CORE_TESTS)
         # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
     #

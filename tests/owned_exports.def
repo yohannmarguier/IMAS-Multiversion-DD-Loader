@@ -1,0 +1,8 @@
+/* Explicit manifest of shim-owned C ABI exports (ADR 0005) — public symbols
+ * this project defines rather than mirrors from IMAS-Core, every one
+ * carrying the `imas_mvdd_` prefix. tests/check_exports.cmake asserts the
+ * shim's actual imas_mvdd_-prefixed exports equal this list exactly, so a
+ * new one can never silently escape the drift check the way an addition
+ * under IMAS-Core's own `al_` namespace could.
+ */
+IMAS_MVDD_OWNED_EXPORT(imas_mvdd_set_hli_dd_version)

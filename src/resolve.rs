@@ -580,19 +580,8 @@ fn failure(detail: &str) -> al_status_t {
         code: -1,
         message: [0; MAX_ERR_MSG_LEN],
     };
-    write_truncated(&mut status.message, &message);
+    crate::write_truncated(&mut status.message, &message);
     status
-}
-
-fn write_truncated(buffer: &mut [c_char; MAX_ERR_MSG_LEN], message: &str) {
-    let capacity = MAX_ERR_MSG_LEN - 1; // always leave room for the NUL
-    let mut len = message.len().min(capacity);
-    while len > 0 && !message.is_char_boundary(len) {
-        len -= 1;
-    }
-    for (slot, byte) in buffer.iter_mut().zip(message.as_bytes()[..len].iter()) {
-        *slot = *byte as c_char;
-    }
 }
 
 /// Forwards to IMAS-Core's real `al_context_info`, resolving IMAS-Core
@@ -608,6 +597,13 @@ pub(crate) unsafe fn context_info(ctx: c_int, info: *mut *mut c_char) -> al_stat
 /// Forwards to IMAS-Core's real `al_begin_dataentry_action`, resolving
 /// IMAS-Core lazily on first use.
 ///
+/// Opening a pulse is the earliest action any HLI performs, so this is
+/// where the process-wide HLI DD version latch resolves for the first time
+/// if the setter was never called (ADR 0005): the environment variable or
+/// the unset state settles here, atomically, for the rest of the process.
+/// An invalid environment value refuses the call before IMAS-Core is ever
+/// reached.
+///
 /// # Safety
 /// `uri` must be a valid, NUL-terminated C string. `dectxID` must be a
 /// valid, writable `*mut c_int`, matching IMAS-Core's own contract.
@@ -616,6 +612,9 @@ pub(crate) unsafe fn begin_dataentry_action(
     mode: c_int,
     dectx_id: *mut c_int,
 ) -> al_status_t {
+    if let Err(reason) = crate::hli_version::resolve_for_open() {
+        return crate::conversion_refusal(&reason);
+    }
     forward_status!(begin_dataentry_action(uri, mode, dectx_id))
 }
 
