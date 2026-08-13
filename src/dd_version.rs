@@ -153,10 +153,7 @@ fn parse_development(raw: &str, base_str: &str, rest: &str) -> Result<DdVersion,
             "'{raw}' has a non-canonical development commit distance"
         ));
     }
-    let distance: u64 = distance_str
-        .parse()
-        .map_err(|_| format!("'{raw}' has an unparsable development commit distance"))?;
-    if distance == 0 {
+    if distance_str == "0" {
         return Err(format!(
             "'{raw}' has a zero commit distance, which is not a development build"
         ));
@@ -347,6 +344,15 @@ mod tests {
     #[test]
     fn a_leading_zero_commit_distance_is_rejected() {
         assert!("4.1.1-007-g8eaa5f1".parse::<DdVersion>().is_err());
+    }
+
+    #[test]
+    fn a_development_build_with_a_distance_larger_than_u64_is_accepted() {
+        assert!(
+            "4.1.1-18446744073709551616-g8eaa5f1"
+                .parse::<DdVersion>()
+                .is_ok()
+        );
     }
 
     #[test]
