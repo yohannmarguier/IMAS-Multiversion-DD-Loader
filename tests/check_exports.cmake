@@ -16,7 +16,10 @@ endforeach()
 
 function(all_exported_symbols library output_variable)
     execute_process(
-        COMMAND "${NM_EXECUTABLE}" -g "${library}"
+        # Both nm variants used by CI spell “defined symbols only” as `-U`:
+        # GNU nm otherwise prints imports such as GLIBC functions, while
+        # Apple's spelling produces the same defined external-symbol set.
+        COMMAND "${NM_EXECUTABLE}" -g -U "${library}"
         RESULT_VARIABLE nm_result
         OUTPUT_VARIABLE nm_output
         ERROR_VARIABLE nm_error)
@@ -35,15 +38,6 @@ function(all_exported_symbols library output_variable)
             continue()
         endif()
         list(POP_BACK nm_fields candidate)
-
-        # `nm -g` also prints undefined imports. They are not exports of the
-        # library being inspected, so exclude them before comparing public
-        # ABI surfaces. The remaining field immediately before the symbol is
-        # nm's one-letter kind on both Mach-O and ELF.
-        list(POP_BACK nm_fields symbol_kind)
-        if(symbol_kind STREQUAL "U")
-            continue()
-        endif()
 
         # Mach-O prepends one underscore to C symbols; ELF does not. Avoid an
         # anchored regular expression here because its repeated-match behavior
