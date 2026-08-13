@@ -73,9 +73,13 @@ static void scenario_translates_renamed_container_and_timebase(void) {
 
     void *data = NULL;
     int shape[1] = {0};
-    CHECK(al_read_data(arraystruct_ctx, "measured", "", &data, 3, 1, shape).code == 0);
+    CHECK(al_read_data(arraystruct_ctx,
+                       "/time_slice/constraints/b_field_pol_probe/measured", "", &data, 3,
+                       1, shape)
+              .code == 0);
     CHECK(data != NULL);
-    CHECK(strcmp(string_from_stub("recording_stub_read_field"), "measured") == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_read_field"),
+                 "/time_slice/constraints/bpol_probe/measured") == 0);
 
     printf("arraystruct_path_test translates-renamed-container-and-timebase: the stored "
            "AOS spelling opened and retained a child conversion record\\n");

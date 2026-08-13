@@ -1135,16 +1135,16 @@ pub(crate) unsafe fn read_data(
     };
 
     let translated_field = match resolve_context_path(&record, field) {
-        ReadPath::Forward => None,
-        ReadPath::Translated(path) => Some(path),
-        ReadPath::Refusal(message) => return crate::conversion_refusal(&message),
-        ReadPath::NoSource => return no_source_read(data),
+        ContextPathResolution::Forward => None,
+        ContextPathResolution::Translated(path) => Some(path),
+        ContextPathResolution::Refusal(message) => return crate::conversion_refusal(&message),
+        ContextPathResolution::NoSource => return no_source_read(data),
     };
     let translated_timebase = match resolve_context_path(&record, timebase) {
-        ReadPath::Forward => None,
-        ReadPath::Translated(path) => Some(path),
-        ReadPath::Refusal(message) => return crate::conversion_refusal(&message),
-        ReadPath::NoSource => return no_source_read(data),
+        ContextPathResolution::Forward => None,
+        ContextPathResolution::Translated(path) => Some(path),
+        ContextPathResolution::Refusal(message) => return crate::conversion_refusal(&message),
+        ContextPathResolution::NoSource => return no_source_read(data),
     };
 
     forward_status!(read_data(
@@ -1176,9 +1176,9 @@ fn no_source_read(data: *mut *mut c_void) -> al_status_t {
     al_status_t::default()
 }
 
-/// The result of resolving one `al_read_data` path-bearing argument against
-/// a mismatched context's conversion record.
-enum ReadPath {
+/// The result of resolving one path-bearing context argument against a
+/// mismatched conversion record.
+enum ContextPathResolution {
     /// No usable caller path or no matching rule/default: forward it unchanged.
     Forward,
     /// A concrete stored-DD spelling for IMAS-Core to receive.
@@ -1186,6 +1186,16 @@ enum ReadPath {
     /// The artifact says no stored counterpart exists.
     NoSource,
     /// The artifact or this seam deliberately declines to serve the path.
+    Refusal(String),
+}
+
+/// A conversion-map outcome narrowed to what a path-bearing ABI argument can
+/// pass to IMAS-Core: one concrete stored spelling, no source, or a refusal.
+/// Merged/split plans and value transformations deliberately have no single
+/// spelling for these seams to pass through yet.
+enum ConcreteStoredPath {
+    Path(String),
+    NoSource,
     Refusal(String),
 }
 
@@ -1199,15 +1209,17 @@ fn resolve_arraystruct_argument(
     label: &str,
 ) -> Result<Option<CString>, String> {
     match resolve_context_path(record, raw) {
-        ReadPath::Translated(path) => Ok(Some(path)),
-        ReadPath::Refusal(message) => Err(message),
-        ReadPath::NoSource => Err(format!("arraystruct {label} has no stored source")),
-        ReadPath::Forward => match c_str_or_none(raw).filter(|path| !path.is_empty()) {
-            Some(_) => Err(format!(
-                "arraystruct {label} is unclaimed by the conversion map"
-            )),
-            None => Ok(None),
-        },
+        ContextPathResolution::Translated(path) => Ok(Some(path)),
+        ContextPathResolution::Refusal(message) => Err(message),
+        ContextPathResolution::NoSource => Err(format!("arraystruct {label} has no stored source")),
+        ContextPathResolution::Forward => {
+            match c_str_or_none(raw).filter(|path| !path.is_empty()) {
+                Some(_) => Err(format!(
+                    "arraystruct {label} is unclaimed by the conversion map"
+                )),
+                None => Ok(None),
+            }
+        }
     }
 }
 
@@ -1218,9 +1230,9 @@ fn resolve_arraystruct_argument(
 fn resolve_context_path(
     record: &crate::context_registry::ConversionRecord,
     raw: *const c_char,
-) -> ReadPath {
+) -> ContextPathResolution {
     let Some(raw) = c_str_or_none(raw).filter(|path| !path.is_empty()) else {
-        return ReadPath::Forward;
+        return ContextPathResolution::Forward;
     };
     let is_absolute = raw.starts_with('/');
     let hli_absolute = join_hli_path(&record.resolved_path, raw);
@@ -1231,36 +1243,22 @@ fn resolve_context_path(
         // The embedded artifact has an identity default, but a future
         // artifact may not. An absent rule/default is never permission to
         // invent a stored spelling.
-        return ReadPath::Forward;
+        return ContextPathResolution::Forward;
     };
 
-    match explanation.outcome {
-        Outcome::Refusal(reason) => ReadPath::Refusal(refusal_reason_message(reason)),
-        Outcome::NoSource => ReadPath::NoSource,
-        Outcome::Path {
-            resolved_path,
-            value_transformation,
-            candidates,
-        } => {
-            if !candidates.is_empty() {
-                return ReadPath::Refusal(
-                    "reading a merged/split path is not yet implemented (issue #57)".to_string(),
-                );
-            }
-            if value_transformation != ValueTransformation::None {
-                return ReadPath::Refusal(
-                    "value-transform execution is not yet implemented (issue #59)".to_string(),
-                );
-            }
+    match concrete_stored_path(explanation.outcome) {
+        ConcreteStoredPath::NoSource => ContextPathResolution::NoSource,
+        ConcreteStoredPath::Refusal(message) => ContextPathResolution::Refusal(message),
+        ConcreteStoredPath::Path(resolved_path) => {
             let translated = if is_absolute {
                 format!("/{resolved_path}")
             } else {
                 let stored_anchor = match stored_anchor(record) {
                     Ok(anchor) => anchor,
-                    Err(message) => return ReadPath::Refusal(message),
+                    Err(message) => return ContextPathResolution::Refusal(message),
                 };
                 let Some(translated) = strip_anchor(&stored_anchor, &resolved_path) else {
-                    return ReadPath::Refusal(
+                    return ContextPathResolution::Refusal(
                         "translated path does not lie beneath this context's stored anchor"
                             .to_string(),
                     );
@@ -1268,10 +1266,10 @@ fn resolve_context_path(
                 translated
             };
             match CString::new(translated) {
-                Ok(path) => ReadPath::Translated(path),
-                Err(_) => {
-                    ReadPath::Refusal("translated field contains an interior NUL byte".to_string())
-                }
+                Ok(path) => ContextPathResolution::Translated(path),
+                Err(_) => ContextPathResolution::Refusal(
+                    "translated field contains an interior NUL byte".to_string(),
+                ),
             }
         }
     }
@@ -1290,26 +1288,32 @@ fn stored_anchor(record: &crate::context_registry::ConversionRecord) -> Result<S
     else {
         return Err("context anchor has no stored-DD conversion rule".to_string());
     };
-    match explanation.outcome {
-        Outcome::Refusal(reason) => Err(refusal_reason_message(reason)),
-        Outcome::NoSource => Err("context anchor has no stored source".to_string()),
+    match concrete_stored_path(explanation.outcome) {
+        ConcreteStoredPath::Path(path) => Ok(path),
+        ConcreteStoredPath::NoSource => Err("context anchor has no stored source".to_string()),
+        ConcreteStoredPath::Refusal(message) => Err(message),
+    }
+}
+
+fn concrete_stored_path(outcome: Outcome) -> ConcreteStoredPath {
+    match outcome {
+        Outcome::Refusal(reason) => ConcreteStoredPath::Refusal(refusal_reason_message(reason)),
+        Outcome::NoSource => ConcreteStoredPath::NoSource,
         Outcome::Path {
-            resolved_path,
-            value_transformation,
+            resolved_path: _,
+            value_transformation: _,
             candidates,
-        } => {
-            if !candidates.is_empty() {
-                return Err(
-                    "reading a merged/split path is not yet implemented (issue #57)".to_string(),
-                );
-            }
-            if value_transformation != ValueTransformation::None {
-                return Err(
-                    "value-transform execution is not yet implemented (issue #59)".to_string(),
-                );
-            }
-            Ok(resolved_path)
-        }
+        } if !candidates.is_empty() => ConcreteStoredPath::Refusal(
+            "resolving a merged/split path is not yet implemented (issue #57)".to_string(),
+        ),
+        Outcome::Path {
+            resolved_path: _,
+            value_transformation,
+            candidates: _,
+        } if value_transformation != ValueTransformation::None => ConcreteStoredPath::Refusal(
+            "value-transform execution is not yet implemented (issue #59)".to_string(),
+        ),
+        Outcome::Path { resolved_path, .. } => ConcreteStoredPath::Path(resolved_path),
     }
 }
 
