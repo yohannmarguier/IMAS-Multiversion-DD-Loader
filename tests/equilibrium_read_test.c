@@ -63,7 +63,10 @@ static int open_fixture_pulse(const char *dd_version) {
 }
 
 /* Opens "equilibrium", then the "time_slice" AOS, and reads `field` (in the
- * caller's own DD spelling) from time slice 0. Returns the value read. */
+ * caller's own DD spelling) from time slice 0. IMAS-Core's scalar ABI
+ * requires HLI-provided storage: it copies into that buffer and frees its own
+ * temporary allocation before returning. Pointer identity therefore proves
+ * the shim neither substitutes nor frees the HLI-owned result buffer. */
 static double read_beta_at_slice_zero(int pulse_ctx, const char *field) {
     int op_ctx = -1;
     CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
@@ -73,8 +76,8 @@ static double read_beta_at_slice_zero(int pulse_ctx, const char *field) {
     CHECK_OK(al_begin_arraystruct_action(op_ctx, "time_slice", "", &size, &aos_ctx));
     CHECK(size == 2);
 
-    double value = -1.0;
     int shape[MAXDIM] = {0};
+    double value = -1.0;
     void *buffer = &value;
     CHECK_OK(al_read_data(aos_ctx, field, "", &buffer, DOUBLE_DATA, 0, shape));
     CHECK(buffer == &value);
