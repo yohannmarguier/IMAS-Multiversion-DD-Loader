@@ -244,9 +244,10 @@ pub unsafe extern "C" fn al_begin_global_action(
     unsafe { resolve::begin_global_action(pctx_id, dataobjectname, datapath, rwmode, octx_id) }
 }
 
-/// Mirrors IMAS-Core's `al_begin_slice_action` exactly and forwards
-/// unchanged. `dataobjectname` is a seam argument: this ticket forwards it
-/// verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's `al_begin_slice_action` exactly and applies the same
+/// stored-version discovery and occurrence-registration rule as
+/// `al_begin_global_action` (issue #55). `dataobjectname` is always
+/// forwarded unchanged — IDS names are stable across DD versions.
 ///
 /// # Safety
 /// `dataobjectname` must be a valid, NUL-terminated C string, or null
@@ -266,9 +267,10 @@ pub unsafe extern "C" fn al_begin_slice_action(
     }
 }
 
-/// Mirrors IMAS-Core's `al_begin_timerange_action` exactly and forwards
-/// unchanged. `dataobjectname` is a seam argument: this ticket forwards it
-/// verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's `al_begin_timerange_action` exactly and applies the
+/// same stored-version discovery and occurrence-registration rule as
+/// `al_begin_global_action` (issue #55). `dataobjectname` is always
+/// forwarded unchanged — IDS names are stable across DD versions.
 ///
 /// # Safety
 /// `dataobjectname` must be a valid, NUL-terminated C string, or null

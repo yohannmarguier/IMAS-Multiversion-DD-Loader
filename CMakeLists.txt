@@ -359,6 +359,17 @@ if(IMAS_MVDD_BUILD_TESTS)
     add_test(NAME rust-unit
         COMMAND "${CARGO_EXECUTABLE}" test ${CARGO_COMMON_ARGS})
 
+    # The artifact's autoconvert-equivalence floor is an external contract:
+    # run the validation command itself, including its deliberately reduced
+    # fixture, rather than testing an internal helper (issue #51).
+    add_test(NAME equilibrium-artifact-coverage-floor
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCARGO_EXECUTABLE=${CARGO_EXECUTABLE}"
+            "-DCARGO_MANIFEST_PATH=${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+            "-DAPPROVED_ARTIFACT=${CMAKE_CURRENT_SOURCE_DIR}/docs/3.39.0--4.1.1.xml"
+            "-DREDUCED_ARTIFACT=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/equilibrium-3.39.0--4.1.1-reduced.xml"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_artifact_coverage_floor.cmake")
+
     add_executable(abi_smoke "${CMAKE_CURRENT_SOURCE_DIR}/tests/abi_smoke.c")
     target_link_libraries(abi_smoke PRIVATE imas_mvdd_loader)
     add_dependencies(abi_smoke imas_mvdd_capi)
@@ -610,6 +621,88 @@ if(IMAS_MVDD_BUILD_TESTS)
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=not-a-version")
 
+    # --- al_begin_slice_action / al_begin_timerange_action apply the same
+    # rule as global action (issue #55) ---
+
+    add_test(NAME version-discovery-slice-action-hli-unset-is-plain-forward
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
+            $<TARGET_FILE:version_discovery_test> slice-action-hli-unset-is-plain-forward)
+    set_tests_properties(version-discovery-slice-action-hli-unset-is-plain-forward PROPERTIES
+        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+    add_test(NAME version-discovery-slice-action-unstamped-forwards-ids-name-unchanged
+        COMMAND version_discovery_test slice-action-unstamped-forwards-ids-name-unchanged)
+    set_tests_properties(version-discovery-slice-action-unstamped-forwards-ids-name-unchanged
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+
+    add_test(NAME version-discovery-slice-action-matching-version-forwards-ids-name-unchanged
+        COMMAND version_discovery_test slice-action-matching-version-forwards-ids-name-unchanged)
+    set_tests_properties(version-discovery-slice-action-matching-version-forwards-ids-name-unchanged
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME version-discovery-slice-action-mismatch-registers-occurrence-for-global-action
+        COMMAND version_discovery_test
+            slice-action-mismatch-registers-occurrence-for-global-action)
+    set_tests_properties(
+        version-discovery-slice-action-mismatch-registers-occurrence-for-global-action
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME version-discovery-slice-action-malformed-stamp-refuses-and-ends-context
+        COMMAND version_discovery_test slice-action-malformed-stamp-refuses-and-ends-context)
+    set_tests_properties(version-discovery-slice-action-malformed-stamp-refuses-and-ends-context
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=not-a-version")
+
+    add_test(NAME version-discovery-slice-action-failure-forwards-status-unchanged
+        COMMAND version_discovery_test slice-action-failure-forwards-status-unchanged)
+    set_tests_properties(version-discovery-slice-action-failure-forwards-status-unchanged
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_SLICE_FAIL=1")
+
+    add_test(NAME version-discovery-timerange-action-hli-unset-is-plain-forward
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
+            $<TARGET_FILE:version_discovery_test> timerange-action-hli-unset-is-plain-forward)
+    set_tests_properties(version-discovery-timerange-action-hli-unset-is-plain-forward PROPERTIES
+        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+    add_test(NAME version-discovery-timerange-action-unstamped-forwards-ids-name-unchanged
+        COMMAND version_discovery_test timerange-action-unstamped-forwards-ids-name-unchanged)
+    set_tests_properties(version-discovery-timerange-action-unstamped-forwards-ids-name-unchanged
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+
+    add_test(NAME version-discovery-timerange-action-matching-version-forwards-ids-name-unchanged
+        COMMAND version_discovery_test
+            timerange-action-matching-version-forwards-ids-name-unchanged)
+    set_tests_properties(
+        version-discovery-timerange-action-matching-version-forwards-ids-name-unchanged
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME
+        version-discovery-timerange-action-mismatch-registers-occurrence-for-global-action
+        COMMAND version_discovery_test
+            timerange-action-mismatch-registers-occurrence-for-global-action)
+    set_tests_properties(
+        version-discovery-timerange-action-mismatch-registers-occurrence-for-global-action
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME version-discovery-timerange-action-malformed-stamp-refuses-and-ends-context
+        COMMAND version_discovery_test timerange-action-malformed-stamp-refuses-and-ends-context)
+    set_tests_properties(version-discovery-timerange-action-malformed-stamp-refuses-and-ends-context
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=not-a-version")
+
+    add_test(NAME version-discovery-timerange-action-failure-forwards-status-unchanged
+        COMMAND version_discovery_test timerange-action-failure-forwards-status-unchanged)
+    set_tests_properties(version-discovery-timerange-action-failure-forwards-status-unchanged
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_TIMERANGE_FAIL=1")
+
     if(IMAS_MVDD_REAL_CORE_TESTS)
         # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
     #
@@ -647,11 +740,18 @@ if(IMAS_MVDD_BUILD_TESTS)
 
     add_executable(real_core_forwarding_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_forwarding_test.c")
-    target_include_directories(real_core_forwarding_test PRIVATE ${_imas_core_include_dirs})
+    find_package(HDF5 COMPONENTS C REQUIRED)
+    target_include_directories(real_core_forwarding_test PRIVATE
+        ${_imas_core_include_dirs}
+        ${HDF5_C_INCLUDE_DIRS})
     target_compile_definitions(real_core_forwarding_test PRIVATE
         "REAL_CORE_TEST_PLUGIN_DIR=\"$<TARGET_FILE_DIR:real_core_test_plugin>\""
         "REAL_CORE_TEST_PLUGIN_NAME=\"mvddtest\"")
-    target_link_libraries(real_core_forwarding_test PRIVATE imas_mvdd_loader)
+    # The test uses HDF5 only to seed malformed on-disk DD-version metadata;
+    # the slice/time-range operations themselves use the public shim/Core ABI.
+    target_link_libraries(real_core_forwarding_test PRIVATE
+        imas_mvdd_loader
+        ${HDF5_C_LIBRARIES})
     add_dependencies(real_core_forwarding_test
         imas_mvdd_capi
         real_core_test_plugin)

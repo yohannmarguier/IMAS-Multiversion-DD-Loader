@@ -1,6 +1,8 @@
 /* Issue #53, ADR 0002/0007/0009/0012: DD-version stamp discovery at the
  * al_begin_global_action seam, driven by the one read-outcome classifier,
- * plus al_begin_dataentry_action's data-entry registration.
+ * plus al_begin_dataentry_action's data-entry registration. Issue #55 extends
+ * the same discovery-and-registration rule to al_begin_slice_action and
+ * al_begin_timerange_action, which carry no `datapath` argument to translate.
  *
  * The HLI DD version latch (ADR 0005) and the context registry (ADR 0003)
  * are both process-wide, so every scenario below is registered as its own
@@ -10,9 +12,13 @@
  * There is no C-level introspection into the context registry itself (it is
  * an internal Rust module, not a shim-owned export), so "a mismatch
  * registers the occurrence" is proven the only way it is externally
- * observable at this seam: a *second* open of the same occurrence, under the
- * same pulse, translates `datapath` before IMAS-Core is called — which is
- * only possible if the first open's discovery actually cached the mismatch. */
+ * observable at the global-action seam: a *second* open of the same
+ * occurrence, under the same pulse, translates `datapath` before IMAS-Core is
+ * called — which is only possible if the first open's discovery actually
+ * cached the mismatch. Slice and time-range actions have no `datapath` to
+ * translate, so their scenarios instead prove that discovery was attempted
+ * (the stamp read happened) and that a malformed stamp still refuses and
+ * cleans up the just-opened context exactly like global action's does. */
 
 #include <dlfcn.h>
 #include <stdio.h>
@@ -75,6 +81,19 @@ static al_status_t open_dataentry(int *dectxID) {
  * a plausible rwmode. */
 static al_status_t open_global(const char *dataobjectname, const char *datapath, int *octxID) {
     return al_begin_global_action(1001, dataobjectname, datapath, 30, octxID);
+}
+
+/* CLOSEST_INTERP (0, al_const.h) and an arbitrary time — irrelevant to every
+ * scenario here beyond being plausible arguments. */
+static al_status_t open_slice(const char *dataobjectname, int *octxID) {
+    return al_begin_slice_action(1001, dataobjectname, 30, 1.5, 0, octxID);
+}
+
+static al_status_t open_timerange(const char *dataobjectname, int *octxID) {
+    double dtime_buffer = 0.0;
+    int dtime_shape = 0;
+    return al_begin_timerange_action(1001, dataobjectname, 30, 1.0, 2.0, &dtime_buffer,
+                                      &dtime_shape, 0, octxID);
 }
 
 /* --- al_begin_dataentry_action registration (ADR 0002) --------------------- */
@@ -281,6 +300,248 @@ static void scenario_malformed_stamp_refuses_and_ends_context(void) {
            "IMAS_MVDD_CONVERSION_ERROR and cleaned up the leaked-open context\n");
 }
 
+/* --- al_begin_slice_action applies the same rule as global action (issue #55) --- */
+
+static void scenario_slice_action_hli_unset_is_plain_forward(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int octxID = -1;
+    al_status_t status = open_slice("equilibrium", &octxID);
+
+    CHECK(status.code == 0);
+    CHECK(octxID == 2002);
+    CHECK(strcmp(string_from_stub("recording_stub_slice_dataobjectname"), "equilibrium") == 0);
+    /* No HLI DD version means no discovery at all: not even the version-
+     * stamp read happens. */
+    CHECK(int_from_stub("recording_stub_read_call_count") == 0);
+
+    printf("version_discovery_test slice-action-hli-unset-is-plain-forward: no discovery was "
+           "attempted\n");
+}
+
+static void scenario_slice_action_unstamped_forwards_ids_name_unchanged(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int octxID = -1;
+    al_status_t status = open_slice("equilibrium", &octxID);
+
+    CHECK(status.code == 0);
+    CHECK(octxID == 2002);
+    CHECK(strcmp(string_from_stub("recording_stub_slice_dataobjectname"), "equilibrium") == 0);
+    CHECK(int_from_stub("recording_stub_read_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_read_field"),
+                 "ids_properties/version_put/data_dictionary") == 0);
+
+    printf("version_discovery_test slice-action-unstamped-forwards-ids-name-unchanged: discovery "
+           "was attempted and the IDS name reached IMAS-Core unchanged\n");
+}
+
+static void scenario_slice_action_matching_version_forwards_ids_name_unchanged(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int octxID = -1;
+    al_status_t status = open_slice("equilibrium", &octxID);
+
+    CHECK(status.code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_slice_dataobjectname"), "equilibrium") == 0);
+
+    printf("version_discovery_test slice-action-matching-version-forwards-ids-name-unchanged: a "
+           "matching stamp is a passthrough with the open still succeeding\n");
+}
+
+static void scenario_slice_action_mismatch_registers_occurrence_for_global_action(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int octxID = -1;
+    CHECK(open_slice("equilibrium", &octxID).code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_slice_dataobjectname"), "equilibrium") == 0);
+
+    /* There is no C-level introspection into the context registry itself
+     * (see file header), so a slice action's discovered mismatch being
+     * classified and cached is only externally observable through another
+     * seam that reads the same occurrence cache: a subsequent global action
+     * on the same occurrence, under the same pulse, now translates its
+     * datapath before IMAS-Core is ever called — which is only possible if
+     * the slice action's own discovery already cached the mismatch. */
+    const char *hli_path = "time_slice/global_quantities/beta_tor_norm";
+    const char *stored_path = "time_slice/global_quantities/beta_normal";
+    int octxID2 = -1;
+    CHECK(open_global("equilibrium", hli_path, &octxID2).code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_global_datapath"), stored_path) == 0);
+
+    printf("version_discovery_test slice-action-mismatch-registers-occurrence-for-global-action: "
+           "a slice action's discovered mismatch translated a later global action's datapath\n");
+}
+
+static void scenario_slice_action_malformed_stamp_refuses_and_ends_context(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int octxID = -1;
+    al_status_t status = open_slice("equilibrium", &octxID);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(strstr(status.message, "malformed") != NULL);
+    CHECK(strstr(status.message, "version_put") != NULL);
+    CHECK(strcmp(string_from_stub("recording_stub_slice_dataobjectname"), "equilibrium") == 0);
+
+    /* The just-opened IMAS-Core context (id 2002, the stub's fixed slice-
+     * action octxID) must be ended so a refusal here never leaks it. */
+    CHECK(int_from_stub("recording_stub_end_action_call_count") == 1);
+    CHECK(int_from_stub("recording_stub_end_action_ctx_id") == 2002);
+
+    printf("version_discovery_test slice-action-malformed-stamp-refuses-and-ends-context: refused "
+           "with IMAS_MVDD_CONVERSION_ERROR and cleaned up the leaked-open context\n");
+}
+
+static void scenario_slice_action_failure_forwards_status_unchanged(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int octxID = -1;
+    al_status_t status = open_slice("equilibrium", &octxID);
+
+    CHECK(status.code != 0);
+    CHECK(strstr(status.message, "recording-stub: slice open refused") != NULL);
+    /* dataobjectname was still recorded faithfully: the failure comes from
+     * the stub after receiving it unchanged, not from the shim withholding
+     * it. */
+    CHECK(strcmp(string_from_stub("recording_stub_slice_dataobjectname"), "equilibrium") == 0);
+    /* A failed open must attempt no stamp discovery and leak no context to
+     * clean up. */
+    CHECK(int_from_stub("recording_stub_read_call_count") == 0);
+    CHECK(int_from_stub("recording_stub_end_action_call_count") == 0);
+
+    printf("version_discovery_test slice-action-failure-forwards-status-unchanged: propagated "
+           "IMAS-Core's refusal without attempting discovery or registering a context\n");
+}
+
+/* --- al_begin_timerange_action applies the same rule as global action (issue #55) --- */
+
+static void scenario_timerange_action_hli_unset_is_plain_forward(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int octxID = -1;
+    al_status_t status = open_timerange("equilibrium", &octxID);
+
+    CHECK(status.code == 0);
+    CHECK(octxID == 2003);
+    CHECK(strcmp(string_from_stub("recording_stub_timerange_dataobjectname"), "equilibrium") == 0);
+    /* No HLI DD version means no discovery at all: not even the version-
+     * stamp read happens. */
+    CHECK(int_from_stub("recording_stub_read_call_count") == 0);
+
+    printf("version_discovery_test timerange-action-hli-unset-is-plain-forward: no discovery was "
+           "attempted\n");
+}
+
+static void scenario_timerange_action_unstamped_forwards_ids_name_unchanged(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int octxID = -1;
+    al_status_t status = open_timerange("equilibrium", &octxID);
+
+    CHECK(status.code == 0);
+    CHECK(octxID == 2003);
+    CHECK(strcmp(string_from_stub("recording_stub_timerange_dataobjectname"), "equilibrium") == 0);
+    CHECK(int_from_stub("recording_stub_read_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_read_field"),
+                 "ids_properties/version_put/data_dictionary") == 0);
+
+    printf("version_discovery_test timerange-action-unstamped-forwards-ids-name-unchanged: "
+           "discovery was attempted and the IDS name reached IMAS-Core unchanged\n");
+}
+
+static void scenario_timerange_action_matching_version_forwards_ids_name_unchanged(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int octxID = -1;
+    al_status_t status = open_timerange("equilibrium", &octxID);
+
+    CHECK(status.code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_timerange_dataobjectname"), "equilibrium") == 0);
+
+    printf("version_discovery_test timerange-action-matching-version-forwards-ids-name-unchanged: "
+           "a matching stamp is a passthrough with the open still succeeding\n");
+}
+
+static void scenario_timerange_action_mismatch_registers_occurrence_for_global_action(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int octxID = -1;
+    CHECK(open_timerange("equilibrium", &octxID).code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_timerange_dataobjectname"), "equilibrium") == 0);
+
+    /* There is no C-level introspection into the context registry itself
+     * (see file header), so a time-range action's discovered mismatch being
+     * classified and cached is only externally observable through another
+     * seam that reads the same occurrence cache: a subsequent global action
+     * on the same occurrence, under the same pulse, now translates its
+     * datapath before IMAS-Core is ever called — which is only possible if
+     * the time-range action's own discovery already cached the mismatch. */
+    const char *hli_path = "time_slice/global_quantities/beta_tor_norm";
+    const char *stored_path = "time_slice/global_quantities/beta_normal";
+    int octxID2 = -1;
+    CHECK(open_global("equilibrium", hli_path, &octxID2).code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_global_datapath"), stored_path) == 0);
+
+    printf("version_discovery_test timerange-action-mismatch-registers-occurrence-for-global-"
+           "action: a time-range action's discovered mismatch translated a later global action's "
+           "datapath\n");
+}
+
+static void scenario_timerange_action_malformed_stamp_refuses_and_ends_context(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int octxID = -1;
+    al_status_t status = open_timerange("equilibrium", &octxID);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(strstr(status.message, "malformed") != NULL);
+    CHECK(strstr(status.message, "version_put") != NULL);
+    CHECK(strcmp(string_from_stub("recording_stub_timerange_dataobjectname"), "equilibrium") == 0);
+
+    /* The just-opened IMAS-Core context (id 2003, the stub's fixed
+     * time-range-action octxID) must be ended so a refusal here never
+     * leaks it. */
+    CHECK(int_from_stub("recording_stub_end_action_call_count") == 1);
+    CHECK(int_from_stub("recording_stub_end_action_ctx_id") == 2003);
+
+    printf("version_discovery_test timerange-action-malformed-stamp-refuses-and-ends-context: "
+           "refused with IMAS_MVDD_CONVERSION_ERROR and cleaned up the leaked-open context\n");
+}
+
+static void scenario_timerange_action_failure_forwards_status_unchanged(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int octxID = -1;
+    al_status_t status = open_timerange("equilibrium", &octxID);
+
+    CHECK(status.code != 0);
+    CHECK(strstr(status.message, "recording-stub: timerange open refused") != NULL);
+    /* dataobjectname was still recorded faithfully: the failure comes from
+     * the stub after receiving it unchanged, not from the shim withholding
+     * it. */
+    CHECK(strcmp(string_from_stub("recording_stub_timerange_dataobjectname"), "equilibrium") == 0);
+    /* A failed open must attempt no stamp discovery and leak no context to
+     * clean up. */
+    CHECK(int_from_stub("recording_stub_read_call_count") == 0);
+    CHECK(int_from_stub("recording_stub_end_action_call_count") == 0);
+
+    printf("version_discovery_test timerange-action-failure-forwards-status-unchanged: propagated "
+           "IMAS-Core's refusal without attempting discovery or registering a context\n");
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr,
@@ -293,7 +554,19 @@ int main(int argc, char **argv) {
                 "mismatch-translates-datapath-on-second-open|"
                 "unstamped-stamp-clears-an-earlier-mismatch|"
                 "failed-stamp-read-clears-an-earlier-mismatch|"
-                "malformed-stamp-refuses-and-ends-context>\n",
+                "malformed-stamp-refuses-and-ends-context|"
+                "slice-action-hli-unset-is-plain-forward|"
+                "slice-action-unstamped-forwards-ids-name-unchanged|"
+                "slice-action-matching-version-forwards-ids-name-unchanged|"
+                "slice-action-mismatch-registers-occurrence-for-global-action|"
+                "slice-action-malformed-stamp-refuses-and-ends-context|"
+                "slice-action-failure-forwards-status-unchanged|"
+                "timerange-action-hli-unset-is-plain-forward|"
+                "timerange-action-unstamped-forwards-ids-name-unchanged|"
+                "timerange-action-matching-version-forwards-ids-name-unchanged|"
+                "timerange-action-mismatch-registers-occurrence-for-global-action|"
+                "timerange-action-malformed-stamp-refuses-and-ends-context|"
+                "timerange-action-failure-forwards-status-unchanged>\n",
                 argv[0]);
         return 2;
     }
@@ -317,6 +590,33 @@ int main(int argc, char **argv) {
         scenario_failed_stamp_read_clears_an_earlier_mismatch();
     } else if (strcmp(scenario, "malformed-stamp-refuses-and-ends-context") == 0) {
         scenario_malformed_stamp_refuses_and_ends_context();
+    } else if (strcmp(scenario, "slice-action-hli-unset-is-plain-forward") == 0) {
+        scenario_slice_action_hli_unset_is_plain_forward();
+    } else if (strcmp(scenario, "slice-action-unstamped-forwards-ids-name-unchanged") == 0) {
+        scenario_slice_action_unstamped_forwards_ids_name_unchanged();
+    } else if (strcmp(scenario, "slice-action-matching-version-forwards-ids-name-unchanged") == 0) {
+        scenario_slice_action_matching_version_forwards_ids_name_unchanged();
+    } else if (strcmp(scenario, "slice-action-mismatch-registers-occurrence-for-global-action") ==
+               0) {
+        scenario_slice_action_mismatch_registers_occurrence_for_global_action();
+    } else if (strcmp(scenario, "slice-action-malformed-stamp-refuses-and-ends-context") == 0) {
+        scenario_slice_action_malformed_stamp_refuses_and_ends_context();
+    } else if (strcmp(scenario, "slice-action-failure-forwards-status-unchanged") == 0) {
+        scenario_slice_action_failure_forwards_status_unchanged();
+    } else if (strcmp(scenario, "timerange-action-hli-unset-is-plain-forward") == 0) {
+        scenario_timerange_action_hli_unset_is_plain_forward();
+    } else if (strcmp(scenario, "timerange-action-unstamped-forwards-ids-name-unchanged") == 0) {
+        scenario_timerange_action_unstamped_forwards_ids_name_unchanged();
+    } else if (strcmp(scenario, "timerange-action-matching-version-forwards-ids-name-unchanged") ==
+               0) {
+        scenario_timerange_action_matching_version_forwards_ids_name_unchanged();
+    } else if (strcmp(scenario,
+                       "timerange-action-mismatch-registers-occurrence-for-global-action") == 0) {
+        scenario_timerange_action_mismatch_registers_occurrence_for_global_action();
+    } else if (strcmp(scenario, "timerange-action-malformed-stamp-refuses-and-ends-context") == 0) {
+        scenario_timerange_action_malformed_stamp_refuses_and_ends_context();
+    } else if (strcmp(scenario, "timerange-action-failure-forwards-status-unchanged") == 0) {
+        scenario_timerange_action_failure_forwards_status_unchanged();
     } else {
         fprintf(stderr, "unknown scenario: %s\n", scenario);
         return 2;

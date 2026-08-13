@@ -227,6 +227,23 @@ al_status_t al_begin_slice_action(int pctxID, const char *dataobjectname, int rw
     g_slice_rwmode = rwmode;
     g_slice_time = time;
     g_slice_interpmode = interpmode;
+
+    /* RECORDING_STUB_SLICE_FAIL lets a test simulate a failed open: the
+     * shim must still forward dataobjectname unchanged (verified above via
+     * the recording, which runs before this check) and must attempt no
+     * stamp discovery and register no context for the caller-visible
+     * failure. */
+    if (getenv("RECORDING_STUB_SLICE_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -9;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: slice open refused", sizeof status.message - 1);
+        if (octxID != NULL) {
+            *octxID = 0;
+        }
+        return status;
+    }
+
     if (octxID != NULL) {
         *octxID = 2002;
     }
@@ -258,6 +275,24 @@ al_status_t al_begin_timerange_action(int pctxID, const char *dataobjectname, in
     g_timerange_dtime_buffer = dtime_buffer;
     g_timerange_dtime_shape = dtime_shape;
     g_timerange_interpmode = interpmode;
+
+    /* RECORDING_STUB_TIMERANGE_FAIL lets a test simulate a failed open: the
+     * shim must still forward dataobjectname unchanged (verified above via
+     * the recording, which runs before this check) and must attempt no
+     * stamp discovery and register no context for the caller-visible
+     * failure. */
+    if (getenv("RECORDING_STUB_TIMERANGE_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -10;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: timerange open refused",
+                sizeof status.message - 1);
+        if (octxID != NULL) {
+            *octxID = 0;
+        }
+        return status;
+    }
+
     if (octxID != NULL) {
         *octxID = 2003;
     }
