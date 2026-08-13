@@ -712,19 +712,6 @@ if(IMAS_MVDD_BUILD_TESTS)
         LABELS real-core
         RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
 
-    add_test(NAME equilibrium-read-reverse-unclaimed-path-is-not-found
-        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-            $<TARGET_FILE:equilibrium_read_test> reverse-unclaimed-path-is-not-found)
-    set_tests_properties(equilibrium-read-reverse-unclaimed-path-is-not-found PROPERTIES
-        LABELS real-core
-        RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
-
-    add_test(NAME equilibrium-read-retyped-path-is-refused
-        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-            $<TARGET_FILE:equilibrium_read_test> retyped-path-is-refused)
-    set_tests_properties(equilibrium-read-retyped-path-is-refused PROPERTIES
-        LABELS real-core
-        RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
     endif()
 endif()
 

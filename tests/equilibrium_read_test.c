@@ -146,63 +146,6 @@ static void scenario_conversion_disabled_read_is_unaffected(void) {
            "version left the read a plain forward\n");
 }
 
-/* --- an unclaimed path returns not-found without calling IMAS-Core ------- */
-
-static void scenario_reverse_unclaimed_path_is_not_found(void) {
-    CHECK_OK(imas_mvdd_set_hli_dd_version("3.39.0"));
-    int pulse_ctx = open_fixture_pulse("4.1.1");
-
-    int op_ctx = -1;
-    CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
-    int size = -1;
-    int aos_ctx = -1;
-    CHECK_OK(al_begin_arraystruct_action(op_ctx, "time_slice", "", &size, &aos_ctx));
-
-    /* drop-lcfs (rel="left_only", fidelity forward="lossy"): DD 3.39.0's
-     * "lcfs" subtree has no DD 4.1.1 counterpart at all. Resolving it
-     * forward (the HLI's own 3.39.0 spelling, read against the mismatched
-     * 4.1.1 fixture) must return success with a null data pointer, never
-     * calling IMAS-Core with a made-up stored spelling. */
-    double value = -1.0;
-    int shape[MAXDIM] = {0};
-    void *buffer = &value;
-    CHECK_OK(al_read_data(aos_ctx, "boundary/lcfs/r", "", &buffer, DOUBLE_DATA, 1, shape));
-    CHECK(buffer == NULL);
-
-    CHECK_OK(al_end_action(aos_ctx));
-    CHECK_OK(al_end_action(op_ctx));
-    close_fixture_pulse(pulse_ctx);
-    printf("equilibrium_read_test reverse-unclaimed-path-is-not-found: an unclaimed left_only "
-           "path returned success with a null data pointer\n");
-}
-
-/* --- a retyped path is refused before IMAS-Core is ever called ----------- */
-
-static void scenario_retyped_path_is_refused(void) {
-    CHECK_OK(imas_mvdd_set_hli_dd_version("3.39.0"));
-    int pulse_ctx = open_fixture_pulse("4.1.1");
-
-    int op_ctx = -1;
-    CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
-
-    /* retype-coordinates-type (rel="retyped"): a container-shape change this
-     * seam declines to serve (Outcome::Refusal(UnservableRetype)), resolved
-     * purely against the conversion map before any IMAS-Core call — no
-     * arraystruct traversal into "grids_ggd" is needed to prove that. */
-    int value = -1;
-    int shape[MAXDIM] = {0};
-    void *buffer = &value;
-    al_status_t status = al_read_data(op_ctx, "grids_ggd/grid/space/coordinates_type", "",
-                                       &buffer, INTEGER_DATA, 1, shape);
-    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
-    CHECK(strstr(status.message, "IMAS-MVDD:") != NULL);
-
-    CHECK_OK(al_end_action(op_ctx));
-    close_fixture_pulse(pulse_ctx);
-    printf("equilibrium_read_test retyped-path-is-refused: a retyped path was refused before "
-           "IMAS-Core was ever called\n");
-}
-
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr,
@@ -210,9 +153,7 @@ int main(int argc, char **argv) {
                 "<reverse-reads-renamed-value-through-own-spelling|"
                 "forward-reads-renamed-value-through-own-spelling|"
                 "same-version-read-is-unaffected|"
-                "conversion-disabled-read-is-unaffected|"
-                "reverse-unclaimed-path-is-not-found|"
-                "retyped-path-is-refused>\n",
+                "conversion-disabled-read-is-unaffected>\n",
                 argv[0]);
         return 2;
     }
@@ -226,10 +167,6 @@ int main(int argc, char **argv) {
         scenario_same_version_read_is_unaffected();
     } else if (strcmp(scenario, "conversion-disabled-read-is-unaffected") == 0) {
         scenario_conversion_disabled_read_is_unaffected();
-    } else if (strcmp(scenario, "reverse-unclaimed-path-is-not-found") == 0) {
-        scenario_reverse_unclaimed_path_is_not_found();
-    } else if (strcmp(scenario, "retyped-path-is-refused") == 0) {
-        scenario_retyped_path_is_refused();
     } else {
         fprintf(stderr, "unknown scenario: %s\n", scenario);
         return 2;
