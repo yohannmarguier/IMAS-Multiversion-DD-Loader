@@ -737,23 +737,21 @@ if(IMAS_MVDD_BUILD_TESTS)
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
 
-    add_test(NAME read-path-rank-changing-retype-refuses-without-core-call
-        COMMAND read_path_test rank-changing-retype-refuses-without-core-call)
-    set_tests_properties(read-path-rank-changing-retype-refuses-without-core-call PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    # All conversion-refusal scenarios need the same known mismatched
+    # occurrence. Keep that shared seam setup in one place.
+    function(add_read_path_refusal_test name scenario)
+        add_test(NAME "${name}" COMMAND read_path_test "${scenario}")
+        set_tests_properties("${name}" PROPERTIES
+            ENVIRONMENT
+                "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    endfunction()
 
-    add_test(NAME read-path-unit-redefinition-refuses-without-core-call
-        COMMAND read_path_test unit-redefinition-refuses-without-core-call)
-    set_tests_properties(read-path-unit-redefinition-refuses-without-core-call PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
-
-    add_test(NAME read-path-unsupported-sign-flip-types-refuse-without-core-call
-        COMMAND read_path_test unsupported-sign-flip-types-refuse-without-core-call)
-    set_tests_properties(read-path-unsupported-sign-flip-types-refuse-without-core-call PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_read_path_refusal_test(read-path-rank-changing-retype-refuses-without-core-call
+        rank-changing-retype-refuses-without-core-call)
+    add_read_path_refusal_test(read-path-unit-redefinition-refuses-without-core-call
+        unit-redefinition-refuses-without-core-call)
+    add_read_path_refusal_test(read-path-unsupported-sign-flip-types-refuse-without-core-call
+        unsupported-sign-flip-types-refuse-without-core-call)
 
     add_test(NAME read-path-resolves-relative-field-and-absolute-timebase
         COMMAND read_path_test resolves-relative-field-and-absolute-timebase)

@@ -1116,27 +1116,13 @@ pub(crate) unsafe fn read_data(
     let translated_field = match resolve_read_path(&record, field) {
         ReadPath::Forward => None,
         ReadPath::Translated(path) => Some(path),
-        ReadPath::Refusal { reason, dd_path } => {
-            return crate::read_conversion_refusal(
-                &reason,
-                &dd_path,
-                &record.hli_version,
-                &record.stored_version,
-            );
-        }
+        ReadPath::Refusal { reason, dd_path } => return read_refusal(&record, &reason, &dd_path),
         ReadPath::NoSource => return no_source_read(data),
     };
     let translated_timebase = match resolve_read_path(&record, timebase) {
         ReadPath::Forward => None,
         ReadPath::Translated(path) => Some(path),
-        ReadPath::Refusal { reason, dd_path } => {
-            return crate::read_conversion_refusal(
-                &reason,
-                &dd_path,
-                &record.hli_version,
-                &record.stored_version,
-            );
-        }
+        ReadPath::Refusal { reason, dd_path } => return read_refusal(&record, &reason, &dd_path),
         ReadPath::NoSource => return no_source_read(data),
     };
 
@@ -1155,6 +1141,17 @@ pub(crate) unsafe fn read_data(
         dim,
         size,
     ))
+}
+
+/// Formats a path-conversion refusal using the version pair retained by its
+/// live context record. Both `field` and `timebase` resolve through this one
+/// status boundary, so their caller-visible diagnostics cannot drift.
+fn read_refusal(
+    record: &crate::context_registry::ConversionRecord,
+    reason: &str,
+    dd_path: &str,
+) -> al_status_t {
+    crate::read_conversion_refusal(reason, dd_path, &record.hli_version, &record.stored_version)
 }
 
 /// Returns the C ABI's normal not-found outcome for a path the artifact says
