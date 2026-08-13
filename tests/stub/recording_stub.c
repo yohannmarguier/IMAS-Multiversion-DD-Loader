@@ -325,6 +325,21 @@ static char g_read_buffer[] = "recording-stub: read data payload";
 static al_status_t stamp_read_response(void **data, int *size) {
     const char *stamp = getenv("RECORDING_STUB_STAMP_VERSION");
     al_status_t status = ok_status();
+    if (getenv("RECORDING_STUB_STAMP_READ_FAIL") != NULL) {
+        /* A failed discovery is distinct from successful not-found. The
+         * shim's read-outcome classifier treats both as an unstamped
+         * occurrence, but this switch keeps that classifier branch covered
+         * through the public global-action ABI (issue #53, ADR 0012). */
+        status.code = -8;
+        strncpy(status.message, "recording-stub: stamp read refused", sizeof status.message - 1);
+        if (data != NULL) {
+            *data = NULL;
+        }
+        if (size != NULL) {
+            *size = 0;
+        }
+        return status;
+    }
     if (stamp == NULL) {
         if (data != NULL) {
             *data = NULL;

@@ -231,6 +231,35 @@ static void scenario_unstamped_stamp_clears_an_earlier_mismatch(void) {
            "discovery invalidated the mismatch cache\n");
 }
 
+static void scenario_failed_stamp_read_clears_an_earlier_mismatch(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    CHECK(setenv("RECORDING_STUB_STAMP_VERSION", "3.39.0", 1) == 0);
+    const char *hli_path = "time_slice/global_quantities/beta_tor_norm";
+    const char *stored_path = "time_slice/global_quantities/beta_normal";
+
+    int octxID = -1;
+    CHECK(open_global("equilibrium", hli_path, &octxID).code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_global_datapath"), hli_path) == 0);
+
+    /* The classifier must make an IMAS-Core discovery failure an unstamped
+     * passthrough occurrence, not propagate it through this successful open. */
+    CHECK(unsetenv("RECORDING_STUB_STAMP_VERSION") == 0);
+    CHECK(setenv("RECORDING_STUB_STAMP_READ_FAIL", "1", 1) == 0);
+    int octxID2 = -1;
+    CHECK(open_global("equilibrium", hli_path, &octxID2).code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_global_datapath"), stored_path) == 0);
+
+    CHECK(unsetenv("RECORDING_STUB_STAMP_READ_FAIL") == 0);
+    int octxID3 = -1;
+    CHECK(open_global("equilibrium", hli_path, &octxID3).code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_global_datapath"), hli_path) == 0);
+
+    printf("version_discovery_test failed-stamp-read-clears-an-earlier-mismatch: failed "
+           "discovery was an unstamped passthrough and cleared the cache\n");
+}
+
 static void scenario_malformed_stamp_refuses_and_ends_context(void) {
     int dectxID = -1;
     CHECK(open_dataentry(&dectxID).code == 0);
@@ -263,6 +292,7 @@ int main(int argc, char **argv) {
                 "matching-version-forwards-datapath-unchanged|"
                 "mismatch-translates-datapath-on-second-open|"
                 "unstamped-stamp-clears-an-earlier-mismatch|"
+                "failed-stamp-read-clears-an-earlier-mismatch|"
                 "malformed-stamp-refuses-and-ends-context>\n",
                 argv[0]);
         return 2;
@@ -283,6 +313,8 @@ int main(int argc, char **argv) {
         scenario_mismatch_translates_datapath_on_second_open();
     } else if (strcmp(scenario, "unstamped-stamp-clears-an-earlier-mismatch") == 0) {
         scenario_unstamped_stamp_clears_an_earlier_mismatch();
+    } else if (strcmp(scenario, "failed-stamp-read-clears-an-earlier-mismatch") == 0) {
+        scenario_failed_stamp_read_clears_an_earlier_mismatch();
     } else if (strcmp(scenario, "malformed-stamp-refuses-and-ends-context") == 0) {
         scenario_malformed_stamp_refuses_and_ends_context();
     } else {

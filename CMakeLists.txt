@@ -598,6 +598,12 @@ if(IMAS_MVDD_BUILD_TESTS)
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
 
+    add_test(NAME version-discovery-failed-stamp-read-clears-an-earlier-mismatch
+        COMMAND version_discovery_test failed-stamp-read-clears-an-earlier-mismatch)
+    set_tests_properties(version-discovery-failed-stamp-read-clears-an-earlier-mismatch PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+
     add_test(NAME version-discovery-malformed-stamp-refuses-and-ends-context
         COMMAND version_discovery_test malformed-stamp-refuses-and-ends-context)
     set_tests_properties(version-discovery-malformed-stamp-refuses-and-ends-context PROPERTIES
