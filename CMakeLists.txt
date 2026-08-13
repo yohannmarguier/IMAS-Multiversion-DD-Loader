@@ -359,6 +359,17 @@ if(IMAS_MVDD_BUILD_TESTS)
     add_test(NAME rust-unit
         COMMAND "${CARGO_EXECUTABLE}" test ${CARGO_COMMON_ARGS})
 
+    # The artifact's autoconvert-equivalence floor is an external contract:
+    # run the validation command itself, including its deliberately reduced
+    # fixture, rather than testing an internal helper (issue #51).
+    add_test(NAME equilibrium-artifact-coverage-floor
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCARGO_EXECUTABLE=${CARGO_EXECUTABLE}"
+            "-DCARGO_MANIFEST_PATH=${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+            "-DAPPROVED_ARTIFACT=${CMAKE_CURRENT_SOURCE_DIR}/docs/3.39.0--4.1.1.xml"
+            "-DREDUCED_ARTIFACT=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/equilibrium-3.39.0--4.1.1-reduced.xml"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_artifact_coverage_floor.cmake")
+
     add_executable(abi_smoke "${CMAKE_CURRENT_SOURCE_DIR}/tests/abi_smoke.c")
     target_link_libraries(abi_smoke PRIVATE imas_mvdd_loader)
     add_dependencies(abi_smoke imas_mvdd_capi)

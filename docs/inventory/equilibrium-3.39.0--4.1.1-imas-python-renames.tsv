@@ -1,0 +1,58 @@
+# IMAS-Python automatic-conversion baseline for equilibrium 3.39.0 -> 4.1.1.
+#
+# Generated from IMAS-Python commit fbc39ebc6a30dabbe3041d8480ce4e3f4e282f6c's
+# DDVersionMap("equilibrium", 3.39.0, 4.1.1):
+# retain reciprocal NBC rename mappings whose source and target are both in
+# this repository's checked-in leaf-path inventories.  The reverse baseline is
+# the same pairs read right-to-left.  Type changes and IMAS-Python's explicit
+# 3-to-4 post-processing are intentionally excluded: automatic conversion's
+# floor is rename-only (ADR 0011).
+time_slice/constraints/bpol_probe/chi_squared	time_slice/constraints/b_field_pol_probe/chi_squared
+time_slice/constraints/bpol_probe/exact	time_slice/constraints/b_field_pol_probe/exact
+time_slice/constraints/bpol_probe/measured	time_slice/constraints/b_field_pol_probe/measured
+time_slice/constraints/bpol_probe/reconstructed	time_slice/constraints/b_field_pol_probe/reconstructed
+time_slice/constraints/bpol_probe/time_measurement	time_slice/constraints/b_field_pol_probe/time_measurement
+time_slice/constraints/bpol_probe/weight	time_slice/constraints/b_field_pol_probe/weight
+time_slice/constraints/iron_core_segment/magnetisation_r/chi_squared	time_slice/constraints/iron_core_segment/magnetization_r/chi_squared
+time_slice/constraints/iron_core_segment/magnetisation_r/exact	time_slice/constraints/iron_core_segment/magnetization_r/exact
+time_slice/constraints/iron_core_segment/magnetisation_r/measured	time_slice/constraints/iron_core_segment/magnetization_r/measured
+time_slice/constraints/iron_core_segment/magnetisation_r/reconstructed	time_slice/constraints/iron_core_segment/magnetization_r/reconstructed
+time_slice/constraints/iron_core_segment/magnetisation_r/time_measurement	time_slice/constraints/iron_core_segment/magnetization_r/time_measurement
+time_slice/constraints/iron_core_segment/magnetisation_r/weight	time_slice/constraints/iron_core_segment/magnetization_r/weight
+time_slice/constraints/iron_core_segment/magnetisation_z/chi_squared	time_slice/constraints/iron_core_segment/magnetization_z/chi_squared
+time_slice/constraints/iron_core_segment/magnetisation_z/exact	time_slice/constraints/iron_core_segment/magnetization_z/exact
+time_slice/constraints/iron_core_segment/magnetisation_z/measured	time_slice/constraints/iron_core_segment/magnetization_z/measured
+time_slice/constraints/iron_core_segment/magnetisation_z/reconstructed	time_slice/constraints/iron_core_segment/magnetization_z/reconstructed
+time_slice/constraints/iron_core_segment/magnetisation_z/time_measurement	time_slice/constraints/iron_core_segment/magnetization_z/time_measurement
+time_slice/constraints/iron_core_segment/magnetisation_z/weight	time_slice/constraints/iron_core_segment/magnetization_z/weight
+time_slice/constraints/j_tor/chi_squared	time_slice/constraints/j_phi/chi_squared
+time_slice/constraints/j_tor/exact	time_slice/constraints/j_phi/exact
+time_slice/constraints/j_tor/measured	time_slice/constraints/j_phi/measured
+time_slice/constraints/j_tor/position/phi	time_slice/constraints/j_phi/position/phi
+time_slice/constraints/j_tor/position/psi	time_slice/constraints/j_phi/position/psi
+time_slice/constraints/j_tor/position/r	time_slice/constraints/j_phi/position/r
+time_slice/constraints/j_tor/position/rho_tor_norm	time_slice/constraints/j_phi/position/rho_tor_norm
+time_slice/constraints/j_tor/position/z	time_slice/constraints/j_phi/position/z
+time_slice/constraints/j_tor/reconstructed	time_slice/constraints/j_phi/reconstructed
+time_slice/constraints/j_tor/time_measurement	time_slice/constraints/j_phi/time_measurement
+time_slice/constraints/j_tor/weight	time_slice/constraints/j_phi/weight
+time_slice/constraints/mse_polarisation_angle/chi_squared	time_slice/constraints/mse_polarization_angle/chi_squared
+time_slice/constraints/mse_polarisation_angle/exact	time_slice/constraints/mse_polarization_angle/exact
+time_slice/constraints/mse_polarisation_angle/measured	time_slice/constraints/mse_polarization_angle/measured
+time_slice/constraints/mse_polarisation_angle/reconstructed	time_slice/constraints/mse_polarization_angle/reconstructed
+time_slice/constraints/mse_polarisation_angle/time_measurement	time_slice/constraints/mse_polarization_angle/time_measurement
+time_slice/constraints/mse_polarisation_angle/weight	time_slice/constraints/mse_polarization_angle/weight
+time_slice/ggd/b_field_tor/coefficients	time_slice/ggd/b_field_phi/coefficients
+time_slice/ggd/b_field_tor/grid_index	time_slice/ggd/b_field_phi/grid_index
+time_slice/ggd/b_field_tor/grid_subset_index	time_slice/ggd/b_field_phi/grid_subset_index
+time_slice/ggd/b_field_tor/values	time_slice/ggd/b_field_phi/values
+time_slice/ggd/j_tor/coefficients	time_slice/ggd/j_phi/coefficients
+time_slice/ggd/j_tor/grid_index	time_slice/ggd/j_phi/grid_index
+time_slice/ggd/j_tor/grid_subset_index	time_slice/ggd/j_phi/grid_subset_index
+time_slice/ggd/j_tor/values	time_slice/ggd/j_phi/values
+time_slice/global_quantities/beta_normal	time_slice/global_quantities/beta_tor_norm
+time_slice/global_quantities/magnetic_axis/b_field_tor	time_slice/global_quantities/magnetic_axis/b_field_phi
+time_slice/global_quantities/psi_axis	time_slice/global_quantities/psi_magnetic_axis
+time_slice/profiles_1d/j_tor	time_slice/profiles_1d/j_phi
+time_slice/profiles_2d/b_field_tor	time_slice/profiles_2d/b_field_phi
+time_slice/profiles_2d/j_tor	time_slice/profiles_2d/j_phi
