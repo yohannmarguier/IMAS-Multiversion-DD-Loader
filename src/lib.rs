@@ -16,9 +16,10 @@
 //! that record's shared conversion map before forwarding the translated
 //! field to IMAS-Core (issue #54) — proven bidirectionally against the
 //! checked-in equilibrium fixture pair for an explicit `renamed`/identity
-//! path with no value transformation and no `merged`/`split` candidates.
-//! IMAS-Core's returned allocation is forwarded unchanged. A `merged`/`split`
-//! read plan (issue #57), value-transform execution (issue #59), a renamed
+//! path with no value transformation. IMAS-Core's returned allocation is
+//! forwarded unchanged. An untransformed `merged`/`split` read plan (issue
+//! #57) selects its first data candidate in declared precedence order;
+//! value-transform execution (issue #59), a renamed
 //! AOS container (issue #61), independent `field`/`timebase` resolution
 //! (issue #56), and slice/time-range discovery (issue #55) remain future
 //! work under issue #43.

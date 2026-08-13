@@ -440,7 +440,9 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
      * reports success (also 0, but a distinct meaning) — see CLAUDE.md's
      * "two conflicting meanings of zero." The shim must forward this
      * status.code exactly as received, not reinterpret it. */
-    if (getenv("RECORDING_STUB_READ_NOT_FOUND") != NULL) {
+    const char *not_found_field = getenv("RECORDING_STUB_READ_NOT_FOUND_FIELD");
+    if (getenv("RECORDING_STUB_READ_NOT_FOUND") != NULL ||
+        (not_found_field != NULL && field != NULL && strcmp(field, not_found_field) == 0)) {
         status.code = 0;
         memset(status.message, 0, sizeof status.message);
         strncpy(status.message, "recording-stub: not found", sizeof status.message - 1);

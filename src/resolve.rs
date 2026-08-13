@@ -14,9 +14,10 @@ use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::OnceLock;
 
 use crate::context_registry::{MapCacheKey, REGISTRY};
-use crate::conversion_map::{ConversionMap, Outcome, RefusalReason, ValueTransformation};
+use crate::conversion_map::{ConversionMap, Fidelity, Outcome, RefusalReason, ValueTransformation};
 use crate::dl::Library;
 use crate::known_artifacts;
+use crate::read_outcome::{self, ReadOutcome};
 use crate::version_stamp::{self, StampOutcome};
 use crate::{MAX_ERR_MSG_LEN, al_status_t};
 
@@ -1076,11 +1077,12 @@ pub(crate) fn end_action(ctx_id: c_int) -> al_status_t {
 /// in the direction that reaches the stored DD spelling, before IMAS-Core is
 /// called:
 ///
-/// - An explicit refusal, or a rule this seam does not yet know how to
-///   execute (a `merged`/`split` read plan, issue #57; a value
-///   transformation, issue #59; translating this context's own anchor path,
-///   issue #61), is a shim-owned [`al_status_t`] refusal — IMAS-Core is
-///   never called.
+/// - An explicit refusal, or a plan requiring a value transformation (issue
+///   #59) or translating this context's own anchor path (issue #61), is a
+///   shim-owned [`al_status_t`] refusal — IMAS-Core is never called.
+/// - An untransformed `merged`/`split` path is tried in declared precedence
+///   order until one candidate returns data; misses use the common read-
+///   outcome classifier and allocate/free nothing in the shim.
 /// - No claimed source on the stored side returns success with a null data
 ///   pointer, matching IMAS-Core's own not-found convention, without calling
 ///   IMAS-Core at all.
@@ -1116,31 +1118,88 @@ pub(crate) unsafe fn read_data(
     let translated_field = match resolve_read_path(&record, field) {
         ReadPath::Forward => None,
         ReadPath::Translated(path) => Some(path),
+        ReadPath::Candidates(paths) => Some(paths),
         ReadPath::Refusal(message) => return crate::conversion_refusal(&message),
         ReadPath::NoSource => return no_source_read(data),
     };
     let translated_timebase = match resolve_read_path(&record, timebase) {
         ReadPath::Forward => None,
         ReadPath::Translated(path) => Some(path),
+        ReadPath::Candidates(paths) => Some(paths),
         ReadPath::Refusal(message) => return crate::conversion_refusal(&message),
         ReadPath::NoSource => return no_source_read(data),
     };
 
-    forward_status!(read_data(
-        ctx_id,
-        translated_field
-            .as_deref()
-            .map(CStr::as_ptr)
-            .unwrap_or(field),
-        translated_timebase
-            .as_deref()
-            .map(CStr::as_ptr)
-            .unwrap_or(timebase),
-        data,
-        datatype,
-        dim,
-        size,
-    ))
+    let has_candidate_plan = translated_field
+        .as_ref()
+        .is_some_and(TranslatedReadPath::is_candidate_plan)
+        || translated_timebase
+            .as_ref()
+            .is_some_and(TranslatedReadPath::is_candidate_plan);
+    if !has_candidate_plan {
+        return forward_status!(read_data(
+            ctx_id,
+            translated_field
+                .as_ref()
+                .map(TranslatedReadPath::as_ptr)
+                .unwrap_or(field),
+            translated_timebase
+                .as_ref()
+                .map(TranslatedReadPath::as_ptr)
+                .unwrap_or(timebase),
+            data,
+            datatype,
+            dim,
+            size,
+        ));
+    }
+
+    let field_attempts = translated_field.as_ref().map_or_else(
+        || vec![ReadAttempt::forward(field)],
+        TranslatedReadPath::attempts,
+    );
+    let timebase_attempts = translated_timebase.as_ref().map_or_else(
+        || vec![ReadAttempt::forward(timebase)],
+        TranslatedReadPath::attempts,
+    );
+    for field_attempt in &field_attempts {
+        for timebase_attempt in &timebase_attempts {
+            let status = forward_status!(read_data(
+                ctx_id,
+                field_attempt.path,
+                timebase_attempt.path,
+                data,
+                datatype,
+                dim,
+                size,
+            ));
+            // SAFETY: `data` is valid and writable by `read_data`'s own
+            // safety contract, and the just-finished IMAS-Core call has
+            // initialized it.
+            match read_outcome::classify(&status, unsafe { *data }) {
+                ReadOutcome::Failure => return status,
+                ReadOutcome::Data => {
+                    retain_read_fidelity(ctx_id, field, field_attempt.fidelity);
+                    retain_read_fidelity(ctx_id, timebase, timebase_attempt.fidelity);
+                    return status;
+                }
+                ReadOutcome::NotFound => {}
+            }
+        }
+    }
+    no_source_read(data)
+}
+
+/// Retains the caller's non-exact path in its root conversion context without
+/// changing the successful IMAS-Core status. Value transformation remains a
+/// refusal until #59, so fidelity is the only selected-plan state to keep.
+fn retain_read_fidelity(ctx_id: c_int, raw_path: *const c_char, fidelity: Fidelity) {
+    if fidelity == Fidelity::Exact {
+        return;
+    }
+    if let Some(path) = c_str_or_none(raw_path).filter(|path| !path.is_empty()) {
+        REGISTRY.record_read_loss(ctx_id, path.to_string(), fidelity);
+    }
 }
 
 /// Returns the C ABI's normal not-found outcome for a path the artifact says
@@ -1161,11 +1220,58 @@ enum ReadPath {
     /// No usable caller path or no matching rule/default: forward it unchanged.
     Forward,
     /// A concrete stored-DD spelling for IMAS-Core to receive.
-    Translated(CString),
+    Translated(TranslatedReadPath),
+    /// A precedence-ordered merged/split plan.
+    Candidates(TranslatedReadPath),
     /// The artifact says no stored counterpart exists.
     NoSource,
     /// The artifact or this seam deliberately declines to serve the path.
     Refusal(String),
+}
+
+/// One translated argument, either one stored spelling or an ordered read
+/// plan. Candidate fidelity stays attached until a candidate wins.
+struct TranslatedReadPath {
+    paths: Vec<ResolvedReadPath>,
+}
+
+struct ResolvedReadPath {
+    path: CString,
+    fidelity: Fidelity,
+}
+
+struct ReadAttempt {
+    path: *const c_char,
+    fidelity: Fidelity,
+}
+
+impl ReadAttempt {
+    fn forward(path: *const c_char) -> Self {
+        Self {
+            path,
+            fidelity: Fidelity::Exact,
+        }
+    }
+}
+
+impl TranslatedReadPath {
+    fn is_candidate_plan(&self) -> bool {
+        self.paths.len() > 1
+    }
+
+    fn as_ptr(&self) -> *const c_char {
+        self.paths[0].path.as_ptr()
+    }
+
+    fn attempts(&self) -> Vec<ReadAttempt> {
+        self.paths
+            .iter()
+            .map(|candidate| ReadAttempt {
+                path: candidate.path.as_ptr(),
+                fidelity: candidate.fidelity,
+            })
+            .collect()
+    }
 }
 
 /// Resolves one field-like argument independently, preserving the caller's
@@ -1190,6 +1296,7 @@ fn resolve_read_path(
         return ReadPath::Forward;
     };
 
+    let fidelity = explanation.fidelity;
     match explanation.outcome {
         Outcome::Refusal(reason) => ReadPath::Refusal(refusal_reason_message(reason)),
         Outcome::NoSource => ReadPath::NoSource,
@@ -1198,35 +1305,50 @@ fn resolve_read_path(
             value_transformation,
             candidates,
         } => {
-            if !candidates.is_empty() {
-                return ReadPath::Refusal(
-                    "reading a merged/split path is not yet implemented (issue #57)".to_string(),
-                );
-            }
-            if value_transformation != ValueTransformation::None {
+            if value_transformation != ValueTransformation::None
+                || candidates
+                    .iter()
+                    .any(|candidate| candidate.value_transformation != ValueTransformation::None)
+            {
                 return ReadPath::Refusal(
                     "value-transform execution is not yet implemented (issue #59)".to_string(),
                 );
             }
-            let translated = if is_absolute {
-                format!("/{resolved_path}")
-            } else {
-                let Some(translated) = strip_anchor(&record.resolved_path, &resolved_path) else {
-                    return ReadPath::Refusal(
-                        "translating this context's own anchor path is not yet implemented (issue #61)"
-                            .to_string(),
-                    );
-                };
-                translated
-            };
-            match CString::new(translated) {
-                Ok(path) => ReadPath::Translated(path),
-                Err(_) => {
-                    ReadPath::Refusal("translated field contains an interior NUL byte".to_string())
-                }
+            if candidates.is_empty() {
+                return translated_read_component(record, &resolved_path, is_absolute, fidelity)
+                    .map(|path| ReadPath::Translated(TranslatedReadPath { paths: vec![path] }))
+                    .unwrap_or_else(ReadPath::Refusal);
             }
+
+            candidates
+                .into_iter()
+                .map(|candidate| {
+                    translated_read_component(record, &candidate.path, is_absolute, fidelity)
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(|paths| ReadPath::Candidates(TranslatedReadPath { paths }))
+                .unwrap_or_else(ReadPath::Refusal)
         }
     }
+}
+
+fn translated_read_component(
+    record: &crate::context_registry::ConversionRecord,
+    resolved_path: &str,
+    is_absolute: bool,
+    fidelity: Fidelity,
+) -> Result<ResolvedReadPath, String> {
+    let translated = if is_absolute {
+        format!("/{resolved_path}")
+    } else {
+        strip_anchor(&record.resolved_path, resolved_path).ok_or_else(|| {
+            "translating this context's own anchor path is not yet implemented (issue #61)"
+                .to_string()
+        })?
+    };
+    CString::new(translated)
+        .map(|path| ResolvedReadPath { path, fidelity })
+        .map_err(|_| "translated field contains an interior NUL byte".to_string())
 }
 
 /// Joins `anchor` (a context's own resolved path, in the HLI's own DD

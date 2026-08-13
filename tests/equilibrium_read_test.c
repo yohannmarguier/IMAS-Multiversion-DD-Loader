@@ -122,6 +122,28 @@ static void scenario_forward_reads_renamed_value_through_own_spelling(void) {
            "4.1.1 HLI read beta_tor_norm=1.8 from the 3.39.0 fixture's beta_normal\n");
 }
 
+static void scenario_reverse_merged_read_falls_through_to_stored_alias(void) {
+    CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
+    int pulse_ctx = open_fixture_pulse("3.39.0");
+    int op_ctx = -1;
+    CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
+    int time_slice_size = -1, time_slice_ctx = -1;
+    CHECK_OK(al_begin_arraystruct_action(op_ctx, "time_slice", "", &time_slice_size, &time_slice_ctx));
+    int profiles_size = -1, profiles_ctx = -1;
+    CHECK_OK(al_begin_arraystruct_action(time_slice_ctx, "profiles_2d", "", &profiles_size, &profiles_ctx));
+    int shape[MAXDIM] = {0};
+    void *buffer = NULL;
+    CHECK_OK(al_read_data(profiles_ctx, "b_field_phi", "", &buffer, DOUBLE_DATA, 2, shape));
+    CHECK(buffer != NULL);
+    CHECK(shape[0] == 2 && shape[1] == 3);
+    CHECK(((double *)buffer)[0] == 3.1);
+    free(buffer);
+    CHECK_OK(al_end_action(profiles_ctx));
+    CHECK_OK(al_end_action(time_slice_ctx));
+    CHECK_OK(al_end_action(op_ctx));
+    close_fixture_pulse(pulse_ctx);
+}
+
 /* --- same-version and conversion-disabled scenarios remain unchanged ----- */
 
 static void scenario_same_version_read_is_unaffected(void) {
@@ -155,6 +177,7 @@ int main(int argc, char **argv) {
                 "usage: %s "
                 "<reverse-reads-renamed-value-through-own-spelling|"
                 "forward-reads-renamed-value-through-own-spelling|"
+                "reverse-merged-read-falls-through-to-stored-alias|"
                 "same-version-read-is-unaffected|"
                 "conversion-disabled-read-is-unaffected>\n",
                 argv[0]);
@@ -166,6 +189,8 @@ int main(int argc, char **argv) {
         scenario_reverse_reads_renamed_value_through_own_spelling();
     } else if (strcmp(scenario, "forward-reads-renamed-value-through-own-spelling") == 0) {
         scenario_forward_reads_renamed_value_through_own_spelling();
+    } else if (strcmp(scenario, "reverse-merged-read-falls-through-to-stored-alias") == 0) {
+        scenario_reverse_merged_read_falls_through_to_stored_alias();
     } else if (strcmp(scenario, "same-version-read-is-unaffected") == 0) {
         scenario_same_version_read_is_unaffected();
     } else if (strcmp(scenario, "conversion-disabled-read-is-unaffected") == 0) {

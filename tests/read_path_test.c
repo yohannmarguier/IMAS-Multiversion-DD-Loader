@@ -120,6 +120,46 @@ static void scenario_identity_rule_returns_data(void) {
     printf("read_path_test identity-rule-returns-data: identity rule read the stored path\\n");
 }
 
+static void scenario_merged_read_falls_through_to_next_candidate(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    CHECK(data != NULL);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 2);
+    check_stub_paths("time_slice/ggd/b_field_tor", "");
+}
+
+static void scenario_merged_read_stops_at_first_candidate_with_data(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    CHECK(data != NULL);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 1);
+    check_stub_paths("time_slice/ggd/b_field_phi", "");
+}
+
+static void scenario_merged_read_returns_not_found_when_all_candidates_are_absent(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    void *data = (void *)1;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    CHECK(data == NULL);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 2);
+    check_stub_paths("time_slice/ggd/b_field_tor", "");
+}
+
+static void scenario_transformed_split_plan_refuses_before_core_call(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    void *data = (void *)1;
+    CHECK(read_data(operation_ctx, "time_slice/global_quantities/psi_axis", "", &data).code ==
+          IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(data == (void *)1);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
+}
+
 static void scenario_no_source_returns_null_without_core_call(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int reads_before = int_from_stub("recording_stub_read_call_count");
@@ -229,6 +269,10 @@ int main(int argc, char **argv) {
         fprintf(stderr,
                 "usage: %s <translates-field-and-timebase-independently|"
                 "forward-direction-translates-and-reports-no-source|identity-rule-returns-data|"
+                "merged-read-falls-through-to-next-candidate|"
+                "merged-read-stops-at-first-candidate-with-data|"
+                "merged-read-returns-not-found-when-all-candidates-are-absent|"
+                "transformed-split-plan-refuses-before-core-call|"
                 "no-source-returns-null-without-core-call|"
                 "resolves-relative-field-and-absolute-timebase|"
                 "matching-context-bypasses-conversion|unknown-context-bypasses-conversion|"
@@ -248,6 +292,18 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "identity-rule-returns-data") == 0) {
         scenario_identity_rule_returns_data();
         return 0;
+    }
+    if (strcmp(argv[1], "merged-read-falls-through-to-next-candidate") == 0) {
+        scenario_merged_read_falls_through_to_next_candidate(); return 0;
+    }
+    if (strcmp(argv[1], "merged-read-stops-at-first-candidate-with-data") == 0) {
+        scenario_merged_read_stops_at_first_candidate_with_data(); return 0;
+    }
+    if (strcmp(argv[1], "merged-read-returns-not-found-when-all-candidates-are-absent") == 0) {
+        scenario_merged_read_returns_not_found_when_all_candidates_are_absent(); return 0;
+    }
+    if (strcmp(argv[1], "transformed-split-plan-refuses-before-core-call") == 0) {
+        scenario_transformed_split_plan_refuses_before_core_call(); return 0;
     }
     if (strcmp(argv[1], "no-source-returns-null-without-core-call") == 0) {
         scenario_no_source_returns_null_without_core_call();
