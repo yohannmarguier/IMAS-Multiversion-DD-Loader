@@ -63,7 +63,10 @@ The future part of the project that derives chronological DD changes for every D
 The meaning of a conversion rule: whether it matches a DD path and what path or value transformation it requires. Only the shim executes rule semantics.
 
 **rule explanation**:
-Test information from the shim that identifies the rule selected for a requested DD path, its match kind, precedence, path result, and value transformations.
+Test information from the shim that identifies the rule selected for a requested DD path, its match kind, selector stage, precedence, path result, and value transformations.
+
+**selector stage**:
+Which of the three selector kinds a rule explanation's selector matched at: exact, subtree, or glob, tried in that order (ADR 0004). Distinct from match kind, which only says whether an explicit rule or the document-level default applied — a `Default` match kind has no selector stage. Two selectors of the same stage claiming the same path invalidates the conversion-map artifact rather than depending on XML document order.
 
 **glob**:
 A DD-path selector with wildcard characters. It is a fallback and applies only when no exact or subtree selector matches.
