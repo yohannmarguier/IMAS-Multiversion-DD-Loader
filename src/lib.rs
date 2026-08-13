@@ -4,9 +4,15 @@
 //! the path-bearing entry points. The shared constants and `al_status_t` are
 //! here, and the runtime-binding architecture (see `src/resolve.rs` and
 //! `docs/adr/0001-runtime-binding-not-linking.md`) is proven end to end on
-//! all 37 linkable exported IMAS-Core C symbols. DD path/version conversion is still
-//! unimplemented, except for the process-wide HLI DD version latch (see
-//! `src/hli_version.rs` and `docs/adr/0005-hli-dd-version-entry-point.md`).
+//! all 37 linkable exported IMAS-Core C symbols. DD path/version conversion
+//! is wired for the data-entry and global-action seams (issue #53): the
+//! process-wide HLI DD version latch (`src/hli_version.rs`, ADR 0005), the
+//! context registry (`src/context_registry.rs`, ADR 0003), and DD-version
+//! stamp discovery (`src/version_stamp.rs`, ADR 0007) together decide, per
+//! `al_begin_global_action` open, whether an IDS occurrence's stored DD
+//! version differs from the HLI's and registers a conversion record only
+//! then. The read path (`al_read_data`) and arraystruct lifecycle remain
+//! future work under issue #43.
 
 // The mirrored ABI dictates the names; matching IMAS-Core exactly is the point.
 #![allow(non_camel_case_types)]
@@ -21,7 +27,10 @@ pub mod conversion_map;
 mod dd_version;
 mod dl;
 mod hli_version;
+mod known_artifacts;
+mod read_outcome;
 mod resolve;
+mod version_stamp;
 
 /// Length of `al_status_t::message`, mirroring IMAS-Core's `MAX_ERR_MSG_LEN`.
 pub const MAX_ERR_MSG_LEN: usize = 256;

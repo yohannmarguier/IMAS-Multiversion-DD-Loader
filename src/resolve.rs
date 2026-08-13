@@ -13,7 +13,11 @@ use std::env;
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::OnceLock;
 
+use crate::context_registry::{MapCacheKey, REGISTRY};
+use crate::conversion_map::ConversionMap;
 use crate::dl::Library;
+use crate::known_artifacts;
+use crate::version_stamp::{self, StampOutcome};
 use crate::{MAX_ERR_MSG_LEN, al_status_t};
 
 /// Explicit override, honoured before the bare soname — see the ADR's
@@ -604,6 +608,12 @@ pub(crate) unsafe fn context_info(ctx: c_int, info: *mut *mut c_char) -> al_stat
 /// An invalid environment value refuses the call before IMAS-Core is ever
 /// reached.
 ///
+/// `uri` and `mode` are forwarded unchanged in every case (ADR 0002: this
+/// seam has no DD version of its own to translate against). On success the
+/// resulting pulse context is registered in the context registry so that
+/// operation records opened beneath it can carry its ID as their pulse
+/// context ID (issue #53); a failed open registers nothing.
+///
 /// # Safety
 /// `uri` must be a valid, NUL-terminated C string. `dectxID` must be a
 /// valid, writable `*mut c_int`, matching IMAS-Core's own contract.
@@ -615,7 +625,14 @@ pub(crate) unsafe fn begin_dataentry_action(
     if let Err(reason) = crate::hli_version::resolve_for_open() {
         return crate::conversion_refusal(&reason);
     }
-    forward_status!(begin_dataentry_action(uri, mode, dectx_id))
+    let status = forward_status!(begin_dataentry_action(uri, mode, dectx_id));
+    if status.code == 0 {
+        // SAFETY: IMAS-Core's own contract already relied on above requires
+        // `dectx_id` to be a valid, writable pointer.
+        let ctx_id = unsafe { *dectx_id };
+        REGISTRY.record_dataentry(ctx_id);
+    }
+    status
 }
 
 /// Forwards to IMAS-Core's real `al_close_pulse`, resolving IMAS-Core
@@ -625,7 +642,31 @@ pub(crate) fn close_pulse(pulse_ctx: c_int, mode: c_int) -> al_status_t {
 }
 
 /// Forwards to IMAS-Core's real `al_begin_global_action`, resolving
-/// IMAS-Core lazily on first use.
+/// IMAS-Core lazily on first use, and applies ADR 0002's global-action seam
+/// policy (issue #53) when the HLI DD version is latched:
+///
+/// `dataobjectname` (the IDS name, plus occurrence) is always forwarded
+/// unchanged — IDS names are stable across DD versions. `datapath` is
+/// translated only when an *earlier* open of this same occurrence under this
+/// pulse already found a stored-version mismatch this project has an
+/// artifact for; on an occurrence's first use (or once found to match, or
+/// found unstamped) it is forwarded unchanged, since the version that would
+/// justify translating it is not yet known at the point IMAS-Core must be
+/// called.
+///
+/// Once the real open succeeds, the occurrence's DD-version stamp is read
+/// immediately (before this returns to the HLI) and classified through the
+/// one read-outcome classifier ([`crate::read_outcome`]). A present,
+/// malformed stamp is a hard refusal — the just-opened IMAS-Core context is
+/// also ended first, so a refusal here never leaks it. An absent stamp, or
+/// one that matches the HLI DD version, registers nothing (ADR 0007): the
+/// occurrence is presumed to match. A present, valid, *mismatched* stamp
+/// registers the root context, but only when an artifact actually covers
+/// this IDS and version pair (ADR 0011 decision 1) — otherwise this is
+/// treated exactly like an unknown context, passthrough with no record.
+///
+/// When the HLI DD version is unset, this is a plain forward with none of
+/// the above: no stamp read, no registry lookup, no rule resolution.
 ///
 /// # Safety
 /// `dataobjectname` and `datapath` must be valid, NUL-terminated C strings,
@@ -638,13 +679,144 @@ pub(crate) unsafe fn begin_global_action(
     rwmode: c_int,
     octx_id: *mut c_int,
 ) -> al_status_t {
-    forward_status!(begin_global_action(
+    let Some(hli) = crate::hli_version::current() else {
+        return forward_status!(begin_global_action(
+            pctx_id,
+            dataobjectname,
+            datapath,
+            rwmode,
+            octx_id,
+        ));
+    };
+
+    let dataobjectname_str = c_str_or_none(dataobjectname);
+    let ids_name = dataobjectname_str.map(ids_name_from);
+
+    let mut translated_datapath: Option<CString> = None;
+    if let (Some(dataobjectname_str), Some(ids_name)) = (dataobjectname_str, ids_name)
+        && let Some(stored) = REGISTRY.known_stored_version(pctx_id, dataobjectname_str)
+        && stored != hli
+    {
+        translated_datapath = translate_down(ids_name, &stored, &hli, c_str_or_none(datapath));
+    }
+    let effective_datapath = translated_datapath
+        .as_deref()
+        .map(CStr::as_ptr)
+        .unwrap_or(datapath);
+
+    let status = forward_status!(begin_global_action(
         pctx_id,
         dataobjectname,
-        datapath,
+        effective_datapath,
         rwmode,
         octx_id,
-    ))
+    ));
+    if status.code != 0 {
+        return status;
+    }
+
+    let (Some(dataobjectname_str), Some(ids_name)) = (dataobjectname_str, ids_name) else {
+        // No usable occurrence identity: the open itself already succeeded
+        // against real IMAS-Core, but discovery and registration need a
+        // valid `dataobjectname` to key on.
+        return status;
+    };
+    // SAFETY: IMAS-Core's own contract requires `octx_id` to be a valid,
+    // writable pointer, already relied on by the forwarded call above.
+    let opened_octx_id = unsafe { *octx_id };
+
+    match version_stamp::discover(opened_octx_id) {
+        StampOutcome::Malformed(refusal) => {
+            // The open already succeeded against real IMAS-Core; a refusal
+            // from here on must not leak that context, since the HLI — told
+            // this open failed — will never call `al_end_action` on it.
+            let _ = forward_status!(end_action(opened_octx_id));
+            *refusal
+        }
+        StampOutcome::Unstamped => status,
+        StampOutcome::Stored(stored) => {
+            if stored == hli {
+                REGISTRY.forget_occurrence_version(pctx_id, dataobjectname_str);
+            } else {
+                REGISTRY.remember_mismatched_occurrence(
+                    pctx_id,
+                    dataobjectname_str.to_string(),
+                    stored.clone(),
+                );
+                if let Some(artifact) = known_artifacts::lookup(ids_name, &stored, &hli) {
+                    let key = map_cache_key(ids_name, &stored, &hli);
+                    // A global action opens the whole IDS occurrence, not
+                    // one field: the record's resolved path is the
+                    // occurrence's own root, empty because a relative
+                    // `al_read_data` `field` under this context is resolved
+                    // against it directly, with no IDS-name segment to skip
+                    // (ADR 0002, ADR 0003). This is unrelated to `datapath`,
+                    // which stays near-inert (CLAUDE.md) and never feeds
+                    // this field.
+                    REGISTRY.record_root(opened_octx_id, String::new(), pctx_id, key, || {
+                        load_artifact(&artifact)
+                    });
+                }
+            }
+            status
+        }
+    }
+}
+
+/// The IDS name portion of a `dataobjectname` such as `"equilibrium"` or
+/// `"equilibrium/3"` — occurrence numbers do not affect which conversion
+/// map applies.
+fn ids_name_from(dataobjectname: &str) -> &str {
+    dataobjectname.split('/').next().unwrap_or(dataobjectname)
+}
+
+/// `ptr` as a borrowed `&str`, or `None` if it is null or not valid UTF-8.
+fn c_str_or_none<'a>(ptr: *const c_char) -> Option<&'a str> {
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: the caller's own contract requires `ptr`, when non-null, to be
+    // a valid NUL-terminated C string.
+    unsafe { CStr::from_ptr(ptr) }.to_str().ok()
+}
+
+/// Translates `path` from the HLI's own DD spelling to `stored`'s spelling
+/// via the artifact this project has embedded for `(ids, stored, hli)`, if
+/// any. Returns `None` — forward unchanged — when there is no such artifact,
+/// `path` is absent or empty (nothing to translate), or no rule in the
+/// artifact claims `path` at all: none of these is a basis to invent a
+/// translation (ADR 0011).
+fn translate_down(
+    ids: &str,
+    stored: &crate::dd_version::DdVersion,
+    hli: &crate::dd_version::DdVersion,
+    path: Option<&str>,
+) -> Option<CString> {
+    let path = path.filter(|p| !p.is_empty())?;
+    let artifact = known_artifacts::lookup(ids, stored, hli)?;
+    let key = map_cache_key(ids, stored, hli);
+    let map = REGISTRY.get_or_create_map(key, || load_artifact(&artifact));
+    let explanation = map.resolve(path, artifact.direction_to_stored)?;
+    CString::new(explanation.resolved_path).ok()
+}
+
+/// The `(IDS name, stored DD version, HLI DD version)` cache key both the
+/// datapath-translation and root-registration call sites look their shared
+/// conversion map up under.
+fn map_cache_key(
+    ids: &str,
+    stored: &crate::dd_version::DdVersion,
+    hli: &crate::dd_version::DdVersion,
+) -> MapCacheKey {
+    MapCacheKey::new(ids.to_string(), stored.clone(), hli.clone())
+}
+
+/// Parses the one embedded conversion-map artifact `artifact` names. Used
+/// only as a `get_or_create_map`/`record_root` cache-miss closure, so this
+/// runs at most once per `(IDS, stored, HLI)` key for as long as some record
+/// still references the resulting map.
+fn load_artifact(artifact: &known_artifacts::ArtifactMatch) -> ConversionMap {
+    ConversionMap::load(artifact.xml).expect("embedded artifact must parse")
 }
 
 /// Forwards to IMAS-Core's real `al_begin_slice_action`, resolving
@@ -725,9 +897,16 @@ pub(crate) unsafe fn begin_arraystruct_action(
 }
 
 /// Forwards to IMAS-Core's real `al_end_action`, resolving IMAS-Core
-/// lazily on first use.
+/// lazily on first use. On success, removes only `ctx_id`'s own registry
+/// record, if any (ADR 0002, ADR 0003) — a parent context never owns a
+/// child context's lifetime, and an unrecorded or already-plain `ctx_id`
+/// removal is a harmless no-op.
 pub(crate) fn end_action(ctx_id: c_int) -> al_status_t {
-    forward_status!(end_action(ctx_id))
+    let status = forward_status!(end_action(ctx_id));
+    if status.code == 0 {
+        REGISTRY.remove(ctx_id);
+    }
+    status
 }
 
 /// Forwards to IMAS-Core's real `al_read_data`, resolving IMAS-Core lazily

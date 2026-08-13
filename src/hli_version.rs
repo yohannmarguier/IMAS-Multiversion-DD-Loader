@@ -94,6 +94,21 @@ pub(crate) fn resolve_for_open() -> Result<(), String> {
     }
 }
 
+/// The HLI DD version already latched for this process, if any. `None`
+/// covers every case a seam must treat as "no conversion basis": unset (no
+/// setter call and no valid environment variable), an invalid environment
+/// value, or a latch that has not resolved yet because no open has happened.
+/// Callers reach this only after `al_begin_dataentry_action` has already run
+/// at least once for the calling process, since that is the earliest point
+/// the latch can resolve (ADR 0005) — a seam calling this beforehand simply
+/// sees `None` and forwards unchanged, same as the unset case.
+pub(crate) fn current() -> Option<DdVersion> {
+    match LATCH.get()? {
+        Latch::Set(version) => Some(version.clone()),
+        Latch::Unset | Latch::Invalid(_) => None,
+    }
+}
+
 /// C entry point for `imas_mvdd_set_hli_dd_version`: validates the pointer
 /// itself (null, non-UTF-8) as an immediate refusal before parsing the
 /// version string.
