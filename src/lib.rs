@@ -18,10 +18,8 @@
 //! checked-in equilibrium fixture pair for an explicit `renamed`/identity
 //! path with no value transformation and no `merged`/`split` candidates.
 //! IMAS-Core's returned allocation is forwarded unchanged. A `merged`/`split`
-//! read plan (issue #57), value-transform execution (issue #59), a renamed
-//! AOS container (issue #61), independent `field`/`timebase` resolution
-//! (issue #56), and slice/time-range discovery (issue #55) remain future
-//! work under issue #43.
+//! read plan (issue #57) and value-transform execution (issue #59) remain
+//! future work under issue #43.
 
 // The mirrored ABI dictates the names; matching IMAS-Core exactly is the point.
 #![allow(non_camel_case_types)]
@@ -367,12 +365,10 @@ pub unsafe extern "C" fn al_begin_timerange_action(
     }
 }
 
-/// Mirrors IMAS-Core's `al_begin_arraystruct_action` exactly and forwards
-/// `path` and `timebase` verbatim — translating an AOS container that was
-/// itself renamed between DD versions is future work (issue #61). When this
-/// context already carries a conversion record, the opened `actxID` is
-/// registered as its child (issue #54), so a later `al_read_data` on it can
-/// translate its own relative fields.
+/// Mirrors IMAS-Core's `al_begin_arraystruct_action` exactly. When its parent
+/// carries a conversion record, it resolves `path` and `timebase` before
+/// opening the AOS and registers the opened `actxID` as its child, so a later
+/// `al_read_data` can translate relative fields under a renamed container.
 ///
 /// # Safety
 /// `path` and `timebase` must be valid, NUL-terminated C strings, or null

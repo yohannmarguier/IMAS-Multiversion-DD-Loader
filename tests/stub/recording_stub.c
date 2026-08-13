@@ -303,6 +303,7 @@ al_status_t al_begin_timerange_action(int pctxID, const char *dataobjectname, in
 
 static int g_arraystruct_call_count = 0;
 static int g_arraystruct_ctx_id = 0;
+static int g_next_arraystruct_ctx_id = 3004;
 static char *g_arraystruct_path = NULL;
 static char *g_arraystruct_timebase = NULL;
 static int g_arraystruct_size_in = 0;
@@ -315,12 +316,22 @@ al_status_t al_begin_arraystruct_action(int ctxID, const char *path, const char 
     g_arraystruct_path = record_str(path);
     free(g_arraystruct_timebase);
     g_arraystruct_timebase = record_str(timebase);
+
+    if (getenv("RECORDING_STUB_ARRAYSTRUCT_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -12;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: arraystruct open refused",
+                sizeof status.message - 1);
+        return status;
+    }
+
     if (size != NULL) {
         g_arraystruct_size_in = *size;
         *size = 3003;
     }
     if (actxID != NULL) {
-        *actxID = 3004;
+        *actxID = g_next_arraystruct_ctx_id++;
     }
     return ok_status();
 }
