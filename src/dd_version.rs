@@ -56,7 +56,7 @@ const KNOWN_RELEASES: &[(u32, u32, u32)] = &[
     (4, 1, 1),
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum DdVersion {
     Released {
         major: u32,
