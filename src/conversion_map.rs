@@ -1704,16 +1704,41 @@ mod tests {
             None
         );
 
-        // moved: this DD3 path relocated under `boundary`, not kept in place.
-        assert_eq!(
-            map.resolve("time_slice/boundary_separatrix/gap", Direction::Forward),
-            None
-        );
-
         // split: this DD3 path feeds two DD4 destinations, not one identical one.
         assert_eq!(
             map.resolve("time_slice/global_quantities/psi_axis", Direction::Forward),
             None
+        );
+    }
+
+    #[test]
+    fn moved_rule_resolves_in_both_directions_with_its_declared_fidelity() {
+        let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
+
+        let forward = map
+            .resolve(
+                "time_slice/boundary_separatrix/closest_wall_point/r",
+                Direction::Forward,
+            )
+            .expect("the moved rule claims the left-side descendant");
+        assert_eq!(forward.rule_id.as_deref(), Some("move-closest-wall-point"));
+        assert_eq!(forward.fidelity, Fidelity::Exact);
+        assert_eq!(
+            resolved_path(&forward),
+            "time_slice/boundary/closest_wall_point/r"
+        );
+
+        let reverse = map
+            .resolve(
+                "time_slice/boundary/closest_wall_point/r",
+                Direction::Reverse,
+            )
+            .expect("the moved rule claims the right-side descendant");
+        assert_eq!(reverse.rule_id.as_deref(), Some("move-closest-wall-point"));
+        assert_eq!(reverse.fidelity, Fidelity::Exact);
+        assert_eq!(
+            resolved_path(&reverse),
+            "time_slice/boundary_separatrix/closest_wall_point/r"
         );
     }
 
