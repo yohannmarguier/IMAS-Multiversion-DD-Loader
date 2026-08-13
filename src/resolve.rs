@@ -14,7 +14,7 @@ use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::OnceLock;
 
 use crate::context_registry::{MapCacheKey, REGISTRY};
-use crate::conversion_map::ConversionMap;
+use crate::conversion_map::{ConversionMap, Outcome};
 use crate::dl::Library;
 use crate::known_artifacts;
 use crate::version_stamp::{self, StampOutcome};
@@ -807,7 +807,10 @@ fn translate_down(
     let key = map_cache_key(ids, stored, hli);
     let map = REGISTRY.get_or_create_map(key, || load_artifact(&artifact));
     let explanation = map.resolve(path, artifact.direction_to_stored)?;
-    CString::new(explanation.resolved_path).ok()
+    match explanation.outcome {
+        Outcome::Path { resolved_path, .. } => CString::new(resolved_path).ok(),
+        Outcome::NoSource | Outcome::Refusal(_) => None,
+    }
 }
 
 /// The `(IDS name, stored DD version, HLI DD version)` cache key both the
