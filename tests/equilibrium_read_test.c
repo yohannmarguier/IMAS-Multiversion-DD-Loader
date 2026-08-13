@@ -174,7 +174,7 @@ static void scenario_same_version_read_is_unaffected(void) {
     CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
     int pulse_ctx = open_fixture_pulse("4.1.1");
 
-    double value = read_beta_at_slice_zero(pulse_ctx, "global_quantities/beta_tor_norm");
+    double value = read_scalar_at_slice_zero(pulse_ctx, "global_quantities/beta_tor_norm");
     CHECK(value == 1.8);
 
     close_fixture_pulse(pulse_ctx);
@@ -187,7 +187,7 @@ static void scenario_conversion_disabled_read_is_unaffected(void) {
      * latch stays unset for this process. */
     int pulse_ctx = open_fixture_pulse("4.1.1");
 
-    double value = read_beta_at_slice_zero(pulse_ctx, "global_quantities/beta_tor_norm");
+    double value = read_scalar_at_slice_zero(pulse_ctx, "global_quantities/beta_tor_norm");
     CHECK(value == 1.8);
 
     close_fixture_pulse(pulse_ctx);
