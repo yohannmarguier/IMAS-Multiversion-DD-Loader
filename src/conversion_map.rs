@@ -786,7 +786,7 @@ impl ConversionMap {
             let rule = &self.rules[found.rule_index];
 
             // A rule of a kind this issue does not yet resolve (`merged`,
-            // `moved`, `split`) may still hold the winning selector for this
+            // `split`) may still hold the winning selector for this
             // path and direction. Falling through to the identity default
             // would misrepresent it as an untouched exact match instead of
             // correctly declining to resolve it; every other stage is
@@ -794,7 +794,7 @@ impl ConversionMap {
             // stage governs this path (ADR 0004: exact, then subtree, then
             // glob, in that order, never depending on what a later stage
             // might have said).
-            if matches!(rule.rel, Rel::Merged | Rel::Moved | Rel::Split) {
+            if matches!(rule.rel, Rel::Merged | Rel::Split) {
                 return None;
             }
 
@@ -831,7 +831,8 @@ impl ConversionMap {
                 return Some(Self::explicit_match(rule, found.stage, fidelity, outcome));
             }
 
-            // Only `Rel::Renamed` remains.
+            // `Rel::Renamed` and `Rel::Moved` both carry one path on each
+            // side, so they resolve through the same rendered-target path.
             if fidelity == Fidelity::Unmappable {
                 return Some(Self::explicit_match(
                     rule,
@@ -847,7 +848,7 @@ impl ConversionMap {
             };
             let target = target
                 .as_ref()
-                .expect("renamed rule always carries both paths");
+                .expect("renamed or moved rule always carries both paths");
             let resolved_path = target.render(&found.suffix, &found.captures);
             let right_side_path = match direction {
                 Direction::Forward => resolved_path.clone(),
