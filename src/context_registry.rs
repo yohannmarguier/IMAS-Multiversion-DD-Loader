@@ -39,19 +39,33 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use crate::conversion_map::ConversionMap;
+use crate::dd_version::DdVersion;
 
 /// An IMAS-Core context ID, as passed across the C ABI.
 pub(crate) type ContextId = std::ffi::c_int;
 
 /// The `(IDS name, stored DD version, HLI DD version)` key a shared
-/// conversion map is cached under. Versions are carried as their `Display`
-/// spelling rather than `DdVersion` itself, since a cache key only needs
-/// `Hash`/`Eq`.
+/// conversion map is cached under. Its validated version values make it
+/// impossible to cache an invalid or noncanonical version spelling.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct MapCacheKey {
-    pub ids: String,
-    pub stored_version: String,
-    pub hli_version: String,
+    ids: String,
+    stored_version: DdVersion,
+    hli_version: DdVersion,
+}
+
+impl MapCacheKey {
+    pub(crate) fn new(ids: String, stored_version: DdVersion, hli_version: DdVersion) -> Self {
+        Self {
+            ids,
+            stored_version,
+            hli_version,
+        }
+    }
+
+    fn needs_conversion(&self) -> bool {
+        self.stored_version != self.hli_version
+    }
 }
 
 /// A live conversion-eligible context: a root today, a root or child once
@@ -110,20 +124,31 @@ impl ContextRegistry {
             .insert(ctx_id, Entry::DataEntry);
     }
 
-    /// Records `ctx_id` as a root conversion record. Replaces whatever
-    /// record — of any kind — previously lived at `ctx_id`, so a recycled ID
-    /// can never expose the record it used to name.
+    /// Records `ctx_id` as a root conversion record when the stored and HLI
+    /// DD versions differ. Obtains the map through this registry's cache, so
+    /// every record for one version pair shares a map. Returns `false` for a
+    /// matching version pair after removing any record at `ctx_id`, so a
+    /// recycled matching-version ID can never expose stale conversion state.
+    ///
+    /// For a mismatched pair, replaces whatever record — of any kind —
+    /// previously lived at `ctx_id`, so a recycled ID can never expose the
+    /// record it used to name.
     pub(crate) fn record_root(
         &self,
         ctx_id: ContextId,
         resolved_path: String,
         pulse_ctx_id: ContextId,
-        map: Arc<ConversionMap>,
-    ) {
+        key: MapCacheKey,
+        create: impl FnOnce() -> ConversionMap,
+    ) -> bool {
+        if !key.needs_conversion() {
+            self.remove(ctx_id);
+            return false;
+        }
         let record = ConversionRecord {
             resolved_path,
             pulse_ctx_id,
-            map,
+            map: self.get_or_create_map(key, create),
             root_id: ctx_id,
         };
         self.state
@@ -131,6 +156,7 @@ impl ContextRegistry {
             .unwrap()
             .entries
             .insert(ctx_id, Entry::Conversion(record));
+        true
     }
 
     /// Returns a cloned snapshot of the conversion record at `ctx_id`, or
@@ -169,7 +195,7 @@ impl ContextRegistry {
     /// result otherwise. A map already unreferenced by every record (its
     /// cached `Weak` no longer upgrades) is treated as absent: `create` runs
     /// again and its result replaces the stale cache entry.
-    pub(crate) fn get_or_create_map(
+    fn get_or_create_map(
         &self,
         key: MapCacheKey,
         create: impl FnOnce() -> ConversionMap,
@@ -201,12 +227,25 @@ mod tests {
         ConversionMap::load(MINIMAL_ARTIFACT).expect("minimal artifact must load")
     }
 
+    fn version(input: &str) -> DdVersion {
+        input.parse().expect("test DD version must be valid")
+    }
+
     fn dummy_key() -> MapCacheKey {
-        MapCacheKey {
-            ids: "equilibrium".to_string(),
-            stored_version: "3.39.0".to_string(),
-            hli_version: "4.1.1".to_string(),
-        }
+        MapCacheKey::new(
+            "equilibrium".to_string(),
+            version("3.39.0"),
+            version("4.1.1"),
+        )
+    }
+
+    fn record_dummy_root(
+        registry: &ContextRegistry,
+        ctx_id: ContextId,
+        resolved_path: String,
+        pulse_ctx_id: ContextId,
+    ) -> bool {
+        registry.record_root(ctx_id, resolved_path, pulse_ctx_id, dummy_key(), dummy_map)
     }
 
     #[test]
@@ -218,15 +257,24 @@ mod tests {
     #[test]
     fn a_root_record_retains_its_path_pulse_id_map_and_root_identity() {
         let registry = ContextRegistry::new();
-        let map = Arc::new(dummy_map());
-        registry.record_root(5, "time_slice/boundary/psi".to_string(), 1, map.clone());
+        let key = dummy_key();
+        assert!(registry.record_root(
+            5,
+            "time_slice/boundary/psi".to_string(),
+            1,
+            key.clone(),
+            dummy_map,
+        ));
 
         let snapshot = registry.lookup(5).expect("just-recorded root must be live");
         assert_eq!(snapshot.resolved_path, "time_slice/boundary/psi");
         assert_eq!(snapshot.pulse_ctx_id, 1);
         assert_eq!(snapshot.root_id, 5, "a root's root identity is itself");
         assert!(
-            Arc::ptr_eq(&snapshot.map, &map),
+            Arc::ptr_eq(
+                &snapshot.map,
+                &registry.get_or_create_map(key, || panic!("map must be cached"))
+            ),
             "lookup must hand back a shared reference to the same map, not a copy"
         );
     }
@@ -234,7 +282,7 @@ mod tests {
     #[test]
     fn lookup_releases_the_lock_before_returning() {
         let registry = ContextRegistry::new();
-        registry.record_root(5, "p".to_string(), 1, Arc::new(dummy_map()));
+        assert!(record_dummy_root(&registry, 5, "p".to_string(), 1));
 
         let _snapshot = registry.lookup(5).unwrap();
         // If `lookup` still held the lock at this point, this call would
@@ -246,8 +294,8 @@ mod tests {
     #[test]
     fn removing_a_context_removes_only_that_exact_record() {
         let registry = ContextRegistry::new();
-        registry.record_root(5, "a".to_string(), 1, Arc::new(dummy_map()));
-        registry.record_root(6, "b".to_string(), 1, Arc::new(dummy_map()));
+        assert!(record_dummy_root(&registry, 5, "a".to_string(), 1));
+        assert!(record_dummy_root(&registry, 6, "b".to_string(), 1));
 
         registry.remove(5);
 
@@ -259,10 +307,10 @@ mod tests {
     #[test]
     fn a_recycled_context_id_identifies_only_the_newest_root_record() {
         let registry = ContextRegistry::new();
-        registry.record_root(5, "old/path".to_string(), 1, Arc::new(dummy_map()));
+        assert!(record_dummy_root(&registry, 5, "old/path".to_string(), 1));
         registry.remove(5);
 
-        registry.record_root(5, "new/path".to_string(), 2, Arc::new(dummy_map()));
+        assert!(record_dummy_root(&registry, 5, "new/path".to_string(), 2));
 
         let snapshot = registry
             .lookup(5)
@@ -274,11 +322,11 @@ mod tests {
     #[test]
     fn recording_over_a_live_id_replaces_it_without_removal() {
         let registry = ContextRegistry::new();
-        registry.record_root(5, "old/path".to_string(), 1, Arc::new(dummy_map()));
+        assert!(record_dummy_root(&registry, 5, "old/path".to_string(), 1));
 
         // No `remove` call in between: recording at a still-live ID must
         // still fully replace it, not merge with or expose the old record.
-        registry.record_root(5, "new/path".to_string(), 2, Arc::new(dummy_map()));
+        assert!(record_dummy_root(&registry, 5, "new/path".to_string(), 2));
 
         let snapshot = registry.lookup(5).unwrap();
         assert_eq!(snapshot.resolved_path, "new/path");
@@ -306,7 +354,7 @@ mod tests {
         // faithfully, but the pulse's mere presence never manufactured a
         // conversion record for its own ID.
         let pulse_id = registry.pulse_ctx_id(10).expect("live data-entry context");
-        registry.record_root(11, "p".to_string(), pulse_id, Arc::new(dummy_map()));
+        assert!(record_dummy_root(&registry, 11, "p".to_string(), pulse_id));
 
         assert!(registry.lookup(10).is_none());
         let root = registry.lookup(11).unwrap();
@@ -316,10 +364,35 @@ mod tests {
     #[test]
     fn pulse_ctx_id_is_none_for_a_conversion_record_or_unrecorded_id() {
         let registry = ContextRegistry::new();
-        registry.record_root(5, "p".to_string(), 1, Arc::new(dummy_map()));
+        assert!(record_dummy_root(&registry, 5, "p".to_string(), 1));
 
         assert_eq!(registry.pulse_ctx_id(5), None);
         assert_eq!(registry.pulse_ctx_id(999), None);
+    }
+
+    #[test]
+    fn matching_versions_remove_stale_records_without_creating_a_map() {
+        let registry = ContextRegistry::new();
+        let loads = Cell::new(0);
+        assert!(record_dummy_root(&registry, 5, "stale".to_string(), 1));
+        let matching_key = MapCacheKey::new(
+            "equilibrium".to_string(),
+            version("4.1.1"),
+            version("4.1.1"),
+        );
+
+        assert!(
+            !registry.record_root(5, "p".to_string(), 1, matching_key, || {
+                loads.set(loads.get() + 1);
+                dummy_map()
+            },)
+        );
+
+        assert!(
+            registry.lookup(5).is_none(),
+            "matching versions need no record"
+        );
+        assert_eq!(loads.get(), 0, "matching versions must not load a map");
     }
 
     #[test]
@@ -328,19 +401,20 @@ mod tests {
         let loads = Cell::new(0);
         let key = dummy_key();
 
-        let map_for_5 = registry.get_or_create_map(key.clone(), || {
-            loads.set(loads.get() + 1);
-            dummy_map()
-        });
-        registry.record_root(5, "a".to_string(), 1, map_for_5);
+        assert!(
+            registry.record_root(5, "a".to_string(), 1, key.clone(), || {
+                loads.set(loads.get() + 1);
+                dummy_map()
+            })
+        );
+        assert!(
+            registry.record_root(6, "b".to_string(), 1, key.clone(), || {
+                loads.set(loads.get() + 1);
+                dummy_map()
+            })
+        );
 
-        let map_for_6 = registry.get_or_create_map(key.clone(), || {
-            loads.set(loads.get() + 1);
-            dummy_map()
-        });
-        registry.record_root(6, "b".to_string(), 1, map_for_6);
-
-        assert_eq!(loads.get(), 1, "the second lookup must hit the cache");
+        assert_eq!(loads.get(), 1, "the second record must hit the cache");
 
         registry.remove(5);
         let survivor = registry.lookup(6).unwrap();
@@ -362,11 +436,12 @@ mod tests {
         let loads = Cell::new(0);
         let key = dummy_key();
 
-        let map = registry.get_or_create_map(key.clone(), || {
-            loads.set(loads.get() + 1);
-            dummy_map()
-        });
-        registry.record_root(5, "a".to_string(), 1, map);
+        assert!(
+            registry.record_root(5, "a".to_string(), 1, key.clone(), || {
+                loads.set(loads.get() + 1);
+                dummy_map()
+            })
+        );
         registry.remove(5);
 
         let _new_map = registry.get_or_create_map(key, || {
@@ -394,7 +469,8 @@ mod tests {
                         ctx_id,
                         format!("path-{i}"),
                         ctx_id,
-                        Arc::new(dummy_map()),
+                        dummy_key(),
+                        dummy_map,
                     );
                     if let Some(snapshot) = registry.lookup(ctx_id) {
                         // A torn record would show a path that does not
