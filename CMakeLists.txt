@@ -731,6 +731,27 @@ if(IMAS_MVDD_BUILD_TESTS)
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
 
+    add_test(NAME read-path-merged-read-falls-through-to-next-candidate
+        COMMAND read_path_test merged-read-falls-through-to-next-candidate)
+    set_tests_properties(read-path-merged-read-falls-through-to-next-candidate PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_NOT_FOUND_FIELD=time_slice/ggd/b_field_phi")
+    add_test(NAME read-path-merged-read-stops-at-first-candidate-with-data
+        COMMAND read_path_test merged-read-stops-at-first-candidate-with-data)
+    set_tests_properties(read-path-merged-read-stops-at-first-candidate-with-data PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_test(NAME read-path-merged-read-returns-not-found-when-all-candidates-are-absent
+        COMMAND read_path_test merged-read-returns-not-found-when-all-candidates-are-absent)
+    set_tests_properties(read-path-merged-read-returns-not-found-when-all-candidates-are-absent PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_NOT_FOUND=1")
+    add_test(NAME read-path-split-plan-reads-and-flips-its-first-stored-destination
+        COMMAND read_path_test split-plan-reads-and-flips-its-first-stored-destination)
+    set_tests_properties(read-path-split-plan-reads-and-flips-its-first-stored-destination PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1;RECORDING_STUB_READ_DOUBLE=1")
+    add_test(NAME read-path-reverse-split-read-flips-its-single-stored-source
+        COMMAND read_path_test reverse-split-read-flips-its-single-stored-source)
+    set_tests_properties(read-path-reverse-split-read-flips-its-single-stored-source PROPERTIES ENVIRONMENT
+        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_DOUBLE=1")
+
     add_test(NAME read-path-no-source-returns-null-without-core-call
         COMMAND read_path_test no-source-returns-null-without-core-call)
     set_tests_properties(read-path-no-source-returns-null-without-core-call PROPERTIES
@@ -941,6 +962,24 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(equilibrium-read-forward-reads-renamed-value PROPERTIES
         LABELS real-core
         RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+
+    add_test(NAME equilibrium-read-reverse-merged-read-falls-through-to-stored-alias
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> reverse-merged-read-falls-through-to-stored-alias)
+    set_tests_properties(equilibrium-read-reverse-merged-read-falls-through-to-stored-alias PROPERTIES
+        LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+
+    add_test(NAME equilibrium-read-reverse-split-read-uses-first-destination-and-flips-value
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> reverse-split-read-uses-first-destination-and-flips-value)
+    set_tests_properties(equilibrium-read-reverse-split-read-uses-first-destination-and-flips-value PROPERTIES
+        LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
+
+    add_test(NAME equilibrium-read-forward-split-read-uses-single-source-and-flips-value
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> forward-split-read-uses-single-source-and-flips-value)
+    set_tests_properties(equilibrium-read-forward-split-read-uses-single-source-and-flips-value PROPERTIES
+        LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
 
     add_test(NAME equilibrium-read-same-version-is-unaffected
         COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --

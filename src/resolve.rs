@@ -14,11 +14,12 @@ use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::OnceLock;
 
 use crate::context_registry::{MapCacheKey, REGISTRY};
-use crate::conversion_map::{ConversionMap, Outcome, RefusalReason, ValueTransformation};
+use crate::conversion_map::{ConversionMap, Fidelity, Outcome, RefusalReason, ValueTransformation};
 use crate::dl::Library;
 use crate::known_artifacts;
+use crate::read_outcome::{self, ReadOutcome};
 use crate::version_stamp::{self, StampOutcome};
-use crate::{MAX_ERR_MSG_LEN, al_status_t};
+use crate::{MAX_ERR_MSG_LEN, MAXDIM, al_status_t};
 
 /// Explicit override, honoured before the bare soname — see the ADR's
 /// resolution order.
@@ -1098,10 +1099,11 @@ pub(crate) fn end_action(ctx_id: c_int) -> al_status_t {
 /// in the direction that reaches the stored DD spelling, before IMAS-Core is
 /// called:
 ///
-/// - An explicit refusal, or a rule this seam does not yet know how to
-///   execute (a `merged`/`split` read plan, issue #57; or a value
-///   transformation, issue #59) is a shim-owned [`al_status_t`] refusal —
-///   IMAS-Core is never called.
+/// - An explicit refusal is a shim-owned [`al_status_t`] refusal — IMAS-Core
+///   is never called.
+/// - A `merged`/`split` plan is tried in declared precedence order until one
+///   candidate returns data. A winning field transformation runs in place
+///   before the buffer reaches the HLI.
 /// - No claimed source on the stored side returns success with a null data
 ///   pointer, matching IMAS-Core's own not-found convention, without calling
 ///   IMAS-Core at all.
@@ -1134,38 +1136,179 @@ pub(crate) unsafe fn read_data(
         ));
     };
 
-    let translated_field = match resolve_context_path(&record, field) {
-        ContextPathResolution::Forward => None,
-        ContextPathResolution::Translated(path) => Some(path),
-        ContextPathResolution::Refusal { reason, dd_path } => {
+    let translated_field = match resolve_read_path(&record, field) {
+        ReadPath::Forward => None,
+        ReadPath::Translated(path) | ReadPath::Candidates(path) => Some(path),
+        ReadPath::Refusal { reason, dd_path } => {
             return read_refusal(&record, &reason, &dd_path);
         }
-        ContextPathResolution::NoSource => return no_source_read(data),
+        ReadPath::NoSource => return no_source_read(data),
     };
-    let translated_timebase = match resolve_context_path(&record, timebase) {
-        ContextPathResolution::Forward => None,
-        ContextPathResolution::Translated(path) => Some(path),
-        ContextPathResolution::Refusal { reason, dd_path } => {
+    let translated_timebase = match resolve_read_path(&record, timebase) {
+        ReadPath::Forward => None,
+        ReadPath::Translated(path) | ReadPath::Candidates(path) => Some(path),
+        ReadPath::Refusal { reason, dd_path } => {
             return read_refusal(&record, &reason, &dd_path);
         }
-        ContextPathResolution::NoSource => return no_source_read(data),
+        ReadPath::NoSource => return no_source_read(data),
     };
 
-    forward_status!(read_data(
-        ctx_id,
-        translated_field
-            .as_deref()
-            .map(CStr::as_ptr)
-            .unwrap_or(field),
-        translated_timebase
-            .as_deref()
-            .map(CStr::as_ptr)
-            .unwrap_or(timebase),
-        data,
-        datatype,
-        dim,
-        size,
-    ))
+    let has_candidate_plan = translated_field
+        .as_ref()
+        .is_some_and(TranslatedReadPath::is_candidate_plan)
+        || translated_timebase
+            .as_ref()
+            .is_some_and(TranslatedReadPath::is_candidate_plan);
+    let field_needs_transformation = translated_field
+        .as_ref()
+        .is_some_and(TranslatedReadPath::has_value_transformation);
+    if !has_candidate_plan && !field_needs_transformation {
+        return forward_status!(read_data(
+            ctx_id,
+            translated_field
+                .as_ref()
+                .map(TranslatedReadPath::as_ptr)
+                .unwrap_or(field),
+            translated_timebase
+                .as_ref()
+                .map(TranslatedReadPath::as_ptr)
+                .unwrap_or(timebase),
+            data,
+            datatype,
+            dim,
+            size,
+        ));
+    }
+
+    let field_attempts = translated_field.as_ref().map_or_else(
+        || vec![ReadAttempt::forward(field)],
+        TranslatedReadPath::attempts,
+    );
+    let timebase_attempts = translated_timebase.as_ref().map_or_else(
+        || vec![ReadAttempt::forward(timebase)],
+        TranslatedReadPath::attempts,
+    );
+    let field_dd_path = read_argument_path(&record, field);
+    for field_attempt in &field_attempts {
+        for timebase_attempt in &timebase_attempts {
+            if let Err(reason) =
+                validate_value_transformation(&field_attempt.value_transformation, datatype, dim)
+            {
+                return read_refusal(&record, reason, &field_dd_path);
+            }
+            let status = forward_status!(read_data(
+                ctx_id,
+                field_attempt.path,
+                timebase_attempt.path,
+                data,
+                datatype,
+                dim,
+                size,
+            ));
+            // SAFETY: `data` is valid and writable by `read_data`'s own
+            // safety contract, and the just-finished IMAS-Core call has
+            // initialized it.
+            match read_outcome::classify(&status, unsafe { *data }) {
+                ReadOutcome::Failure => return status,
+                ReadOutcome::Data => {
+                    if let Err(reason) = apply_value_transformation(
+                        &field_attempt.value_transformation,
+                        unsafe { *data },
+                        datatype,
+                        dim,
+                        size,
+                    ) {
+                        return read_refusal(&record, reason, &field_dd_path);
+                    }
+                    retain_read_fidelity(ctx_id, field, field_attempt.fidelity);
+                    retain_read_fidelity(ctx_id, timebase, timebase_attempt.fidelity);
+                    return status;
+                }
+                ReadOutcome::NotFound => {}
+            }
+        }
+    }
+    no_source_read(data)
+}
+
+const EMPTY_DOUBLE: f64 = -9e40;
+
+fn validate_value_transformation(
+    transformation: &ValueTransformation,
+    datatype: c_int,
+    dim: c_int,
+) -> Result<(), &'static str> {
+    match transformation {
+        ValueTransformation::None => Ok(()),
+        ValueTransformation::SignFlip { .. }
+            if datatype == DOUBLE_DATA_ID && (0..=MAXDIM as c_int).contains(&dim) =>
+        {
+            Ok(())
+        }
+        ValueTransformation::SignFlip { .. } => {
+            Err("value-transform execution requires DOUBLE_DATA and a rank no greater than MAXDIM")
+        }
+    }
+}
+
+fn apply_value_transformation(
+    transformation: &ValueTransformation,
+    data: *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> Result<(), &'static str> {
+    match transformation {
+        ValueTransformation::None => Ok(()),
+        ValueTransformation::SignFlip { .. } => {
+            validate_value_transformation(transformation, datatype, dim)?;
+            let element_count = if dim == 0 {
+                1
+            } else {
+                if size.is_null() {
+                    return Err("value-transform execution needs array dimensions");
+                }
+                // SAFETY: the ABI requires one initialized extent per rank
+                // after a successful IMAS-Core array read.
+                unsafe { std::slice::from_raw_parts(size, dim as usize) }
+                    .iter()
+                    .try_fold(1usize, |count, &extent| {
+                        usize::try_from(extent)
+                            .ok()
+                            .and_then(|extent| count.checked_mul(extent))
+                    })
+                    .ok_or("value-transform execution received an invalid array shape")?
+            };
+            // SAFETY: ReadOutcome::Data establishes non-null data, and the
+            // validated datatype and returned shape describe this buffer.
+            let values =
+                unsafe { std::slice::from_raw_parts_mut(data.cast::<f64>(), element_count) };
+            for value in values {
+                if *value != EMPTY_DOUBLE {
+                    *value = -*value;
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+fn retain_read_fidelity(ctx_id: c_int, raw_path: *const c_char, fidelity: Fidelity) {
+    if fidelity != Fidelity::Exact
+        && let Some(path) = c_str_or_none(raw_path).filter(|path| !path.is_empty())
+    {
+        REGISTRY.record_read_loss(ctx_id, path.to_string(), fidelity);
+    }
+}
+
+fn read_argument_path(
+    record: &crate::context_registry::ConversionRecord,
+    raw_path: *const c_char,
+) -> String {
+    c_str_or_none(raw_path)
+        .filter(|path| !path.is_empty())
+        .map(|path| join_hli_path(&record.resolved_path, path))
+        .unwrap_or_else(|| record.resolved_path.clone())
 }
 
 /// Formats a path-conversion refusal using the version pair retained by its
@@ -1201,7 +1344,71 @@ enum ContextPathResolution {
     /// The artifact says no stored counterpart exists.
     NoSource,
     /// The artifact or this seam deliberately declines to serve the path.
+    Refusal(String),
+}
+
+/// The richer path result used only by `al_read_data`: an ordered candidate
+/// plan retains each candidate's fidelity and value transformation until a
+/// stored source actually returns data.
+enum ReadPath {
+    Forward,
+    Translated(TranslatedReadPath),
+    Candidates(TranslatedReadPath),
+    NoSource,
     Refusal { reason: String, dd_path: String },
+}
+
+struct TranslatedReadPath {
+    paths: Vec<ResolvedReadPath>,
+}
+
+struct ResolvedReadPath {
+    path: CString,
+    fidelity: Fidelity,
+    value_transformation: ValueTransformation,
+}
+
+struct ReadAttempt {
+    path: *const c_char,
+    fidelity: Fidelity,
+    value_transformation: ValueTransformation,
+}
+
+impl ReadAttempt {
+    fn forward(path: *const c_char) -> Self {
+        Self {
+            path,
+            fidelity: Fidelity::Exact,
+            value_transformation: ValueTransformation::None,
+        }
+    }
+}
+
+impl TranslatedReadPath {
+    fn is_candidate_plan(&self) -> bool {
+        self.paths.len() > 1
+    }
+
+    fn as_ptr(&self) -> *const c_char {
+        self.paths[0].path.as_ptr()
+    }
+
+    fn has_value_transformation(&self) -> bool {
+        self.paths
+            .iter()
+            .any(|path| path.value_transformation != ValueTransformation::None)
+    }
+
+    fn attempts(&self) -> Vec<ReadAttempt> {
+        self.paths
+            .iter()
+            .map(|path| ReadAttempt {
+                path: path.path.as_ptr(),
+                fidelity: path.fidelity,
+                value_transformation: path.value_transformation.clone(),
+            })
+            .collect()
+    }
 }
 
 /// A conversion-map outcome narrowed to what a path-bearing ABI argument can
@@ -1225,7 +1432,7 @@ fn resolve_arraystruct_argument(
 ) -> Result<Option<CString>, String> {
     match resolve_context_path(record, raw) {
         ContextPathResolution::Translated(path) => Ok(Some(path)),
-        ContextPathResolution::Refusal { reason, .. } => Err(reason),
+        ContextPathResolution::Refusal(reason) => Err(reason),
         ContextPathResolution::NoSource => Err(format!("arraystruct {label} has no stored source")),
         ContextPathResolution::Forward => {
             match c_str_or_none(raw).filter(|path| !path.is_empty()) {
@@ -1263,10 +1470,7 @@ fn resolve_context_path(
 
     match concrete_stored_path(explanation.outcome) {
         ConcreteStoredPath::NoSource => ContextPathResolution::NoSource,
-        ConcreteStoredPath::Refusal(reason) => ContextPathResolution::Refusal {
-            reason,
-            dd_path: hli_absolute,
-        },
+        ConcreteStoredPath::Refusal(reason) => ContextPathResolution::Refusal(reason),
         ConcreteStoredPath::Path(resolved_path) => {
             let translated = if is_absolute {
                 format!("/{resolved_path}")
@@ -1274,30 +1478,111 @@ fn resolve_context_path(
                 let stored_anchor = match stored_anchor(record) {
                     Ok(anchor) => anchor,
                     Err(reason) => {
-                        return ContextPathResolution::Refusal {
-                            reason,
-                            dd_path: hli_absolute,
-                        };
+                        return ContextPathResolution::Refusal(reason);
                     }
                 };
                 let Some(translated) = strip_anchor(&stored_anchor, &resolved_path) else {
-                    return ContextPathResolution::Refusal {
-                        reason: "translated path does not lie beneath this context's stored anchor"
+                    return ContextPathResolution::Refusal(
+                        "translated path does not lie beneath this context's stored anchor"
                             .to_string(),
-                        dd_path: hli_absolute,
-                    };
+                    );
                 };
                 translated
             };
             match CString::new(translated) {
                 Ok(path) => ContextPathResolution::Translated(path),
-                Err(_) => ContextPathResolution::Refusal {
-                    reason: "translated field contains an interior NUL byte".to_string(),
-                    dd_path: hli_absolute,
-                },
+                Err(_) => ContextPathResolution::Refusal(
+                    "translated field contains an interior NUL byte".to_string(),
+                ),
             }
         }
     }
+}
+
+/// Resolves one read argument. Unlike `resolve_context_path`, this preserves
+/// merged/split candidates and their transformations so the read seam can
+/// execute the plan without making them appear as one concrete AOS path.
+fn resolve_read_path(
+    record: &crate::context_registry::ConversionRecord,
+    raw: *const c_char,
+) -> ReadPath {
+    let Some(raw) = c_str_or_none(raw).filter(|path| !path.is_empty()) else {
+        return ReadPath::Forward;
+    };
+    let is_absolute = raw.starts_with('/');
+    let hli_absolute = join_hli_path(&record.resolved_path, raw);
+    let Some(explanation) = record
+        .map
+        .resolve(&hli_absolute, record.direction_to_stored)
+    else {
+        return ReadPath::Forward;
+    };
+
+    let fidelity = explanation.fidelity;
+    match explanation.outcome {
+        Outcome::Refusal(reason) => ReadPath::Refusal {
+            reason: refusal_reason_message(reason),
+            dd_path: hli_absolute,
+        },
+        Outcome::NoSource => ReadPath::NoSource,
+        Outcome::Path {
+            resolved_path,
+            value_transformation,
+            candidates,
+        } if candidates.is_empty() => translated_read_component(
+            record,
+            &resolved_path,
+            is_absolute,
+            fidelity,
+            value_transformation,
+        )
+        .map(|path| ReadPath::Translated(TranslatedReadPath { paths: vec![path] }))
+        .unwrap_or_else(|reason| ReadPath::Refusal {
+            reason,
+            dd_path: hli_absolute,
+        }),
+        Outcome::Path { candidates, .. } => candidates
+            .into_iter()
+            .map(|candidate| {
+                translated_read_component(
+                    record,
+                    &candidate.path,
+                    is_absolute,
+                    fidelity,
+                    candidate.value_transformation,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|paths| ReadPath::Candidates(TranslatedReadPath { paths }))
+            .unwrap_or_else(|reason| ReadPath::Refusal {
+                reason,
+                dd_path: hli_absolute,
+            }),
+    }
+}
+
+fn translated_read_component(
+    record: &crate::context_registry::ConversionRecord,
+    resolved_path: &str,
+    is_absolute: bool,
+    fidelity: Fidelity,
+    value_transformation: ValueTransformation,
+) -> Result<ResolvedReadPath, String> {
+    let translated = if is_absolute {
+        format!("/{resolved_path}")
+    } else {
+        let anchor = stored_anchor(record)?;
+        strip_anchor(&anchor, resolved_path).ok_or_else(|| {
+            "translated path does not lie beneath this context's stored anchor".to_string()
+        })?
+    };
+    CString::new(translated)
+        .map(|path| ResolvedReadPath {
+            path,
+            fidelity,
+            value_transformation,
+        })
+        .map_err(|_| "translated field contains an interior NUL byte".to_string())
 }
 
 /// Resolves the context's HLI-DD anchor to its stored-DD spelling. A child

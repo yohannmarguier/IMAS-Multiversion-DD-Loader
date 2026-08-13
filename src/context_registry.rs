@@ -53,7 +53,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
-use crate::conversion_map::{ConversionMap, Direction};
+use crate::conversion_map::{ConversionMap, Direction, Fidelity};
 use crate::dd_version::DdVersion;
 
 /// An IMAS-Core context ID, as passed across the C ABI.
@@ -124,9 +124,21 @@ enum Entry {
     Conversion(ConversionRecord),
 }
 
+/// A non-exact path successfully read through one root conversion context.
+/// The log is root-owned so child contexts contribute to the same eventual
+/// conversion report (ADR 0012); its public query ABI is deferred to #65.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReadLoss {
+    hli_path: String,
+    fidelity: Fidelity,
+}
+
 #[derive(Default)]
 struct State {
     entries: HashMap<ContextId, Entry>,
+    /// Losses are separate from cloned conversion snapshots so a child never
+    /// accidentally owns a copied log. A root context owns exactly one log.
+    loss_logs: HashMap<ContextId, Vec<ReadLoss>>,
     maps: HashMap<MapCacheKey, Weak<ConversionMap>>,
 }
 
@@ -148,11 +160,11 @@ impl ContextRegistry {
     /// starts with an empty occurrence-version cache rather than inheriting
     /// a previous pulse's discoveries.
     pub(crate) fn record_dataentry(&self, ctx_id: ContextId) {
-        self.state
-            .lock()
-            .unwrap()
+        let mut state = self.state.lock().unwrap();
+        state
             .entries
             .insert(ctx_id, Entry::DataEntry(HashMap::new()));
+        state.loss_logs.remove(&ctx_id);
     }
 
     /// Records `ctx_id` as a root conversion record when the stored and HLI
@@ -189,11 +201,9 @@ impl ContextRegistry {
             hli_version,
             parent_id: None,
         };
-        self.state
-            .lock()
-            .unwrap()
-            .entries
-            .insert(ctx_id, Entry::Conversion(record));
+        let mut state = self.state.lock().unwrap();
+        state.entries.insert(ctx_id, Entry::Conversion(record));
+        state.loss_logs.insert(ctx_id, Vec::new());
         true
     }
 
@@ -220,9 +230,11 @@ impl ContextRegistry {
             Some(Entry::Conversion(record)) => record.clone(),
             Some(Entry::DataEntry(_)) | None => {
                 state.entries.remove(&ctx_id);
+                state.loss_logs.remove(&ctx_id);
                 return false;
             }
         };
+        state.loss_logs.remove(&ctx_id);
         state.entries.insert(
             ctx_id,
             Entry::Conversion(ConversionRecord {
@@ -313,11 +325,30 @@ impl ContextRegistry {
         }
     }
 
+    /// Appends a non-exact successful read to its root context's loss log.
+    /// Exact reads never enter the log; a missing, ended, or non-conversion
+    /// context has no conversion loss to retain.
+    pub(crate) fn record_read_loss(&self, ctx_id: ContextId, hli_path: String, fidelity: Fidelity) {
+        if fidelity == Fidelity::Exact {
+            return;
+        }
+        let mut state = self.state.lock().unwrap();
+        let Some(Entry::Conversion(record)) = state.entries.get(&ctx_id) else {
+            return;
+        };
+        let root_id = record.root_id;
+        if let Some(losses) = state.loss_logs.get_mut(&root_id) {
+            losses.push(ReadLoss { hli_path, fidelity });
+        }
+    }
+
     /// Removes exactly the record at `ctx_id`, if any (mirrors a successful
     /// `al_end_action` releasing one context). A later recording at the same
     /// ID starts a brand-new record; this never affects any other ID.
     pub(crate) fn remove(&self, ctx_id: ContextId) {
-        self.state.lock().unwrap().entries.remove(&ctx_id);
+        let mut state = self.state.lock().unwrap();
+        state.entries.remove(&ctx_id);
+        state.loss_logs.remove(&ctx_id);
     }
 
     /// Returns the cached `Arc<ConversionMap>` for `key`, cloning a live
@@ -473,6 +504,25 @@ mod tests {
         assert_eq!(child.resolved_path, "root/path/aos(1)");
         assert_eq!(child.root_id, 5, "child retains its resolved root identity");
         assert_eq!(child.pulse_ctx_id, 1, "child inherits the pulse context id");
+    }
+
+    #[test]
+    fn a_non_exact_read_from_a_child_is_retained_by_its_root_context() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+        assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+
+        registry.record_read_loss(6, "field".to_string(), Fidelity::Lossy);
+
+        let state = registry.state.lock().unwrap();
+        assert_eq!(
+            state.loss_logs.get(&5),
+            Some(&vec![ReadLoss {
+                hli_path: "field".to_string(),
+                fidelity: Fidelity::Lossy,
+            }])
+        );
+        assert!(!state.loss_logs.contains_key(&6));
     }
 
     #[test]

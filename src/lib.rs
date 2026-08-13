@@ -16,10 +16,9 @@
 //! that record's shared conversion map before forwarding the translated
 //! field to IMAS-Core (issue #54) — proven bidirectionally against the
 //! checked-in equilibrium fixture pair for an explicit `renamed`/identity
-//! path with no value transformation and no `merged`/`split` candidates.
-//! IMAS-Core's returned allocation is forwarded unchanged. A `merged`/`split`
-//! read plan (issue #57) and value-transform execution (issue #59) remain
-//! future work under issue #43.
+//! path. `merged`/`split` reads (issue #57) try stored candidates in declared
+//! precedence order and apply a selected COCOS sign flip in place (issue #59);
+//! IMAS-Core's returned allocation is still forwarded unchanged.
 
 // The mirrored ABI dictates the names; matching IMAS-Core exactly is the point.
 #![allow(non_camel_case_types)]

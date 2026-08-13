@@ -356,6 +356,7 @@ static char *g_read_timebase = NULL;
 static int g_read_datatype = 0;
 static int g_read_dim = 0;
 static char g_read_buffer[] = "recording-stub: read data payload";
+static double g_read_double_buffer = 1.5;
 
 #define VERSION_STAMP_FIELD "ids_properties/version_put/data_dictionary"
 
@@ -439,10 +440,12 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
     }
 
     if (data != NULL) {
-        *data = g_read_buffer;
+        *data = getenv("RECORDING_STUB_READ_DOUBLE") != NULL
+                    ? (void *)&g_read_double_buffer
+                    : (void *)g_read_buffer;
     }
     if (size != NULL) {
-        size[0] = 4004;
+        size[0] = getenv("RECORDING_STUB_READ_DOUBLE") != NULL ? 1 : 4004;
     }
 
     al_status_t status;
@@ -451,7 +454,9 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
      * reports success (also 0, but a distinct meaning) — see CLAUDE.md's
      * "two conflicting meanings of zero." The shim must forward this
      * status.code exactly as received, not reinterpret it. */
-    if (getenv("RECORDING_STUB_READ_NOT_FOUND") != NULL) {
+    const char *not_found_field = getenv("RECORDING_STUB_READ_NOT_FOUND_FIELD");
+    if (getenv("RECORDING_STUB_READ_NOT_FOUND") != NULL ||
+        (not_found_field != NULL && field != NULL && strcmp(field, not_found_field) == 0)) {
         status.code = 0;
         memset(status.message, 0, sizeof status.message);
         strncpy(status.message, "recording-stub: not found", sizeof status.message - 1);
