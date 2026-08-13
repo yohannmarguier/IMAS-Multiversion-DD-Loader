@@ -41,3 +41,6 @@ description = "Shim between the IMAS HLIs and IMAS-Core"
 [profile.release]
 # The shim sits on the read path of every HLI call; keep symbols for perf work.
 debug = 1
+
+[dependencies]
+roxmltree = "0.21.1"
