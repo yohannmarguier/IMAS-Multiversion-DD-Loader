@@ -16,6 +16,7 @@ use std::ffi::c_int;
 use std::ffi::c_void;
 
 pub mod conversion_map;
+mod dd_version;
 mod dl;
 mod resolve;
 
