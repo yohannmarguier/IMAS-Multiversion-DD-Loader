@@ -758,6 +758,22 @@ if(IMAS_MVDD_BUILD_TESTS)
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
 
+    # All conversion-refusal scenarios need the same known mismatched
+    # occurrence. Keep that shared seam setup in one place.
+    function(add_read_path_refusal_test name scenario)
+        add_test(NAME "${name}" COMMAND read_path_test "${scenario}")
+        set_tests_properties("${name}" PROPERTIES
+            ENVIRONMENT
+                "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    endfunction()
+
+    add_read_path_refusal_test(read-path-rank-changing-retype-refuses-without-core-call
+        rank-changing-retype-refuses-without-core-call)
+    add_read_path_refusal_test(read-path-unit-redefinition-refuses-without-core-call
+        unit-redefinition-refuses-without-core-call)
+    add_read_path_refusal_test(read-path-unsupported-sign-flip-types-refuse-without-core-call
+        unsupported-sign-flip-types-refuse-without-core-call)
+
     add_test(NAME read-path-resolves-relative-field-and-absolute-timebase
         COMMAND read_path_test resolves-relative-field-and-absolute-timebase)
     set_tests_properties(read-path-resolves-relative-field-and-absolute-timebase PROPERTIES
@@ -793,6 +809,64 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(read-path-core-failure-propagates-unchanged PROPERTIES
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_FAIL=1")
+
+    # --- Issue #61: arraystruct path conversion through the public C ABI ---
+    add_executable(arraystruct_path_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/arraystruct_path_test.c")
+    target_link_libraries(arraystruct_path_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
+    target_compile_definitions(arraystruct_path_test PRIVATE
+        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+    add_dependencies(arraystruct_path_test imas_mvdd_capi recording_stub)
+    set_target_properties(arraystruct_path_test PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    add_test(NAME arraystruct-path-translates-renamed-container-and-timebase
+        COMMAND arraystruct_path_test translates-renamed-container-and-timebase)
+    set_tests_properties(arraystruct-path-translates-renamed-container-and-timebase PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME arraystruct-path-translates-absolute-path-and-relative-timebase
+        COMMAND arraystruct_path_test translates-absolute-path-and-relative-timebase)
+    set_tests_properties(arraystruct-path-translates-absolute-path-and-relative-timebase PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME arraystruct-path-failed-open-propagates-without-child-record
+        COMMAND arraystruct_path_test failed-open-propagates-without-child-record)
+    set_tests_properties(arraystruct-path-failed-open-propagates-without-child-record PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_ARRAYSTRUCT_FAIL=1")
+
+    add_test(NAME arraystruct-path-no-source-refuses-before-core
+        COMMAND arraystruct_path_test no-source-refuses-before-core)
+    set_tests_properties(arraystruct-path-no-source-refuses-before-core PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME arraystruct-path-matching-parent-forwards-unchanged
+        COMMAND arraystruct_path_test plain-parent-forwards-unchanged)
+    set_tests_properties(arraystruct-path-matching-parent-forwards-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME arraystruct-path-unstamped-parent-forwards-unchanged
+        COMMAND arraystruct_path_test plain-parent-forwards-unchanged)
+    set_tests_properties(arraystruct-path-unstamped-parent-forwards-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+
+    add_test(NAME arraystruct-path-unknown-parent-forwards-unchanged
+        COMMAND arraystruct_path_test unknown-parent-forwards-unchanged)
+    set_tests_properties(arraystruct-path-unknown-parent-forwards-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME arraystruct-path-conversion-disabled-parent-forwards-unchanged
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
+            $<TARGET_FILE:arraystruct_path_test> plain-parent-forwards-unchanged)
+    set_tests_properties(arraystruct-path-conversion-disabled-parent-forwards-unchanged PROPERTIES
+        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
 
     if(IMAS_MVDD_REAL_CORE_TESTS)
         # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---

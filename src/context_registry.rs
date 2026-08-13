@@ -101,6 +101,13 @@ pub(crate) struct ConversionRecord {
     /// that resolves a path expressed in the HLI's own DD spelling to the
     /// stored DD spelling. Inherited unchanged from a root by every child.
     pub direction_to_stored: Direction,
+    /// The stored DD version for this occurrence. It is retained with the
+    /// record so a later rule refusal can identify both ends of the failed
+    /// conversion without reopening or rediscovering the occurrence.
+    pub stored_version: DdVersion,
+    /// The DD version the calling HLI declared for this process. Like the
+    /// stored version, this is inherited by child contexts for diagnostics.
+    pub hli_version: DdVersion,
     /// The context ID of this record's direct parent, or `None` for a root
     /// record.
     parent_id: Option<ContextId>,
@@ -182,12 +189,16 @@ impl ContextRegistry {
             self.remove(ctx_id);
             return false;
         }
+        let stored_version = key.stored_version.clone();
+        let hli_version = key.hli_version.clone();
         let record = ConversionRecord {
             resolved_path,
             pulse_ctx_id,
             map: self.get_or_create_map(key, create),
             root_id: ctx_id,
             direction_to_stored,
+            stored_version,
+            hli_version,
             parent_id: None,
         };
         let mut state = self.state.lock().unwrap();
@@ -232,6 +243,8 @@ impl ContextRegistry {
                 map: parent.map,
                 root_id: parent.root_id,
                 direction_to_stored: parent.direction_to_stored,
+                stored_version: parent.stored_version,
+                hli_version: parent.hli_version,
                 parent_id: Some(parent_ctx_id),
             }),
         );
@@ -441,6 +454,8 @@ mod tests {
         assert_eq!(snapshot.resolved_path, "time_slice/boundary/psi");
         assert_eq!(snapshot.pulse_ctx_id, 1);
         assert_eq!(snapshot.root_id, 5, "a root's root identity is itself");
+        assert_eq!(snapshot.stored_version.to_string(), "3.39.0");
+        assert_eq!(snapshot.hli_version.to_string(), "4.1.1");
         assert!(
             Arc::ptr_eq(
                 &snapshot.map,
@@ -532,6 +547,8 @@ mod tests {
         assert_eq!(child.pulse_ctx_id, 1, "child inherits the pulse context id");
         assert_eq!(child.root_id, 5);
         assert_eq!(child.parent_id, Some(5));
+        assert_eq!(child.stored_version.to_string(), "3.39.0");
+        assert_eq!(child.hli_version.to_string(), "4.1.1");
         assert_eq!(
             child.direction_to_stored, DUMMY_DIRECTION,
             "child inherits the parent's direction"
