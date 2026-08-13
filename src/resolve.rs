@@ -1137,13 +1137,17 @@ pub(crate) unsafe fn read_data(
     let translated_field = match resolve_context_path(&record, field) {
         ContextPathResolution::Forward => None,
         ContextPathResolution::Translated(path) => Some(path),
-        ContextPathResolution::Refusal(message) => return crate::conversion_refusal(&message),
+        ContextPathResolution::Refusal { reason, dd_path } => {
+            return read_refusal(&record, &reason, &dd_path);
+        }
         ContextPathResolution::NoSource => return no_source_read(data),
     };
     let translated_timebase = match resolve_context_path(&record, timebase) {
         ContextPathResolution::Forward => None,
         ContextPathResolution::Translated(path) => Some(path),
-        ContextPathResolution::Refusal(message) => return crate::conversion_refusal(&message),
+        ContextPathResolution::Refusal { reason, dd_path } => {
+            return read_refusal(&record, &reason, &dd_path);
+        }
         ContextPathResolution::NoSource => return no_source_read(data),
     };
 
@@ -1162,6 +1166,17 @@ pub(crate) unsafe fn read_data(
         dim,
         size,
     ))
+}
+
+/// Formats a path-conversion refusal using the version pair retained by its
+/// live context record. Both `field` and `timebase` resolve through this one
+/// status boundary, so their caller-visible diagnostics cannot drift.
+fn read_refusal(
+    record: &crate::context_registry::ConversionRecord,
+    reason: &str,
+    dd_path: &str,
+) -> al_status_t {
+    crate::read_conversion_refusal(reason, dd_path, &record.hli_version, &record.stored_version)
 }
 
 /// Returns the C ABI's normal not-found outcome for a path the artifact says
@@ -1186,7 +1201,7 @@ enum ContextPathResolution {
     /// The artifact says no stored counterpart exists.
     NoSource,
     /// The artifact or this seam deliberately declines to serve the path.
-    Refusal(String),
+    Refusal { reason: String, dd_path: String },
 }
 
 /// A conversion-map outcome narrowed to what a path-bearing ABI argument can
@@ -1210,7 +1225,7 @@ fn resolve_arraystruct_argument(
 ) -> Result<Option<CString>, String> {
     match resolve_context_path(record, raw) {
         ContextPathResolution::Translated(path) => Ok(Some(path)),
-        ContextPathResolution::Refusal(message) => Err(message),
+        ContextPathResolution::Refusal { reason, .. } => Err(reason),
         ContextPathResolution::NoSource => Err(format!("arraystruct {label} has no stored source")),
         ContextPathResolution::Forward => {
             match c_str_or_none(raw).filter(|path| !path.is_empty()) {
@@ -1248,28 +1263,38 @@ fn resolve_context_path(
 
     match concrete_stored_path(explanation.outcome) {
         ConcreteStoredPath::NoSource => ContextPathResolution::NoSource,
-        ConcreteStoredPath::Refusal(message) => ContextPathResolution::Refusal(message),
+        ConcreteStoredPath::Refusal(reason) => ContextPathResolution::Refusal {
+            reason,
+            dd_path: hli_absolute,
+        },
         ConcreteStoredPath::Path(resolved_path) => {
             let translated = if is_absolute {
                 format!("/{resolved_path}")
             } else {
                 let stored_anchor = match stored_anchor(record) {
                     Ok(anchor) => anchor,
-                    Err(message) => return ContextPathResolution::Refusal(message),
+                    Err(reason) => {
+                        return ContextPathResolution::Refusal {
+                            reason,
+                            dd_path: hli_absolute,
+                        };
+                    }
                 };
                 let Some(translated) = strip_anchor(&stored_anchor, &resolved_path) else {
-                    return ContextPathResolution::Refusal(
-                        "translated path does not lie beneath this context's stored anchor"
+                    return ContextPathResolution::Refusal {
+                        reason: "translated path does not lie beneath this context's stored anchor"
                             .to_string(),
-                    );
+                        dd_path: hli_absolute,
+                    };
                 };
                 translated
             };
             match CString::new(translated) {
                 Ok(path) => ContextPathResolution::Translated(path),
-                Err(_) => ContextPathResolution::Refusal(
-                    "translated field contains an interior NUL byte".to_string(),
-                ),
+                Err(_) => ContextPathResolution::Refusal {
+                    reason: "translated field contains an interior NUL byte".to_string(),
+                    dd_path: hli_absolute,
+                },
             }
         }
     }

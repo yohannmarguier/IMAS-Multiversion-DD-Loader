@@ -96,6 +96,68 @@ pub(crate) fn conversion_refusal(reason: &str) -> al_status_t {
     status
 }
 
+/// Builds a refusal raised while converting an `al_read_data` path. Unlike
+/// the generic conversion refusal used before a context exists, a read has a
+/// DD path and both ends of its version pair available to explain what could
+/// not be served (ADR 0010, ADR 0012).
+pub(crate) fn read_conversion_refusal(
+    reason: &str,
+    dd_path: &str,
+    hli_version: &dd_version::DdVersion,
+    stored_version: &dd_version::DdVersion,
+) -> al_status_t {
+    let mut status = al_status_t {
+        code: IMAS_MVDD_CONVERSION_ERROR,
+        message: [0; MAX_ERR_MSG_LEN],
+    };
+    write_truncated(
+        &mut status.message,
+        &format_read_refusal_message(reason, dd_path, hli_version, stored_version),
+    );
+    status
+}
+
+fn format_read_refusal_message(
+    reason: &str,
+    dd_path: &str,
+    hli_version: &dd_version::DdVersion,
+    stored_version: &dd_version::DdVersion,
+) -> String {
+    let prefix = format!("IMAS-MVDD: {reason}; DD path: ");
+    let versions = format!("; HLI DD version: {hli_version}; stored DD version: {stored_version}");
+    let full = format!("{prefix}{dd_path}{versions}");
+    if full.len() < MAX_ERR_MSG_LEN {
+        return full;
+    }
+
+    let without_versions = format!("{prefix}{dd_path}");
+    if without_versions.len() < MAX_ERR_MSG_LEN {
+        return without_versions;
+    }
+
+    let path_capacity = (MAX_ERR_MSG_LEN - 1).saturating_sub(prefix.len());
+    format!(
+        "{prefix}{}",
+        truncate_path_from_left(dd_path, path_capacity)
+    )
+}
+
+fn truncate_path_from_left(path: &str, capacity: usize) -> String {
+    if path.len() <= capacity {
+        return path.to_string();
+    }
+    if capacity <= 3 {
+        return ".".repeat(capacity);
+    }
+
+    let suffix_capacity = capacity - 3;
+    let mut suffix_start = path.len() - suffix_capacity;
+    while !path.is_char_boundary(suffix_start) {
+        suffix_start += 1;
+    }
+    format!("...{}", &path[suffix_start..])
+}
+
 /// Mirrors IMAS-Core's `al_context_info` exactly — same name, same
 /// signature. Resolves IMAS-Core lazily on first call (see
 /// `resolve::context_info`) and forwards every call to the real
@@ -703,10 +765,60 @@ pub unsafe extern "C" fn al_plugin_write_data(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::CStr;
+
     use super::*;
 
     #[test]
     fn status_default_is_success() {
         assert_eq!(al_status_t::default().code, 0);
+    }
+
+    #[test]
+    fn read_refusal_drops_versions_before_left_truncating_an_overlong_path() {
+        let hli_version = "4.1.1".parse().unwrap();
+        let stored_version = "3.39.0".parse().unwrap();
+        let path = format!("{}coordinates_type", "grids_ggd/grid/space/".repeat(20));
+
+        let status = read_conversion_refusal(
+            "this path's container changed shape and cannot be served",
+            &path,
+            &hli_version,
+            &stored_version,
+        );
+        let message = unsafe { CStr::from_ptr(status.message.as_ptr()) }
+            .to_str()
+            .unwrap();
+
+        assert_eq!(status.code, IMAS_MVDD_CONVERSION_ERROR);
+        assert_eq!(status.message[MAX_ERR_MSG_LEN - 1], 0);
+        assert!(message.starts_with(
+            "IMAS-MVDD: this path's container changed shape and cannot be served; DD path: ..."
+        ));
+        assert!(message.ends_with("coordinates_type"));
+        assert!(!message.contains("HLI DD version"));
+        assert!(!message.contains("stored DD version"));
+    }
+
+    #[test]
+    fn read_refusal_drops_both_versions_together_before_truncating_the_path() {
+        let hli_version = "4.1.1".parse().unwrap();
+        let stored_version = "3.39.0".parse().unwrap();
+        let path = format!("{}coordinates_type", "grids_ggd/grid/space/".repeat(6));
+
+        let status = read_conversion_refusal(
+            "this path's container changed shape and cannot be served",
+            &path,
+            &hli_version,
+            &stored_version,
+        );
+        let message = unsafe { CStr::from_ptr(status.message.as_ptr()) }
+            .to_str()
+            .unwrap();
+
+        assert_eq!(status.code, IMAS_MVDD_CONVERSION_ERROR);
+        assert!(message.ends_with(&path));
+        assert!(!message.contains("HLI DD version"));
+        assert!(!message.contains("stored DD version"));
     }
 }

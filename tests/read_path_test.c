@@ -77,6 +77,21 @@ static void check_stub_paths(const char *field, const char *timebase) {
     CHECK(strcmp(string_from_stub("recording_stub_read_timebase"), timebase) == 0);
 }
 
+static void check_read_refusal(int operation_ctx, const char *field, int datatype,
+                               const char *expected_message) {
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    void *data = (void *)1;
+    int size[1] = {73};
+
+    al_status_t status = al_read_data(operation_ctx, field, "", &data, datatype, 1, size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(strcmp(status.message, expected_message) == 0);
+    CHECK(data == (void *)1);
+    CHECK(size[0] == 73);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
+}
+
 static void scenario_translates_field_and_timebase_independently(void) {
     int operation_ctx = open_mismatched_equilibrium();
     void *data = NULL;
@@ -131,6 +146,46 @@ static void scenario_no_source_returns_null_without_core_call(void) {
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
 
     printf("read_path_test no-source-returns-null-without-core-call: no stored path was read\\n");
+}
+
+static void scenario_rank_changing_retype_refuses_without_core_call(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    check_read_refusal(
+        operation_ctx, "grids_ggd/grid/space/coordinates_type", 2 /* INTEGER_DATA */,
+        "IMAS-MVDD: this path's container changed shape and cannot be served; "
+        "DD path: grids_ggd/grid/space/coordinates_type; HLI DD version: 4.1.1; "
+        "stored DD version: 3.39.0");
+
+    printf("read_path_test rank-changing-retype-refuses-without-core-call: refusal preserved "
+           "caller storage and never reached IMAS-Core\\n");
+}
+
+static void scenario_unit_redefinition_refuses_without_core_call(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    check_read_refusal(
+        operation_ctx, "time_slice/constraints/strike_point/chi_squared_r", 3 /* DOUBLE_DATA */,
+        "IMAS-MVDD: this path's unit was redefined and cannot be converted; "
+        "DD path: time_slice/constraints/strike_point/chi_squared_r; "
+        "HLI DD version: 4.1.1; stored DD version: 3.39.0");
+
+    printf("read_path_test unit-redefinition-refuses-without-core-call: refusal preserved "
+           "caller storage and never reached IMAS-Core\\n");
+}
+
+static void scenario_unsupported_sign_flip_types_refuse_without_core_call(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    const int unsupported_types[] = {2 /* INTEGER_DATA */, 4 /* COMPLEX_DATA */};
+
+    for (size_t i = 0; i < sizeof unsupported_types / sizeof unsupported_types[0]; ++i) {
+        check_read_refusal(
+            operation_ctx, "time_slice/boundary/psi", unsupported_types[i],
+            "IMAS-MVDD: value-transform execution is not yet implemented (issue #59); "
+            "DD path: time_slice/boundary/psi; HLI DD version: 4.1.1; stored DD version: "
+            "3.39.0");
+    }
+
+    printf("read_path_test unsupported-sign-flip-types-refuse-without-core-call: integer "
+           "and complex reads were refused before IMAS-Core\\n");
 }
 
 static void scenario_resolves_relative_field_and_absolute_timebase(void) {
@@ -230,6 +285,9 @@ int main(int argc, char **argv) {
                 "usage: %s <translates-field-and-timebase-independently|"
                 "forward-direction-translates-and-reports-no-source|identity-rule-returns-data|"
                 "no-source-returns-null-without-core-call|"
+                "rank-changing-retype-refuses-without-core-call|"
+                "unit-redefinition-refuses-without-core-call|"
+                "unsupported-sign-flip-types-refuse-without-core-call|"
                 "resolves-relative-field-and-absolute-timebase|"
                 "matching-context-bypasses-conversion|unknown-context-bypasses-conversion|"
                 "unstamped-context-bypasses-conversion|conversion-disabled-bypasses-conversion|"
@@ -251,6 +309,18 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "no-source-returns-null-without-core-call") == 0) {
         scenario_no_source_returns_null_without_core_call();
+        return 0;
+    }
+    if (strcmp(argv[1], "rank-changing-retype-refuses-without-core-call") == 0) {
+        scenario_rank_changing_retype_refuses_without_core_call();
+        return 0;
+    }
+    if (strcmp(argv[1], "unit-redefinition-refuses-without-core-call") == 0) {
+        scenario_unit_redefinition_refuses_without_core_call();
+        return 0;
+    }
+    if (strcmp(argv[1], "unsupported-sign-flip-types-refuse-without-core-call") == 0) {
+        scenario_unsupported_sign_flip_types_refuse_without_core_call();
         return 0;
     }
     if (strcmp(argv[1], "resolves-relative-field-and-absolute-timebase") == 0) {
