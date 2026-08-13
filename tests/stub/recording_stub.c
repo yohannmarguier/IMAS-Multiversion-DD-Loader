@@ -315,6 +315,16 @@ al_status_t al_begin_arraystruct_action(int ctxID, const char *path, const char 
     g_arraystruct_path = record_str(path);
     free(g_arraystruct_timebase);
     g_arraystruct_timebase = record_str(timebase);
+
+    if (getenv("RECORDING_STUB_ARRAYSTRUCT_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -12;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: arraystruct open refused",
+                sizeof status.message - 1);
+        return status;
+    }
+
     if (size != NULL) {
         g_arraystruct_size_in = *size;
         *size = 3003;
