@@ -455,6 +455,12 @@ pub enum LoadError {
         first: String,
         second: String,
     },
+    /// Two `<redefine>` glob selectors could claim the same right-side
+    /// path, making the refusal's fidelity depend on XML document order.
+    OverlappingRedefineSelectors {
+        first: String,
+        second: String,
+    },
     DuplicatePrecedence {
         rule_id: String,
         precedence: u32,
@@ -502,6 +508,10 @@ impl fmt::Display for LoadError {
             } => write!(
                 f,
                 "overlapping glob source selectors on the {role} side: `{first}` and `{second}`"
+            ),
+            LoadError::OverlappingRedefineSelectors { first, second } => write!(
+                f,
+                "overlapping <redefine> glob selectors: `{first}` and `{second}`"
             ),
             LoadError::DuplicatePrecedence {
                 rule_id,
@@ -586,6 +596,26 @@ fn reject_ambiguous_sources(role: &'static str, sources: &[SourceEntry]) -> Resu
                     role,
                     first: globs[i].to_string(),
                     second: other.to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Rejects `<redefine>` glob selectors that could both claim a right-side
+/// path. Unlike structural selectors, redefines are consulted only after a
+/// target path is known, but their fidelity still reaches the caller in the
+/// refusal explanation and must not depend on XML document order (ADR 0004).
+fn reject_ambiguous_redefines(redefines: &[RedefineEntry]) -> Result<(), LoadError> {
+    for (index, redefine) in redefines.iter().enumerate() {
+        for other in &redefines[(index + 1)..] {
+            let first = redefine.selector.pattern();
+            let second = other.selector.pattern();
+            if globs_overlap(first, second) {
+                return Err(LoadError::OverlappingRedefineSelectors {
+                    first: first.to_string(),
+                    second: second.to_string(),
                 });
             }
         }
@@ -760,6 +790,7 @@ impl ConversionMap {
         }
         reject_ambiguous_sources("left", &left_sources)?;
         reject_ambiguous_sources("right", &right_sources)?;
+        reject_ambiguous_redefines(&redefines)?;
 
         Ok(ConversionMap {
             ids,
