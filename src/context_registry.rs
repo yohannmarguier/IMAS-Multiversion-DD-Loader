@@ -88,7 +88,7 @@ pub(crate) struct ConversionRecord {
     pub root_id: ContextId,
     /// The context ID of this record's direct parent, or `None` for a root
     /// record.
-    pub parent_id: Option<ContextId>,
+    parent_id: Option<ContextId>,
 }
 
 /// One entry in the registry's shared context-ID namespace.
