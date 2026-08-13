@@ -2,8 +2,8 @@
 //!
 //! See `docs/adr/0004-xml-conversion-map-artifact.md` and CONTEXT.md's
 //! "conversion-map artifact", "rule explanation" and "path-level rule"
-//! entries. This module loads the hand-authored equilibrium 3.39.0 ⇄ 4.1.1
-//! artifact (`docs/3.39.0--4.1.1.xml`) and resolves the document-level
+//! entries. This module parses the hand-authored equilibrium 3.39.0 ⇄ 4.1.1
+//! artifact when supplied by its caller, and resolves the document-level
 //! identity default and `renamed` path-level rules. Other `rel` kinds
 //! (`merged`, `moved`, `retyped`, `split`, `left_only`, `right_only`) parse
 //! structurally, so the artifact loads as one complete unit, but `resolve`
