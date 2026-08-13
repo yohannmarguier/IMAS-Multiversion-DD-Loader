@@ -423,6 +423,37 @@ pub struct RuleExplanation {
     pub outcome: Outcome,
 }
 
+/// Which side of a conversion-map artifact a raw DD path inventory, or a
+/// rule-declared path, belongs to (issue #50's completeness proof).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InventorySide {
+    Left,
+    Right,
+}
+
+/// One way [`ConversionMap::check_completeness`] found a path was not
+/// legitimately claimed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompletenessViolation {
+    /// A raw inventory path resolved to neither an explicit rule nor the
+    /// document-level default.
+    UnclaimedInventoryPath { side: InventorySide, path: String },
+    /// A raw inventory path fell through to the document-level identity
+    /// default, but no path by that same spelling exists in the other
+    /// side's raw inventory — the default's identity assumption is false.
+    DefaultAssumesMissingCounterpart { side: InventorySide, path: String },
+    /// A rule's own primary selector (`left`/`right`, never a `merged`/
+    /// `split` rule's `<from>` candidates — see
+    /// [`ConversionMap::check_completeness`]'s doc comment) corresponds to
+    /// nothing in that side's raw inventory: a structurally invented path
+    /// with no basis in the real Data Dictionary.
+    RuleSelectorNotBackedByInventory {
+        rule_id: String,
+        side: InventorySide,
+        pattern: String,
+    },
+}
+
 /// A conversion-map artifact failed to load because its rule data is
 /// structurally unusable — malformed XML, a missing required attribute, an
 /// unrecognised enum value, or a rule shape that contradicts its own `rel`.
@@ -1182,6 +1213,143 @@ impl ConversionMap {
             None => ValueTransformation::None,
         }
     }
+
+    /// Proves this artifact's completeness against the real DD path
+    /// inventories on both sides (issue #50), rather than trusting the
+    /// generated `<coverage>` summary a hand-authored artifact ships with.
+    /// Two things must hold:
+    ///
+    /// 1. Every path in `left_inventory`/`right_inventory` resolves to an
+    ///    explicit rule, or to the document-level identity default *and*
+    ///    the same spelling genuinely exists on the other side (a default
+    ///    match whose counterpart is missing is a silent, wrong identity
+    ///    assumption, not completeness).
+    /// 2. Every rule's own primary selector (`left`/`right`) corresponds to
+    ///    something real in its own side's raw inventory — an `Exact`
+    ///    literal match, or a `Subtree`/`Glob` selector that claims at
+    ///    least one real entry — catching a structurally invented path
+    ///    (e.g. a typo) that would otherwise never be visited by the
+    ///    inventory sweep in point 1.
+    ///
+    /// Two distinct tolerances keep point 2 from over-rejecting real rules
+    /// — both are "paths introduced on a rule side that do not occur in the
+    /// corresponding raw inventory" that the proof must include rather than
+    /// reject, ADR 0013:
+    ///
+    /// - A `merged`/`split` rule's plural `<from>` candidates are
+    ///   deliberately exempt from point 2 entirely: they are a
+    ///   precedence-ordered read plan (ADR 0006) that may legitimately name
+    ///   an alias not yet present in an older snapshot of the inventory —
+    ///   the real approved artifact's `fold-constraints-j` rule, for
+    ///   instance, lists a DD4-only canonical alias as its precedence-1 DD3
+    ///   candidate, since the read plan is written to serve the whole 3.x
+    ///   lineage feeding into 4.1.1, not only the pinned 3.39.0 snapshot.
+    /// - A rule's own primary `Subtree` selector is backed by *either*
+    ///   itself or any descendant, which is what proves a `retyped` rule's
+    ///   container-level anchor complete even when a shape change (e.g.
+    ///   `INT_1D` → `STRUCT_ARRAY`) means the anchor is no longer a raw DD
+    ///   leaf itself and only its shape-derived child is (the real
+    ///   `retype-coordinates-type` rule is this exact case) — with no
+    ///   `retyped`-specific carve-out, since `left_only`/`right_only`/
+    ///   `moved` subtree rules already rely on the identical tolerance.
+    ///
+    /// This method never mutates `self` and is never called by [`Self::
+    /// resolve`] — the two are wholly independent, so a violation here has
+    /// no bearing on runtime resolution (CONTEXT.md's "coverage record").
+    pub fn check_completeness(
+        &self,
+        left_inventory: &[String],
+        right_inventory: &[String],
+    ) -> Result<(), Vec<CompletenessViolation>> {
+        let mut violations = Vec::new();
+
+        self.check_inventory_claimed(
+            left_inventory,
+            right_inventory,
+            Direction::Forward,
+            InventorySide::Left,
+            &mut violations,
+        );
+        self.check_inventory_claimed(
+            right_inventory,
+            left_inventory,
+            Direction::Reverse,
+            InventorySide::Right,
+            &mut violations,
+        );
+
+        for rule in &self.rules {
+            if let Some(selector) = &rule.left
+                && !Self::selector_backed_by_inventory(selector, left_inventory)
+            {
+                violations.push(CompletenessViolation::RuleSelectorNotBackedByInventory {
+                    rule_id: rule.id.clone(),
+                    side: InventorySide::Left,
+                    pattern: selector.pattern().to_string(),
+                });
+            }
+            if let Some(selector) = &rule.right
+                && !Self::selector_backed_by_inventory(selector, right_inventory)
+            {
+                violations.push(CompletenessViolation::RuleSelectorNotBackedByInventory {
+                    rule_id: rule.id.clone(),
+                    side: InventorySide::Right,
+                    pattern: selector.pattern().to_string(),
+                });
+            }
+        }
+
+        if violations.is_empty() {
+            Ok(())
+        } else {
+            Err(violations)
+        }
+    }
+
+    fn check_inventory_claimed(
+        &self,
+        inventory: &[String],
+        counterpart_inventory: &[String],
+        direction: Direction,
+        side: InventorySide,
+        violations: &mut Vec<CompletenessViolation>,
+    ) {
+        for path in inventory {
+            match self.resolve(path, direction) {
+                None => violations.push(CompletenessViolation::UnclaimedInventoryPath {
+                    side,
+                    path: path.clone(),
+                }),
+                Some(explanation) if explanation.match_kind == MatchKind::Default => {
+                    if !counterpart_inventory.iter().any(|entry| entry == path) {
+                        violations.push(CompletenessViolation::DefaultAssumesMissingCounterpart {
+                            side,
+                            path: path.clone(),
+                        });
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+    }
+
+    /// Whether `selector` corresponds to at least one real entry in
+    /// `inventory`: literal membership for `Exact`, self-or-descendant
+    /// membership for `Subtree`, and at least one matching entry for `Glob`.
+    fn selector_backed_by_inventory(selector: &Selector, inventory: &[String]) -> bool {
+        match selector {
+            Selector::Exact(pattern) => inventory.iter().any(|entry| entry == pattern),
+            Selector::Subtree(anchor) => inventory.iter().any(|entry| {
+                entry == anchor
+                    || entry
+                        .strip_prefix(anchor.as_str())
+                        .is_some_and(|rest| rest.starts_with('/'))
+            }),
+            Selector::Glob(pattern) => inventory
+                .iter()
+                .any(|entry| glob_match(pattern, entry).is_some()),
+        }
+    }
 }
 
 fn fidelity_for(rule: &Rule, direction: Direction) -> Fidelity {
@@ -1511,6 +1679,16 @@ mod tests {
     use super::*;
 
     const APPROVED_ARTIFACT: &str = include_str!("../docs/3.39.0--4.1.1.xml");
+    const LEFT_INVENTORY_339: &str = include_str!("../docs/inventory/equilibrium-3.39.0.txt");
+    const RIGHT_INVENTORY_411: &str = include_str!("../docs/inventory/equilibrium-4.1.1.txt");
+
+    fn parse_inventory(text: &str) -> Vec<String> {
+        text.lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
 
     fn resolved_path(explanation: &RuleExplanation) -> &str {
         match &explanation.outcome {
@@ -2523,5 +2701,247 @@ mod tests {
                 second: "time_slice/constraints/*".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn unclaimed_inventory_path_fails_completeness_check() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("a map with no default and no rules loads");
+        let left_inventory = vec!["orphan/path".to_string()];
+        let right_inventory: Vec<String> = vec![];
+
+        let violations = map
+            .check_completeness(&left_inventory, &right_inventory)
+            .expect_err("a path with no rule and no default must fail completeness");
+        assert!(
+            violations.contains(&CompletenessViolation::UnclaimedInventoryPath {
+                side: InventorySide::Left,
+                path: "orphan/path".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn default_match_assuming_a_missing_counterpart_fails_completeness_check() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <default rel="identical"/>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+        // "a" is not actually present on the right, so the identity default
+        // silently assumes a path that does not exist there.
+        let left_inventory = vec!["a".to_string()];
+        let right_inventory: Vec<String> = vec![];
+
+        let violations = map
+            .check_completeness(&left_inventory, &right_inventory)
+            .expect_err("the default cannot silently assume a nonexistent counterpart");
+        assert!(
+            violations.contains(&CompletenessViolation::DefaultAssumesMissingCounterpart {
+                side: InventorySide::Left,
+                path: "a".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn identical_path_on_both_sides_satisfies_the_default_match() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <default rel="identical"/>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+        let inventory = vec!["a".to_string()];
+        assert_eq!(map.check_completeness(&inventory, &inventory), Ok(()));
+    }
+
+    #[test]
+    fn explicit_rule_claims_a_path_absent_from_the_other_side() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="drop-a" rel="left_only" left="a">
+                  <fidelity forward="lossy" reverse="unmappable"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+        let left_inventory = vec!["a".to_string()];
+        let right_inventory: Vec<String> = vec![];
+        assert_eq!(
+            map.check_completeness(&left_inventory, &right_inventory),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn rule_selector_not_backed_by_inventory_fails_completeness_check() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="drop-invented" rel="left_only" left="totally/invented/path">
+                  <fidelity forward="lossy" reverse="unmappable"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+        // No real path anywhere is named or nested under this rule's claim.
+        let left_inventory: Vec<String> = vec![];
+        let right_inventory: Vec<String> = vec![];
+
+        let violations = map
+            .check_completeness(&left_inventory, &right_inventory)
+            .expect_err("a rule with no basis in the raw inventory must fail completeness");
+        assert!(
+            violations.contains(&CompletenessViolation::RuleSelectorNotBackedByInventory {
+                rule_id: "drop-invented".to_string(),
+                side: InventorySide::Left,
+                pattern: "totally/invented/path".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn merged_rule_from_candidate_absent_from_inventory_is_tolerated() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="fold" rel="merged" right="modern">
+                  <from left="modern" precedence="1"/>
+                  <from left="legacy" precedence="2"/>
+                  <fidelity forward="lossy" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+        // "modern" does not exist yet at this pinned left-side snapshot,
+        // mirroring the real artifact's fold-constraints-j: its precedence-1
+        // alias post-dates 3.39.0, and the proof must tolerate that rather
+        // than reject the rule (issue #50's "paths introduced on a rule side
+        // that do not occur in the corresponding raw inventory").
+        let left_inventory = vec!["legacy".to_string()];
+        let right_inventory = vec!["modern".to_string()];
+
+        assert_eq!(
+            map.check_completeness(&left_inventory, &right_inventory),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn subtree_rule_anchor_is_backed_by_a_nested_descendant_even_when_absent_itself() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="drop-group" rel="left_only" left="a/group" subtree="yes">
+                  <fidelity forward="lossy" reverse="unmappable"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+        // "a/group" itself is a container never listed as its own leaf --
+        // only a descendant path is.
+        let left_inventory = vec!["a/group/leaf".to_string()];
+        let right_inventory: Vec<String> = vec![];
+
+        assert_eq!(
+            map.check_completeness(&left_inventory, &right_inventory),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn retyped_rule_anchor_absent_from_inventory_is_backed_by_its_shape_derived_child() {
+        // Story 40 (#43) names this scenario explicitly: a retyped-style
+        // rule's container-level anchor may not itself be a raw DD leaf once
+        // its shape changes -- this mirrors the real artifact's
+        // retype-coordinates-type rule, whose anchor is confirmed via
+        // imas-dd's version history to change from INT_1D to STRUCT_ARRAY at
+        // DD4's 4.0.0 boundary, so a leaf-only inventory can plausibly list
+        // only the shape's own child leaf ("index"), not the container
+        // itself. The same Subtree-backing tolerance that already lets
+        // left_only/right_only/moved subtree rules claim a container without
+        // being a raw leaf themselves covers this case too -- no
+        // retyped-specific exemption is needed (ADR 0013).
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="retype-coordinates-type" rel="retyped"
+                      left="grids_ggd/grid/space/coordinates_type"
+                      right="grids_ggd/grid/space/coordinates_type"
+                      subtree="yes">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("retyped rule is structurally valid");
+        let left_inventory = vec!["grids_ggd/grid/space/coordinates_type".to_string()];
+        // Deliberately omit the bare anchor on the right -- only its
+        // shape-derived child is present, exactly like a leaf-only listing.
+        let right_inventory = vec!["grids_ggd/grid/space/coordinates_type/index".to_string()];
+
+        assert_eq!(
+            map.check_completeness(&left_inventory, &right_inventory),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn approved_artifact_completeness_holds_against_real_dd_inventories() {
+        let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
+        let left_inventory = parse_inventory(LEFT_INVENTORY_339);
+        let right_inventory = parse_inventory(RIGHT_INVENTORY_411);
+
+        let result = map.check_completeness(&left_inventory, &right_inventory);
+        assert_eq!(result, Ok(()), "completeness violations: {result:?}");
+    }
+
+    #[test]
+    fn completeness_violations_do_not_influence_resolution() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <default rel="identical"/>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+        let left_inventory = vec!["a".to_string()];
+        let right_inventory: Vec<String> = vec![]; // deliberately incomplete
+
+        let before = map.resolve("a", Direction::Forward);
+        assert!(
+            map.check_completeness(&left_inventory, &right_inventory)
+                .is_err()
+        );
+        let after = map.resolve("a", Direction::Forward);
+
+        assert_eq!(before, after);
     }
 }

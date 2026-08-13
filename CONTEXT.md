@@ -99,6 +99,13 @@ The explicit priority of a source path within one path-level rule. A lower numbe
 **coverage record**:
 A generated record of the DD paths that a conversion-map artifact covers. It is not hand-edited and does not define rule execution.
 
+**completeness proof**:
+`ConversionMap::check_completeness`'s result: whether every path in a real, checked-in path inventory pair is claimed by an explicit rule or a valid document-level default, and whether every rule's own primary selector corresponds to something real rather than a hallucinated path. It replaces trust in the hand-authored coverage record with an executable check; it never runs inside `resolve` and has no bearing on rule execution. See `docs/adr/0013-completeness-proven-against-real-inventories.md`.
+
+**path inventory**:
+A checked-in, real listing of the DD leaf paths for one IDS at one specific DD version, consulted only by the completeness proof.
+_Avoid_: coverage record — a different, hand-authored concept the proof supersedes for verification purposes.
+
 **conversion chain**:
 An ordered in-memory representation of DD changes between two DD versions. The initial special-case artifact does not need a conversion chain. The future generator's chain and merge design is not decided yet.
 
