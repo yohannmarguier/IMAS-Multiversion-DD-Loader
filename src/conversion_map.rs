@@ -2023,6 +2023,33 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_redefine_globs_invalidate_the_map() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <transforms>
+                <redefine glob="time_slice/*/chi_squared_r"
+                          left-units="m" right-units="m^-2">
+                  <fidelity forward="unmappable" reverse="unmappable"/>
+                </redefine>
+                <redefine glob="time_slice/constraints/*"
+                          left-units="m" right-units="m^-2">
+                  <fidelity forward="lossy" reverse="lossy"/>
+                </redefine>
+              </transforms>
+            </ids-map>
+        "#;
+
+        let err = ConversionMap::load(xml)
+            .expect_err("overlapping unit-redefinition globs must not depend on XML order");
+        assert_eq!(
+            err.to_string(),
+            "overlapping <redefine> glob selectors: `time_slice/*/chi_squared_r` and `time_slice/constraints/*`"
+        );
+    }
+
+    #[test]
     fn rejects_a_rule_that_sets_both_subtree_and_glob() {
         let xml = r#"
             <ids-map ids="equilibrium" format-version="1">
