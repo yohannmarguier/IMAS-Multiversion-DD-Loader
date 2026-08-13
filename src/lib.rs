@@ -11,8 +11,17 @@
 //! stamp discovery (`src/version_stamp.rs`, ADR 0007) together decide, per
 //! `al_begin_global_action` open, whether an IDS occurrence's stored DD
 //! version differs from the HLI's and registers a conversion record only
-//! then. The read path (`al_read_data`) and arraystruct lifecycle remain
-//! future work under issue #43.
+//! then. `al_begin_arraystruct_action` registers a child record when its own
+//! context already carries one, and `al_read_data` resolves `field` through
+//! that record's shared conversion map before forwarding the translated
+//! field to IMAS-Core (issue #54) — proven bidirectionally against the
+//! checked-in equilibrium fixture pair for an explicit `renamed`/identity
+//! path with no value transformation and no `merged`/`split` candidates.
+//! IMAS-Core's returned allocation is forwarded unchanged. A `merged`/`split`
+//! read plan (issue #57), value-transform execution (issue #59), a renamed
+//! AOS container (issue #61), independent `field`/`timebase` resolution
+//! (issue #56), and slice/time-range discovery (issue #55) remain future
+//! work under issue #43.
 
 // The mirrored ABI dictates the names; matching IMAS-Core exactly is the point.
 #![allow(non_camel_case_types)]
@@ -297,8 +306,11 @@ pub unsafe extern "C" fn al_begin_timerange_action(
 }
 
 /// Mirrors IMAS-Core's `al_begin_arraystruct_action` exactly and forwards
-/// unchanged. `path` and `timebase` are seam arguments: this ticket
-/// forwards them verbatim, DD path translation is future work.
+/// `path` and `timebase` verbatim — translating an AOS container that was
+/// itself renamed between DD versions is future work (issue #61). When this
+/// context already carries a conversion record, the opened `actxID` is
+/// registered as its child (issue #54), so a later `al_read_data` on it can
+/// translate its own relative fields.
 ///
 /// # Safety
 /// `path` and `timebase` must be valid, NUL-terminated C strings, or null
@@ -326,9 +338,15 @@ pub extern "C" fn al_end_action(ctx_id: c_int) -> al_status_t {
     resolve::end_action(ctx_id)
 }
 
-/// Mirrors IMAS-Core's `al_read_data` exactly and forwards unchanged.
-/// `field` and `timebase` are seam arguments: this ticket forwards them
-/// verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's `al_read_data` exactly. When `ctxID` carries no live
+/// conversion record, this is a plain forward, unchanged from before issue
+/// #54. Otherwise `field` is resolved through the record's conversion map
+/// and translated to the stored spelling before IMAS-Core is called — for an
+/// explicit `renamed`/identity outcome with no value transformation and no
+/// `merged`/`split` candidates; every other outcome refuses rather than
+/// guess (see `src/resolve.rs`). `timebase` is always forwarded unchanged
+/// (issue #56). IMAS-Core's returned allocation is forwarded exactly as
+/// received: the shim neither substitutes nor frees it.
 ///
 /// # Safety
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null

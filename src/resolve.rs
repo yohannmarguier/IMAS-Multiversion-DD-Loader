@@ -14,7 +14,7 @@ use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::OnceLock;
 
 use crate::context_registry::{MapCacheKey, REGISTRY};
-use crate::conversion_map::{ConversionMap, Outcome};
+use crate::conversion_map::{ConversionMap, Outcome, RefusalReason, ValueTransformation};
 use crate::dl::Library;
 use crate::known_artifacts;
 use crate::version_stamp::{self, StampOutcome};
@@ -792,6 +792,7 @@ fn discover_and_register_occurrence(
                 );
                 if let Some(artifact) = known_artifacts::lookup(ids_name, &stored, hli) {
                     let key = map_cache_key(ids_name, &stored, hli);
+                    let direction = artifact.direction_to_stored;
                     // A global/slice/time-range action opens the whole IDS
                     // occurrence, not one field: the record's resolved path
                     // is the occurrence's own root, empty because a relative
@@ -800,9 +801,14 @@ fn discover_and_register_occurrence(
                     // (ADR 0002, ADR 0003). This is unrelated to `datapath`,
                     // which stays near-inert (CLAUDE.md) and never feeds
                     // this field.
-                    REGISTRY.record_root(opened_ctx_id, String::new(), pctx_id, key, || {
-                        load_artifact(&artifact)
-                    });
+                    REGISTRY.record_root(
+                        opened_ctx_id,
+                        String::new(),
+                        pctx_id,
+                        key,
+                        direction,
+                        || load_artifact(&artifact),
+                    );
                 }
             }
             status
@@ -845,6 +851,11 @@ fn translate_down(
     let map = REGISTRY.get_or_create_map(key, || load_artifact(&artifact));
     let explanation = map.resolve(path, artifact.direction_to_stored)?;
     match explanation.outcome {
+        // `datapath` is near-inert (CLAUDE.md): only a concrete resolved
+        // path is a basis to translate it at all. A no-source or refusal
+        // outcome here is not this seam's call to make — forward unchanged
+        // and let the eventual `al_read_data` on this occurrence be the one
+        // that refuses or reports absence.
         Outcome::Path { resolved_path, .. } => CString::new(resolved_path).ok(),
         Outcome::NoSource | Outcome::Refusal(_) => None,
     }
@@ -1005,7 +1016,14 @@ pub(crate) unsafe fn begin_timerange_action(
 }
 
 /// Forwards to IMAS-Core's real `al_begin_arraystruct_action`, resolving
-/// IMAS-Core lazily on first use.
+/// IMAS-Core lazily on first use. `path` and `timebase` are forwarded
+/// unchanged in every case — translating them for an AOS container that was
+/// itself renamed between DD versions is future work (issue #61).
+///
+/// When `ctx_id` names a live conversion record (a mismatched root or an
+/// already-registered child) and the real open succeeds, the resulting
+/// `actxID` is registered as a child of `ctx_id`, so a later `al_read_data`
+/// on it can translate its own relative fields (issue #54).
 ///
 /// # Safety
 /// `path` and `timebase` must be valid, NUL-terminated C strings, or null
@@ -1018,9 +1036,21 @@ pub(crate) unsafe fn begin_arraystruct_action(
     size: *mut c_int,
     actx_id: *mut c_int,
 ) -> al_status_t {
-    forward_status!(begin_arraystruct_action(
+    let status = forward_status!(begin_arraystruct_action(
         ctx_id, path, timebase, size, actx_id,
-    ))
+    ));
+    if status.code == 0
+        && let Some(parent) = REGISTRY.lookup(ctx_id)
+        && let Some(path_str) = c_str_or_none(path).filter(|p| !p.is_empty())
+    {
+        let resolved_path = join_hli_path(&parent.resolved_path, path_str);
+        // SAFETY: IMAS-Core's own contract, already relied on by the
+        // forwarded call above, requires `actx_id` to be a valid, writable
+        // pointer on success.
+        let opened_actx_id = unsafe { *actx_id };
+        REGISTRY.record_child(opened_actx_id, ctx_id, resolved_path);
+    }
+    status
 }
 
 /// Forwards to IMAS-Core's real `al_end_action`, resolving IMAS-Core
@@ -1039,6 +1069,28 @@ pub(crate) fn end_action(ctx_id: c_int) -> al_status_t {
 /// Forwards to IMAS-Core's real `al_read_data`, resolving IMAS-Core lazily
 /// on first use.
 ///
+/// When `ctx_id` names no live conversion record — no mismatch was ever
+/// discovered, the occurrence matched or was unstamped, or the HLI DD
+/// version is unset — this is a plain forward, unchanged from before issue
+/// #54. Otherwise `field` is resolved through the record's conversion map,
+/// in the direction that reaches the stored DD spelling, before IMAS-Core is
+/// called:
+///
+/// - An explicit refusal, or a rule this seam does not yet know how to
+///   execute (a `merged`/`split` read plan, issue #57; a value
+///   transformation, issue #59; translating this context's own anchor path,
+///   issue #61), is a shim-owned [`al_status_t`] refusal — IMAS-Core is
+///   never called.
+/// - No claimed source on the stored side returns success with a null data
+///   pointer, matching IMAS-Core's own not-found convention, without calling
+///   IMAS-Core at all.
+/// - Otherwise the translated field reaches IMAS-Core and its returned
+///   allocation is forwarded to the HLI exactly as received: the shim
+///   neither substitutes nor frees it.
+///
+/// `timebase` is always forwarded unchanged: resolving it independently of
+/// `field` is future work (issue #56).
+///
 /// # Safety
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null
 /// where IMAS-Core's own contract allows it. `data` and `size` must be
@@ -1053,9 +1105,123 @@ pub(crate) unsafe fn read_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
-    forward_status!(read_data(
-        ctx_id, field, timebase, data, datatype, dim, size,
-    ))
+    let Some(record) = REGISTRY.lookup(ctx_id) else {
+        return forward_status!(read_data(
+            ctx_id, field, timebase, data, datatype, dim, size
+        ));
+    };
+
+    let Some(field_str) = c_str_or_none(field).filter(|f| !f.is_empty()) else {
+        // Nothing to translate (issue #46's `translate_down` shares this
+        // same "absent/empty is not a basis to convert" rule).
+        return forward_status!(read_data(
+            ctx_id, field, timebase, data, datatype, dim, size
+        ));
+    };
+    let hli_absolute = join_hli_path(&record.resolved_path, field_str);
+    let Some(explanation) = record
+        .map
+        .resolve(&hli_absolute, record.direction_to_stored)
+    else {
+        // Defensive: the embedded artifact always carries a document-level
+        // identity default, so this never happens against it today. Without
+        // any matching rule or default, there is no basis to translate.
+        return forward_status!(read_data(
+            ctx_id, field, timebase, data, datatype, dim, size
+        ));
+    };
+
+    match explanation.outcome {
+        Outcome::Refusal(reason) => crate::conversion_refusal(&refusal_reason_message(reason)),
+        Outcome::NoSource => {
+            // SAFETY: the caller's own contract, relied on throughout this
+            // function, requires `data` to be a valid, writable pointer.
+            unsafe {
+                *data = std::ptr::null_mut();
+            }
+            al_status_t::default()
+        }
+        Outcome::Path {
+            resolved_path,
+            value_transformation,
+            candidates,
+        } => {
+            if !candidates.is_empty() {
+                return crate::conversion_refusal(
+                    "reading a merged/split path is not yet implemented (issue #57)",
+                );
+            }
+            if value_transformation != ValueTransformation::None {
+                return crate::conversion_refusal(
+                    "value-transform execution is not yet implemented (issue #59)",
+                );
+            }
+            let Some(translated) = strip_anchor(&record.resolved_path, &resolved_path) else {
+                return crate::conversion_refusal(
+                    "translating this context's own anchor path is not yet implemented (issue #61)",
+                );
+            };
+            let Ok(translated_field) = CString::new(translated) else {
+                return crate::conversion_refusal("translated field contains an interior NUL byte");
+            };
+            forward_status!(read_data(
+                ctx_id,
+                translated_field.as_ptr(),
+                timebase,
+                data,
+                datatype,
+                dim,
+                size,
+            ))
+        }
+    }
+}
+
+/// Joins `anchor` (a context's own resolved path, in the HLI's own DD
+/// spelling) with a relative `raw` path argument, or resolves `raw` from the
+/// IDS root when it is absolute (a leading `/`) — the same relative-vs-
+/// absolute rule every path/field argument follows (CLAUDE.md).
+fn join_hli_path(anchor: &str, raw: &str) -> String {
+    match raw.strip_prefix('/') {
+        Some(root_relative) => root_relative.to_string(),
+        None if anchor.is_empty() => raw.to_string(),
+        None => format!("{anchor}/{raw}"),
+    }
+}
+
+/// The portion of `resolved_path` (a full path in the stored DD's spelling)
+/// past `anchor` (this context's own resolved path, in the HLI's own
+/// spelling) — the field IMAS-Core actually expects relative to `ctx_id`.
+/// `None` when `resolved_path` does not start with `anchor` at all, which
+/// can only happen when the anchor path itself was renamed between DD
+/// versions rather than just the field beneath it (unsupported here; see
+/// issue #61).
+fn strip_anchor(anchor: &str, resolved_path: &str) -> Option<String> {
+    if anchor.is_empty() {
+        return Some(resolved_path.to_string());
+    }
+    resolved_path
+        .strip_prefix(anchor)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .map(str::to_string)
+}
+
+/// A short, stable description of one [`RefusalReason`]. Full refusal-
+/// message formatting (naming the DD path and both versions, with
+/// CLAUDE.md's fixed truncation order) is issue #58's contract; this seam
+/// only needs `conversion_refusal`'s existing `IMAS-MVDD:`-prefixed wrapper.
+fn refusal_reason_message(reason: RefusalReason) -> String {
+    match reason {
+        RefusalReason::UnservableRetype => {
+            "this path's container changed shape and cannot be served".to_string()
+        }
+        RefusalReason::UnitRedefinition => {
+            "this path's unit was redefined and cannot be converted".to_string()
+        }
+        RefusalReason::Unmappable => {
+            "this path has no safe conversion between DD versions".to_string()
+        }
+    }
 }
 
 /// Forwards to IMAS-Core's real `al_write_data`, resolving IMAS-Core
@@ -1291,6 +1457,51 @@ pub(crate) unsafe fn plugin_write_data(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn join_hli_path_appends_a_relative_path_under_a_nonempty_anchor() {
+        assert_eq!(
+            join_hli_path("time_slice", "global_quantities/beta_tor_norm"),
+            "time_slice/global_quantities/beta_tor_norm"
+        );
+    }
+
+    #[test]
+    fn join_hli_path_uses_the_relative_path_verbatim_under_an_empty_anchor() {
+        assert_eq!(join_hli_path("", "time_slice"), "time_slice");
+    }
+
+    #[test]
+    fn join_hli_path_resolves_an_absolute_path_from_the_ids_root_ignoring_the_anchor() {
+        assert_eq!(
+            join_hli_path("time_slice", "/ids_properties/comment"),
+            "ids_properties/comment"
+        );
+    }
+
+    #[test]
+    fn strip_anchor_returns_the_resolved_path_verbatim_under_an_empty_anchor() {
+        assert_eq!(
+            strip_anchor("", "time_slice/global_quantities/beta_normal"),
+            Some("time_slice/global_quantities/beta_normal".to_string())
+        );
+    }
+
+    #[test]
+    fn strip_anchor_removes_a_matching_anchor_prefix() {
+        assert_eq!(
+            strip_anchor("time_slice", "time_slice/global_quantities/beta_normal"),
+            Some("global_quantities/beta_normal".to_string())
+        );
+    }
+
+    #[test]
+    fn strip_anchor_fails_when_the_resolved_path_does_not_start_with_the_anchor() {
+        assert_eq!(
+            strip_anchor("time_slice", "grids_ggd/grid/space/coordinates_type"),
+            None
+        );
+    }
 
     #[test]
     fn override_value_is_used_verbatim() {

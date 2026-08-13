@@ -766,6 +766,52 @@ if(IMAS_MVDD_BUILD_TESTS)
             $<TARGET_FILE:real_core_forwarding_test>)
     set_tests_properties(runtime-binding-real-core-forwarding PROPERTIES
         LABELS real-core)
+
+    # --- Issue #54: the first bidirectional translated read, against the
+    # checked-in equilibrium HDF5 fixture pair rather than a throwaway pulse.
+    add_executable(equilibrium_read_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/equilibrium_read_test.c")
+    target_include_directories(equilibrium_read_test PRIVATE ${_imas_core_include_dirs})
+    target_compile_definitions(equilibrium_read_test PRIVATE
+        "EQUILIBRIUM_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/imas-python-fixtures/fixtures\"")
+    target_link_libraries(equilibrium_read_test PRIVATE imas_mvdd_loader)
+    add_dependencies(equilibrium_read_test imas_mvdd_capi)
+    set_target_properties(equilibrium_read_test PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    # The HLI DD version latch is process-wide, so each scenario is its own
+    # ctest process (mirrors version_discovery_test.c). Scenarios opening the
+    # same fixture directory share a resource lock: HDF5's own file locking
+    # makes two concurrent opens of the same pulse unreliable, and ctest may
+    # otherwise run tests in parallel.
+    add_test(NAME equilibrium-read-reverse-reads-renamed-value
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> reverse-reads-renamed-value-through-own-spelling)
+    set_tests_properties(equilibrium-read-reverse-reads-renamed-value PROPERTIES
+        LABELS real-core
+        RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
+
+    add_test(NAME equilibrium-read-forward-reads-renamed-value
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> forward-reads-renamed-value-through-own-spelling)
+    set_tests_properties(equilibrium-read-forward-reads-renamed-value PROPERTIES
+        LABELS real-core
+        RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+
+    add_test(NAME equilibrium-read-same-version-is-unaffected
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> same-version-read-is-unaffected)
+    set_tests_properties(equilibrium-read-same-version-is-unaffected PROPERTIES
+        LABELS real-core
+        RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
+
+    add_test(NAME equilibrium-read-conversion-disabled-is-unaffected
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> conversion-disabled-read-is-unaffected)
+    set_tests_properties(equilibrium-read-conversion-disabled-is-unaffected PROPERTIES
+        LABELS real-core
+        RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
+
     endif()
 endif()
 
