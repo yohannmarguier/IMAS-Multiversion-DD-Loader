@@ -810,6 +810,51 @@ if(IMAS_MVDD_BUILD_TESTS)
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_FAIL=1")
 
+    # --- Issue #65: the root-context fidelity loss log and its query exports ---
+    # Both scenarios below need the HLI reading in its own, 3.39.0 spelling
+    # (Direction::Forward) to hit a rule this artifact declares lossy in that
+    # direction: fold-ggd-bfield (merged) and move-gap (moved).
+    add_test(NAME read-path-merged-read-retains-a-lossy-verdict-in-the-loss-log
+        COMMAND read_path_test merged-read-retains-a-lossy-verdict-in-the-loss-log)
+    set_tests_properties(read-path-merged-read-retains-a-lossy-verdict-in-the-loss-log PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME read-path-moved-read-retains-a-lossy-verdict-in-the-loss-log
+        COMMAND read_path_test moved-read-retains-a-lossy-verdict-in-the-loss-log)
+    set_tests_properties(read-path-moved-read-retains-a-lossy-verdict-in-the-loss-log PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME read-path-ending-context-destroys-its-loss-log
+        COMMAND read_path_test ending-context-destroys-its-loss-log)
+    set_tests_properties(read-path-ending-context-destroys-its-loss-log PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    # The remaining query-export safety scenarios only need any live
+    # non-exact loss entry to query against, so they reuse the standard
+    # mismatched occurrence fixture like the refusal scenarios above.
+    function(add_loss_query_test name scenario)
+        add_test(NAME "${name}" COMMAND read_path_test "${scenario}")
+        set_tests_properties("${name}" PROPERTIES
+            ENVIRONMENT
+                "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    endfunction()
+
+    add_loss_query_test(read-path-loss-count-null-output-is-refused
+        loss-count-null-output-is-refused)
+    add_loss_query_test(read-path-loss-at-null-path-buffer-is-refused
+        loss-at-null-path-buffer-is-refused)
+    add_loss_query_test(read-path-loss-at-null-verdict-is-refused
+        loss-at-null-verdict-is-refused)
+    add_loss_query_test(read-path-loss-at-negative-index-is-refused
+        loss-at-negative-index-is-refused)
+    add_loss_query_test(read-path-loss-at-out-of-range-index-is-refused
+        loss-at-out-of-range-index-is-refused)
+    add_loss_query_test(read-path-loss-at-insufficient-buffer-is-refused
+        loss-at-insufficient-buffer-is-refused)
+
     # --- Issue #61: arraystruct path conversion through the public C ABI ---
     add_executable(arraystruct_path_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/arraystruct_path_test.c")

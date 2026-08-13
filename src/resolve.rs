@@ -1153,33 +1153,12 @@ pub(crate) unsafe fn read_data(
         ReadPath::NoSource => return no_source_read(data),
     };
 
-    let has_candidate_plan = translated_field
-        .as_ref()
-        .is_some_and(TranslatedReadPath::is_candidate_plan)
-        || translated_timebase
-            .as_ref()
-            .is_some_and(TranslatedReadPath::is_candidate_plan);
-    let field_needs_transformation = translated_field
-        .as_ref()
-        .is_some_and(TranslatedReadPath::has_value_transformation);
-    if !has_candidate_plan && !field_needs_transformation {
-        return forward_status!(read_data(
-            ctx_id,
-            translated_field
-                .as_ref()
-                .map(TranslatedReadPath::as_ptr)
-                .unwrap_or(field),
-            translated_timebase
-                .as_ref()
-                .map(TranslatedReadPath::as_ptr)
-                .unwrap_or(timebase),
-            data,
-            datatype,
-            dim,
-            size,
-        ));
-    }
-
+    // Every translated field/timebase — a single translated path or a
+    // merged/split candidate plan — is tried through this one loop rather
+    // than short-circuiting a "simple" single-path case through a bare
+    // forward: a short-circuit here previously skipped `retain_read_fidelity`
+    // for a plain non-exact `renamed`/`moved` rule, so a single-candidate
+    // Lossy read never reached the loss log (ADR 0012, issue #65).
     let field_attempts = translated_field.as_ref().map_or_else(
         || vec![ReadAttempt::forward(field)],
         TranslatedReadPath::attempts,
@@ -1301,6 +1280,96 @@ fn retain_read_fidelity(ctx_id: c_int, raw_path: *const c_char, fidelity: Fideli
     }
 }
 
+/// Implements `imas_mvdd_context_loss_count` (ADR 0012): reports the number
+/// of loss-log entries retained on `ctx_id`'s root context without
+/// allocating. Every untracked context — a data-entry pulse, an unrecorded
+/// or already-ended id, or an operation whose stored and HLI DD versions
+/// matched — reports `0` rather than a refusal, since none of them has ever
+/// produced a loss entry.
+///
+/// # Safety
+/// `count` must be a valid, writable `*mut c_int`, or null.
+pub(crate) unsafe fn context_loss_count(ctx_id: c_int, count: *mut c_int) -> al_status_t {
+    if count.is_null() {
+        return crate::conversion_refusal(
+            "imas_mvdd_context_loss_count requires a non-null count output",
+        );
+    }
+    let n = REGISTRY.loss_count(ctx_id);
+    // SAFETY: just checked non-null above.
+    unsafe {
+        *count = n as c_int;
+    }
+    al_status_t::default()
+}
+
+/// Implements `imas_mvdd_context_loss_at` (ADR 0012): copies the
+/// `index`-th loss-log entry retained on `ctx_id`'s root context into
+/// caller-owned storage, without allocating or publishing any internal
+/// struct or pointer. Refuses — leaving every output untouched — for a null
+/// output pointer, a negative index or buffer length, an out-of-range index
+/// (which also covers every untracked context, whose count is always
+/// zero), and a buffer too small to hold the path and its trailing NUL.
+///
+/// # Safety
+/// `path_buf` must be a valid, writable buffer of at least `buf_len` bytes,
+/// or null. `verdict` must be a valid, writable `*mut c_int`, or null.
+pub(crate) unsafe fn context_loss_at(
+    ctx_id: c_int,
+    index: c_int,
+    path_buf: *mut c_char,
+    buf_len: c_int,
+    verdict: *mut c_int,
+) -> al_status_t {
+    if verdict.is_null() {
+        return crate::conversion_refusal(
+            "imas_mvdd_context_loss_at requires a non-null verdict output",
+        );
+    }
+    if path_buf.is_null() {
+        return crate::conversion_refusal(
+            "imas_mvdd_context_loss_at requires a non-null path buffer",
+        );
+    }
+    let Ok(index) = usize::try_from(index) else {
+        return crate::conversion_refusal("imas_mvdd_context_loss_at index must not be negative");
+    };
+    let Ok(buf_len) = usize::try_from(buf_len) else {
+        return crate::conversion_refusal(
+            "imas_mvdd_context_loss_at buffer length must not be negative",
+        );
+    };
+    let Some((path, fidelity)) = REGISTRY.loss_at(ctx_id, index) else {
+        return crate::conversion_refusal(
+            "imas_mvdd_context_loss_at index is out of range for this context",
+        );
+    };
+    if path.len() >= buf_len {
+        return crate::conversion_refusal(
+            "imas_mvdd_context_loss_at buffer is too small for this path",
+        );
+    }
+    // SAFETY: `path_buf` is non-null and at least `buf_len` bytes long per
+    // this function's safety contract, and `path.len() < buf_len` leaves
+    // room for the trailing NUL written just past it.
+    unsafe {
+        std::ptr::copy_nonoverlapping(path.as_ptr().cast::<c_char>(), path_buf, path.len());
+        *path_buf.add(path.len()) = 0;
+        *verdict = fidelity_verdict_code(fidelity);
+    }
+    al_status_t::default()
+}
+
+fn fidelity_verdict_code(fidelity: Fidelity) -> c_int {
+    match fidelity {
+        Fidelity::Exact => {
+            unreachable!("the loss log never retains an exact-fidelity read (ADR 0012)")
+        }
+        Fidelity::Lossy => crate::IMAS_MVDD_FIDELITY_LOSSY,
+        Fidelity::Unmappable => crate::IMAS_MVDD_FIDELITY_UNMAPPABLE,
+    }
+}
+
 fn read_argument_path(
     record: &crate::context_registry::ConversionRecord,
     raw_path: *const c_char,
@@ -1385,20 +1454,6 @@ impl ReadAttempt {
 }
 
 impl TranslatedReadPath {
-    fn is_candidate_plan(&self) -> bool {
-        self.paths.len() > 1
-    }
-
-    fn as_ptr(&self) -> *const c_char {
-        self.paths[0].path.as_ptr()
-    }
-
-    fn has_value_transformation(&self) -> bool {
-        self.paths
-            .iter()
-            .any(|path| path.value_transformation != ValueTransformation::None)
-    }
-
     fn attempts(&self) -> Vec<ReadAttempt> {
         self.paths
             .iter()

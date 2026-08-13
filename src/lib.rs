@@ -50,6 +50,12 @@ pub const MAXDIM: usize = 7;
 /// value here; every other failure propagates IMAS-Core's own code unchanged.
 pub const IMAS_MVDD_CONVERSION_ERROR: c_int = -1000;
 
+/// Fidelity verdict codes `imas_mvdd_context_loss_at` writes to its
+/// `verdict` output (ADR 0008, ADR 0012). The loss log never retains an
+/// exact-fidelity read, so no code names it.
+pub const IMAS_MVDD_FIDELITY_LOSSY: c_int = 0;
+pub const IMAS_MVDD_FIDELITY_UNMAPPABLE: c_int = 1;
+
 /// Status returned by every ABI entry point. `code == 0` means success.
 ///
 /// Note the conflicting convention one layer down: a backend's `read_data`
@@ -260,6 +266,53 @@ pub extern "C" fn getDDVersion() -> *const c_char {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn imas_mvdd_set_hli_dd_version(version: *const c_char) -> al_status_t {
     unsafe { hli_version::set_from_c(version) }
+}
+
+/// Shim-owned export (ADR 0012) — listed on `tests/owned_exports.def`
+/// alongside `imas_mvdd_set_hli_dd_version`. Reports, without allocating,
+/// the number of non-exact read outcomes retained on `ctxID`'s root
+/// conversion context (a query on a child context resolves to the same
+/// root log). Every context that never produced a loss entry — a
+/// data-entry pulse, an unrecorded or already-ended id, or an operation
+/// whose stored and HLI DD versions matched — reports `0` rather than a
+/// refusal.
+///
+/// # Safety
+/// `count` must be a valid, writable `*mut c_int`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn imas_mvdd_context_loss_count(
+    ctx_id: c_int,
+    count: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::context_loss_count(ctx_id, count) }
+}
+
+/// Shim-owned export (ADR 0012) — listed on `tests/owned_exports.def`
+/// alongside `imas_mvdd_set_hli_dd_version`. Copies the `index`-th loss-log
+/// entry retained on `ctxID`'s root conversion context into caller-owned
+/// storage: the DD path exactly as the HLI requested it, NUL-terminated in
+/// `path_buf`, and its fidelity verdict (`IMAS_MVDD_FIDELITY_LOSSY` or
+/// `IMAS_MVDD_FIDELITY_UNMAPPABLE`) in `*verdict`. No internal struct or
+/// pointer is published and nothing is allocated.
+///
+/// Refuses — leaving every output untouched — for a null `path_buf` or
+/// `verdict`, a negative `index` or `buf_len`, an index at or past
+/// `imas_mvdd_context_loss_count`'s reported count (which also covers every
+/// untracked context, whose count is always zero), and a `buf_len` too
+/// small to hold the path and its trailing NUL.
+///
+/// # Safety
+/// `path_buf` must be a valid, writable buffer of at least `buf_len` bytes,
+/// or null. `verdict` must be a valid, writable `*mut c_int`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn imas_mvdd_context_loss_at(
+    ctx_id: c_int,
+    index: c_int,
+    path_buf: *mut c_char,
+    buf_len: c_int,
+    verdict: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::context_loss_at(ctx_id, index, path_buf, buf_len, verdict) }
 }
 
 /// Mirrors IMAS-Core's `al_begin_dataentry_action` exactly and forwards
