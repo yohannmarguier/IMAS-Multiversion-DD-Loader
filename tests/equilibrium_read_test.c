@@ -67,7 +67,7 @@ static int open_fixture_pulse(const char *dd_version) {
  * requires HLI-provided storage: it copies into that buffer and frees its own
  * temporary allocation before returning. Pointer identity therefore proves
  * the shim neither substitutes nor frees the HLI-owned result buffer. */
-static double read_beta_at_slice_zero(int pulse_ctx, const char *field) {
+static double read_scalar_at_slice_zero(int pulse_ctx, const char *field) {
     int op_ctx = -1;
     CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
 
@@ -100,7 +100,7 @@ static void scenario_reverse_reads_renamed_value_through_own_spelling(void) {
     /* The 4.1.1 fixture stores this under "beta_tor_norm"; the HLI asks for
      * its own 3.39.0 name, "beta_normal". A plain forward would ask the
      * fixture for a field it does not have. */
-    double value = read_beta_at_slice_zero(pulse_ctx, "global_quantities/beta_normal");
+    double value = read_scalar_at_slice_zero(pulse_ctx, "global_quantities/beta_normal");
     CHECK(value == 1.8);
 
     close_fixture_pulse(pulse_ctx);
@@ -114,7 +114,7 @@ static void scenario_forward_reads_renamed_value_through_own_spelling(void) {
     CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
     int pulse_ctx = open_fixture_pulse("3.39.0");
 
-    double value = read_beta_at_slice_zero(pulse_ctx, "global_quantities/beta_tor_norm");
+    double value = read_scalar_at_slice_zero(pulse_ctx, "global_quantities/beta_tor_norm");
     CHECK(value == 1.8);
 
     close_fixture_pulse(pulse_ctx);
@@ -141,6 +141,30 @@ static void scenario_reverse_merged_read_falls_through_to_stored_alias(void) {
     CHECK_OK(al_end_action(profiles_ctx));
     CHECK_OK(al_end_action(time_slice_ctx));
     CHECK_OK(al_end_action(op_ctx));
+    close_fixture_pulse(pulse_ctx);
+}
+
+static void scenario_reverse_split_read_uses_first_destination_and_flips_value(void) {
+    CHECK_OK(imas_mvdd_set_hli_dd_version("3.39.0"));
+    int pulse_ctx = open_fixture_pulse("4.1.1");
+
+    /* DD4 has both split destinations; precedence chooses psi_axis. Its
+     * COCOS-17 fixture value is +0.75, so the DD3 HLI must receive -0.75. */
+    double value = read_scalar_at_slice_zero(pulse_ctx, "global_quantities/psi_axis");
+    CHECK(value == -0.75);
+
+    close_fixture_pulse(pulse_ctx);
+}
+
+static void scenario_forward_split_read_uses_single_source_and_flips_value(void) {
+    CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
+    int pulse_ctx = open_fixture_pulse("3.39.0");
+
+    /* DD3 holds the split's single source at -0.75; the DD4 HLI receives
+     * the COCOS-17 spelling and therefore +0.75. */
+    double value = read_scalar_at_slice_zero(pulse_ctx, "global_quantities/psi_axis");
+    CHECK(value == 0.75);
+
     close_fixture_pulse(pulse_ctx);
 }
 
@@ -178,6 +202,8 @@ int main(int argc, char **argv) {
                 "<reverse-reads-renamed-value-through-own-spelling|"
                 "forward-reads-renamed-value-through-own-spelling|"
                 "reverse-merged-read-falls-through-to-stored-alias|"
+                "reverse-split-read-uses-first-destination-and-flips-value|"
+                "forward-split-read-uses-single-source-and-flips-value|"
                 "same-version-read-is-unaffected|"
                 "conversion-disabled-read-is-unaffected>\n",
                 argv[0]);
@@ -191,6 +217,10 @@ int main(int argc, char **argv) {
         scenario_forward_reads_renamed_value_through_own_spelling();
     } else if (strcmp(scenario, "reverse-merged-read-falls-through-to-stored-alias") == 0) {
         scenario_reverse_merged_read_falls_through_to_stored_alias();
+    } else if (strcmp(scenario, "reverse-split-read-uses-first-destination-and-flips-value") == 0) {
+        scenario_reverse_split_read_uses_first_destination_and_flips_value();
+    } else if (strcmp(scenario, "forward-split-read-uses-single-source-and-flips-value") == 0) {
+        scenario_forward_split_read_uses_single_source_and_flips_value();
     } else if (strcmp(scenario, "same-version-read-is-unaffected") == 0) {
         scenario_same_version_read_is_unaffected();
     } else if (strcmp(scenario, "conversion-disabled-read-is-unaffected") == 0) {

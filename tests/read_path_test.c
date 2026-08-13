@@ -69,7 +69,7 @@ static int open_mismatched_equilibrium(void) {
 
 static al_status_t read_data(int ctx_id, const char *field, const char *timebase, void **data) {
     int size[1] = {0};
-    return al_read_data(ctx_id, field, timebase, data, 3, 1, size);
+    return al_read_data(ctx_id, field, timebase, data, 52 /* DOUBLE_DATA */, 1, size);
 }
 
 static void check_stub_paths(const char *field, const char *timebase) {
@@ -150,14 +150,32 @@ static void scenario_merged_read_returns_not_found_when_all_candidates_are_absen
     check_stub_paths("time_slice/ggd/b_field_tor", "");
 }
 
-static void scenario_transformed_split_plan_refuses_before_core_call(void) {
+static void scenario_split_plan_reads_and_flips_its_first_stored_destination(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int reads_before = int_from_stub("recording_stub_read_call_count");
-    void *data = (void *)1;
-    CHECK(read_data(operation_ctx, "time_slice/global_quantities/psi_axis", "", &data).code ==
-          IMAS_MVDD_CONVERSION_ERROR);
-    CHECK(data == (void *)1);
-    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
+    int size[1] = {0};
+    void *data = NULL;
+    CHECK(al_read_data(operation_ctx, "time_slice/global_quantities/psi_axis", "", &data,
+                       52 /* DOUBLE_DATA */, 1, size)
+              .code == 0);
+    CHECK(data != NULL);
+    CHECK(*(double *)data == -1.5);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 1);
+    check_stub_paths("time_slice/global_quantities/psi_axis", "");
+}
+
+static void scenario_reverse_split_read_flips_its_single_stored_source(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    int size[1] = {0};
+    void *data = NULL;
+    CHECK(al_read_data(operation_ctx, "time_slice/global_quantities/psi_axis", "", &data,
+                       52 /* DOUBLE_DATA */, 1, size)
+              .code == 0);
+    CHECK(data != NULL);
+    CHECK(*(double *)data == -1.5);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 1);
+    check_stub_paths("time_slice/global_quantities/psi_axis", "");
 }
 
 static void scenario_no_source_returns_null_without_core_call(void) {
@@ -272,7 +290,8 @@ int main(int argc, char **argv) {
                 "merged-read-falls-through-to-next-candidate|"
                 "merged-read-stops-at-first-candidate-with-data|"
                 "merged-read-returns-not-found-when-all-candidates-are-absent|"
-                "transformed-split-plan-refuses-before-core-call|"
+                "split-plan-reads-and-flips-its-first-stored-destination|"
+                "reverse-split-read-flips-its-single-stored-source|"
                 "no-source-returns-null-without-core-call|"
                 "resolves-relative-field-and-absolute-timebase|"
                 "matching-context-bypasses-conversion|unknown-context-bypasses-conversion|"
@@ -302,8 +321,11 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "merged-read-returns-not-found-when-all-candidates-are-absent") == 0) {
         scenario_merged_read_returns_not_found_when_all_candidates_are_absent(); return 0;
     }
-    if (strcmp(argv[1], "transformed-split-plan-refuses-before-core-call") == 0) {
-        scenario_transformed_split_plan_refuses_before_core_call(); return 0;
+    if (strcmp(argv[1], "split-plan-reads-and-flips-its-first-stored-destination") == 0) {
+        scenario_split_plan_reads_and_flips_its_first_stored_destination(); return 0;
+    }
+    if (strcmp(argv[1], "reverse-split-read-flips-its-single-stored-source") == 0) {
+        scenario_reverse_split_read_flips_its_single_stored_source(); return 0;
     }
     if (strcmp(argv[1], "no-source-returns-null-without-core-call") == 0) {
         scenario_no_source_returns_null_without_core_call();

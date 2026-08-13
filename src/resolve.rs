@@ -19,7 +19,7 @@ use crate::dl::Library;
 use crate::known_artifacts;
 use crate::read_outcome::{self, ReadOutcome};
 use crate::version_stamp::{self, StampOutcome};
-use crate::{MAX_ERR_MSG_LEN, al_status_t};
+use crate::{MAX_ERR_MSG_LEN, MAXDIM, al_status_t};
 
 /// Explicit override, honoured before the bare soname — see the ADR's
 /// resolution order.
@@ -1077,12 +1077,12 @@ pub(crate) fn end_action(ctx_id: c_int) -> al_status_t {
 /// in the direction that reaches the stored DD spelling, before IMAS-Core is
 /// called:
 ///
-/// - An explicit refusal, or a plan requiring a value transformation (issue
-///   #59) or translating this context's own anchor path (issue #61), is a
-///   shim-owned [`al_status_t`] refusal — IMAS-Core is never called.
-/// - An untransformed `merged`/`split` path is tried in declared precedence
-///   order until one candidate returns data; misses use the common read-
-///   outcome classifier and allocate/free nothing in the shim.
+/// - An explicit refusal or translating this context's own anchor path (issue
+///   #61) is a shim-owned [`al_status_t`] refusal — IMAS-Core is never called.
+/// - A `merged`/`split` path is tried in declared precedence order until one
+///   candidate returns data; misses use the common read-outcome classifier and
+///   allocate/free nothing in the shim. The winning field's value transformation
+///   then executes in place before the buffer reaches the HLI.
 /// - No claimed source on the stored side returns success with a null data
 ///   pointer, matching IMAS-Core's own not-found convention, without calling
 ///   IMAS-Core at all.
@@ -1136,7 +1136,10 @@ pub(crate) unsafe fn read_data(
         || translated_timebase
             .as_ref()
             .is_some_and(TranslatedReadPath::is_candidate_plan);
-    if !has_candidate_plan {
+    let field_needs_transformation = translated_field
+        .as_ref()
+        .is_some_and(TranslatedReadPath::has_value_transformation);
+    if !has_candidate_plan && !field_needs_transformation {
         return forward_status!(read_data(
             ctx_id,
             translated_field
@@ -1164,6 +1167,11 @@ pub(crate) unsafe fn read_data(
     );
     for field_attempt in &field_attempts {
         for timebase_attempt in &timebase_attempts {
+            if let Err(reason) =
+                validate_value_transformation(&field_attempt.value_transformation, datatype, dim)
+            {
+                return crate::conversion_refusal(reason);
+            }
             let status = forward_status!(read_data(
                 ctx_id,
                 field_attempt.path,
@@ -1179,6 +1187,15 @@ pub(crate) unsafe fn read_data(
             match read_outcome::classify(&status, unsafe { *data }) {
                 ReadOutcome::Failure => return status,
                 ReadOutcome::Data => {
+                    if let Err(reason) = apply_value_transformation(
+                        &field_attempt.value_transformation,
+                        unsafe { *data },
+                        datatype,
+                        dim,
+                        size,
+                    ) {
+                        return crate::conversion_refusal(reason);
+                    }
                     retain_read_fidelity(ctx_id, field, field_attempt.fidelity);
                     retain_read_fidelity(ctx_id, timebase, timebase_attempt.fidelity);
                     return status;
@@ -1190,9 +1207,80 @@ pub(crate) unsafe fn read_data(
     no_source_read(data)
 }
 
+const EMPTY_DOUBLE: f64 = -9e40;
+
+/// Validates the part of a value transformation knowable before calling
+/// IMAS-Core. A candidate that is absent may fall through without needing
+/// this check; a candidate that could return data must be representable by
+/// this seam.
+fn validate_value_transformation(
+    transformation: &ValueTransformation,
+    datatype: c_int,
+    dim: c_int,
+) -> Result<(), &'static str> {
+    match transformation {
+        ValueTransformation::None => Ok(()),
+        ValueTransformation::SignFlip { .. }
+            if datatype == DOUBLE_DATA_ID && (0..=MAXDIM as c_int).contains(&dim) =>
+        {
+            Ok(())
+        }
+        ValueTransformation::SignFlip { .. } => {
+            Err("value-transform execution requires DOUBLE_DATA and a rank no greater than MAXDIM")
+        }
+    }
+}
+
+/// Applies the selected stored field's transformation to IMAS-Core's buffer
+/// without allocating or replacing it. The read-outcome classifier guarantees
+/// `data` is non-null before this is called.
+fn apply_value_transformation(
+    transformation: &ValueTransformation,
+    data: *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> Result<(), &'static str> {
+    match transformation {
+        ValueTransformation::None => Ok(()),
+        ValueTransformation::SignFlip { .. } => {
+            validate_value_transformation(transformation, datatype, dim)?;
+            let element_count = if dim == 0 {
+                1
+            } else {
+                if size.is_null() {
+                    return Err("value-transform execution needs array dimensions");
+                }
+                // SAFETY: `read_data`'s contract requires a writable size
+                // array with one element per requested rank, and IMAS-Core
+                // has initialized it on this successful read.
+                unsafe { std::slice::from_raw_parts(size, dim as usize) }
+                    .iter()
+                    .try_fold(1usize, |count, &extent| {
+                        let extent = usize::try_from(extent).ok()?;
+                        count.checked_mul(extent)
+                    })
+                    .ok_or("value-transform execution received an invalid array shape")?
+            };
+            // SAFETY: `data` is non-null after `ReadOutcome::Data`; the
+            // validated DOUBLE_DATA type and returned shape describe this
+            // IMAS-Core-owned buffer, which the ABI permits the HLI to own
+            // and mutate after a successful read.
+            let values =
+                unsafe { std::slice::from_raw_parts_mut(data.cast::<f64>(), element_count) };
+            for value in values {
+                if *value != EMPTY_DOUBLE {
+                    *value = -*value;
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Retains the caller's non-exact path in its root conversion context without
-/// changing the successful IMAS-Core status. Value transformation remains a
-/// refusal until #59, so fidelity is the only selected-plan state to keep.
+/// changing the successful IMAS-Core status. Value transformation changes the
+/// returned buffer but never the successful status.
 fn retain_read_fidelity(ctx_id: c_int, raw_path: *const c_char, fidelity: Fidelity) {
     if fidelity == Fidelity::Exact {
         return;
@@ -1238,11 +1326,13 @@ struct TranslatedReadPath {
 struct ResolvedReadPath {
     path: CString,
     fidelity: Fidelity,
+    value_transformation: ValueTransformation,
 }
 
 struct ReadAttempt {
     path: *const c_char,
     fidelity: Fidelity,
+    value_transformation: ValueTransformation,
 }
 
 impl ReadAttempt {
@@ -1250,6 +1340,7 @@ impl ReadAttempt {
         Self {
             path,
             fidelity: Fidelity::Exact,
+            value_transformation: ValueTransformation::None,
         }
     }
 }
@@ -1263,12 +1354,19 @@ impl TranslatedReadPath {
         self.paths[0].path.as_ptr()
     }
 
+    fn has_value_transformation(&self) -> bool {
+        self.paths
+            .iter()
+            .any(|path| path.value_transformation != ValueTransformation::None)
+    }
+
     fn attempts(&self) -> Vec<ReadAttempt> {
         self.paths
             .iter()
             .map(|candidate| ReadAttempt {
                 path: candidate.path.as_ptr(),
                 fidelity: candidate.fidelity,
+                value_transformation: candidate.value_transformation.clone(),
             })
             .collect()
     }
@@ -1305,25 +1403,28 @@ fn resolve_read_path(
             value_transformation,
             candidates,
         } => {
-            if value_transformation != ValueTransformation::None
-                || candidates
-                    .iter()
-                    .any(|candidate| candidate.value_transformation != ValueTransformation::None)
-            {
-                return ReadPath::Refusal(
-                    "value-transform execution is not yet implemented (issue #59)".to_string(),
-                );
-            }
             if candidates.is_empty() {
-                return translated_read_component(record, &resolved_path, is_absolute, fidelity)
-                    .map(|path| ReadPath::Translated(TranslatedReadPath { paths: vec![path] }))
-                    .unwrap_or_else(ReadPath::Refusal);
+                return translated_read_component(
+                    record,
+                    &resolved_path,
+                    is_absolute,
+                    fidelity,
+                    value_transformation,
+                )
+                .map(|path| ReadPath::Translated(TranslatedReadPath { paths: vec![path] }))
+                .unwrap_or_else(ReadPath::Refusal);
             }
 
             candidates
                 .into_iter()
                 .map(|candidate| {
-                    translated_read_component(record, &candidate.path, is_absolute, fidelity)
+                    translated_read_component(
+                        record,
+                        &candidate.path,
+                        is_absolute,
+                        fidelity,
+                        candidate.value_transformation,
+                    )
                 })
                 .collect::<Result<Vec<_>, _>>()
                 .map(|paths| ReadPath::Candidates(TranslatedReadPath { paths }))
@@ -1337,6 +1438,7 @@ fn translated_read_component(
     resolved_path: &str,
     is_absolute: bool,
     fidelity: Fidelity,
+    value_transformation: ValueTransformation,
 ) -> Result<ResolvedReadPath, String> {
     let translated = if is_absolute {
         format!("/{resolved_path}")
@@ -1347,7 +1449,11 @@ fn translated_read_component(
         })?
     };
     CString::new(translated)
-        .map(|path| ResolvedReadPath { path, fidelity })
+        .map(|path| ResolvedReadPath {
+            path,
+            fidelity,
+            value_transformation,
+        })
         .map_err(|_| "translated field contains an interior NUL byte".to_string())
 }
 

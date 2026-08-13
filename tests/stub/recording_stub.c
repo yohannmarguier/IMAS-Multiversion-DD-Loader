@@ -345,6 +345,7 @@ static char *g_read_timebase = NULL;
 static int g_read_datatype = 0;
 static int g_read_dim = 0;
 static char g_read_buffer[] = "recording-stub: read data payload";
+static double g_read_double_buffer = 1.5;
 
 #define VERSION_STAMP_FIELD "ids_properties/version_put/data_dictionary"
 
@@ -428,10 +429,12 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
     }
 
     if (data != NULL) {
-        *data = g_read_buffer;
+        *data = getenv("RECORDING_STUB_READ_DOUBLE") != NULL
+                    ? (void *)&g_read_double_buffer
+                    : (void *)g_read_buffer;
     }
     if (size != NULL) {
-        size[0] = 4004;
+        size[0] = getenv("RECORDING_STUB_READ_DOUBLE") != NULL ? 1 : 4004;
     }
 
     al_status_t status;
