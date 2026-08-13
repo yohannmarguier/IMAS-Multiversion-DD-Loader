@@ -727,13 +727,23 @@ pub(crate) unsafe fn begin_global_action(
 
     match version_stamp::discover(opened_octx_id) {
         StampOutcome::Malformed(refusal) => {
+            // A prior open may have cached a mismatch for this occurrence,
+            // but this read gives no usable version to justify retaining it.
+            // Never translate a later `datapath` from stale discovery state.
+            REGISTRY.forget_occurrence_version(pctx_id, dataobjectname_str);
             // The open already succeeded against real IMAS-Core; a refusal
             // from here on must not leak that context, since the HLI — told
             // this open failed — will never call `al_end_action` on it.
             let _ = forward_status!(end_action(opened_octx_id));
             *refusal
         }
-        StampOutcome::Unstamped => status,
+        StampOutcome::Unstamped => {
+            // An absent or failed discovery read means this occurrence is no
+            // longer known to differ from the HLI DD version. Clear any
+            // earlier mismatch before a future open chooses its `datapath`.
+            REGISTRY.forget_occurrence_version(pctx_id, dataobjectname_str);
+            status
+        }
         StampOutcome::Stored(stored) => {
             if stored == hli {
                 REGISTRY.forget_occurrence_version(pctx_id, dataobjectname_str);
