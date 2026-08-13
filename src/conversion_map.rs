@@ -217,8 +217,9 @@ impl Selector {
     /// the *other* side of the same rule: a `Subtree` or `Exact` pattern has
     /// `suffix` appended verbatim, and a `Glob` pattern has its `*`
     /// wildcards filled in positionally from `captures` (`ConversionMap::
-    /// load` guarantees both sides of a glob rule carry the same number of
-    /// wildcards, so every capture is used and no `*` is left unfilled).
+    /// load` guarantees the counterpart selector, including every
+    /// `merged`/`split` candidate, carries the same number of wildcards, so
+    /// every capture is used and no `*` is left unfilled).
     fn render(&self, suffix: &str, captures: &[String]) -> String {
         match self {
             Selector::Glob(pattern) => {
@@ -1173,6 +1174,28 @@ fn parse_froms(
     Ok(froms)
 }
 
+fn validate_glob_candidate_wildcards(
+    rule_id: &str,
+    singleton: &Selector,
+    froms: &[FromEntry],
+    singleton_side: &str,
+    candidates_side: &str,
+) -> Result<(), LoadError> {
+    let singleton_wildcard_count = wildcard_count(singleton.pattern());
+    if froms
+        .iter()
+        .any(|from| wildcard_count(from.selector.pattern()) != singleton_wildcard_count)
+    {
+        return Err(LoadError::InvalidRuleShape {
+            rule_id: rule_id.to_string(),
+            reason: format!(
+                "glob `{singleton_side}` and every {candidates_side}-side <from> must carry the same number of `*` wildcards"
+            ),
+        });
+    }
+    Ok(())
+}
+
 fn parse_rule(node: &roxmltree::Node) -> Result<Rule, LoadError> {
     let id = required_attr(node, "rule", "id")?.to_string();
     let rel = parse_rel(node)?;
@@ -1240,6 +1263,15 @@ fn parse_rule(node: &roxmltree::Node) -> Result<Rule, LoadError> {
             if froms.is_empty() {
                 return Err(shape_error("requires at least one <from left=\"...\"/>"));
             }
+            if stage == SelectorStage::Glob {
+                validate_glob_candidate_wildcards(
+                    &id,
+                    right.as_ref().unwrap(),
+                    &froms,
+                    "right",
+                    "left",
+                )?;
+            }
             froms
         }
         Rel::Split => {
@@ -1251,6 +1283,15 @@ fn parse_rule(node: &roxmltree::Node) -> Result<Rule, LoadError> {
             let froms = parse_froms(&id, node, "right", stage)?;
             if froms.is_empty() {
                 return Err(shape_error("requires at least one <from right=\"...\"/>"));
+            }
+            if stage == SelectorStage::Glob {
+                validate_glob_candidate_wildcards(
+                    &id,
+                    left.as_ref().unwrap(),
+                    &froms,
+                    "left",
+                    "right",
+                )?;
             }
             froms
         }
@@ -1583,6 +1624,39 @@ mod tests {
                 reason: "requires at least one <from left=\"...\"/>".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn rejects_glob_merged_and_split_rules_with_unrenderable_candidate_paths() {
+        for xml in [
+            r#"
+                <ids-map ids="equilibrium" format-version="1">
+                  <side id="left" dd="3.39.0" cocos="11"/>
+                  <side id="right" dd="4.1.1" cocos="17"/>
+                  <rules>
+                    <rule id="merge" rel="merged" glob="yes" right="right/*">
+                      <from left="left/*/*" precedence="1"/>
+                      <fidelity forward="exact" reverse="exact"/>
+                    </rule>
+                  </rules>
+                </ids-map>
+            "#,
+            r#"
+                <ids-map ids="equilibrium" format-version="1">
+                  <side id="left" dd="3.39.0" cocos="11"/>
+                  <side id="right" dd="4.1.1" cocos="17"/>
+                  <rules>
+                    <rule id="split" rel="split" glob="yes" left="left/*">
+                      <from right="right/*/*" precedence="1"/>
+                      <fidelity forward="exact" reverse="exact"/>
+                    </rule>
+                  </rules>
+                </ids-map>
+            "#,
+        ] {
+            let err = ConversionMap::load(xml).unwrap_err();
+            assert!(matches!(err, LoadError::InvalidRuleShape { .. }));
+        }
     }
 
     #[test]
