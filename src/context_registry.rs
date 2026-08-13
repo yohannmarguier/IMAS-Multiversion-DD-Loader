@@ -21,9 +21,13 @@
 //! its context ID as their pulse context ID; recording one never resolves
 //! rules or transforms anything by itself.
 //!
-//! Only root records exist so far — a root's root identity is its own
-//! context ID. Child (arraystruct) records, which resolve their root
-//! identity from a parent snapshot instead, land in issue #60.
+//! A root's root identity is its own context ID. A child (arraystruct)
+//! record resolves its root identity, pulse context ID, and shared
+//! conversion map from a live parent snapshot instead of storing them
+//! independently, and additionally carries its direct parent's context ID.
+//! The parent snapshot only supplies that starting state — it does not make
+//! the parent record own the child's lifecycle, and the registry exposes no
+//! sibling enumeration or general ancestry-walking operation.
 //!
 //! The conversion-map cache is registry-owned and keyed by `(IDS name,
 //! stored DD version, HLI DD version)`: it hands out `Arc` clones of a
@@ -68,8 +72,7 @@ impl MapCacheKey {
     }
 }
 
-/// A live conversion-eligible context: a root today, a root or child once
-/// issue #60 lands.
+/// A live conversion-eligible context: a root or a child.
 #[derive(Debug, Clone)]
 pub(crate) struct ConversionRecord {
     /// The path this context resolves to, in the HLI's own DD spelling,
@@ -83,6 +86,9 @@ pub(crate) struct ConversionRecord {
     /// The context ID of this record's root. Equal to the record's own
     /// context ID for a root record.
     pub root_id: ContextId,
+    /// The context ID of this record's direct parent, or `None` for a root
+    /// record.
+    parent_id: Option<ContextId>,
 }
 
 /// One entry in the registry's shared context-ID namespace.
@@ -150,12 +156,52 @@ impl ContextRegistry {
             pulse_ctx_id,
             map: self.get_or_create_map(key, create),
             root_id: ctx_id,
+            parent_id: None,
         };
         self.state
             .lock()
             .unwrap()
             .entries
             .insert(ctx_id, Entry::Conversion(record));
+        true
+    }
+
+    /// Records `ctx_id` as a child conversion record beneath the live
+    /// conversion record at `parent_ctx_id`, inheriting its pulse context ID,
+    /// shared conversion map, and root identity. `resolved_path` is this
+    /// child's own resolved absolute HLI-DD path.
+    ///
+    /// Returns `false` and removes any record at `ctx_id` if `parent_ctx_id`
+    /// names no live conversion record — a data-entry context, an unrecorded
+    /// or recycled ID, or a root that turned out not to need conversion — so
+    /// a recycled child ID never exposes stale state.
+    ///
+    /// Replaces whatever record — of any kind — previously lived at
+    /// `ctx_id`, mirroring `record_root`.
+    pub(crate) fn record_child(
+        &self,
+        ctx_id: ContextId,
+        parent_ctx_id: ContextId,
+        resolved_path: String,
+    ) -> bool {
+        let mut state = self.state.lock().unwrap();
+        let parent = match state.entries.get(&parent_ctx_id) {
+            Some(Entry::Conversion(record)) => record.clone(),
+            Some(Entry::DataEntry) | None => {
+                state.entries.remove(&ctx_id);
+                return false;
+            }
+        };
+        state.entries.insert(
+            ctx_id,
+            Entry::Conversion(ConversionRecord {
+                resolved_path,
+                pulse_ctx_id: parent.pulse_ctx_id,
+                map: parent.map,
+                root_id: parent.root_id,
+                parent_id: Some(parent_ctx_id),
+            }),
+        );
         true
     }
 
@@ -302,6 +348,162 @@ mod tests {
         assert!(registry.lookup(5).is_none());
         let survivor = registry.lookup(6).expect("removing 5 must not affect 6");
         assert_eq!(survivor.resolved_path, "b");
+    }
+
+    #[test]
+    fn removing_a_parent_record_does_not_invalidate_a_still_live_child() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+        assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+
+        registry.remove(5);
+
+        let child = registry
+            .lookup(6)
+            .expect("removing the parent must not invalidate a still-live child");
+        assert_eq!(child.resolved_path, "root/path/aos(1)");
+        assert_eq!(child.root_id, 5, "child retains its resolved root identity");
+        assert_eq!(child.pulse_ctx_id, 1, "child inherits the pulse context id");
+    }
+
+    #[test]
+    fn a_child_record_retains_its_own_path_and_parent_id_and_shares_the_parents_map() {
+        let registry = ContextRegistry::new();
+        let key = dummy_key();
+        assert!(registry.record_root(5, "root/path".to_string(), 1, key.clone(), dummy_map));
+
+        assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+
+        let child = registry
+            .lookup(6)
+            .expect("just-recorded child must be live");
+        assert_eq!(child.resolved_path, "root/path/aos(1)");
+        assert_eq!(child.pulse_ctx_id, 1, "child inherits the pulse context id");
+        assert_eq!(child.root_id, 5);
+        assert_eq!(child.parent_id, Some(5));
+        assert!(
+            Arc::ptr_eq(
+                &child.map,
+                &registry.get_or_create_map(key, || panic!("map must be cached"))
+            ),
+            "child must share the same map reference as its parent, not a copy"
+        );
+    }
+
+    #[test]
+    fn a_root_record_has_no_parent_id() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+
+        let root = registry.lookup(5).unwrap();
+        assert_eq!(root.parent_id, None);
+    }
+
+    #[test]
+    fn a_grandchild_inherits_the_root_identity_through_its_immediate_parent() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+        assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+
+        assert!(registry.record_child(7, 6, "root/path/aos(1)/nested(2)".to_string()));
+
+        let grandchild = registry.lookup(7).unwrap();
+        assert_eq!(
+            grandchild.root_id, 5,
+            "root identity resolves through the chain of parents, not just the immediate one"
+        );
+        assert_eq!(
+            grandchild.parent_id,
+            Some(6),
+            "parent id names the direct parent only"
+        );
+        assert_eq!(grandchild.pulse_ctx_id, 1);
+    }
+
+    #[test]
+    fn recording_a_child_under_an_id_with_no_live_conversion_record_fails_and_clears_any_stale_entry()
+     {
+        let registry = ContextRegistry::new();
+        registry.record_dataentry(1);
+        assert!(record_dummy_root(&registry, 9, "stale".to_string(), 1));
+
+        // A data-entry context is not a conversion record: no root to inherit from.
+        assert!(!registry.record_child(9, 1, "irrelevant".to_string()));
+        assert!(
+            registry.lookup(9).is_none(),
+            "a failed child recording must clear whatever used to live at ctx_id"
+        );
+
+        // An unrecorded/recycled parent id behaves the same way.
+        assert!(!registry.record_child(20, 999, "irrelevant".to_string()));
+        assert!(registry.lookup(20).is_none());
+    }
+
+    #[test]
+    fn removing_a_child_affects_only_that_context_id() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+        assert!(registry.record_child(6, 5, "child/a".to_string()));
+        assert!(registry.record_child(7, 5, "child/b".to_string()));
+
+        registry.remove(6);
+
+        assert!(registry.lookup(6).is_none());
+        assert_eq!(registry.lookup(7).unwrap().resolved_path, "child/b");
+        assert_eq!(registry.lookup(5).unwrap().resolved_path, "root/path");
+    }
+
+    #[test]
+    fn a_recycled_child_id_never_exposes_the_record_it_used_to_name() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+        assert!(registry.record_child(6, 5, "old/child".to_string()));
+        registry.remove(6);
+
+        assert!(registry.record_child(6, 5, "new/child".to_string()));
+
+        let snapshot = registry.lookup(6).unwrap();
+        assert_eq!(snapshot.resolved_path, "new/child");
+    }
+
+    #[test]
+    fn a_recycled_parent_id_does_not_retroactively_change_an_already_recorded_child() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "old/root".to_string(), 1));
+        assert!(registry.record_child(6, 5, "old/child".to_string()));
+        registry.remove(5);
+
+        // Id 5 is recycled for an unrelated new root.
+        assert!(record_dummy_root(&registry, 5, "new/root".to_string(), 2));
+
+        let child = registry
+            .lookup(6)
+            .expect("the child recorded against the old parent stays live");
+        assert_eq!(
+            child.resolved_path, "old/child",
+            "the child's own snapshot must not shift just because id 5 was recycled"
+        );
+        assert_eq!(
+            child.root_id, 5,
+            "root_id is the numeric id resolved at record time"
+        );
+        assert_eq!(
+            child.pulse_ctx_id, 1,
+            "the child keeps the pulse it inherited originally"
+        );
+    }
+
+    #[test]
+    fn child_lookup_releases_the_lock_before_returning() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+        assert!(registry.record_child(6, 5, "child".to_string()));
+
+        let _snapshot = registry.lookup(6).unwrap();
+        // If `lookup` still held the lock at this point, this call would
+        // deadlock rather than return.
+        registry.remove(6);
+        assert!(registry.lookup(6).is_none());
     }
 
     #[test]
@@ -480,6 +682,44 @@ mod tests {
                         assert_eq!(snapshot.pulse_ctx_id, ctx_id);
                     }
                     registry.remove(ctx_id);
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn concurrent_child_operations_never_observe_a_torn_record() {
+        let registry = Arc::new(ContextRegistry::new());
+        let mut handles = Vec::new();
+
+        for i in 0..8 {
+            let registry = registry.clone();
+            handles.push(thread::spawn(move || {
+                let root_id = i as ContextId;
+                let child_id = (i + 100) as ContextId;
+                for _ in 0..200 {
+                    registry.record_root(
+                        root_id,
+                        format!("root-{i}"),
+                        root_id,
+                        dummy_key(),
+                        dummy_map,
+                    );
+                    registry.record_child(child_id, root_id, format!("child-{i}"));
+                    if let Some(snapshot) = registry.lookup(child_id) {
+                        // A torn record would show a path or root identity
+                        // that does not match the root this thread always
+                        // pairs it with.
+                        assert_eq!(snapshot.resolved_path, format!("child-{i}"));
+                        assert_eq!(snapshot.root_id, root_id);
+                        assert_eq!(snapshot.parent_id, Some(root_id));
+                    }
+                    registry.remove(child_id);
+                    registry.remove(root_id);
                 }
             }));
         }
