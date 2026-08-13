@@ -44,9 +44,10 @@
 //! map stays alive exactly as long as some record references it and is
 //! dropped once none do — no explicit eviction needed.
 //!
-//! Wired into the data-entry and global-action seams as of issue #53; the
-//! read-path (`al_read_data`) and arraystruct lifecycle land in later
-//! tickets under #43.
+//! The data-entry and global-action seams register roots (issue #53), and
+//! `al_begin_arraystruct_action` registers their live conversion-record
+//! children (issue #54). `al_read_data` then looks up either record to
+//! resolve its field in the stored DD's spelling.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
