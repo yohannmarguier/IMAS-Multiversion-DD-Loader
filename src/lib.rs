@@ -5,7 +5,8 @@
 //! here, and the runtime-binding architecture (see `src/resolve.rs` and
 //! `docs/adr/0001-runtime-binding-not-linking.md`) is proven end to end on
 //! all 37 linkable exported IMAS-Core C symbols. DD path/version conversion is still
-//! unimplemented.
+//! unimplemented, except for the process-wide HLI DD version latch (see
+//! `src/hli_version.rs` and `docs/adr/0005-hli-dd-version-entry-point.md`).
 
 // The mirrored ABI dictates the names; matching IMAS-Core exactly is the point.
 #![allow(non_camel_case_types)]
@@ -17,6 +18,7 @@ use std::ffi::c_void;
 
 mod dd_version;
 mod dl;
+mod hli_version;
 mod resolve;
 
 /// Length of `al_status_t::message`, mirroring IMAS-Core's `MAX_ERR_MSG_LEN`.
@@ -24,6 +26,12 @@ pub const MAX_ERR_MSG_LEN: usize = 256;
 
 /// Maximum array rank accepted across the ABI, mirroring IMAS-Core's `MAXDIM`.
 pub const MAXDIM: usize = 7;
+
+/// Shim-owned refusal code (ADR 0010, ADR 0012): returned instead of an
+/// IMAS-Core code whenever the shim itself refuses a call rather than
+/// forwarding it. The shim reserves `-1000..=-1099` and allocates only this
+/// value here; every other failure propagates IMAS-Core's own code unchanged.
+pub const IMAS_MVDD_CONVERSION_ERROR: c_int = -1000;
 
 /// Status returned by every ABI entry point. `code == 0` means success.
 ///
@@ -43,6 +51,31 @@ impl Default for al_status_t {
             message: [0; MAX_ERR_MSG_LEN],
         }
     }
+}
+
+/// Writes as much of `message` as fits in `buffer`, always leaving room for
+/// the trailing NUL and never splitting a UTF-8 code point.
+pub(crate) fn write_truncated(buffer: &mut [c_char; MAX_ERR_MSG_LEN], message: &str) {
+    let capacity = MAX_ERR_MSG_LEN - 1; // always leave room for the NUL
+    let mut len = message.len().min(capacity);
+    while len > 0 && !message.is_char_boundary(len) {
+        len -= 1;
+    }
+    for (slot, byte) in buffer.iter_mut().zip(message.as_bytes()[..len].iter()) {
+        *slot = *byte as c_char;
+    }
+}
+
+/// Builds a shim-originated refusal `al_status_t`: `IMAS_MVDD_CONVERSION_ERROR`
+/// with a message prefixed `IMAS-MVDD:` (ADR 0010), truncated to fit the
+/// fixed-size ABI buffer without ever panicking or overflowing.
+pub(crate) fn conversion_refusal(reason: &str) -> al_status_t {
+    let mut status = al_status_t {
+        code: IMAS_MVDD_CONVERSION_ERROR,
+        message: [0; MAX_ERR_MSG_LEN],
+    };
+    write_truncated(&mut status.message, &format!("IMAS-MVDD: {reason}"));
+    status
 }
 
 /// Mirrors IMAS-Core's `al_context_info` exactly — same name, same
@@ -129,6 +162,25 @@ pub extern "C" fn getALVersion() -> *const c_char {
 #[unsafe(no_mangle)]
 pub extern "C" fn getDDVersion() -> *const c_char {
     resolve::get_dd_version()
+}
+
+/// Shim-owned export (ADR 0005) — the `imas_mvdd_` prefix marks it as a
+/// symbol this project defines rather than mirrors from IMAS-Core, and it is
+/// listed explicitly on the export-drift check's owned-exports manifest
+/// (`tests/owned_exports.def`). Reports the calling HLI's process-wide DD
+/// version once, before any open. The value latches on first use for the
+/// life of the process: an identical repeat is accepted, a conflicting
+/// repeat is refused naming both versions, and the call is safe from any
+/// thread. A version arriving after the process already latched to unset —
+/// an earlier open with no setter call and no valid
+/// `IMAS_MVDD_HLI_DD_VERSION` — is refused too. An invalid version string
+/// fails immediately and never touches the latch.
+///
+/// # Safety
+/// `version` must be a valid, NUL-terminated C string, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn imas_mvdd_set_hli_dd_version(version: *const c_char) -> al_status_t {
+    unsafe { hli_version::set_from_c(version) }
 }
 
 /// Mirrors IMAS-Core's `al_begin_dataentry_action` exactly and forwards
