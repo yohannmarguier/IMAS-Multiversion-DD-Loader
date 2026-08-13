@@ -399,9 +399,10 @@ pub enum Outcome {
     Refusal(RefusalReason),
 }
 
-/// Test information identifying the rule selected for a requested DD path,
-/// its match kind, precedence, path result, fidelity and value
-/// transformation (CONTEXT.md's "rule explanation").
+/// Test information identifying the rule selected for a requested DD path:
+/// its match kind, precedence, fidelity, and path result — the latter an
+/// [`Outcome`], since a path result is not always a translated path
+/// (CONTEXT.md's "rule explanation").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleExplanation {
     /// The selected rule's id, or `None` for a `Default` match.
@@ -808,14 +809,12 @@ impl ConversionMap {
             // cannot serve (ADR 0006). Its own fidelity is retained
             // verbatim for the loss log; the refusal is a separate signal.
             if rule.rel == Rel::Retyped {
-                return Some(RuleExplanation {
-                    rule_id: Some(rule.id.clone()),
-                    match_kind: MatchKind::Explicit,
-                    selector_stage: Some(found.stage),
-                    precedence: None,
+                return Some(Self::explicit_match(
+                    rule,
+                    found.stage,
                     fidelity,
-                    outcome: Outcome::Refusal(RefusalReason::UnservableRetype),
-                });
+                    Outcome::Refusal(RefusalReason::UnservableRetype),
+                ));
             }
 
             // `left_only`/`right_only` never carry a selector on the other
@@ -829,26 +828,17 @@ impl ConversionMap {
                 } else {
                     Outcome::NoSource
                 };
-                return Some(RuleExplanation {
-                    rule_id: Some(rule.id.clone()),
-                    match_kind: MatchKind::Explicit,
-                    selector_stage: Some(found.stage),
-                    precedence: None,
-                    fidelity,
-                    outcome,
-                });
+                return Some(Self::explicit_match(rule, found.stage, fidelity, outcome));
             }
 
             // Only `Rel::Renamed` remains.
             if fidelity == Fidelity::Unmappable {
-                return Some(RuleExplanation {
-                    rule_id: Some(rule.id.clone()),
-                    match_kind: MatchKind::Explicit,
-                    selector_stage: Some(found.stage),
-                    precedence: None,
+                return Some(Self::explicit_match(
+                    rule,
+                    found.stage,
                     fidelity,
-                    outcome: Outcome::Refusal(RefusalReason::Unmappable),
-                });
+                    Outcome::Refusal(RefusalReason::Unmappable),
+                ));
             }
 
             let target = match direction {
@@ -865,58 +855,77 @@ impl ConversionMap {
             };
 
             if let Some(redefine_fidelity) = self.redefine_for(&right_side_path, direction) {
-                return Some(RuleExplanation {
-                    rule_id: Some(rule.id.clone()),
-                    match_kind: MatchKind::Explicit,
-                    selector_stage: Some(found.stage),
-                    precedence: None,
-                    fidelity: redefine_fidelity,
-                    outcome: Outcome::Refusal(RefusalReason::UnitRedefinition),
-                });
+                return Some(Self::explicit_match(
+                    rule,
+                    found.stage,
+                    redefine_fidelity,
+                    Outcome::Refusal(RefusalReason::UnitRedefinition),
+                ));
             }
 
-            return Some(RuleExplanation {
-                rule_id: Some(rule.id.clone()),
-                match_kind: MatchKind::Explicit,
-                selector_stage: Some(found.stage),
-                precedence: None,
+            return Some(Self::explicit_match(
+                rule,
+                found.stage,
                 fidelity,
-                outcome: Outcome::Path {
+                Outcome::Path {
                     value_transformation: self
                         .value_transformation_for(&right_side_path, direction),
                     resolved_path,
                 },
-            });
+            ));
         }
 
         if self.default_identical {
             // Identical mapping: the right-side spelling equals the path
             // itself regardless of which side supplied it.
             if let Some(redefine_fidelity) = self.redefine_for(path, direction) {
-                return Some(RuleExplanation {
-                    rule_id: None,
-                    match_kind: MatchKind::Default,
-                    selector_stage: None,
-                    precedence: None,
-                    fidelity: redefine_fidelity,
-                    outcome: Outcome::Refusal(RefusalReason::UnitRedefinition),
-                });
+                return Some(Self::default_match(
+                    redefine_fidelity,
+                    Outcome::Refusal(RefusalReason::UnitRedefinition),
+                ));
             }
 
-            return Some(RuleExplanation {
-                rule_id: None,
-                match_kind: MatchKind::Default,
-                selector_stage: None,
-                precedence: None,
-                fidelity: Fidelity::Exact,
-                outcome: Outcome::Path {
+            return Some(Self::default_match(
+                Fidelity::Exact,
+                Outcome::Path {
                     value_transformation: self.value_transformation_for(path, direction),
                     resolved_path: path.to_string(),
                 },
-            });
+            ));
         }
 
         None
+    }
+
+    /// Builds the [`RuleExplanation`] for an explicit rule match, sharing the
+    /// match-identifying fields every outcome of a matched rule carries.
+    fn explicit_match(
+        rule: &Rule,
+        stage: SelectorStage,
+        fidelity: Fidelity,
+        outcome: Outcome,
+    ) -> RuleExplanation {
+        RuleExplanation {
+            rule_id: Some(rule.id.clone()),
+            match_kind: MatchKind::Explicit,
+            selector_stage: Some(stage),
+            precedence: None,
+            fidelity,
+            outcome,
+        }
+    }
+
+    /// Builds the [`RuleExplanation`] for a document-level identity default
+    /// match; see [`Self::explicit_match`].
+    fn default_match(fidelity: Fidelity, outcome: Outcome) -> RuleExplanation {
+        RuleExplanation {
+            rule_id: None,
+            match_kind: MatchKind::Default,
+            selector_stage: None,
+            precedence: None,
+            fidelity,
+            outcome,
+        }
     }
 
     /// The declared fidelity for `direction` if `right_side_path` falls
