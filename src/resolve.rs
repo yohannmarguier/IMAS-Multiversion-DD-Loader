@@ -1088,8 +1088,10 @@ pub(crate) fn end_action(ctx_id: c_int) -> al_status_t {
 ///   allocation is forwarded to the HLI exactly as received: the shim
 ///   neither substitutes nor frees it.
 ///
-/// `timebase` is always forwarded unchanged: resolving it independently of
-/// `field` is future work (issue #56).
+/// `field` and `timebase` are resolved independently through the same
+/// version pair. A no-source result for either means this read cannot find
+/// data in the stored representation, so the seam returns the normal
+/// success-with-null result without calling IMAS-Core.
 ///
 /// # Safety
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null
@@ -1111,68 +1113,118 @@ pub(crate) unsafe fn read_data(
         ));
     };
 
-    let Some(field_str) = c_str_or_none(field).filter(|f| !f.is_empty()) else {
-        // Nothing to translate (issue #46's `translate_down` shares this
-        // same "absent/empty is not a basis to convert" rule).
-        return forward_status!(read_data(
-            ctx_id, field, timebase, data, datatype, dim, size
-        ));
+    let translated_field = match resolve_read_path(&record, field) {
+        ReadPath::Forward => None,
+        ReadPath::Translated(path) => Some(path),
+        ReadPath::Refusal(message) => return crate::conversion_refusal(&message),
+        ReadPath::NoSource => return no_source_read(data),
     };
-    let hli_absolute = join_hli_path(&record.resolved_path, field_str);
+    let translated_timebase = match resolve_read_path(&record, timebase) {
+        ReadPath::Forward => None,
+        ReadPath::Translated(path) => Some(path),
+        ReadPath::Refusal(message) => return crate::conversion_refusal(&message),
+        ReadPath::NoSource => return no_source_read(data),
+    };
+
+    forward_status!(read_data(
+        ctx_id,
+        translated_field
+            .as_deref()
+            .map(CStr::as_ptr)
+            .unwrap_or(field),
+        translated_timebase
+            .as_deref()
+            .map(CStr::as_ptr)
+            .unwrap_or(timebase),
+        data,
+        datatype,
+        dim,
+        size,
+    ))
+}
+
+/// Returns the C ABI's normal not-found outcome for a path the artifact says
+/// has no stored source. The caller owns `data`'s validity by the public
+/// `al_read_data` contract.
+fn no_source_read(data: *mut *mut c_void) -> al_status_t {
+    // SAFETY: forwarded from `read_data`, whose safety contract requires a
+    // valid, writable data pointer.
+    unsafe {
+        *data = std::ptr::null_mut();
+    }
+    al_status_t::default()
+}
+
+/// The result of resolving one `al_read_data` path-bearing argument against
+/// a mismatched context's conversion record.
+enum ReadPath {
+    /// No usable caller path or no matching rule/default: forward it unchanged.
+    Forward,
+    /// A concrete stored-DD spelling for IMAS-Core to receive.
+    Translated(CString),
+    /// The artifact says no stored counterpart exists.
+    NoSource,
+    /// The artifact or this seam deliberately declines to serve the path.
+    Refusal(String),
+}
+
+/// Resolves one field-like argument independently, preserving the caller's
+/// relative-vs-absolute spelling after conversion has selected the stored-DD
+/// path. Both `field` and `timebase` use this one policy.
+fn resolve_read_path(
+    record: &crate::context_registry::ConversionRecord,
+    raw: *const c_char,
+) -> ReadPath {
+    let Some(raw) = c_str_or_none(raw).filter(|path| !path.is_empty()) else {
+        return ReadPath::Forward;
+    };
+    let is_absolute = raw.starts_with('/');
+    let hli_absolute = join_hli_path(&record.resolved_path, raw);
     let Some(explanation) = record
         .map
         .resolve(&hli_absolute, record.direction_to_stored)
     else {
-        // Defensive: the embedded artifact always carries a document-level
-        // identity default, so this never happens against it today. Without
-        // any matching rule or default, there is no basis to translate.
-        return forward_status!(read_data(
-            ctx_id, field, timebase, data, datatype, dim, size
-        ));
+        // The embedded artifact has an identity default, but a future
+        // artifact may not. An absent rule/default is never permission to
+        // invent a stored spelling.
+        return ReadPath::Forward;
     };
 
     match explanation.outcome {
-        Outcome::Refusal(reason) => crate::conversion_refusal(&refusal_reason_message(reason)),
-        Outcome::NoSource => {
-            // SAFETY: the caller's own contract, relied on throughout this
-            // function, requires `data` to be a valid, writable pointer.
-            unsafe {
-                *data = std::ptr::null_mut();
-            }
-            al_status_t::default()
-        }
+        Outcome::Refusal(reason) => ReadPath::Refusal(refusal_reason_message(reason)),
+        Outcome::NoSource => ReadPath::NoSource,
         Outcome::Path {
             resolved_path,
             value_transformation,
             candidates,
         } => {
             if !candidates.is_empty() {
-                return crate::conversion_refusal(
-                    "reading a merged/split path is not yet implemented (issue #57)",
+                return ReadPath::Refusal(
+                    "reading a merged/split path is not yet implemented (issue #57)".to_string(),
                 );
             }
             if value_transformation != ValueTransformation::None {
-                return crate::conversion_refusal(
-                    "value-transform execution is not yet implemented (issue #59)",
+                return ReadPath::Refusal(
+                    "value-transform execution is not yet implemented (issue #59)".to_string(),
                 );
             }
-            let Some(translated) = strip_anchor(&record.resolved_path, &resolved_path) else {
-                return crate::conversion_refusal(
-                    "translating this context's own anchor path is not yet implemented (issue #61)",
-                );
+            let translated = if is_absolute {
+                format!("/{resolved_path}")
+            } else {
+                let Some(translated) = strip_anchor(&record.resolved_path, &resolved_path) else {
+                    return ReadPath::Refusal(
+                        "translating this context's own anchor path is not yet implemented (issue #61)"
+                            .to_string(),
+                    );
+                };
+                translated
             };
-            let Ok(translated_field) = CString::new(translated) else {
-                return crate::conversion_refusal("translated field contains an interior NUL byte");
-            };
-            forward_status!(read_data(
-                ctx_id,
-                translated_field.as_ptr(),
-                timebase,
-                data,
-                datatype,
-                dim,
-                size,
-            ))
+            match CString::new(translated) {
+                Ok(path) => ReadPath::Translated(path),
+                Err(_) => {
+                    ReadPath::Refusal("translated field contains an interior NUL byte".to_string())
+                }
+            }
         }
     }
 }

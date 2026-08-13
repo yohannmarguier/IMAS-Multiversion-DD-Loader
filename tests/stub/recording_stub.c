@@ -419,6 +419,14 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
         return stamp_read_response(data, size);
     }
 
+    if (getenv("RECORDING_STUB_READ_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -23;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: read refused", sizeof status.message - 1);
+        return status;
+    }
+
     if (data != NULL) {
         *data = g_read_buffer;
     }
