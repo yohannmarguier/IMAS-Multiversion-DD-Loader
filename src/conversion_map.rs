@@ -4,20 +4,15 @@
 //! "conversion-map artifact", "rule explanation", "path-level rule" and
 //! "glob" entries. This module parses the hand-authored equilibrium 3.39.0
 //! ⇄ 4.1.1 artifact when supplied by its caller, and resolves the
-//! document-level identity default, `renamed` path-level rules, and
-//! `merged`/`split` rules — matched through any of the three selector stages
+//! document-level identity default and every path-level `rel` — matched
+//! through any of the three selector stages
 //! ADR 0004 defines (`Exact`, `Subtree`, `Glob`, tried in that order; see
-//! [`ConversionMap::best_match`] and `Selector::try_match`). A `merged` or
-//! `split` rule's ambiguous direction (the side with more than one path)
-//! resolves to an ordered [`CandidatePath`] read plan rather than a single
-//! path, per ADR 0006: every declared source, in precedence order, for later
-//! read execution to try in turn without reading data or re-deriving that
-//! order itself (#48). The remaining `rel` kinds (`moved`, `retyped`,
-//! `left_only`, `right_only`) parse structurally and participate in selector
-//! matching — so a path any of them claims is never misreported as an
-//! unmatched, defaulted-to-identity path — but `resolve` does not yet turn a
-//! match on one of them into a translated path or an explicit refusal; a
-//! later issue extends those resolution outcomes (#49).
+//! [`ConversionMap::best_match`] and `Selector::try_match`). A resolved
+//! match is an [`Outcome`]: a concrete path (with an ordered
+//! [`CandidatePath`] read plan when a `merged`/`split` direction is
+//! ambiguous), no source, or an explicit refusal. This keeps #48's ordered
+//! candidate plans and #49's refusal/no-source outcomes at the one resolver
+//! seam, before any ABI call.
 //!
 //! `<include>` and `<coverage>` elements are recognised and skipped: the
 //! included `../common/*.xml` and `../inventory/*.txt` files are a future
@@ -373,9 +368,40 @@ pub struct CandidatePath {
     pub value_transformation: ValueTransformation,
 }
 
+/// The path-bearing portion of a successful resolver result before it is
+/// wrapped with the selected rule's metadata and fidelity.
+struct PathPlan {
+    resolved_path: String,
+    right_side_paths: Vec<String>,
+    candidates: Vec<CandidatePath>,
+}
+
+/// Why the shim declines to convert a path at all — no IMAS-Core call is
+/// possible and no translated value is returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefusalReason {
+    UnservableRetype,
+    UnitRedefinition,
+    Unmappable,
+}
+
+/// What resolving a path produced beyond match information.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// A concrete path plus, where necessary, its ordered read plan.
+    Path {
+        resolved_path: String,
+        value_transformation: ValueTransformation,
+        candidates: Vec<CandidatePath>,
+    },
+    /// No path exists on the other side for this direction.
+    NoSource,
+    /// The shim declines to convert this path.
+    Refusal(RefusalReason),
+}
+
 /// Test information identifying the rule selected for a requested DD path,
-/// its match kind, precedence, path result, fidelity and value
-/// transformation (CONTEXT.md's "rule explanation").
+/// its match kind, precedence, fidelity and [`Outcome`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleExplanation {
     /// The selected rule's id, or `None` for a `Default` match.
@@ -393,21 +419,8 @@ pub struct RuleExplanation {
     /// because no single source can be declared the winner without reading
     /// data.
     pub precedence: Option<u32>,
-    /// The primary resolved path: the only path for an unambiguous
-    /// resolution, or the precedence-first entry of `candidates` when this
-    /// resolution is a read plan.
-    pub resolved_path: String,
     pub fidelity: Fidelity,
-    /// The value transformation for `resolved_path` specifically — equal to
-    /// `candidates[0].value_transformation` when `candidates` is populated.
-    pub value_transformation: ValueTransformation,
-    /// The full ordered read plan for a `merged` rule resolved in reverse or
-    /// a `split` rule resolved forward — the side with more than one
-    /// possible source, where the shim cannot pick a single winner without
-    /// reading data (ADR 0006). Empty for every other resolution, including
-    /// a `merged` rule resolved forward and a `split` rule resolved in
-    /// reverse, which each have exactly one destination and so need no plan.
-    pub candidates: Vec<CandidatePath>,
+    pub outcome: Outcome,
 }
 
 /// A conversion-map artifact failed to load because its rule data is
@@ -442,6 +455,10 @@ pub enum LoadError {
     /// compete for the same path).
     OverlappingSourceSelectors {
         role: &'static str,
+        first: String,
+        second: String,
+    },
+    OverlappingRedefineSelectors {
         first: String,
         second: String,
     },
@@ -492,6 +509,10 @@ impl fmt::Display for LoadError {
             } => write!(
                 f,
                 "overlapping glob source selectors on the {role} side: `{first}` and `{second}`"
+            ),
+            LoadError::OverlappingRedefineSelectors { first, second } => write!(
+                f,
+                "overlapping <redefine> glob selectors: `{first}` and `{second}`"
             ),
             LoadError::DuplicatePrecedence {
                 rule_id,
@@ -590,6 +611,33 @@ fn reject_ambiguous_sources(role: &'static str, sources: &[SourceEntry]) -> Resu
     Ok(())
 }
 
+/// One `<redefine>` unit change keyed on the right-side path.
+#[derive(Debug, Clone)]
+struct RedefineEntry {
+    selector: Selector,
+    fidelity_forward: Fidelity,
+    fidelity_reverse: Fidelity,
+}
+
+/// Reject unit-redefinition globs that could claim the same right-side path.
+/// Their fidelity reaches the caller in the refusal explanation, so it must
+/// not depend on XML document order (ADR 0004).
+fn reject_ambiguous_redefines(redefines: &[RedefineEntry]) -> Result<(), LoadError> {
+    for (index, redefine) in redefines.iter().enumerate() {
+        for other in &redefines[(index + 1)..] {
+            let first = redefine.selector.pattern();
+            let second = other.selector.pattern();
+            if globs_overlap(first, second) {
+                return Err(LoadError::OverlappingRedefineSelectors {
+                    first: first.to_string(),
+                    second: second.to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A loaded conversion-map artifact for one adjacent DD-version step
 /// (CONTEXT.md's "conversion-map artifact").
 #[derive(Debug, Clone)]
@@ -600,6 +648,7 @@ pub struct ConversionMap {
     pub default_identical: bool,
     rules: Vec<Rule>,
     sign_flips: HashMap<String, (CocosConvention, CocosConvention)>,
+    redefines: Vec<RedefineEntry>,
     /// Every selector that can claim a path on a forward resolve (the
     /// left-hand side of `renamed`/`moved`/`retyped`/`split`, all of
     /// `left_only`, and every `merged` rule's left-side `<from>` entries).
@@ -626,6 +675,7 @@ impl ConversionMap {
         let mut default_identical = false;
         let mut rules: Vec<Rule> = Vec::new();
         let mut sign_flips: HashMap<String, (CocosConvention, CocosConvention)> = HashMap::new();
+        let mut redefines: Vec<RedefineEntry> = Vec::new();
         let mut seen_rule_ids: HashSet<String> = HashSet::new();
 
         for child in root.children().filter(|n| n.is_element()) {
@@ -674,7 +724,7 @@ impl ConversionMap {
                     }
                 }
                 "transforms" => {
-                    parse_transforms(&child, &mut sign_flips)?;
+                    parse_transforms(&child, &mut sign_flips, &mut redefines)?;
                 }
                 _ => {}
             }
@@ -751,6 +801,7 @@ impl ConversionMap {
         }
         reject_ambiguous_sources("left", &left_sources)?;
         reject_ambiguous_sources("right", &right_sources)?;
+        reject_ambiguous_redefines(&redefines)?;
 
         Ok(ConversionMap {
             ids,
@@ -759,6 +810,7 @@ impl ConversionMap {
             default_identical,
             rules,
             sign_flips,
+            redefines,
             left_sources,
             right_sources,
         })
@@ -776,44 +828,38 @@ impl ConversionMap {
             let rule = &self.rules[found.rule_index];
 
             return match rule.rel {
-                Rel::Renamed => Some(self.resolve_renamed(rule, path, direction, &found)),
+                Rel::Renamed | Rel::Moved => {
+                    Some(self.resolve_single_path(rule, path, direction, &found))
+                }
                 Rel::Merged => Some(self.resolve_merged(rule, path, direction, &found)),
                 Rel::Split => Some(self.resolve_split(rule, path, direction, &found)),
-                // A rule of a kind not yet resolved (`moved`, `retyped`,
-                // `left_only`, `right_only`) may still hold the winning
-                // selector for this path and direction. Falling through to
-                // the identity default would misrepresent it as an
-                // untouched exact match instead of correctly declining to
-                // resolve it; every other stage is skipped too, since the
-                // winning selector already settled which stage governs this
-                // path (ADR 0004: exact, then subtree, then glob, in that
-                // order, never depending on what a later stage might have
-                // said). A later issue extends these outcomes (#49).
-                Rel::Moved | Rel::Retyped | Rel::LeftOnly | Rel::RightOnly => None,
+                Rel::Retyped => Some(Self::explicit_match(
+                    rule,
+                    &found,
+                    fidelity_for(rule, direction),
+                    Outcome::Refusal(RefusalReason::UnservableRetype),
+                )),
+                Rel::LeftOnly | Rel::RightOnly => {
+                    let fidelity = fidelity_for(rule, direction);
+                    let outcome = if fidelity == Fidelity::Unmappable {
+                        Outcome::Refusal(RefusalReason::Unmappable)
+                    } else {
+                        Outcome::NoSource
+                    };
+                    Some(Self::explicit_match(rule, &found, fidelity, outcome))
+                }
             };
         }
 
         if self.default_identical {
-            let resolved_path = path.to_string();
-            // Identical mapping: the right-side spelling equals the path
-            // itself regardless of which side supplied it.
-            return Some(RuleExplanation {
-                rule_id: None,
-                match_kind: MatchKind::Default,
-                selector_stage: None,
-                precedence: None,
-                value_transformation: self.value_transformation_for(path, direction),
-                resolved_path,
-                fidelity: Fidelity::Exact,
-                candidates: Vec::new(),
-            });
+            return Some(self.default_path(path, direction));
         }
 
         None
     }
 
-    /// Resolves a `renamed` rule's single, unambiguous path on the other side.
-    fn resolve_renamed(
+    /// Resolves a `renamed` or `moved` rule's single path on the other side.
+    fn resolve_single_path(
         &self,
         rule: &Rule,
         path: &str,
@@ -824,24 +870,33 @@ impl ConversionMap {
             Direction::Forward => (&rule.right, rule.fidelity_forward),
             Direction::Reverse => (&rule.left, rule.fidelity_reverse),
         };
+        if fidelity == Fidelity::Unmappable {
+            return Self::explicit_match(
+                rule,
+                found,
+                fidelity,
+                Outcome::Refusal(RefusalReason::Unmappable),
+            );
+        }
         let target = target
             .as_ref()
-            .expect("renamed rule always carries both paths");
+            .expect("renamed or moved rule always carries both paths");
         let resolved_path = target.render(&found.suffix, &found.captures);
         let right_side_path = match direction {
             Direction::Forward => resolved_path.clone(),
             Direction::Reverse => path.to_string(),
         };
-        RuleExplanation {
-            rule_id: Some(rule.id.clone()),
-            match_kind: MatchKind::Explicit,
-            selector_stage: Some(found.stage),
-            precedence: None,
-            value_transformation: self.value_transformation_for(&right_side_path, direction),
-            resolved_path,
+        self.explicit_path(
+            rule,
+            found,
             fidelity,
-            candidates: Vec::new(),
-        }
+            direction,
+            PathPlan {
+                resolved_path,
+                right_side_paths: vec![right_side_path],
+                candidates: Vec::new(),
+            },
+        )
     }
 
     /// Resolves a `merged` rule: forward, the requested path is one declared
@@ -861,17 +916,17 @@ impl ConversionMap {
             Direction::Forward => {
                 let target = rule.right.as_ref().expect("merged rule has a right path");
                 let resolved_path = target.render(&found.suffix, &found.captures);
-                let value_transformation = self.value_transformation_for(&resolved_path, direction);
-                RuleExplanation {
-                    rule_id: Some(rule.id.clone()),
-                    match_kind: MatchKind::Explicit,
-                    selector_stage: Some(found.stage),
-                    precedence: found.precedence,
-                    value_transformation,
-                    resolved_path,
-                    fidelity: rule.fidelity_forward,
-                    candidates: Vec::new(),
-                }
+                self.explicit_path(
+                    rule,
+                    found,
+                    rule.fidelity_forward,
+                    direction,
+                    PathPlan {
+                        right_side_paths: vec![resolved_path.clone()],
+                        resolved_path,
+                        candidates: Vec::new(),
+                    },
+                )
             }
             Direction::Reverse => {
                 // The canonical path was already supplied, so it is the
@@ -881,17 +936,17 @@ impl ConversionMap {
                         path.to_string()
                     });
                 let resolved_path = candidates[0].path.clone();
-                let value_transformation = candidates[0].value_transformation.clone();
-                RuleExplanation {
-                    rule_id: Some(rule.id.clone()),
-                    match_kind: MatchKind::Explicit,
-                    selector_stage: Some(found.stage),
-                    precedence: None,
-                    resolved_path,
-                    fidelity: rule.fidelity_reverse,
-                    value_transformation,
-                    candidates,
-                }
+                self.explicit_path(
+                    rule,
+                    found,
+                    rule.fidelity_reverse,
+                    direction,
+                    PathPlan {
+                        resolved_path,
+                        right_side_paths: vec![path.to_string()],
+                        candidates,
+                    },
+                )
             }
         }
     }
@@ -917,34 +972,122 @@ impl ConversionMap {
                     candidate.to_string()
                 });
                 let resolved_path = candidates[0].path.clone();
-                let value_transformation = candidates[0].value_transformation.clone();
-                RuleExplanation {
-                    rule_id: Some(rule.id.clone()),
-                    match_kind: MatchKind::Explicit,
-                    selector_stage: Some(found.stage),
-                    precedence: None,
-                    resolved_path,
-                    fidelity: rule.fidelity_forward,
-                    value_transformation,
-                    candidates,
-                }
+                let right_side_paths = candidates
+                    .iter()
+                    .map(|candidate| candidate.path.clone())
+                    .collect();
+                self.explicit_path(
+                    rule,
+                    found,
+                    rule.fidelity_forward,
+                    direction,
+                    PathPlan {
+                        resolved_path,
+                        right_side_paths,
+                        candidates,
+                    },
+                )
             }
             Direction::Reverse => {
                 let target = rule.left.as_ref().expect("split rule has a left path");
                 let resolved_path = target.render(&found.suffix, &found.captures);
-                let value_transformation = self.value_transformation_for(path, direction);
-                RuleExplanation {
-                    rule_id: Some(rule.id.clone()),
-                    match_kind: MatchKind::Explicit,
-                    selector_stage: Some(found.stage),
-                    precedence: found.precedence,
-                    value_transformation,
-                    resolved_path,
-                    fidelity: rule.fidelity_reverse,
-                    candidates: Vec::new(),
-                }
+                self.explicit_path(
+                    rule,
+                    found,
+                    rule.fidelity_reverse,
+                    direction,
+                    PathPlan {
+                        resolved_path,
+                        right_side_paths: vec![path.to_string()],
+                        candidates: Vec::new(),
+                    },
+                )
             }
         }
+    }
+
+    fn explicit_path(
+        &self,
+        rule: &Rule,
+        found: &BestMatch,
+        fidelity: Fidelity,
+        direction: Direction,
+        plan: PathPlan,
+    ) -> RuleExplanation {
+        if let Some(redefine_fidelity) = plan
+            .right_side_paths
+            .iter()
+            .find_map(|path| self.redefine_for(path, direction))
+        {
+            return Self::explicit_match(
+                rule,
+                found,
+                redefine_fidelity,
+                Outcome::Refusal(RefusalReason::UnitRedefinition),
+            );
+        }
+        let value_transformation =
+            self.value_transformation_for(&plan.right_side_paths[0], direction);
+        Self::explicit_match(
+            rule,
+            found,
+            fidelity,
+            Outcome::Path {
+                resolved_path: plan.resolved_path,
+                value_transformation,
+                candidates: plan.candidates,
+            },
+        )
+    }
+
+    fn default_path(&self, path: &str, direction: Direction) -> RuleExplanation {
+        let (fidelity, outcome) = match self.redefine_for(path, direction) {
+            Some(fidelity) => (fidelity, Outcome::Refusal(RefusalReason::UnitRedefinition)),
+            None => (
+                Fidelity::Exact,
+                Outcome::Path {
+                    resolved_path: path.to_string(),
+                    value_transformation: self.value_transformation_for(path, direction),
+                    candidates: Vec::new(),
+                },
+            ),
+        };
+        RuleExplanation {
+            rule_id: None,
+            match_kind: MatchKind::Default,
+            selector_stage: None,
+            precedence: None,
+            fidelity,
+            outcome,
+        }
+    }
+
+    fn explicit_match(
+        rule: &Rule,
+        found: &BestMatch,
+        fidelity: Fidelity,
+        outcome: Outcome,
+    ) -> RuleExplanation {
+        RuleExplanation {
+            rule_id: Some(rule.id.clone()),
+            match_kind: MatchKind::Explicit,
+            selector_stage: Some(found.stage),
+            precedence: found.precedence,
+            fidelity,
+            outcome,
+        }
+    }
+
+    fn redefine_for(&self, right_side_path: &str, direction: Direction) -> Option<Fidelity> {
+        self.redefines.iter().find_map(|entry| {
+            entry
+                .selector
+                .try_match(right_side_path)
+                .map(|_| match direction {
+                    Direction::Forward => entry.fidelity_forward,
+                    Direction::Reverse => entry.fidelity_reverse,
+                })
+        })
     }
 
     /// Renders every `<from>` entry's selector against `found`'s match,
@@ -1038,6 +1181,13 @@ impl ConversionMap {
             },
             None => ValueTransformation::None,
         }
+    }
+}
+
+fn fidelity_for(rule: &Rule, direction: Direction) -> Fidelity {
+    match direction {
+        Direction::Forward => rule.fidelity_forward,
+        Direction::Reverse => rule.fidelity_reverse,
     }
 }
 
@@ -1311,6 +1461,7 @@ fn parse_rule(node: &roxmltree::Node) -> Result<Rule, LoadError> {
 fn parse_transforms(
     node: &roxmltree::Node,
     sign_flips: &mut HashMap<String, (CocosConvention, CocosConvention)>,
+    redefines: &mut Vec<RedefineEntry>,
 ) -> Result<(), LoadError> {
     for child in node.children().filter(|n| n.is_element()) {
         match child.tag_name().name() {
@@ -1331,7 +1482,7 @@ fn parse_transforms(
                 }
             }
             "redefine" => {
-                required_attr(&child, "redefine", "glob")?;
+                let pattern = required_attr(&child, "redefine", "glob")?.to_string();
                 required_attr(&child, "redefine", "left-units")?;
                 required_attr(&child, "redefine", "right-units")?;
                 let fidelity_node = child
@@ -1341,8 +1492,13 @@ fn parse_transforms(
                         element: "redefine".to_string(),
                         attribute: "fidelity".to_string(),
                     })?;
-                parse_fidelity_value(&fidelity_node, "forward")?;
-                parse_fidelity_value(&fidelity_node, "reverse")?;
+                let fidelity_forward = parse_fidelity_value(&fidelity_node, "forward")?;
+                let fidelity_reverse = parse_fidelity_value(&fidelity_node, "reverse")?;
+                redefines.push(RedefineEntry {
+                    selector: Selector::new(SelectorStage::Glob, pattern),
+                    fidelity_forward,
+                    fidelity_reverse,
+                });
             }
             _ => {}
         }
@@ -1355,6 +1511,30 @@ mod tests {
     use super::*;
 
     const APPROVED_ARTIFACT: &str = include_str!("../docs/3.39.0--4.1.1.xml");
+
+    fn resolved_path(explanation: &RuleExplanation) -> &str {
+        match &explanation.outcome {
+            Outcome::Path { resolved_path, .. } => resolved_path,
+            other => panic!("expected a translated path, got {other:?}"),
+        }
+    }
+
+    fn value_transformation(explanation: &RuleExplanation) -> &ValueTransformation {
+        match &explanation.outcome {
+            Outcome::Path {
+                value_transformation,
+                ..
+            } => value_transformation,
+            other => panic!("expected a translated path, got {other:?}"),
+        }
+    }
+
+    fn candidates(explanation: &RuleExplanation) -> &[CandidatePath] {
+        match &explanation.outcome {
+            Outcome::Path { candidates, .. } => candidates,
+            other => panic!("expected a translated path, got {other:?}"),
+        }
+    }
 
     #[test]
     fn rejects_malformed_xml() {
@@ -1715,9 +1895,12 @@ mod tests {
             .expect("default-identical path must resolve");
         assert_eq!(explanation.match_kind, MatchKind::Default);
         assert_eq!(explanation.rule_id, None);
-        assert_eq!(explanation.resolved_path, "vacuum_toroidal_field/b0");
+        assert_eq!(resolved_path(&explanation), "vacuum_toroidal_field/b0");
         assert_eq!(explanation.fidelity, Fidelity::Exact);
-        assert_eq!(explanation.value_transformation, ValueTransformation::None);
+        assert_eq!(
+            *value_transformation(&explanation),
+            ValueTransformation::None
+        );
 
         // A map with no document-level default must report a genuine miss as
         // `None`, distinct from the `Some(Default match)` case above.
@@ -1748,11 +1931,11 @@ mod tests {
         assert_eq!(forward.rule_id.as_deref(), Some("rename-beta-normal"));
         assert_eq!(forward.precedence, None);
         assert_eq!(
-            forward.resolved_path,
+            resolved_path(&forward),
             "time_slice/global_quantities/beta_tor_norm"
         );
         assert_eq!(forward.fidelity, Fidelity::Exact);
-        assert_eq!(forward.value_transformation, ValueTransformation::None);
+        assert_eq!(*value_transformation(&forward), ValueTransformation::None);
 
         let reverse = map
             .resolve(
@@ -1763,34 +1946,26 @@ mod tests {
         assert_eq!(reverse.match_kind, MatchKind::Explicit);
         assert_eq!(reverse.rule_id.as_deref(), Some("rename-beta-normal"));
         assert_eq!(
-            reverse.resolved_path,
+            resolved_path(&reverse),
             "time_slice/global_quantities/beta_normal"
         );
         assert_eq!(reverse.fidelity, Fidelity::Exact);
-        assert_eq!(reverse.value_transformation, ValueTransformation::None);
+        assert_eq!(*value_transformation(&reverse), ValueTransformation::None);
     }
 
     #[test]
-    fn paths_claimed_by_a_not_yet_resolved_rule_kind_do_not_default_to_identity() {
+    fn side_only_rules_do_not_default_to_identity() {
         let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
 
-        // left_only: this DD3 path was dropped, not carried through unchanged.
-        assert_eq!(
-            map.resolve("time_slice/boundary/lcfs", Direction::Forward),
-            None
-        );
+        let left_only = map
+            .resolve("time_slice/boundary/lcfs", Direction::Forward)
+            .expect("a left-only rule claims this path");
+        assert_eq!(left_only.outcome, Outcome::NoSource);
 
-        // moved: this DD3 path relocated under `boundary`, not kept in place.
-        assert_eq!(
-            map.resolve("time_slice/boundary_separatrix/gap", Direction::Forward),
-            None
-        );
-
-        // right_only: this DD4-only path has no DD3 spelling to fall back to.
-        assert_eq!(
-            map.resolve("time_slice/contour_tree", Direction::Reverse),
-            None
-        );
+        let right_only = map
+            .resolve("time_slice/contour_tree", Direction::Reverse)
+            .expect("a right-only rule claims this path");
+        assert_eq!(right_only.outcome, Outcome::NoSource);
     }
 
     #[test]
@@ -1812,13 +1987,12 @@ mod tests {
         assert_eq!(explanation.fidelity, Fidelity::Exact);
         assert_eq!(explanation.precedence, None);
 
-        let candidates: Vec<(&str, u32)> = explanation
-            .candidates
+        let candidate_paths: Vec<(&str, u32)> = candidates(&explanation)
             .iter()
             .map(|c| (c.path.as_str(), c.precedence))
             .collect();
         assert_eq!(
-            candidates,
+            candidate_paths,
             vec![
                 ("time_slice/profiles_2d/b_field_phi", 1),
                 ("time_slice/profiles_2d/b_field_tor", 2),
@@ -1827,7 +2001,7 @@ mod tests {
         );
         // The precedence-first candidate is surfaced as the primary result.
         assert_eq!(
-            explanation.resolved_path,
+            resolved_path(&explanation),
             "time_slice/profiles_2d/b_field_phi"
         );
     }
@@ -1853,8 +2027,7 @@ mod tests {
         let explanation = map
             .resolve("right/canonical", Direction::Reverse)
             .expect("merged rule must resolve in reverse");
-        let paths: Vec<&str> = explanation
-            .candidates
+        let paths: Vec<&str> = candidates(&explanation)
             .iter()
             .map(|c| c.path.as_str())
             .collect();
@@ -1873,10 +2046,10 @@ mod tests {
             .expect("a merged rule's DD3 alias must resolve forward");
         assert_eq!(explanation.match_kind, MatchKind::Explicit);
         assert_eq!(explanation.rule_id.as_deref(), Some("fold-constraints-j"));
-        assert_eq!(explanation.resolved_path, "time_slice/constraints/j_phi");
+        assert_eq!(resolved_path(&explanation), "time_slice/constraints/j_phi");
         assert_eq!(explanation.precedence, Some(2));
         assert_eq!(explanation.fidelity, Fidelity::Lossy);
-        assert!(explanation.candidates.is_empty());
+        assert!(candidates(&explanation).is_empty());
     }
 
     #[test]
@@ -1891,17 +2064,16 @@ mod tests {
         assert_eq!(explanation.fidelity, Fidelity::Exact);
         assert_eq!(explanation.precedence, None);
         assert_eq!(
-            explanation.resolved_path,
+            resolved_path(&explanation),
             "time_slice/global_quantities/psi_axis"
         );
 
-        let candidates: Vec<(&str, u32)> = explanation
-            .candidates
+        let candidate_paths: Vec<(&str, u32)> = candidates(&explanation)
             .iter()
             .map(|c| (c.path.as_str(), c.precedence))
             .collect();
         assert_eq!(
-            candidates,
+            candidate_paths,
             vec![
                 ("time_slice/global_quantities/psi_axis", 1),
                 ("time_slice/global_quantities/psi_magnetic_axis", 2),
@@ -1910,7 +2082,7 @@ mod tests {
         // Both destinations are separately declared `<flip>` targets; each
         // candidate must carry its own value transformation rather than one
         // shared for the whole rule.
-        for candidate in &explanation.candidates {
+        for candidate in candidates(&explanation) {
             assert_eq!(
                 candidate.value_transformation,
                 ValueTransformation::SignFlip {
@@ -1934,19 +2106,19 @@ mod tests {
         assert_eq!(explanation.match_kind, MatchKind::Explicit);
         assert_eq!(explanation.rule_id.as_deref(), Some("split-psi-axis"));
         assert_eq!(
-            explanation.resolved_path,
+            resolved_path(&explanation),
             "time_slice/global_quantities/psi_axis"
         );
         assert_eq!(explanation.precedence, Some(2));
         assert_eq!(explanation.fidelity, Fidelity::Exact);
         assert_eq!(
-            explanation.value_transformation,
+            *value_transformation(&explanation),
             ValueTransformation::SignFlip {
                 from_cocos: CocosConvention("17".to_string()),
                 to_cocos: CocosConvention("11".to_string()),
             }
         );
-        assert!(explanation.candidates.is_empty());
+        assert!(candidates(&explanation).is_empty());
     }
 
     #[test]
@@ -1986,7 +2158,7 @@ mod tests {
             .expect("identical path must resolve");
         assert_eq!(forward.match_kind, MatchKind::Default);
         assert_eq!(
-            forward.value_transformation,
+            *value_transformation(&forward),
             ValueTransformation::SignFlip {
                 from_cocos: CocosConvention("11".to_string()),
                 to_cocos: CocosConvention("17".to_string()),
@@ -1998,7 +2170,7 @@ mod tests {
             .expect("identical path must resolve in reverse too");
         assert_eq!(reverse.match_kind, MatchKind::Default);
         assert_eq!(
-            reverse.value_transformation,
+            *value_transformation(&reverse),
             ValueTransformation::SignFlip {
                 from_cocos: CocosConvention("17".to_string()),
                 to_cocos: CocosConvention("11".to_string()),
@@ -2034,7 +2206,7 @@ mod tests {
             .expect("the exact rule must claim this path");
         assert_eq!(explanation.rule_id.as_deref(), Some("exact-rule"));
         assert_eq!(explanation.selector_stage, Some(SelectorStage::Exact));
-        assert_eq!(explanation.resolved_path, "z");
+        assert_eq!(resolved_path(&explanation), "z");
     }
 
     #[test]
@@ -2072,20 +2244,20 @@ mod tests {
             .resolve("a/old", Direction::Forward)
             .expect("the anchor path is itself covered by its own subtree rule");
         assert_eq!(anchor.selector_stage, Some(SelectorStage::Subtree));
-        assert_eq!(anchor.resolved_path, "a/new");
+        assert_eq!(resolved_path(&anchor), "a/new");
 
         // A nested descendant: the unmatched suffix must be preserved.
         let nested = map
             .resolve("a/old/leaf", Direction::Forward)
             .expect("a path nested under the subtree anchor must also resolve");
         assert_eq!(nested.selector_stage, Some(SelectorStage::Subtree));
-        assert_eq!(nested.resolved_path, "a/new/leaf");
+        assert_eq!(resolved_path(&nested), "a/new/leaf");
 
         // Reverse direction must also preserve the suffix.
         let reverse = map
             .resolve("a/new/leaf", Direction::Reverse)
             .expect("the subtree rule is direction-neutral");
-        assert_eq!(reverse.resolved_path, "a/old/leaf");
+        assert_eq!(resolved_path(&reverse), "a/old/leaf");
 
         // A sibling that merely shares the anchor as a string prefix (not a
         // path-segment boundary) must not match.
@@ -2117,14 +2289,14 @@ mod tests {
             .resolve("a/b/c/d", Direction::Forward)
             .expect("covered by the deeper subtree anchor");
         assert_eq!(explanation.rule_id.as_deref(), Some("deep"));
-        assert_eq!(explanation.resolved_path, "y/d");
+        assert_eq!(resolved_path(&explanation), "y/d");
 
         // Only the shallow anchor covers this one.
         let explanation = map
             .resolve("a/b/other", Direction::Forward)
             .expect("covered only by the shallow subtree anchor");
         assert_eq!(explanation.rule_id.as_deref(), Some("shallow"));
-        assert_eq!(explanation.resolved_path, "x/other");
+        assert_eq!(resolved_path(&explanation), "x/other");
     }
 
     #[test]
@@ -2180,7 +2352,7 @@ mod tests {
             .expect("the glob rule must claim this path");
         assert_eq!(glob_match.rule_id.as_deref(), Some("glob-rule"));
         assert_eq!(glob_match.selector_stage, Some(SelectorStage::Glob));
-        assert_eq!(glob_match.resolved_path, "constraints/flux_loop/value");
+        assert_eq!(resolved_path(&glob_match), "constraints/flux_loop/value");
 
         // An exact selector for the very same glob-matchable path must win instead.
         let exact_match = map
@@ -2188,7 +2360,7 @@ mod tests {
             .expect("the exact rule must claim this path over the glob fallback");
         assert_eq!(exact_match.rule_id.as_deref(), Some("exact-rule"));
         assert_eq!(exact_match.selector_stage, Some(SelectorStage::Exact));
-        assert_eq!(exact_match.resolved_path, "constraints/ip/exact-value");
+        assert_eq!(resolved_path(&exact_match), "constraints/ip/exact-value");
 
         // A path with a different segment count than the glob pattern is not covered.
         assert_eq!(
@@ -2281,9 +2453,75 @@ mod tests {
         // document-level identity default instead of correctly declining to
         // resolve.
         let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
+        let explanation = map
+            .resolve("time_slice/boundary/lcfs/r", Direction::Forward)
+            .expect("the subtree rule claims this descendant");
+        assert_eq!(explanation.outcome, Outcome::NoSource);
+    }
+
+    #[test]
+    fn refusal_and_moved_outcomes_retain_the_rule_explanation() {
+        let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
+
+        let retype = map
+            .resolve("grids_ggd/grid/space/coordinates_type", Direction::Forward)
+            .expect("the retype rule claims this path");
+        assert_eq!(retype.rule_id.as_deref(), Some("retype-coordinates-type"));
+        assert_eq!(retype.fidelity, Fidelity::Exact);
         assert_eq!(
-            map.resolve("time_slice/boundary/lcfs/r", Direction::Forward),
-            None
+            retype.outcome,
+            Outcome::Refusal(RefusalReason::UnservableRetype)
+        );
+
+        let moved = map
+            .resolve(
+                "time_slice/boundary_separatrix/closest_wall_point/r",
+                Direction::Forward,
+            )
+            .expect("the moved rule claims this path");
+        assert_eq!(moved.rule_id.as_deref(), Some("move-closest-wall-point"));
+        assert_eq!(moved.fidelity, Fidelity::Exact);
+        assert_eq!(
+            resolved_path(&moved),
+            "time_slice/boundary/closest_wall_point/r"
+        );
+
+        let unit_redefinition = map
+            .resolve(
+                "time_slice/constraints/strike_point/chi_squared_r",
+                Direction::Forward,
+            )
+            .expect("the identity default resolves this path");
+        assert_eq!(unit_redefinition.match_kind, MatchKind::Default);
+        assert_eq!(unit_redefinition.fidelity, Fidelity::Unmappable);
+        assert_eq!(
+            unit_redefinition.outcome,
+            Outcome::Refusal(RefusalReason::UnitRedefinition)
+        );
+    }
+
+    #[test]
+    fn overlapping_redefine_globs_invalidate_the_map() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <transforms>
+                <redefine glob="time_slice/*/chi_squared_r" left-units="m" right-units="m^-2">
+                  <fidelity forward="unmappable" reverse="unmappable"/>
+                </redefine>
+                <redefine glob="time_slice/constraints/*" left-units="m" right-units="m^-2">
+                  <fidelity forward="lossy" reverse="lossy"/>
+                </redefine>
+              </transforms>
+            </ids-map>
+        "#;
+        assert_eq!(
+            ConversionMap::load(xml).unwrap_err(),
+            LoadError::OverlappingRedefineSelectors {
+                first: "time_slice/*/chi_squared_r".to_string(),
+                second: "time_slice/constraints/*".to_string(),
+            }
         );
     }
 }
