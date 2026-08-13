@@ -19,7 +19,16 @@
 //! is recorded with no stored DD version and no conversion-map reference of
 //! its own. It exists only so operation records opened under it can carry
 //! its context ID as their pulse context ID; recording one never resolves
-//! rules or transforms anything by itself.
+//! rules or transforms anything by itself. It also carries a small cache of
+//! discovered occurrence versions (issue #53), keyed by `dataobjectname`: the
+//! fact that a stored version, once found to mismatch the HLI DD version,
+//! lets a later re-open of that same occurrence translate
+//! `al_begin_global_action`'s `datapath` argument *before* IMAS-Core is
+//! called, when the version-stamp read that would otherwise discover it
+//! cannot happen until after the open (ADR 0002). This cache lives on the
+//! data-entry entry rather than freestanding precisely so recording a new
+//! data-entry context at a recycled ID resets it along with everything else
+//! at that ID.
 //!
 //! A root's root identity is its own context ID. A child (arraystruct)
 //! record resolves its root identity, pulse context ID, and shared
@@ -35,12 +44,13 @@
 //! map stays alive exactly as long as some record references it and is
 //! dropped once none do — no explicit eviction needed.
 //!
-//! Not yet wired into any ABI seam — that lands with the lifecycle and
-//! discovery work in later tickets under #43.
+//! Wired into the data-entry and global-action seams as of issue #53; the
+//! read-path (`al_read_data`) and arraystruct lifecycle land in later
+//! tickets under #43.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use crate::conversion_map::ConversionMap;
 use crate::dd_version::DdVersion;
@@ -95,8 +105,9 @@ pub(crate) struct ConversionRecord {
 #[derive(Debug, Clone)]
 enum Entry {
     /// A pulse context: no stored DD version, no conversion map, not
-    /// itself conversion-eligible.
-    DataEntry,
+    /// itself conversion-eligible. Carries the occurrence-version cache
+    /// described in this module's doc comment, keyed by `dataobjectname`.
+    DataEntry(HashMap<String, DdVersion>),
     /// A conversion-eligible context.
     Conversion(ConversionRecord),
 }
@@ -121,13 +132,15 @@ impl ContextRegistry {
     }
 
     /// Records `ctx_id` as a data-entry (pulse) context. Replaces whatever
-    /// record — of any kind — previously lived at `ctx_id`.
+    /// record — of any kind — previously lived at `ctx_id`, so a recycled ID
+    /// starts with an empty occurrence-version cache rather than inheriting
+    /// a previous pulse's discoveries.
     pub(crate) fn record_dataentry(&self, ctx_id: ContextId) {
         self.state
             .lock()
             .unwrap()
             .entries
-            .insert(ctx_id, Entry::DataEntry);
+            .insert(ctx_id, Entry::DataEntry(HashMap::new()));
     }
 
     /// Records `ctx_id` as a root conversion record when the stored and HLI
@@ -187,7 +200,7 @@ impl ContextRegistry {
         let mut state = self.state.lock().unwrap();
         let parent = match state.entries.get(&parent_ctx_id) {
             Some(Entry::Conversion(record)) => record.clone(),
-            Some(Entry::DataEntry) | None => {
+            Some(Entry::DataEntry(_)) | None => {
                 state.entries.remove(&ctx_id);
                 return false;
             }
@@ -214,7 +227,7 @@ impl ContextRegistry {
     pub(crate) fn lookup(&self, ctx_id: ContextId) -> Option<ConversionRecord> {
         match self.state.lock().unwrap().entries.get(&ctx_id) {
             Some(Entry::Conversion(record)) => Some(record.clone()),
-            Some(Entry::DataEntry) | None => None,
+            Some(Entry::DataEntry(_)) | None => None,
         }
     }
 
@@ -224,8 +237,58 @@ impl ContextRegistry {
     /// unrecorded/recycled ID.
     pub(crate) fn pulse_ctx_id(&self, ctx_id: ContextId) -> Option<ContextId> {
         match self.state.lock().unwrap().entries.get(&ctx_id) {
-            Some(Entry::DataEntry) => Some(ctx_id),
+            Some(Entry::DataEntry(_)) => Some(ctx_id),
             Some(Entry::Conversion(_)) | None => None,
+        }
+    }
+
+    /// Returns the stored DD version already discovered for `dataobjectname`
+    /// under the live data-entry context `pulse_ctx_id`, if a prior open of
+    /// that same occurrence found one that mismatches the HLI DD version.
+    /// `None` covers an occurrence never seen before, one already known to
+    /// match (or be unstamped), and a `pulse_ctx_id` that names no live
+    /// data-entry context — every one of these means "nothing to translate
+    /// yet," which is exactly how `al_begin_global_action` treats it (issue
+    /// #53, ADR 0002).
+    pub(crate) fn known_stored_version(
+        &self,
+        pulse_ctx_id: ContextId,
+        dataobjectname: &str,
+    ) -> Option<DdVersion> {
+        match self.state.lock().unwrap().entries.get(&pulse_ctx_id) {
+            Some(Entry::DataEntry(known)) => known.get(dataobjectname).cloned(),
+            _ => None,
+        }
+    }
+
+    /// Records that `dataobjectname` under `pulse_ctx_id` is now known to be
+    /// stored at `version`, which differs from the HLI DD version — the fact
+    /// a later re-open of the same occurrence needs to translate
+    /// `al_begin_global_action`'s `datapath` before calling IMAS-Core. A
+    /// no-op if `pulse_ctx_id` no longer names a live data-entry context.
+    pub(crate) fn remember_mismatched_occurrence(
+        &self,
+        pulse_ctx_id: ContextId,
+        dataobjectname: String,
+        version: DdVersion,
+    ) {
+        if let Some(Entry::DataEntry(known)) =
+            self.state.lock().unwrap().entries.get_mut(&pulse_ctx_id)
+        {
+            known.insert(dataobjectname, version);
+        }
+    }
+
+    /// Forgets any previously discovered mismatch for `dataobjectname` under
+    /// `pulse_ctx_id` — called when a later open finds the occurrence now
+    /// matches the HLI DD version, so a stale mismatch can never linger and
+    /// wrongly translate a future `datapath`. A no-op if nothing was cached
+    /// or `pulse_ctx_id` no longer names a live data-entry context.
+    pub(crate) fn forget_occurrence_version(&self, pulse_ctx_id: ContextId, dataobjectname: &str) {
+        if let Some(Entry::DataEntry(known)) =
+            self.state.lock().unwrap().entries.get_mut(&pulse_ctx_id)
+        {
+            known.remove(dataobjectname);
         }
     }
 
@@ -241,7 +304,11 @@ impl ContextRegistry {
     /// result otherwise. A map already unreferenced by every record (its
     /// cached `Weak` no longer upgrades) is treated as absent: `create` runs
     /// again and its result replaces the stale cache entry.
-    fn get_or_create_map(
+    ///
+    /// Exposed beyond `record_root` so a seam can translate a path (e.g.
+    /// `al_begin_global_action`'s `datapath`) against an already-known
+    /// mismatch before any context exists yet to record.
+    pub(crate) fn get_or_create_map(
         &self,
         key: MapCacheKey,
         create: impl FnOnce() -> ConversionMap,
@@ -255,6 +322,12 @@ impl ContextRegistry {
         map
     }
 }
+
+/// The single process-wide context registry every seam shares (CONTEXT.md's
+/// "context registry"). Lazily initialised on first use rather than a bare
+/// `static` because `ContextRegistry::new` allocates a `Mutex`-guarded
+/// `HashMap`, which is not const-constructible.
+pub(crate) static REGISTRY: LazyLock<ContextRegistry> = LazyLock::new(ContextRegistry::new);
 
 #[cfg(test)]
 mod tests {
@@ -727,5 +800,83 @@ mod tests {
         for handle in handles {
             handle.join().unwrap();
         }
+    }
+
+    #[test]
+    fn an_occurrence_never_seen_has_no_known_stored_version() {
+        let registry = ContextRegistry::new();
+        registry.record_dataentry(10);
+
+        assert_eq!(registry.known_stored_version(10, "equilibrium"), None);
+    }
+
+    #[test]
+    fn a_remembered_mismatch_is_returned_by_known_stored_version() {
+        let registry = ContextRegistry::new();
+        registry.record_dataentry(10);
+
+        registry.remember_mismatched_occurrence(10, "equilibrium".to_string(), version("3.39.0"));
+
+        assert_eq!(
+            registry.known_stored_version(10, "equilibrium"),
+            Some(version("3.39.0"))
+        );
+        // A distinct occurrence under the same pulse is unaffected.
+        assert_eq!(registry.known_stored_version(10, "core_profiles"), None);
+    }
+
+    #[test]
+    fn forgetting_an_occurrence_clears_only_that_occurrence() {
+        let registry = ContextRegistry::new();
+        registry.record_dataentry(10);
+        registry.remember_mismatched_occurrence(10, "equilibrium".to_string(), version("3.39.0"));
+        registry.remember_mismatched_occurrence(10, "core_profiles".to_string(), version("3.39.0"));
+
+        registry.forget_occurrence_version(10, "equilibrium");
+
+        assert_eq!(registry.known_stored_version(10, "equilibrium"), None);
+        assert_eq!(
+            registry.known_stored_version(10, "core_profiles"),
+            Some(version("3.39.0"))
+        );
+    }
+
+    #[test]
+    fn forgetting_an_unremembered_occurrence_is_a_no_op() {
+        let registry = ContextRegistry::new();
+        registry.record_dataentry(10);
+
+        registry.forget_occurrence_version(10, "equilibrium");
+
+        assert_eq!(registry.known_stored_version(10, "equilibrium"), None);
+    }
+
+    #[test]
+    fn occurrence_version_methods_are_no_ops_for_a_non_dataentry_or_unrecorded_id() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "p".to_string(), 1));
+
+        // A conversion record is not a data-entry context: nothing to cache
+        // onto, and looking it up must not panic or silently succeed.
+        registry.remember_mismatched_occurrence(5, "equilibrium".to_string(), version("3.39.0"));
+        assert_eq!(registry.known_stored_version(5, "equilibrium"), None);
+        registry.forget_occurrence_version(5, "equilibrium");
+
+        // An entirely unrecorded ID behaves the same way.
+        registry.remember_mismatched_occurrence(999, "equilibrium".to_string(), version("3.39.0"));
+        assert_eq!(registry.known_stored_version(999, "equilibrium"), None);
+    }
+
+    #[test]
+    fn recording_a_fresh_dataentry_at_a_recycled_id_resets_its_occurrence_cache() {
+        let registry = ContextRegistry::new();
+        registry.record_dataentry(10);
+        registry.remember_mismatched_occurrence(10, "equilibrium".to_string(), version("3.39.0"));
+
+        // A new pulse reusing the same context ID must not inherit the old
+        // pulse's discoveries.
+        registry.record_dataentry(10);
+
+        assert_eq!(registry.known_stored_version(10, "equilibrium"), None);
     }
 }

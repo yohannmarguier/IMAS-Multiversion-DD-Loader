@@ -540,6 +540,64 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(hli-dd-version-unset-first-open-then-setter-refused PROPERTIES
         ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
 
+    # --- DD-version stamp discovery test: the al_begin_global_action seam
+    # and al_begin_dataentry_action's registration (issue #53, ADR 0002,
+    # ADR 0007, ADR 0009, ADR 0012) ---
+    #
+    # The HLI DD version latch and the context registry are both process-
+    # wide, so each scenario needs its own fresh process, same as
+    # hli_dd_version_test's scenarios.
+    add_executable(version_discovery_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/version_discovery_test.c")
+    target_link_libraries(version_discovery_test PRIVATE
+        imas_mvdd_loader ${CMAKE_DL_LIBS})
+    target_compile_definitions(version_discovery_test PRIVATE
+        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+    add_dependencies(version_discovery_test imas_mvdd_capi recording_stub)
+    set_target_properties(version_discovery_test PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    add_test(NAME version-discovery-dataentry-success-forwards-uri-and-mode
+        COMMAND version_discovery_test dataentry-success-forwards-uri-and-mode)
+    set_tests_properties(version-discovery-dataentry-success-forwards-uri-and-mode PROPERTIES
+        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+    add_test(NAME version-discovery-dataentry-failure-forwards-status-unchanged
+        COMMAND version_discovery_test dataentry-failure-forwards-status-unchanged)
+    set_tests_properties(version-discovery-dataentry-failure-forwards-status-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_DATAENTRY_FAIL=1")
+
+    add_test(NAME version-discovery-hli-unset-global-action-is-plain-forward
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
+            $<TARGET_FILE:version_discovery_test> hli-unset-global-action-is-plain-forward)
+    set_tests_properties(version-discovery-hli-unset-global-action-is-plain-forward PROPERTIES
+        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+    add_test(NAME version-discovery-unstamped-occurrence-forwards-datapath-unchanged
+        COMMAND version_discovery_test unstamped-occurrence-forwards-datapath-unchanged)
+    set_tests_properties(version-discovery-unstamped-occurrence-forwards-datapath-unchanged
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+
+    add_test(NAME version-discovery-matching-version-forwards-datapath-unchanged
+        COMMAND version_discovery_test matching-version-forwards-datapath-unchanged)
+    set_tests_properties(version-discovery-matching-version-forwards-datapath-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME version-discovery-mismatch-translates-datapath-on-second-open
+        COMMAND version_discovery_test mismatch-translates-datapath-on-second-open)
+    set_tests_properties(version-discovery-mismatch-translates-datapath-on-second-open PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME version-discovery-malformed-stamp-refuses-and-ends-context
+        COMMAND version_discovery_test malformed-stamp-refuses-and-ends-context)
+    set_tests_properties(version-discovery-malformed-stamp-refuses-and-ends-context PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=not-a-version")
+
     if(IMAS_MVDD_REAL_CORE_TESTS)
         # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
     #

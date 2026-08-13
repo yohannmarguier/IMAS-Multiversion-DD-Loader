@@ -150,6 +150,23 @@ al_status_t al_begin_dataentry_action(const char *uri, int mode, int *dectxID) {
     free(g_dataentry_uri);
     g_dataentry_uri = record_str(uri);
     g_dataentry_mode = mode;
+
+    /* RECORDING_STUB_DATAENTRY_FAIL lets a test simulate a failed open: the
+     * shim must still forward uri/mode unchanged (verified above via the
+     * recording, which runs before this check) and must register no
+     * data-entry context for the caller-visible failure. */
+    if (getenv("RECORDING_STUB_DATAENTRY_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -7;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: dataentry open refused",
+                sizeof status.message - 1);
+        if (dectxID != NULL) {
+            *dectxID = 0;
+        }
+        return status;
+    }
+
     if (dectxID != NULL) {
         *dectxID = 1001;
     }
@@ -294,6 +311,49 @@ static int g_read_datatype = 0;
 static int g_read_dim = 0;
 static char g_read_buffer[] = "recording-stub: read data payload";
 
+#define VERSION_STAMP_FIELD "ids_properties/version_put/data_dictionary"
+
+/* RECORDING_STUB_STAMP_VERSION lets a test control the DD-version stamp
+ * discovery read (issue #53) independently of every other al_read_data call:
+ * unset means the stamp is absent (the shim's "unstamped" case), set to a
+ * value means the stamp is present and holds exactly that value — a known
+ * DD release/development spelling for the "stored version discovered" case,
+ * or garbage for the "malformed stamp" case. The returned buffer is
+ * malloc'd, sized to exactly the stamp's byte length, and deliberately never
+ * NUL-terminated: the shim owns freeing it (this read never reaches an HLI)
+ * and must decode it by the reported size, never by scanning for a NUL. */
+static al_status_t stamp_read_response(void **data, int *size) {
+    const char *stamp = getenv("RECORDING_STUB_STAMP_VERSION");
+    al_status_t status = ok_status();
+    if (stamp == NULL) {
+        if (data != NULL) {
+            *data = NULL;
+        }
+        if (size != NULL) {
+            *size = 0;
+        }
+        return status;
+    }
+
+    size_t len = strlen(stamp);
+    char *buffer = malloc(len > 0 ? len : 1);
+    if (buffer == NULL) {
+        status.code = -1;
+        strncpy(status.message, "recording-stub: allocation failed", sizeof status.message - 1);
+        return status;
+    }
+    if (len > 0) {
+        memcpy(buffer, stamp, len);
+    }
+    if (data != NULL) {
+        *data = buffer;
+    }
+    if (size != NULL) {
+        *size = (int)len;
+    }
+    return status;
+}
+
 al_status_t al_read_data(int ctxID, const char *field, const char *timebase, void **data,
                           int datatype, int dim, int *size) {
     g_read_call_count++;
@@ -304,6 +364,10 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
     g_read_timebase = record_str(timebase);
     g_read_datatype = datatype;
     g_read_dim = dim;
+
+    if (field != NULL && strcmp(field, VERSION_STAMP_FIELD) == 0) {
+        return stamp_read_response(data, size);
+    }
 
     if (data != NULL) {
         *data = g_read_buffer;
