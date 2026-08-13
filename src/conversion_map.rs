@@ -21,11 +21,60 @@ use std::fmt;
 
 use roxmltree::Document;
 
+/// A released DD version naming one side of a conversion-map artifact.
+///
+/// Conversion-map artifacts connect released DDs; development stamps belong
+/// to the HLI-facing DD-version type, not to an artifact side.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactDdVersion(String);
+
+impl ArtifactDdVersion {
+    fn parse(value: &str) -> Result<Self, LoadError> {
+        let mut components = value.split('.');
+        let valid = (0..3).all(|_| {
+            components.next().is_some_and(|component| {
+                !component.is_empty()
+                    && component.bytes().all(|byte| byte.is_ascii_digit())
+                    && (component == "0" || !component.starts_with('0'))
+            })
+        }) && components.next().is_none();
+        if !valid {
+            return Err(LoadError::InvalidArtifactDdVersion(value.to_string()));
+        }
+        Ok(Self(value.to_string()))
+    }
+}
+
+impl fmt::Display for ArtifactDdVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A COCOS convention identifier from a conversion-map artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CocosConvention(String);
+
+impl CocosConvention {
+    fn parse(value: &str) -> Result<Self, LoadError> {
+        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(LoadError::InvalidCocosConvention(value.to_string()));
+        }
+        Ok(Self(value.to_string()))
+    }
+}
+
+impl fmt::Display for CocosConvention {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// One side of a conversion-map artifact: a DD version and its COCOS convention.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Side {
-    pub dd: String,
-    pub cocos: String,
+    pub dd: ArtifactDdVersion,
+    pub cocos: CocosConvention,
 }
 
 /// Which side of the map a resolution request travels from.
@@ -55,8 +104,8 @@ pub enum Fidelity {
 pub enum ValueTransformation {
     None,
     SignFlip {
-        from_cocos: String,
-        to_cocos: String,
+        from_cocos: CocosConvention,
+        to_cocos: CocosConvention,
     },
 }
 
@@ -137,6 +186,10 @@ pub enum LoadError {
         value: String,
     },
     DuplicateRuleId(String),
+    DuplicateRenamedSource {
+        side: &'static str,
+        path: String,
+    },
     DuplicatePrecedence {
         rule_id: String,
         precedence: u32,
@@ -146,6 +199,8 @@ pub enum LoadError {
         reason: String,
     },
     DuplicateFlipPath(String),
+    InvalidArtifactDdVersion(String),
+    InvalidCocosConvention(String),
     MissingSide(&'static str),
 }
 
@@ -165,6 +220,9 @@ impl fmt::Display for LoadError {
                 "<{element}> attribute `{attribute}` has unrecognised value `{value}`"
             ),
             LoadError::DuplicateRuleId(id) => write!(f, "duplicate rule id `{id}`"),
+            LoadError::DuplicateRenamedSource { side, path } => {
+                write!(f, "duplicate renamed-rule {side} source path `{path}`")
+            }
             LoadError::DuplicatePrecedence {
                 rule_id,
                 precedence,
@@ -180,6 +238,12 @@ impl fmt::Display for LoadError {
             }
             LoadError::DuplicateFlipPath(path) => {
                 write!(f, "path `{path}` appears in more than one <flip>")
+            }
+            LoadError::InvalidArtifactDdVersion(value) => {
+                write!(f, "invalid artifact DD version `{value}`")
+            }
+            LoadError::InvalidCocosConvention(value) => {
+                write!(f, "invalid COCOS convention `{value}`")
             }
             LoadError::MissingSide(id) => write!(f, "missing required <side id=\"{id}\"/>"),
         }
@@ -197,7 +261,7 @@ pub struct ConversionMap {
     pub right: Side,
     pub default_identical: bool,
     rules: Vec<Rule>,
-    sign_flips: HashMap<String, (String, String)>,
+    sign_flips: HashMap<String, (CocosConvention, CocosConvention)>,
 }
 
 impl ConversionMap {
@@ -217,15 +281,17 @@ impl ConversionMap {
         let mut right: Option<Side> = None;
         let mut default_identical = false;
         let mut rules = Vec::new();
-        let mut sign_flips: HashMap<String, (String, String)> = HashMap::new();
+        let mut sign_flips: HashMap<String, (CocosConvention, CocosConvention)> = HashMap::new();
         let mut seen_rule_ids: HashSet<String> = HashSet::new();
+        let mut seen_renamed_left_paths: HashSet<String> = HashSet::new();
+        let mut seen_renamed_right_paths: HashSet<String> = HashSet::new();
 
         for child in root.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
                 "side" => {
                     let id = required_attr(&child, "side", "id")?;
-                    let dd = required_attr(&child, "side", "dd")?.to_string();
-                    let cocos = required_attr(&child, "side", "cocos")?.to_string();
+                    let dd = ArtifactDdVersion::parse(required_attr(&child, "side", "dd")?)?;
+                    let cocos = CocosConvention::parse(required_attr(&child, "side", "cocos")?)?;
                     let side = Side { dd, cocos };
                     match id {
                         "left" => left = Some(side),
@@ -261,6 +327,24 @@ impl ConversionMap {
                         let rule = parse_rule(&rule_node)?;
                         if !seen_rule_ids.insert(rule.id.clone()) {
                             return Err(LoadError::DuplicateRuleId(rule.id));
+                        }
+                        if rule.rel == Rel::Renamed {
+                            let left_path =
+                                rule.left.as_ref().expect("renamed rule has a left path");
+                            if !seen_renamed_left_paths.insert(left_path.clone()) {
+                                return Err(LoadError::DuplicateRenamedSource {
+                                    side: "left",
+                                    path: left_path.clone(),
+                                });
+                            }
+                            let right_path =
+                                rule.right.as_ref().expect("renamed rule has a right path");
+                            if !seen_renamed_right_paths.insert(right_path.clone()) {
+                                return Err(LoadError::DuplicateRenamedSource {
+                                    side: "right",
+                                    path: right_path.clone(),
+                                });
+                            }
                         }
                         rules.push(rule);
                     }
@@ -321,7 +405,8 @@ impl ConversionMap {
                     rule_id: Some(rule.id.clone()),
                     match_kind: MatchKind::Explicit,
                     precedence: None,
-                    value_transformation: self.value_transformation_for(&right_side_path),
+                    value_transformation: self
+                        .value_transformation_for(&right_side_path, direction),
                     resolved_path,
                     fidelity,
                 });
@@ -345,7 +430,7 @@ impl ConversionMap {
                 rule_id: None,
                 match_kind: MatchKind::Default,
                 precedence: None,
-                value_transformation: self.value_transformation_for(path),
+                value_transformation: self.value_transformation_for(path, direction),
                 resolved_path,
                 fidelity: Fidelity::Exact,
             });
@@ -377,11 +462,21 @@ impl ConversionMap {
         })
     }
 
-    fn value_transformation_for(&self, right_side_path: &str) -> ValueTransformation {
+    fn value_transformation_for(
+        &self,
+        right_side_path: &str,
+        direction: Direction,
+    ) -> ValueTransformation {
         match self.sign_flips.get(right_side_path) {
-            Some((from_cocos, to_cocos)) => ValueTransformation::SignFlip {
-                from_cocos: from_cocos.clone(),
-                to_cocos: to_cocos.clone(),
+            Some((from_cocos, to_cocos)) => match direction {
+                Direction::Forward => ValueTransformation::SignFlip {
+                    from_cocos: from_cocos.clone(),
+                    to_cocos: to_cocos.clone(),
+                },
+                Direction::Reverse => ValueTransformation::SignFlip {
+                    from_cocos: to_cocos.clone(),
+                    to_cocos: from_cocos.clone(),
+                },
             },
             None => ValueTransformation::None,
         }
@@ -562,13 +657,13 @@ fn parse_rule(node: &roxmltree::Node) -> Result<Rule, LoadError> {
 
 fn parse_transforms(
     node: &roxmltree::Node,
-    sign_flips: &mut HashMap<String, (String, String)>,
+    sign_flips: &mut HashMap<String, (CocosConvention, CocosConvention)>,
 ) -> Result<(), LoadError> {
     for child in node.children().filter(|n| n.is_element()) {
         match child.tag_name().name() {
             "cocos" => {
-                let from_cocos = required_attr(&child, "cocos", "from")?.to_string();
-                let to_cocos = required_attr(&child, "cocos", "to")?.to_string();
+                let from_cocos = CocosConvention::parse(required_attr(&child, "cocos", "from")?)?;
+                let to_cocos = CocosConvention::parse(required_attr(&child, "cocos", "to")?)?;
                 for flip_node in child
                     .children()
                     .filter(|n| n.is_element() && n.tag_name().name() == "flip")
@@ -679,6 +774,85 @@ mod tests {
         "#;
         let err = ConversionMap::load(xml).unwrap_err();
         assert_eq!(err, LoadError::DuplicateRuleId("dup".to_string()));
+    }
+
+    #[test]
+    fn rejects_renamed_rules_with_the_same_source_path() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="first" rel="renamed" left="a" right="b">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+                <rule id="second" rel="renamed" left="a" right="c">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let err = ConversionMap::load(xml).unwrap_err();
+        assert_eq!(
+            err,
+            LoadError::DuplicateRenamedSource {
+                side: "left",
+                path: "a".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_renamed_rules_with_the_same_reverse_source_path() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="first" rel="renamed" left="a" right="b">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+                <rule id="second" rel="renamed" left="c" right="b">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let err = ConversionMap::load(xml).unwrap_err();
+        assert_eq!(
+            err,
+            LoadError::DuplicateRenamedSource {
+                side: "right",
+                path: "b".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_cocos_convention() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="not-a-convention"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+            </ids-map>
+        "#;
+        let err = ConversionMap::load(xml).unwrap_err();
+        assert_eq!(
+            err,
+            LoadError::InvalidCocosConvention("not-a-convention".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_artifact_dd_version() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+            </ids-map>
+        "#;
+        let err = ConversionMap::load(xml).unwrap_err();
+        assert_eq!(err, LoadError::InvalidArtifactDdVersion("3.39".to_string()));
     }
 
     #[test]
@@ -832,10 +1006,10 @@ mod tests {
     fn loads_the_approved_equilibrium_artifact_as_one_complete_version_pair() {
         let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
         assert_eq!(map.ids, "equilibrium");
-        assert_eq!(map.left.dd, "3.39.0");
-        assert_eq!(map.left.cocos, "11");
-        assert_eq!(map.right.dd, "4.1.1");
-        assert_eq!(map.right.cocos, "17");
+        assert_eq!(map.left.dd, ArtifactDdVersion("3.39.0".to_string()));
+        assert_eq!(map.left.cocos, CocosConvention("11".to_string()));
+        assert_eq!(map.right.dd, ArtifactDdVersion("4.1.1".to_string()));
+        assert_eq!(map.right.cocos, CocosConvention("17".to_string()));
         assert!(map.default_identical);
         // Sanity: both a merged rule and the lone renamed rule loaded.
         assert!(map.rules.iter().any(|r| r.id == "rename-beta-normal"));
@@ -956,8 +1130,8 @@ mod tests {
         assert_eq!(
             forward.value_transformation,
             ValueTransformation::SignFlip {
-                from_cocos: "11".to_string(),
-                to_cocos: "17".to_string(),
+                from_cocos: CocosConvention("11".to_string()),
+                to_cocos: CocosConvention("17".to_string()),
             }
         );
 
@@ -968,8 +1142,8 @@ mod tests {
         assert_eq!(
             reverse.value_transformation,
             ValueTransformation::SignFlip {
-                from_cocos: "11".to_string(),
-                to_cocos: "17".to_string(),
+                from_cocos: CocosConvention("17".to_string()),
+                to_cocos: CocosConvention("11".to_string()),
             }
         );
     }
