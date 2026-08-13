@@ -52,7 +52,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
-use crate::conversion_map::ConversionMap;
+use crate::conversion_map::{ConversionMap, Direction};
 use crate::dd_version::DdVersion;
 
 /// An IMAS-Core context ID, as passed across the C ABI.
@@ -96,6 +96,10 @@ pub(crate) struct ConversionRecord {
     /// The context ID of this record's root. Equal to the record's own
     /// context ID for a root record.
     pub root_id: ContextId,
+    /// The direction (per the shared conversion map's own left/right sides)
+    /// that resolves a path expressed in the HLI's own DD spelling to the
+    /// stored DD spelling. Inherited unchanged from a root by every child.
+    pub direction_to_stored: Direction,
     /// The context ID of this record's direct parent, or `None` for a root
     /// record.
     parent_id: Option<ContextId>,
@@ -158,6 +162,7 @@ impl ContextRegistry {
         resolved_path: String,
         pulse_ctx_id: ContextId,
         key: MapCacheKey,
+        direction_to_stored: Direction,
         create: impl FnOnce() -> ConversionMap,
     ) -> bool {
         if !key.needs_conversion() {
@@ -169,6 +174,7 @@ impl ContextRegistry {
             pulse_ctx_id,
             map: self.get_or_create_map(key, create),
             root_id: ctx_id,
+            direction_to_stored,
             parent_id: None,
         };
         self.state
@@ -212,6 +218,7 @@ impl ContextRegistry {
                 pulse_ctx_id: parent.pulse_ctx_id,
                 map: parent.map,
                 root_id: parent.root_id,
+                direction_to_stored: parent.direction_to_stored,
                 parent_id: Some(parent_ctx_id),
             }),
         );
@@ -358,13 +365,25 @@ mod tests {
         )
     }
 
+    // dummy_key() pairs stored=3.39.0 with hli=4.1.1, which known_artifacts
+    // resolves as Direction::Reverse (the HLI's own, right-side spelling
+    // resolves to the stored, left-side spelling in reverse).
+    const DUMMY_DIRECTION: Direction = Direction::Reverse;
+
     fn record_dummy_root(
         registry: &ContextRegistry,
         ctx_id: ContextId,
         resolved_path: String,
         pulse_ctx_id: ContextId,
     ) -> bool {
-        registry.record_root(ctx_id, resolved_path, pulse_ctx_id, dummy_key(), dummy_map)
+        registry.record_root(
+            ctx_id,
+            resolved_path,
+            pulse_ctx_id,
+            dummy_key(),
+            DUMMY_DIRECTION,
+            dummy_map,
+        )
     }
 
     #[test]
@@ -382,6 +401,7 @@ mod tests {
             "time_slice/boundary/psi".to_string(),
             1,
             key.clone(),
+            DUMMY_DIRECTION,
             dummy_map,
         ));
 
@@ -443,7 +463,14 @@ mod tests {
     fn a_child_record_retains_its_own_path_and_parent_id_and_shares_the_parents_map() {
         let registry = ContextRegistry::new();
         let key = dummy_key();
-        assert!(registry.record_root(5, "root/path".to_string(), 1, key.clone(), dummy_map));
+        assert!(registry.record_root(
+            5,
+            "root/path".to_string(),
+            1,
+            key.clone(),
+            DUMMY_DIRECTION,
+            dummy_map
+        ));
 
         assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
 
@@ -454,6 +481,10 @@ mod tests {
         assert_eq!(child.pulse_ctx_id, 1, "child inherits the pulse context id");
         assert_eq!(child.root_id, 5);
         assert_eq!(child.parent_id, Some(5));
+        assert_eq!(
+            child.direction_to_stored, DUMMY_DIRECTION,
+            "child inherits the parent's direction"
+        );
         assert!(
             Arc::ptr_eq(
                 &child.map,
@@ -656,12 +687,17 @@ mod tests {
             version("4.1.1"),
         );
 
-        assert!(
-            !registry.record_root(5, "p".to_string(), 1, matching_key, || {
+        assert!(!registry.record_root(
+            5,
+            "p".to_string(),
+            1,
+            matching_key,
+            DUMMY_DIRECTION,
+            || {
                 loads.set(loads.get() + 1);
                 dummy_map()
-            },)
-        );
+            },
+        ));
 
         assert!(
             registry.lookup(5).is_none(),
@@ -677,13 +713,13 @@ mod tests {
         let key = dummy_key();
 
         assert!(
-            registry.record_root(5, "a".to_string(), 1, key.clone(), || {
+            registry.record_root(5, "a".to_string(), 1, key.clone(), DUMMY_DIRECTION, || {
                 loads.set(loads.get() + 1);
                 dummy_map()
             })
         );
         assert!(
-            registry.record_root(6, "b".to_string(), 1, key.clone(), || {
+            registry.record_root(6, "b".to_string(), 1, key.clone(), DUMMY_DIRECTION, || {
                 loads.set(loads.get() + 1);
                 dummy_map()
             })
@@ -712,7 +748,7 @@ mod tests {
         let key = dummy_key();
 
         assert!(
-            registry.record_root(5, "a".to_string(), 1, key.clone(), || {
+            registry.record_root(5, "a".to_string(), 1, key.clone(), DUMMY_DIRECTION, || {
                 loads.set(loads.get() + 1);
                 dummy_map()
             })
@@ -745,6 +781,7 @@ mod tests {
                         format!("path-{i}"),
                         ctx_id,
                         dummy_key(),
+                        DUMMY_DIRECTION,
                         dummy_map,
                     );
                     if let Some(snapshot) = registry.lookup(ctx_id) {
@@ -780,6 +817,7 @@ mod tests {
                         format!("root-{i}"),
                         root_id,
                         dummy_key(),
+                        DUMMY_DIRECTION,
                         dummy_map,
                     );
                     registry.record_child(child_id, root_id, format!("child-{i}"));
