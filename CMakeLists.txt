@@ -1361,7 +1361,8 @@ if(IMAS_MVDD_BUILD_TESTS)
         ${HDF5_C_INCLUDE_DIRS})
     target_compile_definitions(real_core_forwarding_test PRIVATE
         "REAL_CORE_TEST_PLUGIN_DIR=\"$<TARGET_FILE_DIR:real_core_test_plugin>\""
-        "REAL_CORE_TEST_PLUGIN_NAME=\"mvddtest\"")
+        "REAL_CORE_TEST_PLUGIN_NAME=\"mvddtest\""
+        "EQUILIBRIUM_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/imas-python-fixtures/fixtures\"")
     # The test uses HDF5 only to seed malformed on-disk DD-version metadata;
     # the slice/time-range operations themselves use the public shim/Core ABI.
     target_link_libraries(real_core_forwarding_test PRIVATE
