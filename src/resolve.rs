@@ -1146,11 +1146,11 @@ pub(crate) unsafe fn read_data(
             dd_path,
             fidelity,
         } => {
-            retain_read_fidelity(ctx_id, &record, field, fidelity);
+            retain_read_fidelity(&record, field, fidelity);
             return read_refusal(&record, &reason, &dd_path);
         }
         ReadPath::NoSource(fidelity) => {
-            retain_read_fidelity(ctx_id, &record, field, fidelity);
+            retain_read_fidelity(&record, field, fidelity);
             return no_source_read(data);
         }
     };
@@ -1162,11 +1162,11 @@ pub(crate) unsafe fn read_data(
             dd_path,
             fidelity,
         } => {
-            retain_read_fidelity(ctx_id, &record, timebase, fidelity);
+            retain_read_fidelity(&record, timebase, fidelity);
             return read_refusal(&record, &reason, &dd_path);
         }
         ReadPath::NoSource(fidelity) => {
-            retain_read_fidelity(ctx_id, &record, timebase, fidelity);
+            retain_read_fidelity(&record, timebase, fidelity);
             return no_source_read(data);
         }
     };
@@ -1192,7 +1192,6 @@ pub(crate) unsafe fn read_data(
                 validate_value_transformation(&field_attempt.value_transformation, datatype, dim)
             {
                 retain_read_fidelities(
-                    ctx_id,
                     &record,
                     field,
                     Fidelity::Unmappable,
@@ -1216,7 +1215,6 @@ pub(crate) unsafe fn read_data(
             match read_outcome::classify(&status, unsafe { *data }) {
                 ReadOutcome::Failure => {
                     retain_read_fidelities(
-                        ctx_id,
                         &record,
                         field,
                         field_attempt.fidelity,
@@ -1234,7 +1232,6 @@ pub(crate) unsafe fn read_data(
                         size,
                     ) {
                         retain_read_fidelities(
-                            ctx_id,
                             &record,
                             field,
                             Fidelity::Unmappable,
@@ -1244,7 +1241,6 @@ pub(crate) unsafe fn read_data(
                         return read_refusal(&record, reason, &field_dd_path);
                     }
                     retain_read_fidelities(
-                        ctx_id,
                         &record,
                         field,
                         field_attempt.fidelity,
@@ -1258,7 +1254,6 @@ pub(crate) unsafe fn read_data(
         }
     }
     retain_read_fidelities(
-        ctx_id,
         &record,
         field,
         translated_read_fidelity(translated_field.as_ref()),
@@ -1351,7 +1346,6 @@ fn joined_argument_path(
 /// against (issue #66), matching the path already used for refusal messages
 /// (`read_argument_path`).
 fn retain_read_fidelity(
-    ctx_id: c_int,
     record: &crate::context_registry::ConversionRecord,
     raw_path: *const c_char,
     fidelity: Fidelity,
@@ -1359,20 +1353,19 @@ fn retain_read_fidelity(
     if fidelity != Fidelity::Exact
         && let Some(path) = joined_argument_path(record, raw_path)
     {
-        REGISTRY.record_read_loss(ctx_id, path, fidelity);
+        REGISTRY.record_read_loss_at_root(record.root_id, path, fidelity);
     }
 }
 
 fn retain_read_fidelities(
-    ctx_id: c_int,
     record: &crate::context_registry::ConversionRecord,
     field: *const c_char,
     field_fidelity: Fidelity,
     timebase: *const c_char,
     timebase_fidelity: Fidelity,
 ) {
-    retain_read_fidelity(ctx_id, record, field, field_fidelity);
-    retain_read_fidelity(ctx_id, record, timebase, timebase_fidelity);
+    retain_read_fidelity(record, field, field_fidelity);
+    retain_read_fidelity(record, timebase, timebase_fidelity);
 }
 
 /// Implements `imas_mvdd_context_loss_count` (ADR 0012): reports the number
