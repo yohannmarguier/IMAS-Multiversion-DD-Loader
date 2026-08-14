@@ -344,6 +344,19 @@ static int g_end_action_ctx_id = 0;
 al_status_t al_end_action(int ctxID) {
     g_end_action_call_count++;
     g_end_action_ctx_id = ctxID;
+
+    /* RECORDING_STUB_END_ACTION_FAIL lets a test simulate a failed close: the
+     * shim must still forward ctxID unchanged (verified above via the
+     * recording, which runs before this check) and must leave its own
+     * registry record for ctxID intact on a failure. */
+    if (getenv("RECORDING_STUB_END_ACTION_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -13;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: end action refused", sizeof status.message - 1);
+        return status;
+    }
+
     return ok_status();
 }
 

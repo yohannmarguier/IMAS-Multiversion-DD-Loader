@@ -1061,6 +1061,66 @@ if(IMAS_MVDD_BUILD_TESTS)
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1;RECORDING_STUB_READ_DOUBLE=1")
 
+    # --- Issue #63: context lifecycle (al_end_action,
+    # al_iterate_over_arraystruct, al_close_pulse) against the recording
+    # stub --------------------------------------------------------------
+    add_executable(context_lifecycle_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/context_lifecycle_test.c")
+    target_link_libraries(context_lifecycle_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
+    target_compile_definitions(context_lifecycle_test PRIVATE
+        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+    add_dependencies(context_lifecycle_test imas_mvdd_capi recording_stub)
+    set_target_properties(context_lifecycle_test PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    add_test(NAME context-lifecycle-ending-child-removes-only-its-own-record
+        COMMAND context_lifecycle_test ending-child-removes-only-its-own-record)
+    set_tests_properties(context-lifecycle-ending-child-removes-only-its-own-record PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME context-lifecycle-ending-root-removes-only-its-own-record
+        COMMAND context_lifecycle_test ending-root-removes-only-its-own-record)
+    set_tests_properties(context-lifecycle-ending-root-removes-only-its-own-record PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME context-lifecycle-failed-end-action-leaves-the-record-intact
+        COMMAND context_lifecycle_test failed-end-action-leaves-the-record-intact)
+    set_tests_properties(context-lifecycle-failed-end-action-leaves-the-record-intact PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME context-lifecycle-recycled-id-cannot-observe-the-released-record
+        COMMAND context_lifecycle_test recycled-id-cannot-observe-the-released-record)
+    set_tests_properties(context-lifecycle-recycled-id-cannot-observe-the-released-record
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+
+    add_test(NAME context-lifecycle-iterate-over-arraystruct-forwards-unchanged-and-mutates-nothing
+        COMMAND context_lifecycle_test
+            iterate-over-arraystruct-forwards-unchanged-and-mutates-nothing)
+    set_tests_properties(
+        context-lifecycle-iterate-over-arraystruct-forwards-unchanged-and-mutates-nothing
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME context-lifecycle-close-pulse-forwards-unchanged-and-never-mutates-the-registry
+        COMMAND context_lifecycle_test
+            close-pulse-forwards-unchanged-and-never-mutates-the-registry)
+    set_tests_properties(
+        context-lifecycle-close-pulse-forwards-unchanged-and-never-mutates-the-registry
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+
+    add_test(NAME context-lifecycle-ending-dataentry-context-leaves-live-operation-and-child-records-intact
+        COMMAND context_lifecycle_test
+            ending-dataentry-context-leaves-live-operation-and-child-records-intact)
+    set_tests_properties(
+        context-lifecycle-ending-dataentry-context-leaves-live-operation-and-child-records-intact
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
     if(IMAS_MVDD_REAL_CORE_TESTS)
         # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
     #
