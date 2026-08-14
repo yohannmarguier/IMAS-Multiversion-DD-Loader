@@ -1,5 +1,5 @@
-/* Issue #64: public al_write_data / al_delete_data ABI scenarios against the
- * recording stub.
+/* Issue #64: public al_write_data / al_delete_data and al_plugin_write_data
+ * ABI scenarios against the recording stub.
  *
  * Per docs/adr/0002-read-path-seam-policy.md: "al_write_data, al_delete_data:
  * If known versions differ, return failure without calling IMAS-Core.
@@ -112,6 +112,25 @@ static void scenario_delete_refuses_under_known_mismatched_root_before_core_call
 
     printf("write_delete_conversion_test delete-refuses-under-known-mismatched-root-before-core-call: "
            "IMAS-Core was never called\\n");
+}
+
+static void scenario_plugin_write_refuses_under_known_mismatched_root_before_core_call(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int plugin_calls_before = int_from_stub("recording_stub_plugin_call_count");
+
+    double sentinel = 42.0;
+    int size[1] = {73};
+    al_status_t status = al_plugin_write_data(
+        operation_ctx, "time_slice/global_quantities/beta_tor_norm", "time", &sentinel,
+        52 /* DOUBLE_DATA */, 1, size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == plugin_calls_before);
+    CHECK(sentinel == 42.0);
+    CHECK(size[0] == 73);
+
+    printf("write_delete_conversion_test plugin-write-refuses-under-known-mismatched-root-before-core-call: "
+           "IMAS-Core was never called and the caller's buffers were untouched\\n");
 }
 
 static void scenario_write_nested_child_context_refuses_through_mismatched_root(void) {
@@ -269,6 +288,7 @@ int main(int argc, char **argv) {
         fprintf(stderr,
                 "usage: %s <write-refuses-under-known-mismatched-root-before-core-call|"
                 "delete-refuses-under-known-mismatched-root-before-core-call|"
+                "plugin-write-refuses-under-known-mismatched-root-before-core-call|"
                 "write-nested-child-context-refuses-through-mismatched-root|"
                 "delete-nested-child-context-refuses-through-mismatched-root|"
                 "write-matching-context-forwards-unchanged|"
@@ -288,6 +308,11 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "delete-refuses-under-known-mismatched-root-before-core-call") == 0) {
         scenario_delete_refuses_under_known_mismatched_root_before_core_call();
+        return 0;
+    }
+    if (strcmp(argv[1], "plugin-write-refuses-under-known-mismatched-root-before-core-call") ==
+        0) {
+        scenario_plugin_write_refuses_under_known_mismatched_root_before_core_call();
         return 0;
     }
     if (strcmp(argv[1], "write-nested-child-context-refuses-through-mismatched-root") == 0) {

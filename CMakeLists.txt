@@ -904,6 +904,8 @@ if(IMAS_MVDD_BUILD_TESTS)
         write-refuses-under-known-mismatched-root-before-core-call)
     add_write_delete_mismatched_test(write-delete-delete-refuses-under-known-mismatched-root-before-core-call
         delete-refuses-under-known-mismatched-root-before-core-call)
+    add_write_delete_mismatched_test(write-delete-plugin-write-refuses-under-known-mismatched-root-before-core-call
+        plugin-write-refuses-under-known-mismatched-root-before-core-call)
     add_write_delete_mismatched_test(write-delete-write-nested-child-context-refuses-through-mismatched-root
         write-nested-child-context-refuses-through-mismatched-root)
     add_write_delete_mismatched_test(write-delete-delete-nested-child-context-refuses-through-mismatched-root

@@ -1816,12 +1816,12 @@ fn refusal_reason_message(reason: RefusalReason) -> String {
     }
 }
 
-/// A short, stable refusal message for a write/delete seam whose `ctx_id`
+/// A short, stable refusal message for a write seam whose `ctx_id`
 /// carries a live conversion record (ADR 0002: "If known versions differ,
 /// return failure without calling IMAS-Core"). Unlike the read path, this is
 /// a blanket refusal keyed only on the context, never on `field`/`path`
 /// content — write-path translation is not introduced by this seam.
-fn mismatched_root_write_refusal(function_name: &str) -> String {
+fn mismatched_context_write_refusal(function_name: &str) -> String {
     format!("{function_name} refuses on a context with a known DD version mismatch")
 }
 
@@ -1848,7 +1848,7 @@ pub(crate) unsafe fn write_data(
     size: *mut c_int,
 ) -> al_status_t {
     if REGISTRY.lookup(ctx_id).is_some() {
-        return crate::conversion_refusal(&mismatched_root_write_refusal("al_write_data"));
+        return crate::conversion_refusal(&mismatched_context_write_refusal("al_write_data"));
     }
     forward_status!(write_data(
         ctx_id, field, timebase, data, datatype, dim, size,
@@ -1867,7 +1867,7 @@ pub(crate) unsafe fn write_data(
 /// IMAS-Core's own contract allows it.
 pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t {
     if REGISTRY.lookup(ctx).is_some() {
-        return crate::conversion_refusal(&mismatched_root_write_refusal("al_delete_data"));
+        return crate::conversion_refusal(&mismatched_context_write_refusal("al_delete_data"));
     }
     forward_status!(delete_data(ctx, path))
 }
@@ -2066,6 +2066,11 @@ pub(crate) unsafe fn plugin_write_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
+    if REGISTRY.lookup(ctx_id).is_some() {
+        return crate::conversion_refusal(&mismatched_context_write_refusal(
+            "al_plugin_write_data",
+        ));
+    }
     forward_status!(plugin_write_data(
         ctx_id, field, timebase, data, datatype, dim, size,
     ))
