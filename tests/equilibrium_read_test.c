@@ -17,7 +17,21 @@
  * the HLI's own DD spelling, from a fixture that spells the field the other
  * way. The HLI DD version latch is process-wide, so each scenario below is
  * registered as its own ctest process, exactly like version_discovery_test.c's
- * scenarios are. */
+ * scenarios are.
+ *
+ * Issue #62 adds the scenarios beneath
+ * `read_nested_constraint_scalar_at_slice_zero`: every scenario above reads
+ * relative to `time_slice`, whose own anchor spells identically on both DD
+ * sides, so it never exercises translating a *renamed* child context's own
+ * anchor before stripping it back off a relative read (`resolve::
+ * stored_anchor`). `constraints/bpol_probe` / `constraints/b_field_pol_probe`
+ * (`rename-bpol-probe`) is such an anchor; `constraints/flux_loop` (identical
+ * on both sides) carries a COCOS sign flip on `measured` instead, proving a
+ * supported value transformation also applies unchanged beneath a nested
+ * context. `equilibrium_values.py`'s PINNED `b_field_pol_probe_measured` and
+ * `flux_loop_measured` are `0.42 + 0.01*i + 0.10*k` and `1.15 + 0.01*i +
+ * 0.10*k`; slice 0, constraint 0 (`i == k == 0`) are `0.42` and `1.15`. The
+ * 4.1.1 fixture writes `flux_loop`'s COCOS-17 value, `-1.15`. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,6 +97,37 @@ static double read_scalar_at_slice_zero(int pulse_ctx, const char *field) {
     CHECK(buffer == &value);
 
     CHECK_OK(al_end_action(aos_ctx));
+    CHECK_OK(al_end_action(op_ctx));
+    return value;
+}
+
+/* Like `read_scalar_at_slice_zero`, but reads `leaf_field` from constraint 0
+ * of the AOS at `aos_field`, itself nested beneath `time_slice`'s own AOS
+ * context (in the caller's own DD spelling — `aos_field` and `leaf_field`
+ * are never translated by this helper). */
+static double read_nested_constraint_scalar_at_slice_zero(int pulse_ctx, const char *aos_field,
+                                                           const char *leaf_field) {
+    int op_ctx = -1;
+    CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
+
+    int time_slice_size = -1;
+    int time_slice_ctx = -1;
+    CHECK_OK(
+        al_begin_arraystruct_action(op_ctx, "time_slice", "", &time_slice_size, &time_slice_ctx));
+    CHECK(time_slice_size == 2);
+
+    int aos_size = -1;
+    int aos_ctx = -1;
+    CHECK_OK(al_begin_arraystruct_action(time_slice_ctx, aos_field, "", &aos_size, &aos_ctx));
+
+    int shape[MAXDIM] = {0};
+    double value = -1.0;
+    void *buffer = &value;
+    CHECK_OK(al_read_data(aos_ctx, leaf_field, "", &buffer, DOUBLE_DATA, 0, shape));
+    CHECK(buffer == &value);
+
+    CHECK_OK(al_end_action(aos_ctx));
+    CHECK_OK(al_end_action(time_slice_ctx));
     CHECK_OK(al_end_action(op_ctx));
     return value;
 }
@@ -168,6 +213,69 @@ static void scenario_forward_split_read_uses_single_source_and_flips_value(void)
     close_fixture_pulse(pulse_ctx);
 }
 
+/* --- issue #62: reads beneath a nested, *renamed* child context --------- */
+
+static void scenario_reverse_reads_renamed_nested_container_field(void) {
+    CHECK_OK(imas_mvdd_set_hli_dd_version("3.39.0"));
+    int pulse_ctx = open_fixture_pulse("4.1.1");
+
+    double value =
+        read_nested_constraint_scalar_at_slice_zero(pulse_ctx, "constraints/bpol_probe", "measured");
+    CHECK(value == 0.42);
+
+    close_fixture_pulse(pulse_ctx);
+    printf("equilibrium_read_test reverse-reads-renamed-nested-container-field: 3.39.0 HLI read "
+           "constraints/bpol_probe/measured=0.42 from the 4.1.1 fixture's "
+           "constraints/b_field_pol_probe\n");
+}
+
+static void scenario_forward_reads_renamed_nested_container_field(void) {
+    CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
+    int pulse_ctx = open_fixture_pulse("3.39.0");
+
+    double value = read_nested_constraint_scalar_at_slice_zero(
+        pulse_ctx, "constraints/b_field_pol_probe", "measured");
+    CHECK(value == 0.42);
+
+    close_fixture_pulse(pulse_ctx);
+    printf("equilibrium_read_test forward-reads-renamed-nested-container-field: 4.1.1 HLI read "
+           "constraints/b_field_pol_probe/measured=0.42 from the 3.39.0 fixture's "
+           "constraints/bpol_probe\n");
+}
+
+/* --- issue #62: a supported value transformation nested beneath an ------ */
+/* --- unrenamed child context --------------------------------------------- */
+
+static void scenario_reverse_sign_flip_applies_through_nested_container(void) {
+    CHECK_OK(imas_mvdd_set_hli_dd_version("3.39.0"));
+    int pulse_ctx = open_fixture_pulse("4.1.1");
+
+    /* The 4.1.1 fixture stores flux_loop/measured's COCOS-17 value, -1.15;
+     * the 3.39.0 HLI must receive it flipped back to COCOS-11, +1.15. */
+    double value = read_nested_constraint_scalar_at_slice_zero(pulse_ctx, "constraints/flux_loop",
+                                                                "measured");
+    CHECK(value == 1.15);
+
+    close_fixture_pulse(pulse_ctx);
+    printf("equilibrium_read_test reverse-sign-flip-applies-through-nested-container: 3.39.0 HLI "
+           "read constraints/flux_loop/measured=1.15 from the 4.1.1 fixture's flipped -1.15\n");
+}
+
+static void scenario_forward_sign_flip_applies_through_nested_container(void) {
+    CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
+    int pulse_ctx = open_fixture_pulse("3.39.0");
+
+    /* The 3.39.0 fixture stores flux_loop/measured's native COCOS-11 value,
+     * +1.15; the 4.1.1 HLI must receive it flipped to COCOS-17, -1.15. */
+    double value = read_nested_constraint_scalar_at_slice_zero(pulse_ctx, "constraints/flux_loop",
+                                                                "measured");
+    CHECK(value == -1.15);
+
+    close_fixture_pulse(pulse_ctx);
+    printf("equilibrium_read_test forward-sign-flip-applies-through-nested-container: 4.1.1 HLI "
+           "read constraints/flux_loop/measured=-1.15 from the 3.39.0 fixture's native 1.15\n");
+}
+
 /* --- same-version and conversion-disabled scenarios remain unchanged ----- */
 
 static void scenario_same_version_read_is_unaffected(void) {
@@ -204,6 +312,10 @@ int main(int argc, char **argv) {
                 "reverse-merged-read-falls-through-to-stored-alias|"
                 "reverse-split-read-uses-first-destination-and-flips-value|"
                 "forward-split-read-uses-single-source-and-flips-value|"
+                "reverse-reads-renamed-nested-container-field|"
+                "forward-reads-renamed-nested-container-field|"
+                "reverse-sign-flip-applies-through-nested-container|"
+                "forward-sign-flip-applies-through-nested-container|"
                 "same-version-read-is-unaffected|"
                 "conversion-disabled-read-is-unaffected>\n",
                 argv[0]);
@@ -221,6 +333,14 @@ int main(int argc, char **argv) {
         scenario_reverse_split_read_uses_first_destination_and_flips_value();
     } else if (strcmp(scenario, "forward-split-read-uses-single-source-and-flips-value") == 0) {
         scenario_forward_split_read_uses_single_source_and_flips_value();
+    } else if (strcmp(scenario, "reverse-reads-renamed-nested-container-field") == 0) {
+        scenario_reverse_reads_renamed_nested_container_field();
+    } else if (strcmp(scenario, "forward-reads-renamed-nested-container-field") == 0) {
+        scenario_forward_reads_renamed_nested_container_field();
+    } else if (strcmp(scenario, "reverse-sign-flip-applies-through-nested-container") == 0) {
+        scenario_reverse_sign_flip_applies_through_nested_container();
+    } else if (strcmp(scenario, "forward-sign-flip-applies-through-nested-container") == 0) {
+        scenario_forward_sign_flip_applies_through_nested_container();
     } else if (strcmp(scenario, "same-version-read-is-unaffected") == 0) {
         scenario_same_version_read_is_unaffected();
     } else if (strcmp(scenario, "conversion-disabled-read-is-unaffected") == 0) {
