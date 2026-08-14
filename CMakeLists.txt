@@ -1330,7 +1330,8 @@ if(IMAS_MVDD_BUILD_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/scoped_passthrough_test.c")
     target_link_libraries(scoped_passthrough_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
     target_compile_definitions(scoped_passthrough_test PRIVATE
-        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\""
+        "EXPECTED_AL_VERSION=\"${IMAS_CORE_VERSION}\"")
     add_dependencies(scoped_passthrough_test imas_mvdd_capi recording_stub)
     set_target_properties(scoped_passthrough_test PROPERTIES
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")

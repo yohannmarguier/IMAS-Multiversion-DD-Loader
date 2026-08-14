@@ -669,6 +669,12 @@ static char *g_filled_paths_dataobjectname = NULL;
  * frees the list and every string in it. */
 static const char *g_filled_paths_defaults[] = {"ids/path/one", "ids/path/two"};
 
+/* Unlike parse_csv_doubles/parse_csv_ints, which copy each token's *value* out
+ * and can therefore tokenize into a buffer of their own, this returns pointers
+ * *into* `buffer` — so the caller has to own it and keep it alive until the
+ * entries have been copied. Entries beyond `capacity` are dropped; the caller
+ * is CMakeLists.txt, not a user, so an in-repo overlong list is a test bug to
+ * fix rather than a condition to report. */
 static int split_csv_into(char *buffer, const char **out, int capacity) {
     int count = 0;
     char *token = strtok(buffer, ",");
@@ -704,8 +710,11 @@ al_status_t al_list_filled_paths(int pctxID, const char *dataobjectname, char **
     }
 
     if (path_list != NULL) {
-        char **list = malloc((size_t)count * sizeof *list);
-        if (list == NULL) {
+        /* An empty override is a legitimate "nothing is filled" fixture, and
+         * malloc(0) may return NULL — which would otherwise be misreported
+         * below as an allocation failure. Hand back an empty list instead. */
+        char **list = count == 0 ? NULL : malloc((size_t)count * sizeof *list);
+        if (count > 0 && list == NULL) {
             al_status_t status = ok_status();
             status.code = -1;
             strncpy(status.message, "recording-stub: allocation failed",

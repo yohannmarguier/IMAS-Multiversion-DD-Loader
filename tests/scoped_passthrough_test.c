@@ -36,12 +36,25 @@
 #ifndef RECORDING_STUB_PATH
 #error "RECORDING_STUB_PATH must be defined by CMakeLists.txt"
 #endif
+#ifndef EXPECTED_AL_VERSION
+#error "EXPECTED_AL_VERSION must be defined by CMakeLists.txt"
+#endif
 
 /* The two spellings of the one path `rename-beta-normal` relates. Reaching
  * IMAS-Core, or coming back from it, as the *other* one of this pair is
  * exactly the failure these scenarios exist to catch. */
 #define HLI_SPELLING "time_slice/global_quantities/beta_tor_norm"
 #define STORED_SPELLING "time_slice/global_quantities/beta_normal"
+
+/* IMAS-Core's data-type codes, spelled out because the recording-stub profile
+ * deliberately acquires no IMAS-Core and so has no al_const.h to include.
+ * The values are `DATA_TYPE_0` (50) plus an offset, per IMAS-Core's
+ * al_defs.h.in — not small ordinals, which is an easy and silent mistake to
+ * make in a test that passes a bare literal. */
+#define IMAS_CHAR_DATA 50
+#define IMAS_INTEGER_DATA 51
+#define IMAS_DOUBLE_DATA 52
+#define IMAS_COMPLEX_DATA 53
 
 #define CHECK(condition)                                                       \
     do {                                                                       \
@@ -108,7 +121,7 @@ static int open_mismatched_equilibrium(int *operation_ctx) {
      * was never registered. */
     void *data = NULL;
     int size[1] = {0};
-    CHECK(al_read_data(*operation_ctx, HLI_SPELLING, "", &data, 3 /* DOUBLE_DATA */, 1, size).code
+    CHECK(al_read_data(*operation_ctx, HLI_SPELLING, "", &data, IMAS_DOUBLE_DATA, 1, size).code
           == 0);
     CHECK(strcmp(string_from_stub("recording_stub_read_field"), STORED_SPELLING) == 0);
 
@@ -248,7 +261,7 @@ static void check_parameter_setters_forward_unchanged(void) {
 
     int payload = 7;
     int extent[1] = {1};
-    CHECK(al_setvalue_parameter_plugin("generic", 3 /* DOUBLE_DATA */, 1, extent, &payload,
+    CHECK(al_setvalue_parameter_plugin("generic", IMAS_INTEGER_DATA, 1, extent, &payload,
                                        "recording-plugin")
               .code
           == 0);
@@ -258,7 +271,7 @@ static void check_parameter_setters_forward_unchanged(void) {
           == 0);
     CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"), "generic") == 0);
     CHECK(strcmp(string_from_stub("recording_stub_plugin_second_string"), "recording-plugin") == 0);
-    CHECK(int_from_stub("recording_stub_plugin_first_int") == 3);
+    CHECK(int_from_stub("recording_stub_plugin_first_int") == IMAS_INTEGER_DATA);
     CHECK(int_from_stub("recording_stub_plugin_second_int") == 1);
     CHECK(pointer_from_stub("recording_stub_plugin_pointer") == &payload);
     CHECK(pointer_from_stub("recording_stub_plugin_size_pointer") == extent);
@@ -318,9 +331,11 @@ static void check_utility_and_version_accessors_forward_unchanged(int operation_
     CHECK(strcmp(getDDVersion(), "!!DEPRECATED!!") == 0);
     CHECK(int_from_stub("recording_stub_utility_call_count") == ++calls);
 
-    /* getALVersion() answers from the shim's own bootstrap check rather than
-     * a fresh forward, so it is asserted on its value alone. */
-    CHECK(getALVersion() != NULL);
+    /* getALVersion() answers from the shim's own bootstrap check rather than a
+     * fresh forward, so there is no new stub call to count — but its value must
+     * still be IMAS-Core's, which for the recording stub is the pinned release
+     * in IMAS_CORE_VERSION. Asserting only non-null would pin nothing. */
+    CHECK(strcmp(getALVersion(), EXPECTED_AL_VERSION) == 0);
 
     char *info = NULL;
     CHECK(al_context_info(operation_ctx, &info).code == 0);

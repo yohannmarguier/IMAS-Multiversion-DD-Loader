@@ -32,9 +32,10 @@ before drawing conclusions from that list.
 
 ## Scope and limitations
 
-These are deliberate boundaries, not gaps awaiting a patch. Most are pinned by a
-named test, so they cannot quietly stop being true; the deployment one below is
-the exception, and says why.
+These are deliberate boundaries, not gaps awaiting a patch. The first, fifth and
+sixth are pinned by a named test, so they cannot quietly stop being true. The
+other three are scoping decisions no test can express — which is itself worth
+knowing when reading a green suite.
 
 - **One DD version per process.** The calling HLI's DD version latches once, on
   the first `imas_mvdd_set_hli_dd_version()` call or from

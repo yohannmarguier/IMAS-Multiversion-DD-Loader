@@ -45,14 +45,24 @@
  * Issue #69 adds the refusal scenarios: every scenario above proves a read the
  * shim can serve, and a validation matrix that only ever demonstrates success
  * would not distinguish a working converter from one that silently serves the
- * wrong bytes when a rule says it must not. `time_slice/constraints/
- * strike_point/chi_squared_r` is declared `unmappable` both ways by a
- * `redefine` entry (its unit changed from `m` to `m^-2` and the variance
- * needed to invert that is not stored), and `grids_ggd/grid/space/
- * coordinates_type` is the artifact's one `retyped` rule, whose container
- * changes shape between an int array and an array of identifier structures.
- * Both refuse before IMAS-Core is called, so each is asserted against a real
- * open pulse whose data is deliberately never reached. */
+ * wrong bytes when a rule says it must not. The two paths used refuse for
+ * deliberately different reasons, and only one of them refuses because of its
+ * declared fidelity:
+ *   - `time_slice/constraints/strike_point/chi_squared_r` is declared
+ *     `unmappable` in both directions by a `redefine` entry — its unit changed
+ *     from `m` to `m^-2`, and the variance needed to invert that is not stored.
+ *   - `grids_ggd/grid/space/coordinates_type` is the artifact's one `retyped`
+ *     rule, and it is declared `exact` both ways ("integers preserved; only the
+ *     container changes"). It still refuses, because `Rel::Retyped` resolves to
+ *     `RefusalReason::UnservableRetype` regardless of fidelity: the shim cannot
+ *     reshape an int array into an array of identifier structures, so a
+ *     conversion that is lossless in principle is unavailable in practice.
+ *     That distinction is the reason this path is worth a scenario — refusal
+ *     follows what the shim can serve, not only what the artifact calls lossy.
+ * Both are logged `UNMAPPABLE`: from the caller's side a refused read yielded
+ * no value, whatever the rule's declared fidelity was. Both refuse before
+ * IMAS-Core is called, so each is asserted against a real open pulse whose data
+ * is deliberately never reached. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -327,10 +337,11 @@ static void check_read_refused(int op_ctx, const char *field, int datatype, cons
     CHECK(verdict == IMAS_MVDD_FIDELITY_UNMAPPABLE);
 }
 
-/* Both refusal reasons are declared unmappable in both directions, so each
- * direction asserts both of them: that is what distinguishes a refusal the
- * artifact demands from one that merely happens to fall out of whichever
- * direction the resolver was written for first. */
+/* Each direction asserts both refusals, since neither is direction-specific:
+ * that is what distinguishes a refusal the rule genuinely demands from one that
+ * merely happens to fall out of whichever direction the resolver was written
+ * for first. See the file header for why these two refuse for different
+ * reasons. */
 static void check_both_refusals(const char *hli_version, const char *fixture_version) {
     CHECK_OK(imas_mvdd_set_hli_dd_version(hli_version));
     int pulse_ctx = open_fixture_pulse(fixture_version);
