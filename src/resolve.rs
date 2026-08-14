@@ -1342,6 +1342,13 @@ unsafe fn read_data_impl(
                 return read_refusal(&record, reason, &field_dd_path);
             }
             let status = forward(field_attempt.path, timebase_attempt.path);
+            eprintln!(
+                "[DEBUG-pr93] read_data_impl ctx={ctx_id} field={:?} transform={:?} status={} data={:?}",
+                field_dd_path,
+                field_attempt.value_transformation,
+                status.code,
+                unsafe { *data },
+            );
             // SAFETY: `data` is valid and writable by `read_data_impl`'s own
             // safety contract, and the just-finished IMAS-Core call has
             // initialized it.
