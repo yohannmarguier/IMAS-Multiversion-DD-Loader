@@ -682,14 +682,53 @@ pub(crate) unsafe fn begin_global_action(
     rwmode: c_int,
     octx_id: *mut c_int,
 ) -> al_status_t {
-    let Some(hli) = crate::hli_version::current() else {
-        return forward_status!(begin_global_action(
+    let forward = |effective_datapath| {
+        forward_status!(begin_global_action(
+            pctx_id,
+            dataobjectname,
+            effective_datapath,
+            rwmode,
+            octx_id,
+        ))
+    };
+    let end_on_refusal = |ctx| forward_status!(end_action(ctx));
+    // SAFETY: same contract as `begin_global_action_impl`, already upheld by
+    // this function's own `unsafe fn` contract.
+    unsafe {
+        begin_global_action_impl(
             pctx_id,
             dataobjectname,
             datapath,
-            rwmode,
             octx_id,
-        ));
+            forward,
+            end_on_refusal,
+        )
+    }
+}
+
+/// The policy shared by `begin_global_action` and `plugin_begin_global_action`
+/// (issue #67): the occurrence-cache `datapath` translation on the way in and
+/// the stored-version discovery/root-registration rule on the way out,
+/// factored out of both so only the forwarded ABI symbol and the matching
+/// end-action twin differ between the ordinary and plugin reentry seams.
+/// `forward` is called with the effective (possibly translated) `datapath`
+/// exactly once, whether or not the HLI DD version is latched.
+///
+/// # Safety
+/// Same contract as [`begin_global_action`]: `dataobjectname` and `datapath`
+/// must be valid, NUL-terminated C strings, or null where IMAS-Core's own
+/// contract allows it, and `octx_id` must be a valid, writable `*mut c_int`
+/// once `forward` reports success.
+unsafe fn begin_global_action_impl(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    datapath: *const c_char,
+    octx_id: *mut c_int,
+    forward: impl FnOnce(*const c_char) -> al_status_t,
+    end_on_refusal: impl FnOnce(c_int) -> al_status_t,
+) -> al_status_t {
+    let Some(hli) = crate::hli_version::current() else {
+        return forward(datapath);
     };
 
     let dataobjectname_str = c_str_or_none(dataobjectname);
@@ -707,13 +746,7 @@ pub(crate) unsafe fn begin_global_action(
         .map(CStr::as_ptr)
         .unwrap_or(datapath);
 
-    let status = forward_status!(begin_global_action(
-        pctx_id,
-        dataobjectname,
-        effective_datapath,
-        rwmode,
-        octx_id,
-    ));
+    let status = forward(effective_datapath);
     if status.code != 0 {
         return status;
     }
@@ -728,14 +761,16 @@ pub(crate) unsafe fn begin_global_action(
         opened_octx_id,
         &hli,
         status,
+        end_on_refusal,
     )
 }
 
 /// The stored-version discovery, classification and root-registration rule
-/// shared by `al_begin_global_action`, `al_begin_slice_action` and
-/// `al_begin_timerange_action` (ADR 0002, issue #53, issue #55) — every
-/// operation-context seam that opens a whole IDS occurrence, once the real
-/// open has already succeeded and the HLI DD version is latched.
+/// shared by `al_begin_global_action`, `al_begin_slice_action`,
+/// `al_begin_timerange_action` (ADR 0002, issue #53, issue #55) and their
+/// `al_plugin_*` reentry twins (issue #67) — every operation-context seam
+/// that opens a whole IDS occurrence, once the real open has already
+/// succeeded and the HLI DD version is latched.
 ///
 /// `dataobjectname_str`/`ids_name` are `None` when the occurrence identity
 /// isn't usable (null or non-UTF-8 `dataobjectname`): the open itself
@@ -747,12 +782,16 @@ pub(crate) unsafe fn begin_global_action(
 /// the caller returns to the HLI) and classified through the one
 /// read-outcome classifier ([`crate::read_outcome`]). A present, malformed
 /// stamp is a hard refusal — the just-opened IMAS-Core context is also
-/// ended first, so a refusal here never leaks it. An absent stamp, or one
-/// that matches the HLI DD version, registers nothing (ADR 0007): the
-/// occurrence is presumed to match. A present, valid, *mismatched* stamp
-/// registers the root context, but only when an artifact actually covers
-/// this IDS and version pair (ADR 0011 decision 1) — otherwise this is
-/// treated exactly like an unknown context, passthrough with no record.
+/// ended first via `end_on_refusal`, so a refusal here never leaks it; the
+/// caller supplies its own matching end-action symbol (`al_end_action` for
+/// an ordinary open, `al_plugin_end_action` for a plugin reentry open) since
+/// a context opened through one family is closed through that same family.
+/// An absent stamp, or one that matches the HLI DD version, registers
+/// nothing (ADR 0007): the occurrence is presumed to match. A present,
+/// valid, *mismatched* stamp registers the root context, but only when an
+/// artifact actually covers this IDS and version pair (ADR 0011 decision 1)
+/// — otherwise this is treated exactly like an unknown context, passthrough
+/// with no record.
 fn discover_and_register_occurrence(
     pctx_id: c_int,
     dataobjectname_str: Option<&str>,
@@ -760,6 +799,7 @@ fn discover_and_register_occurrence(
     opened_ctx_id: c_int,
     hli: &crate::dd_version::DdVersion,
     status: al_status_t,
+    end_on_refusal: impl FnOnce(c_int) -> al_status_t,
 ) -> al_status_t {
     let (Some(dataobjectname_str), Some(ids_name)) = (dataobjectname_str, ids_name) else {
         return status;
@@ -773,8 +813,9 @@ fn discover_and_register_occurrence(
             REGISTRY.forget_occurrence_version(pctx_id, dataobjectname_str);
             // The open already succeeded against real IMAS-Core; a refusal
             // from here on must not leak that context, since the HLI — told
-            // this open failed — will never call `al_end_action` on it.
-            let _ = forward_status!(end_action(opened_ctx_id));
+            // this open failed — will never call the matching end-action
+            // itself.
+            let _ = end_on_refusal(opened_ctx_id);
             *refusal
         }
         StampOutcome::Unstamped => {
@@ -906,28 +947,49 @@ pub(crate) unsafe fn begin_slice_action(
     interpmode: c_int,
     octx_id: *mut c_int,
 ) -> al_status_t {
-    let Some(hli) = crate::hli_version::current() else {
-        return forward_status!(begin_slice_action(
+    let forward = || {
+        forward_status!(begin_slice_action(
             pctx_id,
             dataobjectname,
             rwmode,
             time,
             interpmode,
             octx_id,
-        ));
+        ))
+    };
+    let end_on_refusal = |ctx| forward_status!(end_action(ctx));
+    // SAFETY: same contract as `begin_slice_action_impl`, already upheld by
+    // this function's own `unsafe fn` contract.
+    unsafe { begin_slice_action_impl(pctx_id, dataobjectname, octx_id, forward, end_on_refusal) }
+}
+
+/// The policy shared by `begin_slice_action` and `plugin_begin_slice_action`
+/// (issue #67): the stored-version discovery and root-registration rule,
+/// factored out of both so only the forwarded ABI symbol and the matching
+/// end-action twin differ between the ordinary and plugin reentry seams.
+/// `dataobjectname` carries no `datapath` argument to translate, so unlike
+/// [`begin_global_action_impl`], `forward` takes no arguments.
+///
+/// # Safety
+/// Same contract as [`begin_slice_action`]: `dataobjectname` must be a valid,
+/// NUL-terminated C string, or null where IMAS-Core's own contract allows
+/// it, and `octx_id` must be a valid, writable `*mut c_int` once `forward`
+/// reports success.
+unsafe fn begin_slice_action_impl(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    octx_id: *mut c_int,
+    forward: impl FnOnce() -> al_status_t,
+    end_on_refusal: impl FnOnce(c_int) -> al_status_t,
+) -> al_status_t {
+    let Some(hli) = crate::hli_version::current() else {
+        return forward();
     };
 
     let dataobjectname_str = c_str_or_none(dataobjectname);
     let ids_name = dataobjectname_str.map(ids_name_from);
 
-    let status = forward_status!(begin_slice_action(
-        pctx_id,
-        dataobjectname,
-        rwmode,
-        time,
-        interpmode,
-        octx_id,
-    ));
+    let status = forward();
     if status.code != 0 {
         return status;
     }
@@ -942,6 +1004,7 @@ pub(crate) unsafe fn begin_slice_action(
         opened_octx_id,
         &hli,
         status,
+        end_on_refusal,
     )
 }
 
@@ -1015,6 +1078,7 @@ pub(crate) unsafe fn begin_timerange_action(
         opened_octx_id,
         &hli,
         status,
+        |ctx| forward_status!(end_action(ctx)),
     )
 }
 
@@ -1039,10 +1103,34 @@ pub(crate) unsafe fn begin_arraystruct_action(
     size: *mut c_int,
     actx_id: *mut c_int,
 ) -> al_status_t {
+    let forward = |p, t| forward_status!(begin_arraystruct_action(ctx_id, p, t, size, actx_id));
+    // SAFETY: same contract as `begin_arraystruct_action_impl`, already
+    // upheld by this function's own `unsafe fn` contract.
+    unsafe { begin_arraystruct_action_impl(ctx_id, path, timebase, actx_id, forward) }
+}
+
+/// The policy shared by `begin_arraystruct_action` and
+/// `plugin_begin_arraystruct_action` (issue #67): the `path`/`timebase`
+/// resolution against the parent's conversion record and the child-record
+/// registration on success, factored out of both so only the forwarded ABI
+/// symbol differs between the ordinary and plugin reentry seams. `forward`
+/// is called with the effective (possibly translated) `path`/`timebase`
+/// exactly once.
+///
+/// # Safety
+/// Same contract as [`begin_arraystruct_action`]: `path` and `timebase` must
+/// be valid, NUL-terminated C strings, or null where IMAS-Core's own
+/// contract allows it, and `actx_id` must be a valid, writable `*mut c_int`
+/// once `forward` reports success.
+unsafe fn begin_arraystruct_action_impl(
+    ctx_id: c_int,
+    path: *const c_char,
+    timebase: *const c_char,
+    actx_id: *mut c_int,
+    forward: impl FnOnce(*const c_char, *const c_char) -> al_status_t,
+) -> al_status_t {
     let Some(parent) = REGISTRY.lookup(ctx_id) else {
-        return forward_status!(begin_arraystruct_action(
-            ctx_id, path, timebase, size, actx_id,
-        ));
+        return forward(path, timebase);
     };
 
     let translated_path = match resolve_arraystruct_argument(&parent, path, "path") {
@@ -1054,16 +1142,13 @@ pub(crate) unsafe fn begin_arraystruct_action(
         Err(message) => return crate::conversion_refusal(&message),
     };
 
-    let status = forward_status!(begin_arraystruct_action(
-        ctx_id,
+    let status = forward(
         translated_path.as_deref().map(CStr::as_ptr).unwrap_or(path),
         translated_timebase
             .as_deref()
             .map(CStr::as_ptr)
             .unwrap_or(timebase),
-        size,
-        actx_id,
-    ));
+    );
     if status.code == 0 {
         let resolved_path = join_hli_path(
             &parent.resolved_path,
@@ -2014,6 +2099,16 @@ pub(crate) unsafe fn setvalue_double_scalar_parameter_plugin(
     ))
 }
 
+/// Mirrors `begin_global_action`'s policy exactly (issue #67): the same
+/// occurrence-cache `datapath` translation on the way in, forwarded through
+/// `al_plugin_begin_global_action` rather than `al_begin_global_action`, and
+/// the same stored-version discovery and root-registration rule on success —
+/// cleaned up through `al_plugin_end_action` rather than `al_end_action` on a
+/// malformed-stamp refusal, since a context this seam opened must be closed
+/// through its own reentry family.
+///
+/// # Safety
+/// Same contract as [`begin_global_action`].
 pub(crate) unsafe fn plugin_begin_global_action(
     pctx_id: c_int,
     dataobjectname: *const c_char,
@@ -2021,15 +2116,37 @@ pub(crate) unsafe fn plugin_begin_global_action(
     rwmode: c_int,
     octx_id: *mut c_int,
 ) -> al_status_t {
-    forward_status!(plugin_begin_global_action(
-        pctx_id,
-        dataobjectname,
-        datapath,
-        rwmode,
-        octx_id,
-    ))
+    let forward = |effective_datapath| {
+        forward_status!(plugin_begin_global_action(
+            pctx_id,
+            dataobjectname,
+            effective_datapath,
+            rwmode,
+            octx_id,
+        ))
+    };
+    let end_on_refusal = |ctx| forward_status!(plugin_end_action(ctx));
+    // SAFETY: same contract as `begin_global_action_impl`, already upheld by
+    // this function's own `unsafe fn` contract.
+    unsafe {
+        begin_global_action_impl(
+            pctx_id,
+            dataobjectname,
+            datapath,
+            octx_id,
+            forward,
+            end_on_refusal,
+        )
+    }
 }
 
+/// Mirrors `begin_slice_action`'s policy exactly (issue #67): the same
+/// stored-version discovery and root-registration rule, forwarded through
+/// `al_plugin_begin_slice_action` rather than `al_begin_slice_action` and
+/// cleaned up through `al_plugin_end_action` on a malformed-stamp refusal.
+///
+/// # Safety
+/// Same contract as [`begin_slice_action`].
 pub(crate) unsafe fn plugin_begin_slice_action(
     pctx_id: c_int,
     dataobjectname: *const c_char,
@@ -2038,16 +2155,30 @@ pub(crate) unsafe fn plugin_begin_slice_action(
     interpmode: c_int,
     octx_id: *mut c_int,
 ) -> al_status_t {
-    forward_status!(plugin_begin_slice_action(
-        pctx_id,
-        dataobjectname,
-        rwmode,
-        time,
-        interpmode,
-        octx_id,
-    ))
+    let forward = || {
+        forward_status!(plugin_begin_slice_action(
+            pctx_id,
+            dataobjectname,
+            rwmode,
+            time,
+            interpmode,
+            octx_id,
+        ))
+    };
+    let end_on_refusal = |ctx| forward_status!(plugin_end_action(ctx));
+    // SAFETY: same contract as `begin_slice_action_impl`, already upheld by
+    // this function's own `unsafe fn` contract.
+    unsafe { begin_slice_action_impl(pctx_id, dataobjectname, octx_id, forward, end_on_refusal) }
 }
 
+/// Mirrors `begin_arraystruct_action`'s policy exactly (issue #67): the same
+/// `path`/`timebase` resolution against the parent's conversion record and
+/// the same child-record registration on success, forwarded through
+/// `al_plugin_begin_arraystruct_action` rather than
+/// `al_begin_arraystruct_action`.
+///
+/// # Safety
+/// Same contract as [`begin_arraystruct_action`].
 pub(crate) unsafe fn plugin_begin_arraystruct_action(
     ctx_id: c_int,
     path: *const c_char,
@@ -2055,13 +2186,23 @@ pub(crate) unsafe fn plugin_begin_arraystruct_action(
     size: *mut c_int,
     actx_id: *mut c_int,
 ) -> al_status_t {
-    forward_status!(plugin_begin_arraystruct_action(
-        ctx_id, path, timebase, size, actx_id,
-    ))
+    let forward =
+        |p, t| forward_status!(plugin_begin_arraystruct_action(ctx_id, p, t, size, actx_id));
+    // SAFETY: same contract as `begin_arraystruct_action_impl`, already
+    // upheld by this function's own `unsafe fn` contract.
+    unsafe { begin_arraystruct_action_impl(ctx_id, path, timebase, actx_id, forward) }
 }
 
+/// Mirrors `end_action`'s policy exactly (issue #67): removes only `ctx_id`'s
+/// own registry record, if any, and only once IMAS-Core's own
+/// `al_plugin_end_action` reports success — a refused close leaves the
+/// record intact, matching `end_action`'s rule for `al_end_action`.
 pub(crate) fn plugin_end_action(ctx_id: c_int) -> al_status_t {
-    forward_status!(plugin_end_action(ctx_id))
+    let status = forward_status!(plugin_end_action(ctx_id));
+    if status.code == 0 {
+        REGISTRY.remove(ctx_id);
+    }
+    status
 }
 
 pub(crate) unsafe fn plugin_read_data(

@@ -691,8 +691,8 @@ al_status_t al_list_filled_paths(int pctxID, const char *dataobjectname, char **
 
 static int g_plugin_call_count = 0;
 static const char *g_plugin_last_symbol = NULL;
-static const char *g_plugin_first_string = NULL;
-static const char *g_plugin_second_string = NULL;
+static char *g_plugin_first_string = NULL;
+static char *g_plugin_second_string = NULL;
 static int g_plugin_last_ctx = 0;
 static int g_plugin_first_int = 0;
 static int g_plugin_second_int = 0;
@@ -700,12 +700,19 @@ static double g_plugin_double = 0.0;
 static const void *g_plugin_pointer = NULL;
 static const void *g_plugin_size_pointer = NULL;
 
+/* `first`/`second` are copied rather than retained as raw pointers: a
+ * translated argument the shim forwards (issue #67) is a temporary buffer
+ * freed once the call returns, unlike a caller-owned literal that outlives
+ * the check. Copying here matches every other recorder in this stub
+ * (`record_str`, used by the global/slice/timerange/arraystruct globals). */
 static void record_plugin_call(const char *symbol, int ctx, const char *first, const char *second) {
     g_plugin_call_count++;
     g_plugin_last_symbol = symbol;
     g_plugin_last_ctx = ctx;
-    g_plugin_first_string = first;
-    g_plugin_second_string = second;
+    free(g_plugin_first_string);
+    g_plugin_first_string = record_str(first);
+    free(g_plugin_second_string);
+    g_plugin_second_string = record_str(second);
     g_plugin_first_int = 0;
     g_plugin_second_int = 0;
     g_plugin_double = 0.0;
@@ -812,6 +819,24 @@ al_status_t al_plugin_begin_global_action(int pctx_id, const char *dataobjectnam
     (void)dataobjectname;
     (void)datapath;
     (void)rwmode;
+
+    /* RECORDING_STUB_PLUGIN_GLOBAL_FAIL lets a test simulate a failed open:
+     * the shim must still forward dataobjectname/datapath unchanged (verified
+     * above via the recording, which runs before this check) and must
+     * attempt no stamp discovery and register no context for the
+     * caller-visible failure. */
+    if (getenv("RECORDING_STUB_PLUGIN_GLOBAL_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -14;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: plugin global open refused",
+                sizeof status.message - 1);
+        if (octx_id != NULL) {
+            *octx_id = 0;
+        }
+        return status;
+    }
+
     if (octx_id != NULL) {
         *octx_id = 5001;
     }
@@ -829,6 +854,21 @@ al_status_t al_plugin_begin_slice_action(int pctx_id, const char *dataobjectname
     (void)rwmode;
     (void)time;
     (void)interpmode;
+
+    /* RECORDING_STUB_PLUGIN_SLICE_FAIL mirrors RECORDING_STUB_PLUGIN_GLOBAL_FAIL
+     * for the slice-action reentry twin. */
+    if (getenv("RECORDING_STUB_PLUGIN_SLICE_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -15;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: plugin slice open refused",
+                sizeof status.message - 1);
+        if (octx_id != NULL) {
+            *octx_id = 0;
+        }
+        return status;
+    }
+
     if (octx_id != NULL) {
         *octx_id = 5002;
     }
@@ -843,6 +883,16 @@ al_status_t al_plugin_begin_arraystruct_action(int ctx_id, const char *path,
     (void)ctx_id;
     (void)path;
     (void)timebase;
+
+    if (getenv("RECORDING_STUB_PLUGIN_ARRAYSTRUCT_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -16;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: plugin arraystruct open refused",
+                sizeof status.message - 1);
+        return status;
+    }
+
     if (size != NULL) {
         *size = 5003;
     }
@@ -855,6 +905,19 @@ al_status_t al_plugin_begin_arraystruct_action(int ctx_id, const char *path,
 al_status_t al_plugin_end_action(int ctx_id) {
     record_plugin_call("al_plugin_end_action", ctx_id, NULL, NULL);
     (void)ctx_id;
+
+    /* RECORDING_STUB_PLUGIN_END_ACTION_FAIL mirrors RECORDING_STUB_END_ACTION_FAIL
+     * for the plugin reentry twin: the shim must leave its own registry
+     * record for ctx_id intact on a failure. */
+    if (getenv("RECORDING_STUB_PLUGIN_END_ACTION_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -17;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: plugin end action refused",
+                sizeof status.message - 1);
+        return status;
+    }
+
     return ok_status();
 }
 

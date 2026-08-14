@@ -1145,6 +1145,132 @@ if(IMAS_MVDD_BUILD_TESTS)
         PROPERTIES ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
 
+    # --- Issue #67: give the al_plugin_* reentry twins the same context
+    # creation, path translation, and lifecycle behavior as their ordinary
+    # counterparts --------------------------------------------------------
+    add_executable(plugin_reentry_policy_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/plugin_reentry_policy_test.c")
+    target_link_libraries(plugin_reentry_policy_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
+    target_compile_definitions(plugin_reentry_policy_test PRIVATE
+        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+    add_dependencies(plugin_reentry_policy_test imas_mvdd_capi recording_stub)
+    set_target_properties(plugin_reentry_policy_test PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    add_test(NAME plugin-reentry-policy-plugin-global-hli-unset-is-plain-forward
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
+            $<TARGET_FILE:plugin_reentry_policy_test> plugin-global-hli-unset-is-plain-forward)
+    set_tests_properties(plugin-reentry-policy-plugin-global-hli-unset-is-plain-forward PROPERTIES
+        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+    add_test(NAME plugin-reentry-policy-plugin-global-unstamped-forwards-datapath-unchanged
+        COMMAND plugin_reentry_policy_test plugin-global-unstamped-forwards-datapath-unchanged)
+    set_tests_properties(
+        plugin-reentry-policy-plugin-global-unstamped-forwards-datapath-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+
+    add_test(NAME plugin-reentry-policy-plugin-global-matching-version-forwards-datapath-unchanged
+        COMMAND plugin_reentry_policy_test
+            plugin-global-matching-version-forwards-datapath-unchanged)
+    set_tests_properties(
+        plugin-reentry-policy-plugin-global-matching-version-forwards-datapath-unchanged
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME plugin-reentry-policy-plugin-global-mismatch-translates-datapath-on-second-open
+        COMMAND plugin_reentry_policy_test
+            plugin-global-mismatch-translates-datapath-on-second-open)
+    set_tests_properties(
+        plugin-reentry-policy-plugin-global-mismatch-translates-datapath-on-second-open
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME plugin-reentry-policy-plugin-global-malformed-stamp-refuses-and-ends-context
+        COMMAND plugin_reentry_policy_test
+            plugin-global-malformed-stamp-refuses-and-ends-context)
+    set_tests_properties(
+        plugin-reentry-policy-plugin-global-malformed-stamp-refuses-and-ends-context PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=not-a-version")
+
+    add_test(NAME plugin-reentry-policy-plugin-global-failure-forwards-status-unchanged
+        COMMAND plugin_reentry_policy_test plugin-global-failure-forwards-status-unchanged)
+    set_tests_properties(plugin-reentry-policy-plugin-global-failure-forwards-status-unchanged
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_PLUGIN_GLOBAL_FAIL=1")
+
+    add_test(NAME plugin-reentry-policy-plugin-slice-hli-unset-is-plain-forward
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
+            $<TARGET_FILE:plugin_reentry_policy_test> plugin-slice-hli-unset-is-plain-forward)
+    set_tests_properties(plugin-reentry-policy-plugin-slice-hli-unset-is-plain-forward PROPERTIES
+        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+    add_test(NAME
+        plugin-reentry-policy-plugin-slice-mismatch-registers-occurrence-for-plugin-global-action
+        COMMAND plugin_reentry_policy_test
+            plugin-slice-mismatch-registers-occurrence-for-plugin-global-action)
+    set_tests_properties(
+        plugin-reentry-policy-plugin-slice-mismatch-registers-occurrence-for-plugin-global-action
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME plugin-reentry-policy-plugin-slice-malformed-stamp-refuses-and-ends-context
+        COMMAND plugin_reentry_policy_test
+            plugin-slice-malformed-stamp-refuses-and-ends-context)
+    set_tests_properties(
+        plugin-reentry-policy-plugin-slice-malformed-stamp-refuses-and-ends-context PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=not-a-version")
+
+    add_test(NAME plugin-reentry-policy-plugin-slice-failure-forwards-status-unchanged
+        COMMAND plugin_reentry_policy_test plugin-slice-failure-forwards-status-unchanged)
+    set_tests_properties(plugin-reentry-policy-plugin-slice-failure-forwards-status-unchanged
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_PLUGIN_SLICE_FAIL=1")
+
+    add_test(NAME plugin-reentry-policy-plugin-arraystruct-translates-under-mismatch
+        COMMAND plugin_reentry_policy_test plugin-arraystruct-translates-under-mismatch)
+    set_tests_properties(plugin-reentry-policy-plugin-arraystruct-translates-under-mismatch
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME
+        plugin-reentry-policy-plugin-arraystruct-failed-open-propagates-without-child-record
+        COMMAND plugin_reentry_policy_test
+            plugin-arraystruct-failed-open-propagates-without-child-record)
+    set_tests_properties(
+        plugin-reentry-policy-plugin-arraystruct-failed-open-propagates-without-child-record
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_PLUGIN_ARRAYSTRUCT_FAIL=1")
+
+    add_test(NAME plugin-reentry-policy-plugin-arraystruct-no-source-refuses-before-core
+        COMMAND plugin_reentry_policy_test plugin-arraystruct-no-source-refuses-before-core)
+    set_tests_properties(plugin-reentry-policy-plugin-arraystruct-no-source-refuses-before-core
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME plugin-reentry-policy-plugin-arraystruct-unknown-parent-forwards-unchanged
+        COMMAND plugin_reentry_policy_test plugin-arraystruct-unknown-parent-forwards-unchanged)
+    set_tests_properties(
+        plugin-reentry-policy-plugin-arraystruct-unknown-parent-forwards-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME plugin-reentry-policy-plugin-end-action-removes-only-its-own-record
+        COMMAND plugin_reentry_policy_test plugin-end-action-removes-only-its-own-record)
+    set_tests_properties(plugin-reentry-policy-plugin-end-action-removes-only-its-own-record
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME plugin-reentry-policy-plugin-end-action-failed-leaves-the-record-intact
+        COMMAND plugin_reentry_policy_test
+            plugin-end-action-failed-leaves-the-record-intact)
+    set_tests_properties(
+        plugin-reentry-policy-plugin-end-action-failed-leaves-the-record-intact PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
     if(IMAS_MVDD_REAL_CORE_TESTS)
         # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
     #

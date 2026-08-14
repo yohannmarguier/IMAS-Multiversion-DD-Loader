@@ -712,9 +712,12 @@ pub unsafe extern "C" fn al_setvalue_double_scalar_parameter_plugin(
 // too — a plugin re-entering the ABI must get the same translation an HLI
 // does, or the two would disagree about which DD version a path is written in.
 
-/// Mirrors IMAS-Core's plugin reentry global-action function exactly.
-/// `dataobjectname` and `datapath` are seam arguments: this ticket forwards
-/// them verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's plugin reentry global-action function exactly and
+/// applies the same stored-version discovery, `datapath` translation and
+/// root-registration policy as `al_begin_global_action` (issue #67): a
+/// malformed-stamp refusal ends the just-opened context through
+/// `al_plugin_end_action` rather than `al_end_action`, since a context this
+/// seam opened is closed through its own reentry family.
 ///
 /// # Safety
 /// String and output pointers must meet IMAS-Core's action-lifecycle contract.
@@ -731,9 +734,9 @@ pub unsafe extern "C" fn al_plugin_begin_global_action(
     }
 }
 
-/// Mirrors IMAS-Core's plugin reentry slice-action function exactly.
-/// `dataobjectname` is a seam argument: this ticket forwards it verbatim, DD
-/// path translation is future work.
+/// Mirrors IMAS-Core's plugin reentry slice-action function exactly and
+/// applies the same stored-version discovery and root-registration policy as
+/// `al_begin_slice_action` (issue #67).
 ///
 /// # Safety
 /// String and output pointers must meet IMAS-Core's action-lifecycle contract.
@@ -758,9 +761,9 @@ pub unsafe extern "C" fn al_plugin_begin_slice_action(
     }
 }
 
-/// Mirrors IMAS-Core's plugin reentry arraystruct-action function exactly.
-/// `path` and `timebase` are seam arguments: this ticket forwards them
-/// verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's plugin reentry arraystruct-action function exactly
+/// and applies the same `path`/`timebase` translation and child-record
+/// registration policy as `al_begin_arraystruct_action` (issue #67).
 ///
 /// # Safety
 /// String and output pointers must meet IMAS-Core's action-lifecycle contract.
@@ -775,7 +778,9 @@ pub unsafe extern "C" fn al_plugin_begin_arraystruct_action(
     unsafe { resolve::plugin_begin_arraystruct_action(ctx_id, path, timebase, size, actx_id) }
 }
 
-/// Mirrors IMAS-Core's plugin reentry end-action function exactly.
+/// Mirrors IMAS-Core's plugin reentry end-action function exactly and
+/// removes only `ctx_id`'s own registry record on success (issue #67),
+/// matching `al_end_action`'s rule.
 #[unsafe(no_mangle)]
 pub extern "C" fn al_plugin_end_action(ctx_id: c_int) -> al_status_t {
     resolve::plugin_end_action(ctx_id)
