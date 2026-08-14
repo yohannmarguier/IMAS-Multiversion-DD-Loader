@@ -939,6 +939,24 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(write-delete-write-conversion-disabled-forwards-unchanged PROPERTIES
         ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
 
+    add_test(NAME write-delete-delete-unknown-context-forwards-unchanged
+        COMMAND write_delete_conversion_test delete-unknown-context-forwards-unchanged)
+    set_tests_properties(write-delete-delete-unknown-context-forwards-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME write-delete-delete-unstamped-context-forwards-unchanged
+        COMMAND write_delete_conversion_test delete-unstamped-context-forwards-unchanged)
+    set_tests_properties(write-delete-delete-unstamped-context-forwards-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+
+    add_test(NAME write-delete-delete-conversion-disabled-forwards-unchanged
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
+            $<TARGET_FILE:write_delete_conversion_test> delete-conversion-disabled-forwards-unchanged)
+    set_tests_properties(write-delete-delete-conversion-disabled-forwards-unchanged PROPERTIES
+        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
     # --- Issue #61: arraystruct path conversion through the public C ABI ---
     add_executable(arraystruct_path_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/arraystruct_path_test.c")

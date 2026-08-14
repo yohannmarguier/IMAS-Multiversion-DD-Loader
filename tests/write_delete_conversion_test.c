@@ -228,6 +228,42 @@ static void scenario_delete_matching_context_forwards_unchanged(void) {
            "stamp was forwarded verbatim\\n");
 }
 
+static void scenario_delete_unknown_context_forwards_unchanged(void) {
+    int pulse_ctx = -1;
+    CHECK(al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, &pulse_ctx).code == 0);
+    int operation_ctx = -1;
+    CHECK(al_begin_global_action(pulse_ctx, "core_profiles", "", 30, &operation_ctx).code == 0);
+
+    CHECK(al_delete_data(operation_ctx, "profiles_1d/electrons/density").code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_delete_path"), "profiles_1d/electrons/density") ==
+          0);
+
+    printf("write_delete_conversion_test delete-unknown-context-forwards-unchanged: an unavailable "
+           "artifact was forwarded\\n");
+}
+
+static void scenario_delete_unstamped_context_forwards_unchanged(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+
+    CHECK(al_delete_data(operation_ctx, "time_slice/global_quantities/beta_tor_norm").code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_delete_path"),
+                 "time_slice/global_quantities/beta_tor_norm") == 0);
+
+    printf("write_delete_conversion_test delete-unstamped-context-forwards-unchanged: an unstamped "
+           "occurrence was forwarded\\n");
+}
+
+static void scenario_delete_conversion_disabled_forwards_unchanged(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+
+    CHECK(al_delete_data(operation_ctx, "time_slice/global_quantities/beta_tor_norm").code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_delete_path"),
+                 "time_slice/global_quantities/beta_tor_norm") == 0);
+
+    printf("write_delete_conversion_test delete-conversion-disabled-forwards-unchanged: an unset "
+           "HLI version was forwarded\\n");
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr,
@@ -239,7 +275,10 @@ int main(int argc, char **argv) {
                 "write-unknown-context-forwards-unchanged|"
                 "write-unstamped-context-forwards-unchanged|"
                 "write-conversion-disabled-forwards-unchanged|"
-                "delete-matching-context-forwards-unchanged>\\n",
+                "delete-matching-context-forwards-unchanged|"
+                "delete-unknown-context-forwards-unchanged|"
+                "delete-unstamped-context-forwards-unchanged|"
+                "delete-conversion-disabled-forwards-unchanged>\\n",
                 argv[0]);
         return 2;
     }
@@ -277,6 +316,18 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "delete-matching-context-forwards-unchanged") == 0) {
         scenario_delete_matching_context_forwards_unchanged();
+        return 0;
+    }
+    if (strcmp(argv[1], "delete-unknown-context-forwards-unchanged") == 0) {
+        scenario_delete_unknown_context_forwards_unchanged();
+        return 0;
+    }
+    if (strcmp(argv[1], "delete-unstamped-context-forwards-unchanged") == 0) {
+        scenario_delete_unstamped_context_forwards_unchanged();
+        return 0;
+    }
+    if (strcmp(argv[1], "delete-conversion-disabled-forwards-unchanged") == 0) {
+        scenario_delete_conversion_disabled_forwards_unchanged();
         return 0;
     }
     fprintf(stderr, "unknown scenario: %s\\n", argv[1]);
