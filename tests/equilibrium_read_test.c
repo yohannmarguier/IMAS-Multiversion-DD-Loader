@@ -95,7 +95,6 @@ static double read_scalar_at_slice_zero(int pulse_ctx, const char *field) {
     void *buffer = &value;
     CHECK_OK(al_read_data(aos_ctx, field, "", &buffer, DOUBLE_DATA, 0, shape));
     CHECK(buffer == &value);
-    fprintf(stderr, "[DEBUG-pr93] scalar field=%s value=%.17g\n", field, value);
 
     CHECK_OK(al_end_action(aos_ctx));
     CHECK_OK(al_end_action(op_ctx));
@@ -126,7 +125,6 @@ static double read_nested_constraint_scalar_at_slice_zero(int pulse_ctx, const c
     void *buffer = &value;
     CHECK_OK(al_read_data(aos_ctx, leaf_field, "", &buffer, DOUBLE_DATA, 0, shape));
     CHECK(buffer == &value);
-    fprintf(stderr, "[DEBUG-pr93] nested field=%s value=%.17g\n", leaf_field, value);
 
     CHECK_OK(al_end_action(aos_ctx));
     CHECK_OK(al_end_action(time_slice_ctx));

@@ -33,7 +33,28 @@ const CORE_LIBRARY_ENV_VAR: &str = "IMAS_CORE_LIBRARY";
 const BUILT_AGAINST_VERSION: &str = env!("IMAS_CORE_VERSION");
 
 thread_local! {
-    static ORDINARY_READ_DEPTH: Cell<u32> = const { Cell::new(0) };
+    static READ_POLICY_STATE: Cell<(u32, Option<usize>)> = const { Cell::new((0, None)) };
+}
+
+struct ReadPolicyGuard;
+
+impl ReadPolicyGuard {
+    fn enter() -> Self {
+        READ_POLICY_STATE.with(|state| {
+            let (depth, pointer) = state.get();
+            state.set((depth + 1, pointer));
+        });
+        Self
+    }
+}
+
+impl Drop for ReadPolicyGuard {
+    fn drop(&mut self) {
+        READ_POLICY_STATE.with(|state| {
+            let (depth, pointer) = state.get();
+            state.set((depth - 1, (depth > 1).then_some(pointer).flatten()));
+        });
+    }
 }
 
 type ContextInfoFn = unsafe extern "C" fn(c_int, *mut *mut c_char) -> al_status_t;
@@ -1198,12 +1219,6 @@ pub(crate) unsafe fn read_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
-    if ORDINARY_READ_DEPTH.with(|depth| depth.get() != 0) {
-        return forward_status!(read_data(
-            ctx_id, field, timebase, data, datatype, dim, size
-        ));
-    }
-    ORDINARY_READ_DEPTH.with(|depth| depth.set(1));
     let forward = |field: *const c_char, timebase: *const c_char| {
         forward_status!(read_data(
             ctx_id, field, timebase, data, datatype, dim, size
@@ -1211,10 +1226,7 @@ pub(crate) unsafe fn read_data(
     };
     // SAFETY: same contract as `read_data_impl`, already upheld by this
     // function's own `unsafe fn` contract.
-    let status =
-        unsafe { read_data_impl(ctx_id, field, timebase, data, datatype, dim, size, forward) };
-    ORDINARY_READ_DEPTH.with(|depth| depth.set(0));
-    status
+    unsafe { read_data_impl(ctx_id, field, timebase, data, datatype, dim, size, forward) }
 }
 
 /// Mirrors `read_data`'s policy exactly (issue #68): the same registry
@@ -1289,6 +1301,7 @@ unsafe fn read_data_impl(
     size: *mut c_int,
     forward: impl Fn(*const c_char, *const c_char) -> al_status_t,
 ) -> al_status_t {
+    let _policy_guard = ReadPolicyGuard::enter();
     let Some(record) = REGISTRY.lookup(ctx_id) else {
         return forward(field, timebase);
     };
@@ -1356,13 +1369,6 @@ unsafe fn read_data_impl(
                 return read_refusal(&record, reason, &field_dd_path);
             }
             let status = forward(field_attempt.path, timebase_attempt.path);
-            eprintln!(
-                "[DEBUG-pr93] read_data_impl ctx={ctx_id} field={:?} transform={:?} status={} data={:?}",
-                field_dd_path,
-                field_attempt.value_transformation,
-                status.code,
-                unsafe { *data },
-            );
             // SAFETY: `data` is valid and writable by `read_data_impl`'s own
             // safety contract, and the just-finished IMAS-Core call has
             // initialized it.
@@ -1378,13 +1384,27 @@ unsafe fn read_data_impl(
                     return status;
                 }
                 ReadOutcome::Data => {
-                    if let Err(reason) = apply_value_transformation(
-                        &field_attempt.value_transformation,
-                        unsafe { *data },
-                        datatype,
-                        dim,
-                        size,
-                    ) {
+                    let should_transform = field_attempt.value_transformation
+                        != ValueTransformation::None
+                        && READ_POLICY_STATE.with(|state| {
+                            let (depth, transformed_pointer) = state.get();
+                            let pointer = unsafe { *data } as usize;
+                            if transformed_pointer == Some(pointer) {
+                                false
+                            } else {
+                                state.set((depth, Some(pointer)));
+                                true
+                            }
+                        });
+                    if should_transform
+                        && let Err(reason) = apply_value_transformation(
+                            &field_attempt.value_transformation,
+                            unsafe { *data },
+                            datatype,
+                            dim,
+                            size,
+                        )
+                    {
                         retain_read_fidelities(
                             &record,
                             field,
