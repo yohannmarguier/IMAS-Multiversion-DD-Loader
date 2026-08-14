@@ -124,7 +124,7 @@ enum Entry {
     Conversion(ConversionRecord),
 }
 
-/// A non-exact path successfully read through one root conversion context.
+/// A non-exact path requested through one root conversion context.
 /// The log is root-owned so child contexts contribute to the same eventual
 /// conversion report (ADR 0012); its public query ABI is deferred to #65.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,7 +325,7 @@ impl ContextRegistry {
         }
     }
 
-    /// Appends a non-exact successful read to its root context's loss log.
+    /// Appends a non-exact read outcome to its root context's loss log.
     /// Exact reads never enter the log; a missing, ended, or non-conversion
     /// context has no conversion loss to retain.
     pub(crate) fn record_read_loss(&self, ctx_id: ContextId, hli_path: String, fidelity: Fidelity) {
@@ -340,6 +340,42 @@ impl ContextRegistry {
         if let Some(losses) = state.loss_logs.get_mut(&root_id) {
             losses.push(ReadLoss { hli_path, fidelity });
         }
+    }
+
+    /// Returns the number of loss-log entries retained for `ctx_id`'s root
+    /// context (ADR 0012), resolving a child to its root exactly as
+    /// `record_read_loss` does. Reports `0` — never a refusal — for a
+    /// data-entry context, an unrecorded or already-ended id, and an
+    /// operation whose stored and HLI DD versions matched and was therefore
+    /// never registered: every one of these has produced no loss entry, so
+    /// zero is the truthful answer rather than an error.
+    pub(crate) fn loss_count(&self, ctx_id: ContextId) -> usize {
+        let state = self.state.lock().unwrap();
+        let Some(Entry::Conversion(record)) = state.entries.get(&ctx_id) else {
+            return 0;
+        };
+        state.loss_logs.get(&record.root_id).map_or(0, Vec::len)
+    }
+
+    /// Calls `read` with the `index`-th loss-log entry retained for `ctx_id`'s
+    /// root context, in the order `record_read_loss` appended them, or
+    /// returns `None` for an out-of-range index. Holding the registry lock
+    /// only for the callback lets query exports copy directly from the
+    /// retained string instead of cloning it onto the heap. This single
+    /// bounds check also covers every untracked `ctx_id`, whose count is
+    /// always zero.
+    pub(crate) fn with_loss_at<T>(
+        &self,
+        ctx_id: ContextId,
+        index: usize,
+        read: impl FnOnce(&str, Fidelity) -> T,
+    ) -> Option<T> {
+        let state = self.state.lock().unwrap();
+        let Some(Entry::Conversion(record)) = state.entries.get(&ctx_id) else {
+            return None;
+        };
+        let loss = state.loss_logs.get(&record.root_id)?.get(index)?;
+        Some(read(&loss.hli_path, loss.fidelity))
     }
 
     /// Removes exactly the record at `ctx_id`, if any (mirrors a successful
@@ -984,5 +1020,103 @@ mod tests {
         registry.record_dataentry(10);
 
         assert_eq!(registry.known_stored_version(10, "equilibrium"), None);
+    }
+
+    #[test]
+    fn loss_count_is_zero_for_an_untracked_context() {
+        let registry = ContextRegistry::new();
+        registry.record_dataentry(10);
+
+        // A data-entry context, an unrecorded id, and (by the same code
+        // path) an operation whose versions matched all report zero rather
+        // than a refusal: none of them ever produced a loss entry.
+        assert_eq!(registry.loss_count(10), 0);
+        assert_eq!(registry.loss_count(999), 0);
+    }
+
+    #[test]
+    fn loss_count_reports_the_retained_entries_on_a_root() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+
+        registry.record_read_loss(5, "field/a".to_string(), Fidelity::Lossy);
+        registry.record_read_loss(5, "field/b".to_string(), Fidelity::Unmappable);
+
+        assert_eq!(registry.loss_count(5), 2);
+    }
+
+    #[test]
+    fn loss_count_never_counts_an_exact_read() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+
+        registry.record_read_loss(5, "field/a".to_string(), Fidelity::Exact);
+
+        assert_eq!(registry.loss_count(5), 0);
+    }
+
+    #[test]
+    fn loss_count_resolves_a_child_context_to_its_root() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+        assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+
+        registry.record_read_loss(6, "field".to_string(), Fidelity::Lossy);
+
+        assert_eq!(
+            registry.loss_count(6),
+            1,
+            "a query on the child must resolve to the same root log"
+        );
+        assert_eq!(registry.loss_count(5), 1);
+    }
+
+    #[test]
+    fn loss_at_returns_entries_in_the_order_they_were_recorded() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+
+        registry.record_read_loss(5, "field/a".to_string(), Fidelity::Lossy);
+        registry.record_read_loss(5, "field/b".to_string(), Fidelity::Unmappable);
+
+        assert_eq!(
+            registry.with_loss_at(5, 0, |path, fidelity| (path.to_string(), fidelity)),
+            Some(("field/a".to_string(), Fidelity::Lossy))
+        );
+        assert_eq!(
+            registry.with_loss_at(5, 1, |path, fidelity| (path.to_string(), fidelity)),
+            Some(("field/b".to_string(), Fidelity::Unmappable))
+        );
+    }
+
+    #[test]
+    fn loss_at_returns_none_past_the_last_entry() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+        registry.record_read_loss(5, "field/a".to_string(), Fidelity::Lossy);
+
+        assert_eq!(registry.with_loss_at(5, 1, |_, _| ()), None);
+    }
+
+    #[test]
+    fn loss_at_returns_none_for_any_index_on_an_untracked_context() {
+        let registry = ContextRegistry::new();
+        registry.record_dataentry(10);
+
+        assert_eq!(registry.with_loss_at(10, 0, |_, _| ()), None);
+        assert_eq!(registry.with_loss_at(999, 0, |_, _| ()), None);
+    }
+
+    #[test]
+    fn ending_the_root_context_destroys_its_loss_log() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+        registry.record_read_loss(5, "field/a".to_string(), Fidelity::Lossy);
+        assert_eq!(registry.loss_count(5), 1);
+
+        registry.remove(5);
+
+        assert_eq!(registry.loss_count(5), 0);
+        assert_eq!(registry.with_loss_at(5, 0, |_, _| ()), None);
     }
 }

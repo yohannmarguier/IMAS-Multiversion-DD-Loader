@@ -295,6 +295,10 @@ fn globs_overlap(a: &str, b: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fidelity {
     Exact,
+    /// A merged or split rule that can name only one successful source after
+    /// trying its candidates. The shim does not perform auxiliary reads to
+    /// verify whether information was lost (ADR 0008).
+    PotentiallyLossy,
     Lossy,
     Unmappable,
 }
@@ -406,6 +410,10 @@ pub enum Outcome {
 pub struct RuleExplanation {
     /// The selected rule's id, or `None` for a `Default` match.
     pub rule_id: Option<String>,
+    /// The selected rule's relation, or `None` for a `Default` match. Read
+    /// seams use this to preserve ADR 0008's potential-versus-certain-loss
+    /// distinction when exposing a fidelity verdict to the HLI.
+    pub rel: Option<Rel>,
     pub match_kind: MatchKind,
     /// The selector stage that won (ADR 0004): `Some` for every `Explicit`
     /// match, `None` for a `Default` match — the document-level identity
@@ -1085,6 +1093,7 @@ impl ConversionMap {
         };
         RuleExplanation {
             rule_id: None,
+            rel: None,
             match_kind: MatchKind::Default,
             selector_stage: None,
             precedence: None,
@@ -1101,6 +1110,7 @@ impl ConversionMap {
     ) -> RuleExplanation {
         RuleExplanation {
             rule_id: Some(rule.id.clone()),
+            rel: Some(rule.rel),
             match_kind: MatchKind::Explicit,
             selector_stage: Some(found.stage),
             precedence: found.precedence,

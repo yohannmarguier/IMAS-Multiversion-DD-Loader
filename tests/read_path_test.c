@@ -77,9 +77,30 @@ static void check_stub_paths(const char *field, const char *timebase) {
     CHECK(strcmp(string_from_stub("recording_stub_read_timebase"), timebase) == 0);
 }
 
+static int loss_count(int ctx_id) {
+    int count = -1;
+    al_status_t status = imas_mvdd_context_loss_count(ctx_id, &count);
+    CHECK(status.code == 0);
+    return count;
+}
+
+static void check_no_loss_entry(int ctx_id) {
+    CHECK(loss_count(ctx_id) == 0);
+}
+
+static void check_loss_at(int ctx_id, int index, const char *expected_path, int expected_verdict) {
+    char path_buf[256] = {0};
+    int verdict = -1;
+    al_status_t status = imas_mvdd_context_loss_at(ctx_id, index, path_buf, sizeof(path_buf), &verdict);
+    CHECK(status.code == 0);
+    CHECK(strcmp(path_buf, expected_path) == 0);
+    CHECK(verdict == expected_verdict);
+}
+
 static void check_read_refusal(int operation_ctx, const char *field, int datatype,
                                const char *expected_message) {
     int reads_before = int_from_stub("recording_stub_read_call_count");
+    int losses_before = loss_count(operation_ctx);
     void *data = (void *)1;
     int size[1] = {73};
 
@@ -90,6 +111,8 @@ static void check_read_refusal(int operation_ctx, const char *field, int datatyp
     CHECK(data == (void *)1);
     CHECK(size[0] == 73);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
+    CHECK(loss_count(operation_ctx) == losses_before + 1);
+    check_loss_at(operation_ctx, losses_before, field, IMAS_MVDD_FIDELITY_UNMAPPABLE);
 }
 
 static void scenario_translates_field_and_timebase_independently(void) {
@@ -100,6 +123,7 @@ static void scenario_translates_field_and_timebase_independently(void) {
               .code == 0);
     CHECK(data != NULL);
     check_stub_paths("time_slice/global_quantities/beta_normal", "time");
+    check_no_loss_entry(operation_ctx);
 
     printf("read_path_test translates-field-and-timebase-independently: both paths reached "
            "the stored DD spelling\\n");
@@ -119,6 +143,8 @@ static void scenario_forward_direction_translates_and_reports_no_source(void) {
     CHECK(read_data(operation_ctx, "time_slice/boundary/lcfs", "", &data).code == 0);
     CHECK(data == NULL);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary/lcfs", IMAS_MVDD_FIDELITY_LOSSY);
 
     printf("read_path_test forward-direction-translates-and-reports-no-source: 3.39.0 HLI "
            "paths used 4.1.1 spellings or returned not found\\n");
@@ -131,8 +157,157 @@ static void scenario_identity_rule_returns_data(void) {
     CHECK(read_data(operation_ctx, "time", "", &data).code == 0);
     CHECK(data != NULL);
     check_stub_paths("time", "");
+    check_no_loss_entry(operation_ctx);
 
     printf("read_path_test identity-rule-returns-data: identity rule read the stored path\\n");
+}
+
+static void scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log(void) {
+    /* fold-ggd-bfield is rel="merged", fidelity forward="lossy" — the
+     * "potentially lossy and unverified" bucket (ADR 0008). This scenario's
+     * HLI DD version is 3.39.0, so translating its own field down to the
+     * stored 4.1.1 spelling matches this rule in the forward direction. */
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    CHECK(data != NULL);
+    check_stub_paths("time_slice/ggd/b_field_phi", "");
+
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/ggd/b_field_phi",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY);
+
+    printf("read_path_test merged-read-retains-a-lossy-verdict-in-the-loss-log: a merged "
+           "rule's lossy verdict reached the queryable loss log\\n");
+}
+
+static void scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log(void) {
+    /* move-gap is rel="moved", fidelity forward="lossy" — the "certainly
+     * lossy" bucket (ADR 0008): an unconditional single-path rule, not a
+     * merged/split candidate plan. Same HLI/stored pair as the merged
+     * scenario above. */
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+
+    CHECK(read_data(operation_ctx, "time_slice/boundary_separatrix/gap/r", "", &data).code == 0);
+    CHECK(data != NULL);
+    check_stub_paths("time_slice/boundary/gap/r", "");
+
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r", IMAS_MVDD_FIDELITY_LOSSY);
+
+    printf("read_path_test moved-read-retains-a-lossy-verdict-in-the-loss-log: a plain "
+           "moved rule's lossy verdict reached the queryable loss log\\n");
+}
+
+static void scenario_ending_context_destroys_its_loss_log(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    CHECK(loss_count(operation_ctx) == 1);
+
+    CHECK(al_end_action(operation_ctx).code == 0);
+
+    check_no_loss_entry(operation_ctx);
+
+    printf("read_path_test ending-context-destroys-its-loss-log: al_end_action removed the "
+           "loss log along with its context\\n");
+}
+
+static void scenario_loss_count_null_output_is_refused(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+
+    al_status_t status = imas_mvdd_context_loss_count(operation_ctx, NULL);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+
+    printf("read_path_test loss-count-null-output-is-refused: a null count output was "
+           "rejected without dereferencing it\\n");
+}
+
+static void scenario_loss_at_null_path_buffer_is_refused(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    int verdict = -1;
+
+    al_status_t status = imas_mvdd_context_loss_at(operation_ctx, 0, NULL, 256, &verdict);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(verdict == -1);
+
+    printf("read_path_test loss-at-null-path-buffer-is-refused: a null path buffer was "
+           "rejected without writing to verdict\\n");
+}
+
+static void scenario_loss_at_null_verdict_is_refused(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    char path_buf[256] = {0};
+
+    al_status_t status = imas_mvdd_context_loss_at(operation_ctx, 0, path_buf, sizeof(path_buf), NULL);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(path_buf[0] == 0);
+
+    printf("read_path_test loss-at-null-verdict-is-refused: a null verdict output was "
+           "rejected without writing to the path buffer\\n");
+}
+
+static void scenario_loss_at_negative_index_is_refused(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    char path_buf[256] = {0};
+    int verdict = -1;
+
+    al_status_t status = imas_mvdd_context_loss_at(operation_ctx, -1, path_buf, sizeof(path_buf), &verdict);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(verdict == -1);
+    CHECK(path_buf[0] == 0);
+
+    printf("read_path_test loss-at-negative-index-is-refused: a negative index was "
+           "rejected safely\\n");
+}
+
+static void scenario_loss_at_out_of_range_index_is_refused(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    CHECK(loss_count(operation_ctx) == 1);
+    char path_buf[256] = {0};
+    int verdict = -1;
+
+    al_status_t status = imas_mvdd_context_loss_at(operation_ctx, 1, path_buf, sizeof(path_buf), &verdict);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(verdict == -1);
+    CHECK(path_buf[0] == 0);
+
+    printf("read_path_test loss-at-out-of-range-index-is-refused: an index at the reported "
+           "count was rejected safely\\n");
+}
+
+static void scenario_loss_at_insufficient_buffer_is_refused(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    char path_buf[4] = {'X', 'X', 'X', 'X'};
+    int verdict = -1;
+
+    al_status_t status = imas_mvdd_context_loss_at(operation_ctx, 0, path_buf, sizeof(path_buf), &verdict);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(verdict == -1);
+    CHECK(path_buf[0] == 'X');
+
+    printf("read_path_test loss-at-insufficient-buffer-is-refused: a too-small buffer was "
+           "rejected without a partial write\\n");
 }
 
 static void scenario_merged_read_falls_through_to_next_candidate(void) {
@@ -163,6 +338,7 @@ static void scenario_merged_read_returns_not_found_when_all_candidates_are_absen
     CHECK(data == NULL);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 2);
     check_stub_paths("time_slice/ggd/b_field_tor", "");
+    check_no_loss_entry(operation_ctx);
 }
 
 static void scenario_split_plan_reads_and_flips_its_first_stored_destination(void) {
@@ -177,6 +353,9 @@ static void scenario_split_plan_reads_and_flips_its_first_stored_destination(voi
     CHECK(*(double *)data == -1.5);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 1);
     check_stub_paths("time_slice/global_quantities/psi_axis", "");
+    /* split-psi-axis is exact both directions: a candidate plan with a
+     * COCOS sign flip applied still creates no loss entry. */
+    check_no_loss_entry(operation_ctx);
 }
 
 static void scenario_reverse_split_read_flips_its_single_stored_source(void) {
@@ -191,6 +370,7 @@ static void scenario_reverse_split_read_flips_its_single_stored_source(void) {
     CHECK(*(double *)data == -1.5);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 1);
     check_stub_paths("time_slice/global_quantities/psi_axis", "");
+    check_no_loss_entry(operation_ctx);
 }
 
 static void scenario_no_source_returns_null_without_core_call(void) {
@@ -202,6 +382,9 @@ static void scenario_no_source_returns_null_without_core_call(void) {
           0);
     CHECK(data == NULL);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/contour_tree/critical_point",
+                  IMAS_MVDD_FIDELITY_LOSSY);
 
     printf("read_path_test no-source-returns-null-without-core-call: no stored path was read\\n");
 }
@@ -384,6 +567,7 @@ static void scenario_matching_context_bypasses_conversion(void) {
     CHECK(data != NULL);
     check_stub_paths("time_slice/global_quantities/beta_tor_norm",
                      "time_slice/global_quantities/beta_tor_norm");
+    check_no_loss_entry(operation_ctx);
 
     printf("read_path_test matching-context-bypasses-conversion: matching stamp was forwarded\\n");
 }
@@ -398,6 +582,7 @@ static void scenario_unknown_context_bypasses_conversion(void) {
     CHECK(read_data(operation_ctx, "profiles_1d/electrons/density", "time", &data).code == 0);
     CHECK(data != NULL);
     check_stub_paths("profiles_1d/electrons/density", "time");
+    check_no_loss_entry(operation_ctx);
 
     printf("read_path_test unknown-context-bypasses-conversion: unavailable artifact was forwarded\\n");
 }
@@ -412,6 +597,7 @@ static void scenario_unstamped_context_bypasses_conversion(void) {
     CHECK(data != NULL);
     check_stub_paths("time_slice/global_quantities/beta_tor_norm",
                      "time_slice/global_quantities/beta_tor_norm");
+    check_no_loss_entry(operation_ctx);
 
     printf("read_path_test unstamped-context-bypasses-conversion: unstamped occurrence was "
            "forwarded\\n");
@@ -427,6 +613,7 @@ static void scenario_conversion_disabled_bypasses_conversion(void) {
     CHECK(data != NULL);
     check_stub_paths("time_slice/global_quantities/beta_tor_norm",
                      "time_slice/global_quantities/beta_tor_norm");
+    check_no_loss_entry(operation_ctx);
 
     printf("read_path_test conversion-disabled-bypasses-conversion: unset HLI version was "
            "forwarded\\n");
@@ -468,7 +655,16 @@ int main(int argc, char **argv) {
                 "resolves-relative-field-and-absolute-timebase|"
                 "matching-context-bypasses-conversion|unknown-context-bypasses-conversion|"
                 "unstamped-context-bypasses-conversion|conversion-disabled-bypasses-conversion|"
-                "core-failure-propagates-unchanged>\\n",
+                "core-failure-propagates-unchanged|"
+                "merged-read-retains-a-lossy-verdict-in-the-loss-log|"
+                "moved-read-retains-a-lossy-verdict-in-the-loss-log|"
+                "ending-context-destroys-its-loss-log|"
+                "loss-count-null-output-is-refused|"
+                "loss-at-null-path-buffer-is-refused|"
+                "loss-at-null-verdict-is-refused|"
+                "loss-at-negative-index-is-refused|"
+                "loss-at-out-of-range-index-is-refused|"
+                "loss-at-insufficient-buffer-is-refused>\\n",
                 argv[0]);
         return 2;
     }
@@ -557,6 +753,42 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "core-failure-propagates-unchanged") == 0) {
         scenario_core_failure_propagates_unchanged();
+        return 0;
+    }
+    if (strcmp(argv[1], "merged-read-retains-a-lossy-verdict-in-the-loss-log") == 0) {
+        scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log();
+        return 0;
+    }
+    if (strcmp(argv[1], "moved-read-retains-a-lossy-verdict-in-the-loss-log") == 0) {
+        scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log();
+        return 0;
+    }
+    if (strcmp(argv[1], "ending-context-destroys-its-loss-log") == 0) {
+        scenario_ending_context_destroys_its_loss_log();
+        return 0;
+    }
+    if (strcmp(argv[1], "loss-count-null-output-is-refused") == 0) {
+        scenario_loss_count_null_output_is_refused();
+        return 0;
+    }
+    if (strcmp(argv[1], "loss-at-null-path-buffer-is-refused") == 0) {
+        scenario_loss_at_null_path_buffer_is_refused();
+        return 0;
+    }
+    if (strcmp(argv[1], "loss-at-null-verdict-is-refused") == 0) {
+        scenario_loss_at_null_verdict_is_refused();
+        return 0;
+    }
+    if (strcmp(argv[1], "loss-at-negative-index-is-refused") == 0) {
+        scenario_loss_at_negative_index_is_refused();
+        return 0;
+    }
+    if (strcmp(argv[1], "loss-at-out-of-range-index-is-refused") == 0) {
+        scenario_loss_at_out_of_range_index_is_refused();
+        return 0;
+    }
+    if (strcmp(argv[1], "loss-at-insufficient-buffer-is-refused") == 0) {
+        scenario_loss_at_insufficient_buffer_is_refused();
         return 0;
     }
     fprintf(stderr, "unknown scenario: %s\\n", argv[1]);
