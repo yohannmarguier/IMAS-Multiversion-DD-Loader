@@ -477,9 +477,10 @@ pub unsafe extern "C" fn al_read_data(
     unsafe { resolve::read_data(ctx_id, field, timebase, data, datatype, dim, size) }
 }
 
-/// Mirrors IMAS-Core's `al_write_data` exactly and forwards unchanged.
-/// `field` and `timebase` are seam arguments: this ticket forwards them
-/// verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's `al_write_data` exactly. A context with a known DD
+/// version mismatch refuses before IMAS-Core is called; other contexts forward
+/// unchanged. `field` and `timebase` remain verbatim: write-path translation
+/// is not introduced here.
 ///
 /// # Safety
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null
@@ -498,9 +499,10 @@ pub unsafe extern "C" fn al_write_data(
     unsafe { resolve::write_data(ctx_id, field, timebase, data, datatype, dim, size) }
 }
 
-/// Mirrors IMAS-Core's `al_delete_data` exactly and forwards unchanged.
-/// `path` is a seam argument: this ticket forwards it verbatim, DD path
-/// translation is future work.
+/// Mirrors IMAS-Core's `al_delete_data` exactly. A context with a known DD
+/// version mismatch refuses before IMAS-Core is called; other contexts forward
+/// unchanged. `path` remains verbatim: write-path translation is not
+/// introduced here.
 ///
 /// # Safety
 /// `path` must be a valid, NUL-terminated C string, or null where
@@ -798,9 +800,10 @@ pub unsafe extern "C" fn al_plugin_read_data(
     unsafe { resolve::plugin_read_data(ctx_id, field, timebase, data, datatype, dim, size) }
 }
 
-/// Mirrors IMAS-Core's plugin reentry write-data function exactly.
-/// `field` and `timebase` are seam arguments: this ticket forwards them
-/// verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's plugin reentry write-data function exactly. A context
+/// with a known DD version mismatch refuses before IMAS-Core is called; other
+/// contexts forward unchanged. `field` and `timebase` remain verbatim:
+/// write-path translation is not introduced here.
 ///
 /// # Safety
 /// All pointers must meet IMAS-Core's data-access contract.

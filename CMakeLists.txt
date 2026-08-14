@@ -881,6 +881,84 @@ if(IMAS_MVDD_BUILD_TESTS)
     add_loss_query_test(read-path-loss-at-insufficient-buffer-is-refused
         loss-at-insufficient-buffer-is-refused)
 
+    # --- Issue #64: al_write_data / al_delete_data refusal through the public C ABI ---
+    add_executable(write_delete_conversion_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/write_delete_conversion_test.c")
+    target_link_libraries(write_delete_conversion_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
+    target_compile_definitions(write_delete_conversion_test PRIVATE
+        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+    add_dependencies(write_delete_conversion_test imas_mvdd_capi recording_stub)
+    set_target_properties(write_delete_conversion_test PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    # All scenarios below need the same known mismatched equilibrium
+    # occurrence. Keep that shared seam setup in one place.
+    function(add_write_delete_mismatched_test name scenario)
+        add_test(NAME "${name}" COMMAND write_delete_conversion_test "${scenario}")
+        set_tests_properties("${name}" PROPERTIES
+            ENVIRONMENT
+                "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    endfunction()
+
+    add_write_delete_mismatched_test(write-delete-write-refuses-under-known-mismatched-root-before-core-call
+        write-refuses-under-known-mismatched-root-before-core-call)
+    add_write_delete_mismatched_test(write-delete-delete-refuses-under-known-mismatched-root-before-core-call
+        delete-refuses-under-known-mismatched-root-before-core-call)
+    add_write_delete_mismatched_test(write-delete-plugin-write-refuses-under-known-mismatched-root-before-core-call
+        plugin-write-refuses-under-known-mismatched-root-before-core-call)
+    add_write_delete_mismatched_test(write-delete-write-nested-child-context-refuses-through-mismatched-root
+        write-nested-child-context-refuses-through-mismatched-root)
+    add_write_delete_mismatched_test(write-delete-delete-nested-child-context-refuses-through-mismatched-root
+        delete-nested-child-context-refuses-through-mismatched-root)
+
+    add_test(NAME write-delete-write-unstamped-context-forwards-unchanged
+        COMMAND write_delete_conversion_test write-unstamped-context-forwards-unchanged)
+    set_tests_properties(write-delete-write-unstamped-context-forwards-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+
+    add_test(NAME write-delete-write-matching-context-forwards-unchanged
+        COMMAND write_delete_conversion_test write-matching-context-forwards-unchanged)
+    set_tests_properties(write-delete-write-matching-context-forwards-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME write-delete-delete-matching-context-forwards-unchanged
+        COMMAND write_delete_conversion_test delete-matching-context-forwards-unchanged)
+    set_tests_properties(write-delete-delete-matching-context-forwards-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME write-delete-write-unknown-context-forwards-unchanged
+        COMMAND write_delete_conversion_test write-unknown-context-forwards-unchanged)
+    set_tests_properties(write-delete-write-unknown-context-forwards-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME write-delete-write-conversion-disabled-forwards-unchanged
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
+            $<TARGET_FILE:write_delete_conversion_test> write-conversion-disabled-forwards-unchanged)
+    set_tests_properties(write-delete-write-conversion-disabled-forwards-unchanged PROPERTIES
+        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+    add_test(NAME write-delete-delete-unknown-context-forwards-unchanged
+        COMMAND write_delete_conversion_test delete-unknown-context-forwards-unchanged)
+    set_tests_properties(write-delete-delete-unknown-context-forwards-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME write-delete-delete-unstamped-context-forwards-unchanged
+        COMMAND write_delete_conversion_test delete-unstamped-context-forwards-unchanged)
+    set_tests_properties(write-delete-delete-unstamped-context-forwards-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+
+    add_test(NAME write-delete-delete-conversion-disabled-forwards-unchanged
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
+            $<TARGET_FILE:write_delete_conversion_test> delete-conversion-disabled-forwards-unchanged)
+    set_tests_properties(write-delete-delete-conversion-disabled-forwards-unchanged PROPERTIES
+        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
     # --- Issue #61: arraystruct path conversion through the public C ABI ---
     add_executable(arraystruct_path_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/arraystruct_path_test.c")
