@@ -1330,6 +1330,19 @@ fn apply_value_transformation(
     }
 }
 
+/// The raw HLI argument joined onto `record`'s own anchor, or `None` if the
+/// argument itself is absent. Shared by `read_argument_path`, which falls
+/// back to the bare anchor for a display path, and `retain_read_fidelity`,
+/// which skips logging outright when there was no argument to join.
+fn joined_argument_path(
+    record: &crate::context_registry::ConversionRecord,
+    raw_path: *const c_char,
+) -> Option<String> {
+    c_str_or_none(raw_path)
+        .filter(|path| !path.is_empty())
+        .map(|path| join_hli_path(&record.resolved_path, path))
+}
+
 /// Retains one non-exact outcome on `ctx_id`'s root loss log, keyed by the
 /// complete DD path as the HLI requested it — `record.resolved_path` joined
 /// with `raw_path` — never the raw argument alone. Under a root context
@@ -1344,9 +1357,9 @@ fn retain_read_fidelity(
     fidelity: Fidelity,
 ) {
     if fidelity != Fidelity::Exact
-        && let Some(path) = c_str_or_none(raw_path).filter(|path| !path.is_empty())
+        && let Some(path) = joined_argument_path(record, raw_path)
     {
-        REGISTRY.record_read_loss(ctx_id, join_hli_path(&record.resolved_path, path), fidelity);
+        REGISTRY.record_read_loss(ctx_id, path, fidelity);
     }
 }
 
@@ -1460,10 +1473,7 @@ fn read_argument_path(
     record: &crate::context_registry::ConversionRecord,
     raw_path: *const c_char,
 ) -> String {
-    c_str_or_none(raw_path)
-        .filter(|path| !path.is_empty())
-        .map(|path| join_hli_path(&record.resolved_path, path))
-        .unwrap_or_else(|| record.resolved_path.clone())
+    joined_argument_path(record, raw_path).unwrap_or_else(|| record.resolved_path.clone())
 }
 
 /// Formats a path-conversion refusal using the version pair retained by its
