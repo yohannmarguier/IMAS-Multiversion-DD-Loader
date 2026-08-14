@@ -320,6 +320,23 @@ static void scenario_sign_flip_invalid_shape_refuses_without_modifying_buffer(vo
            "overflowing dimension product was refused without flipping any element\\n");
 }
 
+static void scenario_sign_flip_shape_override_respects_read_rank(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int size[2] = {0, 73};
+    void *data = NULL;
+
+    CHECK(al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
+                       52 /* DOUBLE_DATA */, 1, size)
+              .code == 0);
+    CHECK(data != NULL);
+    CHECK(*(double *)data == -1.5);
+    CHECK(size[0] == 1);
+    CHECK(size[1] == 73);
+
+    printf("read_path_test sign-flip-shape-override-respects-read-rank: the recording "
+           "stub changed only the one extent the ABI supplied\\n");
+}
+
 static void scenario_resolves_relative_field_and_absolute_timebase(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int size = -1;
@@ -428,6 +445,7 @@ int main(int argc, char **argv) {
                 "sign-flip-array-negates-values-and-preserves-empty-double|"
                 "sign-flip-rank-exceeding-maxdim-refuses-without-core-call|"
                 "sign-flip-invalid-shape-refuses-without-modifying-buffer|"
+                "sign-flip-shape-override-respects-read-rank|"
                 "resolves-relative-field-and-absolute-timebase|"
                 "matching-context-bypasses-conversion|unknown-context-bypasses-conversion|"
                 "unstamped-context-bypasses-conversion|conversion-disabled-bypasses-conversion|"
@@ -488,6 +506,10 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "sign-flip-invalid-shape-refuses-without-modifying-buffer") == 0) {
         scenario_sign_flip_invalid_shape_refuses_without_modifying_buffer();
+        return 0;
+    }
+    if (strcmp(argv[1], "sign-flip-shape-override-respects-read-rank") == 0) {
+        scenario_sign_flip_shape_override_respects_read_rank();
         return 0;
     }
     if (strcmp(argv[1], "resolves-relative-field-and-absolute-timebase") == 0) {

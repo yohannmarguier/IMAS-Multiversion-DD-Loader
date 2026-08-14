@@ -359,6 +359,8 @@ static char g_read_buffer[] = "recording-stub: read data payload";
 static double g_read_double_buffer = 1.5;
 
 #define RECORDING_STUB_CSV_CAPACITY 16
+/* IMAS-Core's MAXDIM is part of the duplicated ABI contract above. */
+enum { RECORDING_STUB_MAXDIM = 7 };
 static double g_read_double_values[RECORDING_STUB_CSV_CAPACITY];
 static int g_read_size_override[RECORDING_STUB_CSV_CAPACITY];
 
@@ -513,6 +515,16 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
     const char *size_csv = getenv("RECORDING_STUB_READ_SIZE_CSV");
     if (size != NULL && size_csv != NULL) {
         int size_count = parse_csv_ints(size_csv, g_read_size_override, RECORDING_STUB_CSV_CAPACITY);
+        int reported_rank = dim;
+        if (reported_rank < 0) {
+            reported_rank = 0;
+        }
+        if (reported_rank > RECORDING_STUB_MAXDIM) {
+            reported_rank = RECORDING_STUB_MAXDIM;
+        }
+        if (size_count > reported_rank) {
+            size_count = reported_rank;
+        }
         for (int i = 0; i < size_count; ++i) {
             size[i] = g_read_size_override[i];
         }
