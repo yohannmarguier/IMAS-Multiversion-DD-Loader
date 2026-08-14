@@ -124,7 +124,7 @@ enum Entry {
     Conversion(ConversionRecord),
 }
 
-/// A non-exact path successfully read through one root conversion context.
+/// A non-exact path requested through one root conversion context.
 /// The log is root-owned so child contexts contribute to the same eventual
 /// conversion report (ADR 0012); its public query ABI is deferred to #65.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,7 +325,7 @@ impl ContextRegistry {
         }
     }
 
-    /// Appends a non-exact successful read to its root context's loss log.
+    /// Appends a non-exact read outcome to its root context's loss log.
     /// Exact reads never enter the log; a missing, ended, or non-conversion
     /// context has no conversion loss to retain.
     pub(crate) fn record_read_loss(&self, ctx_id: ContextId, hli_path: String, fidelity: Fidelity) {

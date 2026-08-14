@@ -1141,18 +1141,34 @@ pub(crate) unsafe fn read_data(
     let translated_field = match resolve_read_path(&record, field) {
         ReadPath::Forward => None,
         ReadPath::Translated(path) | ReadPath::Candidates(path) => Some(path),
-        ReadPath::Refusal { reason, dd_path } => {
+        ReadPath::Refusal {
+            reason,
+            dd_path,
+            fidelity,
+        } => {
+            retain_read_fidelity(ctx_id, field, fidelity);
             return read_refusal(&record, &reason, &dd_path);
         }
-        ReadPath::NoSource => return no_source_read(data),
+        ReadPath::NoSource(fidelity) => {
+            retain_read_fidelity(ctx_id, field, fidelity);
+            return no_source_read(data);
+        }
     };
     let translated_timebase = match resolve_read_path(&record, timebase) {
         ReadPath::Forward => None,
         ReadPath::Translated(path) | ReadPath::Candidates(path) => Some(path),
-        ReadPath::Refusal { reason, dd_path } => {
+        ReadPath::Refusal {
+            reason,
+            dd_path,
+            fidelity,
+        } => {
+            retain_read_fidelity(ctx_id, timebase, fidelity);
             return read_refusal(&record, &reason, &dd_path);
         }
-        ReadPath::NoSource => return no_source_read(data),
+        ReadPath::NoSource(fidelity) => {
+            retain_read_fidelity(ctx_id, timebase, fidelity);
+            return no_source_read(data);
+        }
     };
 
     // Every translated field/timebase — a single translated path or a
@@ -1175,6 +1191,13 @@ pub(crate) unsafe fn read_data(
             if let Err(reason) =
                 validate_value_transformation(&field_attempt.value_transformation, datatype, dim)
             {
+                retain_read_fidelities(
+                    ctx_id,
+                    field,
+                    Fidelity::Unmappable,
+                    timebase,
+                    timebase_attempt.fidelity,
+                );
                 return read_refusal(&record, reason, &field_dd_path);
             }
             let status = forward_status!(read_data(
@@ -1190,7 +1213,16 @@ pub(crate) unsafe fn read_data(
             // safety contract, and the just-finished IMAS-Core call has
             // initialized it.
             match read_outcome::classify(&status, unsafe { *data }) {
-                ReadOutcome::Failure => return status,
+                ReadOutcome::Failure => {
+                    retain_read_fidelities(
+                        ctx_id,
+                        field,
+                        field_attempt.fidelity,
+                        timebase,
+                        timebase_attempt.fidelity,
+                    );
+                    return status;
+                }
                 ReadOutcome::Data => {
                     if let Err(reason) = apply_value_transformation(
                         &field_attempt.value_transformation,
@@ -1199,16 +1231,35 @@ pub(crate) unsafe fn read_data(
                         dim,
                         size,
                     ) {
+                        retain_read_fidelities(
+                            ctx_id,
+                            field,
+                            Fidelity::Unmappable,
+                            timebase,
+                            timebase_attempt.fidelity,
+                        );
                         return read_refusal(&record, reason, &field_dd_path);
                     }
-                    retain_read_fidelity(ctx_id, field, field_attempt.fidelity);
-                    retain_read_fidelity(ctx_id, timebase, timebase_attempt.fidelity);
+                    retain_read_fidelities(
+                        ctx_id,
+                        field,
+                        field_attempt.fidelity,
+                        timebase,
+                        timebase_attempt.fidelity,
+                    );
                     return status;
                 }
                 ReadOutcome::NotFound => {}
             }
         }
     }
+    retain_read_fidelities(
+        ctx_id,
+        field,
+        translated_read_fidelity(translated_field.as_ref()),
+        timebase,
+        translated_read_fidelity(translated_timebase.as_ref()),
+    );
     no_source_read(data)
 }
 
@@ -1280,6 +1331,17 @@ fn retain_read_fidelity(ctx_id: c_int, raw_path: *const c_char, fidelity: Fideli
     {
         REGISTRY.record_read_loss(ctx_id, path.to_string(), fidelity);
     }
+}
+
+fn retain_read_fidelities(
+    ctx_id: c_int,
+    field: *const c_char,
+    field_fidelity: Fidelity,
+    timebase: *const c_char,
+    timebase_fidelity: Fidelity,
+) {
+    retain_read_fidelity(ctx_id, field, field_fidelity);
+    retain_read_fidelity(ctx_id, timebase, timebase_fidelity);
 }
 
 /// Implements `imas_mvdd_context_loss_count` (ADR 0012): reports the number
@@ -1426,8 +1488,12 @@ enum ReadPath {
     Forward,
     Translated(TranslatedReadPath),
     Candidates(TranslatedReadPath),
-    NoSource,
-    Refusal { reason: String, dd_path: String },
+    NoSource(Fidelity),
+    Refusal {
+        reason: String,
+        dd_path: String,
+        fidelity: Fidelity,
+    },
 }
 
 struct TranslatedReadPath {
@@ -1467,6 +1533,11 @@ impl TranslatedReadPath {
             })
             .collect()
     }
+}
+
+fn translated_read_fidelity(path: Option<&TranslatedReadPath>) -> Fidelity {
+    path.and_then(|path| path.paths.first())
+        .map_or(Fidelity::Exact, |path| path.fidelity)
 }
 
 /// A conversion-map outcome narrowed to what a path-bearing ABI argument can
@@ -1581,8 +1652,9 @@ fn resolve_read_path(
         Outcome::Refusal(reason) => ReadPath::Refusal {
             reason: refusal_reason_message(reason),
             dd_path: hli_absolute,
+            fidelity: Fidelity::Unmappable,
         },
-        Outcome::NoSource => ReadPath::NoSource,
+        Outcome::NoSource => ReadPath::NoSource(fidelity),
         Outcome::Path {
             resolved_path,
             value_transformation,
@@ -1598,6 +1670,7 @@ fn resolve_read_path(
         .unwrap_or_else(|reason| ReadPath::Refusal {
             reason,
             dd_path: hli_absolute,
+            fidelity: Fidelity::Unmappable,
         }),
         Outcome::Path { candidates, .. } => candidates
             .into_iter()
@@ -1615,6 +1688,7 @@ fn resolve_read_path(
             .unwrap_or_else(|reason| ReadPath::Refusal {
                 reason,
                 dd_path: hli_absolute,
+                fidelity: Fidelity::Unmappable,
             }),
     }
 }

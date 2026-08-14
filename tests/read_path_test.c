@@ -100,6 +100,7 @@ static void check_loss_at(int ctx_id, int index, const char *expected_path, int 
 static void check_read_refusal(int operation_ctx, const char *field, int datatype,
                                const char *expected_message) {
     int reads_before = int_from_stub("recording_stub_read_call_count");
+    int losses_before = loss_count(operation_ctx);
     void *data = (void *)1;
     int size[1] = {73};
 
@@ -110,7 +111,8 @@ static void check_read_refusal(int operation_ctx, const char *field, int datatyp
     CHECK(data == (void *)1);
     CHECK(size[0] == 73);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
-    check_no_loss_entry(operation_ctx);
+    CHECK(loss_count(operation_ctx) == losses_before + 1);
+    check_loss_at(operation_ctx, losses_before, field, IMAS_MVDD_FIDELITY_UNMAPPABLE);
 }
 
 static void scenario_translates_field_and_timebase_independently(void) {
@@ -141,7 +143,8 @@ static void scenario_forward_direction_translates_and_reports_no_source(void) {
     CHECK(read_data(operation_ctx, "time_slice/boundary/lcfs", "", &data).code == 0);
     CHECK(data == NULL);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
-    check_no_loss_entry(operation_ctx);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary/lcfs", IMAS_MVDD_FIDELITY_LOSSY);
 
     printf("read_path_test forward-direction-translates-and-reports-no-source: 3.39.0 HLI "
            "paths used 4.1.1 spellings or returned not found\\n");
