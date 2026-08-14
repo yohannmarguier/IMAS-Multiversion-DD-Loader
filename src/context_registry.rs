@@ -1119,4 +1119,32 @@ mod tests {
         assert_eq!(registry.loss_count(5), 0);
         assert_eq!(registry.with_loss_at(5, 0, |_, _| ()), None);
     }
+
+    #[test]
+    fn the_loss_log_dies_with_the_root_even_when_a_child_closes_non_lifo() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+        assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+        assert!(registry.record_child(7, 5, "root/path/aos(2)".to_string()));
+        registry.record_read_loss(6, "field/a".to_string(), Fidelity::Lossy);
+        registry.record_read_loss(7, "field/b".to_string(), Fidelity::Unmappable);
+        assert_eq!(registry.loss_count(5), 2);
+
+        // The root ends first — non-LIFO relative to the usual inner-to-outer
+        // closing order — while both children are still live records.
+        registry.remove(5);
+
+        assert_eq!(registry.loss_count(5), 0);
+        assert_eq!(
+            registry.loss_count(6),
+            0,
+            "a child outliving its root must not resurrect the log"
+        );
+        assert_eq!(registry.loss_count(7), 0);
+        assert!(
+            registry.lookup(6).is_some(),
+            "removing the root must not itself remove a still-live child record"
+        );
+        assert!(registry.lookup(7).is_some());
+    }
 }

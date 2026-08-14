@@ -12,7 +12,12 @@
  * is this file's first scenario. The remaining scenarios prove the read
  * policies a live child context inherits unchanged from a root context:
  * absolute resolution from the IDS root regardless of the child's own
- * anchor, no-source, refusal, and a supported value transformation. */
+ * anchor, no-source, refusal, and a supported value transformation.
+ *
+ * Issue #66 adds the loss-log scenarios: a non-exact nested read must append
+ * the complete DD path — the child's own anchor joined onto the argument the
+ * HLI passed — to its root's queryable loss log, and a query on either the
+ * live child or the root must resolve to that same entry. */
 
 #include <dlfcn.h>
 #include <stdio.h>
@@ -75,6 +80,26 @@ static void check_stub_paths(const char *field, const char *timebase) {
     CHECK(strcmp(string_from_stub("recording_stub_read_timebase"), timebase) == 0);
 }
 
+static int loss_count(int ctx_id) {
+    int count = -1;
+    al_status_t status = imas_mvdd_context_loss_count(ctx_id, &count);
+    CHECK(status.code == 0);
+    return count;
+}
+
+static void check_no_loss_entry(int ctx_id) {
+    CHECK(loss_count(ctx_id) == 0);
+}
+
+static void check_loss_at(int ctx_id, int index, const char *expected_path, int expected_verdict) {
+    char path_buf[256] = {0};
+    int verdict = -1;
+    al_status_t status = imas_mvdd_context_loss_at(ctx_id, index, path_buf, sizeof(path_buf), &verdict);
+    CHECK(status.code == 0);
+    CHECK(strcmp(path_buf, expected_path) == 0);
+    CHECK(verdict == expected_verdict);
+}
+
 /* --- the core gap: a relative read beneath a *renamed* AOS anchor -------- */
 
 static void scenario_relative_field_and_timebase_resolve_through_renamed_child(void) {
@@ -106,6 +131,8 @@ static void scenario_relative_field_and_timebase_resolve_through_renamed_child(v
      * anchor was genuinely retranslated by checking the arraystruct-open
      * side effect below. */
     check_stub_paths("measured", "time");
+    check_no_loss_entry(arraystruct_ctx);
+    check_no_loss_entry(operation_ctx);
 
     printf("nested_context_read_test relative-field-and-timebase-resolve-through-renamed-child: "
            "a relative read beneath a renamed AOS anchor reached the stored spelling\\n");
@@ -174,6 +201,17 @@ static void scenario_refusal_stops_before_core_through_nested_child(void) {
     CHECK(shape[0] == 73);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
 
+    /* The refusal is retained on the root's loss log under the complete DD
+     * path — the child's own "time_slice" anchor joined onto the relative
+     * argument the HLI actually passed — and a query on either the live
+     * child or the root resolves to the same entry (issue #66). */
+    CHECK(loss_count(time_slice_ctx) == 1);
+    check_loss_at(time_slice_ctx, 0, "time_slice/constraints/strike_point/chi_squared_r",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/constraints/strike_point/chi_squared_r",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE);
+
     printf("nested_context_read_test refusal-stops-before-core-through-nested-child: an "
            "unmappable unit redefinition refused before IMAS-Core, addressed relative to a "
            "live arraystruct context\\n");
@@ -201,9 +239,89 @@ static void scenario_sign_flip_applies_through_nested_child(void) {
     CHECK(data != NULL);
     CHECK(*(double *)data == -1.5);
     check_stub_paths("measured", "");
+    check_no_loss_entry(flux_loop_ctx);
+    check_no_loss_entry(operation_ctx);
 
     printf("nested_context_read_test sign-flip-applies-through-nested-child: a COCOS sign flip "
            "was applied to a field read relative to a live arraystruct context\\n");
+}
+
+/* --- issue #66: a nested non-exact read attributes to its root ---------- */
+
+static void scenario_moved_read_through_nested_child_retains_lossy_verdict_on_root(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int time_slice_ctx = open_time_slice(operation_ctx);
+
+    /* move-gap is rel="moved", fidelity forward="lossy" (read_path_test.c
+     * proves the same rule at the root). Read it relative to the live
+     * time_slice child instead: the anchor ("time_slice") spells identically
+     * on both sides, so a shim that logged the raw, unjoined argument would
+     * retain "boundary_separatrix/gap/r" — missing the anchor prefix a root
+     * read of the same field would have produced. */
+    void *data = NULL;
+    int shape[1] = {0};
+    CHECK(al_read_data(time_slice_ctx, "boundary_separatrix/gap/r", "", &data, 3, 1, shape).code
+          == 0);
+    CHECK(data != NULL);
+    check_stub_paths("boundary/gap/r", "");
+
+    CHECK(loss_count(time_slice_ctx) == 1);
+    check_loss_at(time_slice_ctx, 0, "time_slice/boundary_separatrix/gap/r",
+                  IMAS_MVDD_FIDELITY_LOSSY);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r",
+                  IMAS_MVDD_FIDELITY_LOSSY);
+
+    printf("nested_context_read_test moved-read-through-nested-child-retains-lossy-verdict-on-root: "
+           "a certainly-lossy nested read appended the complete DD path to its root's loss log\\n");
+}
+
+static void scenario_merged_read_through_nested_child_retains_potentially_lossy_verdict(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int time_slice_ctx = open_time_slice(operation_ctx);
+
+    /* fold-ggd-bfield is rel="merged", fidelity forward="lossy" — the
+     * "potentially lossy and unverified" bucket (ADR 0008), distinct from
+     * move-gap's unconditional "certainly lossy" bucket above. */
+    void *data = NULL;
+    int shape[1] = {0};
+    CHECK(al_read_data(time_slice_ctx, "ggd/b_field_phi", "", &data, 3, 1, shape).code == 0);
+    CHECK(data != NULL);
+    check_stub_paths("ggd/b_field_phi", "");
+
+    CHECK(loss_count(time_slice_ctx) == 1);
+    check_loss_at(time_slice_ctx, 0, "time_slice/ggd/b_field_phi",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/ggd/b_field_phi",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY);
+
+    printf("nested_context_read_test "
+           "merged-read-through-nested-child-retains-potentially-lossy-verdict: a merged rule's "
+           "verdict reached the root's loss log with the complete nested DD path\\n");
+}
+
+static void scenario_ending_root_before_child_destroys_the_shared_loss_log(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int time_slice_ctx = open_time_slice(operation_ctx);
+
+    void *data = NULL;
+    int shape[1] = {0};
+    CHECK(al_read_data(time_slice_ctx, "boundary_separatrix/gap/r", "", &data, 3, 1, shape).code
+          == 0);
+    CHECK(loss_count(operation_ctx) == 1);
+    CHECK(loss_count(time_slice_ctx) == 1);
+
+    /* End the root while its child context is still open — non-LIFO relative
+     * to the order the two were opened in. The log is owned by the root
+     * record, not the child, so it must not outlive the root. */
+    CHECK(al_end_action(operation_ctx).code == 0);
+
+    check_no_loss_entry(time_slice_ctx);
+
+    printf("nested_context_read_test "
+           "ending-root-before-child-destroys-the-shared-loss-log: the loss log died with its "
+           "root even though a child context closed non-LIFO\\n");
 }
 
 int main(int argc, char **argv) {
@@ -213,7 +331,10 @@ int main(int argc, char **argv) {
                 "absolute-field-outside-child-subtree-resolves-from-ids-root|"
                 "no-source-returns-null-through-nested-child|"
                 "refusal-stops-before-core-through-nested-child|"
-                "sign-flip-applies-through-nested-child>\\n",
+                "sign-flip-applies-through-nested-child|"
+                "moved-read-through-nested-child-retains-lossy-verdict-on-root|"
+                "merged-read-through-nested-child-retains-potentially-lossy-verdict|"
+                "ending-root-before-child-destroys-the-shared-loss-log>\\n",
                 argv[0]);
         return 2;
     }
@@ -235,6 +356,18 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "sign-flip-applies-through-nested-child") == 0) {
         scenario_sign_flip_applies_through_nested_child();
+        return 0;
+    }
+    if (strcmp(argv[1], "moved-read-through-nested-child-retains-lossy-verdict-on-root") == 0) {
+        scenario_moved_read_through_nested_child_retains_lossy_verdict_on_root();
+        return 0;
+    }
+    if (strcmp(argv[1], "merged-read-through-nested-child-retains-potentially-lossy-verdict") == 0) {
+        scenario_merged_read_through_nested_child_retains_potentially_lossy_verdict();
+        return 0;
+    }
+    if (strcmp(argv[1], "ending-root-before-child-destroys-the-shared-loss-log") == 0) {
+        scenario_ending_root_before_child_destroys_the_shared_loss_log();
         return 0;
     }
     fprintf(stderr, "unknown scenario: %s\\n", argv[1]);
