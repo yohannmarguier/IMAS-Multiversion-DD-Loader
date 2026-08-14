@@ -9,6 +9,7 @@
 //! capture its outbound calls. See
 //! `docs/adr/0001-runtime-binding-not-linking.md`.
 
+use std::cell::Cell;
 use std::env;
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::OnceLock;
@@ -30,6 +31,10 @@ const CORE_LIBRARY_ENV_VAR: &str = "IMAS_CORE_LIBRARY";
 /// Supported IMAS-Core release, sourced by `build.rs` from the repository's
 /// `IMAS_CORE_VERSION` pin.
 const BUILT_AGAINST_VERSION: &str = env!("IMAS_CORE_VERSION");
+
+thread_local! {
+    static ORDINARY_READ_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
 
 type ContextInfoFn = unsafe extern "C" fn(c_int, *mut *mut c_char) -> al_status_t;
 type VersionAccessorFn = unsafe extern "C" fn() -> *const c_char;
@@ -1193,6 +1198,12 @@ pub(crate) unsafe fn read_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
+    if ORDINARY_READ_DEPTH.with(|depth| depth.get() != 0) {
+        return forward_status!(read_data(
+            ctx_id, field, timebase, data, datatype, dim, size
+        ));
+    }
+    ORDINARY_READ_DEPTH.with(|depth| depth.set(1));
     let forward = |field: *const c_char, timebase: *const c_char| {
         forward_status!(read_data(
             ctx_id, field, timebase, data, datatype, dim, size
@@ -1200,7 +1211,10 @@ pub(crate) unsafe fn read_data(
     };
     // SAFETY: same contract as `read_data_impl`, already upheld by this
     // function's own `unsafe fn` contract.
-    unsafe { read_data_impl(ctx_id, field, timebase, data, datatype, dim, size, forward) }
+    let status =
+        unsafe { read_data_impl(ctx_id, field, timebase, data, datatype, dim, size, forward) };
+    ORDINARY_READ_DEPTH.with(|depth| depth.set(0));
+    status
 }
 
 /// Mirrors `read_data`'s policy exactly (issue #68): the same registry
