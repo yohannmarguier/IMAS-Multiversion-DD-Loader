@@ -1061,6 +1061,30 @@ if(IMAS_MVDD_BUILD_TESTS)
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1;RECORDING_STUB_READ_DOUBLE=1")
 
+    # --- Issue #66: nested non-exact reads attribute to their root's loss log ---
+    add_test(NAME nested-context-read-moved-read-through-nested-child-retains-lossy-verdict-on-root
+        COMMAND nested_context_read_test
+            moved-read-through-nested-child-retains-lossy-verdict-on-root)
+    set_tests_properties(
+        nested-context-read-moved-read-through-nested-child-retains-lossy-verdict-on-root
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME nested-context-read-merged-read-through-nested-child-retains-potentially-lossy-verdict
+        COMMAND nested_context_read_test
+            merged-read-through-nested-child-retains-potentially-lossy-verdict)
+    set_tests_properties(
+        nested-context-read-merged-read-through-nested-child-retains-potentially-lossy-verdict
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME nested-context-read-ending-root-before-child-destroys-the-shared-loss-log
+        COMMAND nested_context_read_test
+            ending-root-before-child-destroys-the-shared-loss-log)
+    set_tests_properties(
+        nested-context-read-ending-root-before-child-destroys-the-shared-loss-log PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
     # --- Issue #63: context lifecycle (al_end_action,
     # al_iterate_over_arraystruct, al_close_pulse) against the recording
     # stub --------------------------------------------------------------

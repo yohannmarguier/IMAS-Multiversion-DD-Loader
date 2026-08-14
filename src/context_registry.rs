@@ -325,18 +325,24 @@ impl ContextRegistry {
         }
     }
 
-    /// Appends a non-exact read outcome to its root context's loss log.
-    /// Exact reads never enter the log; a missing, ended, or non-conversion
-    /// context has no conversion loss to retain.
-    pub(crate) fn record_read_loss(&self, ctx_id: ContextId, hli_path: String, fidelity: Fidelity) {
+    /// Appends a non-exact read outcome directly to the loss log belonging to
+    /// the root captured in a read's conversion-record snapshot. Exact reads
+    /// never enter the log; if that root has ended, its log is gone and the
+    /// outcome is deliberately not retained.
+    ///
+    /// This deliberately does not resolve a live `ctx_id`: a read must not
+    /// attribute its outcome to a child context that was ended or recycled
+    /// while IMAS-Core was running.
+    pub(crate) fn record_read_loss_at_root(
+        &self,
+        root_id: ContextId,
+        hli_path: String,
+        fidelity: Fidelity,
+    ) {
         if fidelity == Fidelity::Exact {
             return;
         }
         let mut state = self.state.lock().unwrap();
-        let Some(Entry::Conversion(record)) = state.entries.get(&ctx_id) else {
-            return;
-        };
-        let root_id = record.root_id;
         if let Some(losses) = state.loss_logs.get_mut(&root_id) {
             losses.push(ReadLoss { hli_path, fidelity });
         }
@@ -344,7 +350,7 @@ impl ContextRegistry {
 
     /// Returns the number of loss-log entries retained for `ctx_id`'s root
     /// context (ADR 0012), resolving a child to its root exactly as
-    /// `record_read_loss` does. Reports `0` — never a refusal — for a
+    /// loss recording does. Reports `0` — never a refusal — for a
     /// data-entry context, an unrecorded or already-ended id, and an
     /// operation whose stored and HLI DD versions matched and was therefore
     /// never registered: every one of these has produced no loss entry, so
@@ -358,7 +364,7 @@ impl ContextRegistry {
     }
 
     /// Calls `read` with the `index`-th loss-log entry retained for `ctx_id`'s
-    /// root context, in the order `record_read_loss` appended them, or
+    /// root context, in the order loss recording appended them, or
     /// returns `None` for an out-of-range index. Holding the registry lock
     /// only for the callback lets query exports copy directly from the
     /// retained string instead of cloning it onto the heap. This single
@@ -548,7 +554,8 @@ mod tests {
         assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
         assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
 
-        registry.record_read_loss(6, "field".to_string(), Fidelity::Lossy);
+        let child = registry.lookup(6).expect("the child must be live");
+        registry.record_read_loss_at_root(child.root_id, "field".to_string(), Fidelity::Lossy);
 
         let state = registry.state.lock().unwrap();
         assert_eq!(
@@ -559,6 +566,30 @@ mod tests {
             }])
         );
         assert!(!state.loss_logs.contains_key(&6));
+    }
+
+    #[test]
+    fn a_read_uses_its_captured_root_after_its_child_id_is_reused() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "old/root".to_string(), 1));
+        assert!(registry.record_child(6, 5, "old/root/aos(1)".to_string()));
+        let read_root = registry.lookup(6).expect("the child must be live").root_id;
+
+        // Model a child ending and its numeric ID being reused while
+        // IMAS-Core is answering the read. A loss produced by the earlier
+        // read must still belong to the root it captured, never this new root.
+        registry.remove(6);
+        assert!(record_dummy_root(
+            &registry,
+            6,
+            "replacement/root".to_string(),
+            2
+        ));
+
+        registry.record_read_loss_at_root(read_root, "old/root/field".to_string(), Fidelity::Lossy);
+
+        assert_eq!(registry.loss_count(5), 1);
+        assert_eq!(registry.loss_count(6), 0);
     }
 
     #[test]
@@ -1039,8 +1070,8 @@ mod tests {
         let registry = ContextRegistry::new();
         assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
 
-        registry.record_read_loss(5, "field/a".to_string(), Fidelity::Lossy);
-        registry.record_read_loss(5, "field/b".to_string(), Fidelity::Unmappable);
+        registry.record_read_loss_at_root(5, "field/a".to_string(), Fidelity::Lossy);
+        registry.record_read_loss_at_root(5, "field/b".to_string(), Fidelity::Unmappable);
 
         assert_eq!(registry.loss_count(5), 2);
     }
@@ -1050,7 +1081,7 @@ mod tests {
         let registry = ContextRegistry::new();
         assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
 
-        registry.record_read_loss(5, "field/a".to_string(), Fidelity::Exact);
+        registry.record_read_loss_at_root(5, "field/a".to_string(), Fidelity::Exact);
 
         assert_eq!(registry.loss_count(5), 0);
     }
@@ -1061,7 +1092,7 @@ mod tests {
         assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
         assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
 
-        registry.record_read_loss(6, "field".to_string(), Fidelity::Lossy);
+        registry.record_read_loss_at_root(5, "field".to_string(), Fidelity::Lossy);
 
         assert_eq!(
             registry.loss_count(6),
@@ -1076,8 +1107,8 @@ mod tests {
         let registry = ContextRegistry::new();
         assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
 
-        registry.record_read_loss(5, "field/a".to_string(), Fidelity::Lossy);
-        registry.record_read_loss(5, "field/b".to_string(), Fidelity::Unmappable);
+        registry.record_read_loss_at_root(5, "field/a".to_string(), Fidelity::Lossy);
+        registry.record_read_loss_at_root(5, "field/b".to_string(), Fidelity::Unmappable);
 
         assert_eq!(
             registry.with_loss_at(5, 0, |path, fidelity| (path.to_string(), fidelity)),
@@ -1093,7 +1124,7 @@ mod tests {
     fn loss_at_returns_none_past_the_last_entry() {
         let registry = ContextRegistry::new();
         assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
-        registry.record_read_loss(5, "field/a".to_string(), Fidelity::Lossy);
+        registry.record_read_loss_at_root(5, "field/a".to_string(), Fidelity::Lossy);
 
         assert_eq!(registry.with_loss_at(5, 1, |_, _| ()), None);
     }
@@ -1111,12 +1142,40 @@ mod tests {
     fn ending_the_root_context_destroys_its_loss_log() {
         let registry = ContextRegistry::new();
         assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
-        registry.record_read_loss(5, "field/a".to_string(), Fidelity::Lossy);
+        registry.record_read_loss_at_root(5, "field/a".to_string(), Fidelity::Lossy);
         assert_eq!(registry.loss_count(5), 1);
 
         registry.remove(5);
 
         assert_eq!(registry.loss_count(5), 0);
         assert_eq!(registry.with_loss_at(5, 0, |_, _| ()), None);
+    }
+
+    #[test]
+    fn the_loss_log_dies_with_the_root_even_when_a_child_closes_non_lifo() {
+        let registry = ContextRegistry::new();
+        assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+        assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+        assert!(registry.record_child(7, 5, "root/path/aos(2)".to_string()));
+        registry.record_read_loss_at_root(5, "field/a".to_string(), Fidelity::Lossy);
+        registry.record_read_loss_at_root(5, "field/b".to_string(), Fidelity::Unmappable);
+        assert_eq!(registry.loss_count(5), 2);
+
+        // The root ends first — non-LIFO relative to the usual inner-to-outer
+        // closing order — while both children are still live records.
+        registry.remove(5);
+
+        assert_eq!(registry.loss_count(5), 0);
+        assert_eq!(
+            registry.loss_count(6),
+            0,
+            "a child outliving its root must not resurrect the log"
+        );
+        assert_eq!(registry.loss_count(7), 0);
+        assert!(
+            registry.lookup(6).is_some(),
+            "removing the root must not itself remove a still-live child record"
+        );
+        assert!(registry.lookup(7).is_some());
     }
 }
