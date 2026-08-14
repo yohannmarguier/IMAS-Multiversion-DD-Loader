@@ -939,6 +939,50 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(arraystruct-path-conversion-disabled-parent-forwards-unchanged PROPERTIES
         ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
 
+    # --- Issue #62: al_read_data through a live arraystruct context -------
+    add_executable(nested_context_read_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/nested_context_read_test.c")
+    target_link_libraries(nested_context_read_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
+    target_compile_definitions(nested_context_read_test PRIVATE
+        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+    add_dependencies(nested_context_read_test imas_mvdd_capi recording_stub)
+    set_target_properties(nested_context_read_test PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    add_test(NAME nested-context-read-relative-field-and-timebase-resolve-through-renamed-child
+        COMMAND nested_context_read_test
+            relative-field-and-timebase-resolve-through-renamed-child)
+    set_tests_properties(
+        nested-context-read-relative-field-and-timebase-resolve-through-renamed-child PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME nested-context-read-absolute-field-outside-child-subtree-resolves-from-ids-root
+        COMMAND nested_context_read_test
+            absolute-field-outside-child-subtree-resolves-from-ids-root)
+    set_tests_properties(
+        nested-context-read-absolute-field-outside-child-subtree-resolves-from-ids-root PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME nested-context-read-no-source-returns-null-through-nested-child
+        COMMAND nested_context_read_test no-source-returns-null-through-nested-child)
+    set_tests_properties(nested-context-read-no-source-returns-null-through-nested-child PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME nested-context-read-refusal-stops-before-core-through-nested-child
+        COMMAND nested_context_read_test refusal-stops-before-core-through-nested-child)
+    set_tests_properties(nested-context-read-refusal-stops-before-core-through-nested-child PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME nested-context-read-sign-flip-applies-through-nested-child
+        COMMAND nested_context_read_test sign-flip-applies-through-nested-child)
+    set_tests_properties(nested-context-read-sign-flip-applies-through-nested-child PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1;RECORDING_STUB_READ_DOUBLE=1")
+
     if(IMAS_MVDD_REAL_CORE_TESTS)
         # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
     #
@@ -1050,6 +1094,30 @@ if(IMAS_MVDD_BUILD_TESTS)
         COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
             $<TARGET_FILE:equilibrium_read_test> forward-split-read-uses-single-source-and-flips-value)
     set_tests_properties(equilibrium-read-forward-split-read-uses-single-source-and-flips-value PROPERTIES
+        LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+
+    add_test(NAME equilibrium-read-reverse-reads-renamed-nested-container-field
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> reverse-reads-renamed-nested-container-field)
+    set_tests_properties(equilibrium-read-reverse-reads-renamed-nested-container-field PROPERTIES
+        LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
+
+    add_test(NAME equilibrium-read-forward-reads-renamed-nested-container-field
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> forward-reads-renamed-nested-container-field)
+    set_tests_properties(equilibrium-read-forward-reads-renamed-nested-container-field PROPERTIES
+        LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+
+    add_test(NAME equilibrium-read-reverse-sign-flip-applies-through-nested-container
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> reverse-sign-flip-applies-through-nested-container)
+    set_tests_properties(equilibrium-read-reverse-sign-flip-applies-through-nested-container PROPERTIES
+        LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
+
+    add_test(NAME equilibrium-read-forward-sign-flip-applies-through-nested-container
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> forward-sign-flip-applies-through-nested-container)
+    set_tests_properties(equilibrium-read-forward-sign-flip-applies-through-nested-container PROPERTIES
         LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
 
     add_test(NAME equilibrium-read-same-version-is-unaffected
