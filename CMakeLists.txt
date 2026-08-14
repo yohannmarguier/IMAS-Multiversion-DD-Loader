@@ -794,6 +794,12 @@ if(IMAS_MVDD_BUILD_TESTS)
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_DOUBLE=1;RECORDING_STUB_READ_SIZE_CSV=1,42")
 
+    add_test(NAME read-path-sign-flip-not-found-skips-value-transformation
+        COMMAND read_path_test sign-flip-not-found-skips-value-transformation)
+    set_tests_properties(read-path-sign-flip-not-found-skips-value-transformation PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_NOT_FOUND=1")
+
     add_test(NAME read-path-resolves-relative-field-and-absolute-timebase
         COMMAND read_path_test resolves-relative-field-and-absolute-timebase)
     set_tests_properties(read-path-resolves-relative-field-and-absolute-timebase PROPERTIES

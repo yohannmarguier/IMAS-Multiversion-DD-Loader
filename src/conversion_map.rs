@@ -1200,16 +1200,20 @@ impl ConversionMap {
         direction: Direction,
     ) -> ValueTransformation {
         match self.sign_flips.get(right_side_path) {
-            Some((from_cocos, to_cocos)) => match direction {
-                Direction::Forward => ValueTransformation::SignFlip {
-                    from_cocos: from_cocos.clone(),
-                    to_cocos: to_cocos.clone(),
-                },
-                Direction::Reverse => ValueTransformation::SignFlip {
-                    from_cocos: to_cocos.clone(),
-                    to_cocos: from_cocos.clone(),
-                },
-            },
+            Some((from_cocos, to_cocos)) => {
+                let (from_cocos, to_cocos) = match direction {
+                    Direction::Forward => (from_cocos, to_cocos),
+                    Direction::Reverse => (to_cocos, from_cocos),
+                };
+                if from_cocos == to_cocos {
+                    ValueTransformation::None
+                } else {
+                    ValueTransformation::SignFlip {
+                        from_cocos: from_cocos.clone(),
+                        to_cocos: to_cocos.clone(),
+                    }
+                }
+            }
             None => ValueTransformation::None,
         }
     }
@@ -2354,6 +2358,33 @@ mod tests {
                 to_cocos: CocosConvention("11".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn same_cocos_flip_plan_normalizes_to_identity() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="11"/>
+              <default rel="identical"/>
+              <transforms>
+                <cocos from="11" to="11">
+                  <flip path="time_slice/boundary/psi"/>
+                </cocos>
+              </transforms>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("same-convention map must load");
+
+        for direction in [Direction::Forward, Direction::Reverse] {
+            let explanation = map
+                .resolve("time_slice/boundary/psi", direction)
+                .expect("same-convention flip path must resolve");
+            assert_eq!(
+                *value_transformation(&explanation),
+                ValueTransformation::None
+            );
+        }
     }
 
     #[test]
