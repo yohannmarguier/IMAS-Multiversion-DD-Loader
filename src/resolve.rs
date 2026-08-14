@@ -14,7 +14,9 @@ use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::OnceLock;
 
 use crate::context_registry::{MapCacheKey, REGISTRY};
-use crate::conversion_map::{ConversionMap, Fidelity, Outcome, RefusalReason, ValueTransformation};
+use crate::conversion_map::{
+    ConversionMap, Fidelity, Outcome, RefusalReason, Rel, ValueTransformation,
+};
 use crate::dl::Library;
 use crate::known_artifacts;
 use crate::read_outcome::{self, ReadOutcome};
@@ -1365,6 +1367,7 @@ fn fidelity_verdict_code(fidelity: Fidelity) -> c_int {
         Fidelity::Exact => {
             unreachable!("the loss log never retains an exact-fidelity read (ADR 0012)")
         }
+        Fidelity::PotentiallyLossy => crate::IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY,
         Fidelity::Lossy => crate::IMAS_MVDD_FIDELITY_LOSSY,
         Fidelity::Unmappable => crate::IMAS_MVDD_FIDELITY_UNMAPPABLE,
     }
@@ -1573,7 +1576,7 @@ fn resolve_read_path(
         return ReadPath::Forward;
     };
 
-    let fidelity = explanation.fidelity;
+    let fidelity = read_fidelity(explanation.fidelity, explanation.rel);
     match explanation.outcome {
         Outcome::Refusal(reason) => ReadPath::Refusal {
             reason: refusal_reason_message(reason),
@@ -1613,6 +1616,17 @@ fn resolve_read_path(
                 reason,
                 dd_path: hli_absolute,
             }),
+    }
+}
+
+/// Distinguishes a conditional merged/split conversion from an unconditional
+/// lossy conversion only where a read exposes the verdict to the caller. The
+/// conversion map retains its literal `lossy` declaration; ADR 0008 assigns
+/// the potential-loss meaning from the selected rule kind.
+fn read_fidelity(fidelity: Fidelity, rel: Option<Rel>) -> Fidelity {
+    match (fidelity, rel) {
+        (Fidelity::Lossy, Some(Rel::Merged | Rel::Split)) => Fidelity::PotentiallyLossy,
+        _ => fidelity,
     }
 }
 

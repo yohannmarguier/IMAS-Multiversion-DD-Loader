@@ -53,8 +53,9 @@ pub const IMAS_MVDD_CONVERSION_ERROR: c_int = -1000;
 /// Fidelity verdict codes `imas_mvdd_context_loss_at` writes to its
 /// `verdict` output (ADR 0008, ADR 0012). The loss log never retains an
 /// exact-fidelity read, so no code names it.
-pub const IMAS_MVDD_FIDELITY_LOSSY: c_int = 0;
-pub const IMAS_MVDD_FIDELITY_UNMAPPABLE: c_int = 1;
+pub const IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY: c_int = 0;
+pub const IMAS_MVDD_FIDELITY_LOSSY: c_int = 1;
+pub const IMAS_MVDD_FIDELITY_UNMAPPABLE: c_int = 2;
 
 /// Status returned by every ABI entry point. `code == 0` means success.
 ///
@@ -291,7 +292,8 @@ pub unsafe extern "C" fn imas_mvdd_context_loss_count(
 /// alongside `imas_mvdd_set_hli_dd_version`. Copies the `index`-th loss-log
 /// entry retained on `ctxID`'s root conversion context into caller-owned
 /// storage: the DD path exactly as the HLI requested it, NUL-terminated in
-/// `path_buf`, and its fidelity verdict (`IMAS_MVDD_FIDELITY_LOSSY` or
+/// `path_buf`, and its fidelity verdict
+/// (`IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY`, `IMAS_MVDD_FIDELITY_LOSSY`, or
 /// `IMAS_MVDD_FIDELITY_UNMAPPABLE`) in `*verdict`. No internal struct or
 /// pointer is published and nothing is allocated.
 ///

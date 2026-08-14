@@ -172,7 +172,8 @@ static void scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log(void) {
     check_stub_paths("time_slice/ggd/b_field_phi", "");
 
     CHECK(loss_count(operation_ctx) == 1);
-    check_loss_at(operation_ctx, 0, "time_slice/ggd/b_field_phi", IMAS_MVDD_FIDELITY_LOSSY);
+    check_loss_at(operation_ctx, 0, "time_slice/ggd/b_field_phi",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY);
 
     printf("read_path_test merged-read-retains-a-lossy-verdict-in-the-loss-log: a merged "
            "rule's lossy verdict reached the queryable loss log\\n");
