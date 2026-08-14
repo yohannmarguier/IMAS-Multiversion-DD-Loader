@@ -89,6 +89,27 @@ static void check_stub_field(const char *field) {
     CHECK(strcmp(string_from_stub("recording_stub_read_field"), field) == 0);
 }
 
+static void check_plugin_stub_field(const char *field) {
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"), field) == 0);
+}
+
+static int loss_count(int ctx_id) {
+    int count = -1;
+    al_status_t status = imas_mvdd_context_loss_count(ctx_id, &count);
+    CHECK(status.code == 0);
+    return count;
+}
+
+static void check_loss_at(int ctx_id, int index, const char *expected_path, int expected_verdict) {
+    char path_buf[256] = {0};
+    int verdict = -1;
+    al_status_t status =
+        imas_mvdd_context_loss_at(ctx_id, index, path_buf, sizeof(path_buf), &verdict);
+    CHECK(status.code == 0);
+    CHECK(strcmp(path_buf, expected_path) == 0);
+    CHECK(verdict == expected_verdict);
+}
+
 /* "rename-beta-normal" in docs/3.39.0--4.1.1.xml: 4.1.1's spelling on the
  * right, 3.39.0's on the left. */
 static const char *const ROOT_HLI_FIELD = "time_slice/global_quantities/beta_tor_norm";
@@ -439,6 +460,155 @@ static void scenario_plugin_end_action_failed_leaves_the_record_intact(void) {
            "refused close left the record live for a later read to still translate\n");
 }
 
+/* --- al_plugin_read_data follows read_data's rule exactly (issue #68) ----- */
+
+static void scenario_plugin_read_translates_field_under_mismatch(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+    int operation_ctx = -1;
+    CHECK(open_plugin_global(1001, "equilibrium", "", &operation_ctx).code == 0);
+
+    void *data = NULL;
+    int size[1] = {0};
+    CHECK(al_plugin_read_data(operation_ctx, ROOT_HLI_FIELD, "", &data, 52 /* DOUBLE_DATA */, 1,
+                              size)
+              .code == 0);
+    CHECK(data != NULL);
+    check_plugin_stub_field(ROOT_STORED_FIELD);
+    CHECK(loss_count(operation_ctx) == 0);
+
+    printf("plugin_reentry_policy_test plugin-read-translates-field-under-mismatch: a rename "
+           "rule's stored spelling reached IMAS-Core through the plugin reentry seam\n");
+}
+
+static void scenario_plugin_read_refusal_before_core(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+    int operation_ctx = -1;
+    CHECK(open_plugin_global(1001, "equilibrium", "", &operation_ctx).code == 0);
+
+    int plugin_calls_before = int_from_stub("recording_stub_plugin_call_count");
+    const char *field = "time_slice/constraints/strike_point/chi_squared_r";
+    void *data = (void *)1;
+    int size[1] = {73};
+
+    al_status_t status =
+        al_plugin_read_data(operation_ctx, field, "", &data, 52 /* DOUBLE_DATA */, 1, size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(strstr(status.message, "this path's unit was redefined and cannot be converted") !=
+          NULL);
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == plugin_calls_before);
+    CHECK(data == (void *)1);
+    CHECK(size[0] == 73);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, field, IMAS_MVDD_FIDELITY_UNMAPPABLE);
+
+    printf("plugin_reentry_policy_test plugin-read-refusal-before-core: a unit redefinition "
+           "refused through the plugin reentry seam without calling IMAS-Core\n");
+}
+
+static void scenario_plugin_read_no_source_returns_null_without_core_call(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+    int operation_ctx = -1;
+    CHECK(open_plugin_global(1001, "equilibrium", "", &operation_ctx).code == 0);
+
+    int plugin_calls_before = int_from_stub("recording_stub_plugin_call_count");
+    void *data = (void *)1;
+    int size[1] = {0};
+    CHECK(al_plugin_read_data(operation_ctx, "time_slice/contour_tree/critical_point", "", &data,
+                              52 /* DOUBLE_DATA */, 1, size)
+              .code == 0);
+
+    CHECK(data == NULL);
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == plugin_calls_before);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/contour_tree/critical_point",
+                  IMAS_MVDD_FIDELITY_LOSSY);
+
+    printf("plugin_reentry_policy_test plugin-read-no-source-returns-null-without-core-call: no "
+           "stored path was read through the plugin reentry seam\n");
+}
+
+static void scenario_plugin_read_merged_candidate_falls_through(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+    int operation_ctx = -1;
+    CHECK(open_plugin_global(1001, "equilibrium", "", &operation_ctx).code == 0);
+
+    int plugin_calls_before = int_from_stub("recording_stub_plugin_call_count");
+    void *data = NULL;
+    int size[1] = {0};
+    CHECK(al_plugin_read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data,
+                              52 /* DOUBLE_DATA */, 1, size)
+              .code == 0);
+
+    CHECK(data != NULL);
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == plugin_calls_before + 2);
+    check_plugin_stub_field("time_slice/ggd/b_field_tor");
+
+    printf("plugin_reentry_policy_test plugin-read-merged-candidate-falls-through: the merged "
+           "plan's candidate loop ran through the plugin reentry seam\n");
+}
+
+static void scenario_plugin_read_sign_flip_negates_values(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+    int operation_ctx = -1;
+    CHECK(open_plugin_global(1001, "equilibrium", "", &operation_ctx).code == 0);
+
+    void *data = NULL;
+    int size[1] = {0};
+    CHECK(al_plugin_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
+                              52 /* DOUBLE_DATA */, 1, size)
+              .code == 0);
+
+    CHECK(data != NULL);
+    CHECK(size[0] == 1);
+    CHECK(*(double *)data == -1.5);
+
+    printf("plugin_reentry_policy_test plugin-read-sign-flip-negates-values: a COCOS sign flip "
+           "applied through the plugin reentry seam exactly as it does for al_read_data\n");
+}
+
+static void scenario_plugin_read_through_child_context_retains_loss_on_root(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+    int operation_ctx = -1;
+    CHECK(open_plugin_global(1001, "equilibrium", "", &operation_ctx).code == 0);
+
+    int size = -1;
+    int time_slice_ctx = -1;
+    CHECK(al_plugin_begin_arraystruct_action(operation_ctx, "time_slice", "", &size,
+                                              &time_slice_ctx)
+              .code == 0);
+
+    /* move-gap is rel="moved", fidelity forward="lossy" (read_path_test.c
+     * proves the same rule at the root; nested_context_read_test.c proves it
+     * through an ordinary arraystruct child). Reading it relative to a
+     * plugin-opened time_slice child must append the same complete DD path
+     * to the root's loss log. */
+    void *data = NULL;
+    int shape[1] = {0};
+    CHECK(al_plugin_read_data(time_slice_ctx, "boundary_separatrix/gap/r", "", &data,
+                              52 /* DOUBLE_DATA */, 1, shape)
+              .code == 0);
+    CHECK(data != NULL);
+    check_plugin_stub_field("boundary/gap/r");
+
+    CHECK(loss_count(time_slice_ctx) == 1);
+    check_loss_at(time_slice_ctx, 0, "time_slice/boundary_separatrix/gap/r",
+                  IMAS_MVDD_FIDELITY_LOSSY);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r",
+                  IMAS_MVDD_FIDELITY_LOSSY);
+
+    printf("plugin_reentry_policy_test plugin-read-through-child-context-retains-loss-on-root: a "
+           "non-exact plugin read through a plugin-opened child context appended its complete DD "
+           "path to the root's loss log\n");
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr,
@@ -458,7 +628,13 @@ int main(int argc, char **argv) {
                 "plugin-arraystruct-no-source-refuses-before-core|"
                 "plugin-arraystruct-unknown-parent-forwards-unchanged|"
                 "plugin-end-action-removes-only-its-own-record|"
-                "plugin-end-action-failed-leaves-the-record-intact>\n",
+                "plugin-end-action-failed-leaves-the-record-intact|"
+                "plugin-read-translates-field-under-mismatch|"
+                "plugin-read-refusal-before-core|"
+                "plugin-read-no-source-returns-null-without-core-call|"
+                "plugin-read-merged-candidate-falls-through|"
+                "plugin-read-sign-flip-negates-values|"
+                "plugin-read-through-child-context-retains-loss-on-root>\n",
                 argv[0]);
         return 2;
     }
@@ -501,6 +677,18 @@ int main(int argc, char **argv) {
         scenario_plugin_end_action_removes_only_its_own_record();
     } else if (strcmp(scenario, "plugin-end-action-failed-leaves-the-record-intact") == 0) {
         scenario_plugin_end_action_failed_leaves_the_record_intact();
+    } else if (strcmp(scenario, "plugin-read-translates-field-under-mismatch") == 0) {
+        scenario_plugin_read_translates_field_under_mismatch();
+    } else if (strcmp(scenario, "plugin-read-refusal-before-core") == 0) {
+        scenario_plugin_read_refusal_before_core();
+    } else if (strcmp(scenario, "plugin-read-no-source-returns-null-without-core-call") == 0) {
+        scenario_plugin_read_no_source_returns_null_without_core_call();
+    } else if (strcmp(scenario, "plugin-read-merged-candidate-falls-through") == 0) {
+        scenario_plugin_read_merged_candidate_falls_through();
+    } else if (strcmp(scenario, "plugin-read-sign-flip-negates-values") == 0) {
+        scenario_plugin_read_sign_flip_negates_values();
+    } else if (strcmp(scenario, "plugin-read-through-child-context-retains-loss-on-root") == 0) {
+        scenario_plugin_read_through_child_context_retains_loss_on_root();
     } else {
         fprintf(stderr, "unknown scenario: %s\n", scenario);
         return 2;

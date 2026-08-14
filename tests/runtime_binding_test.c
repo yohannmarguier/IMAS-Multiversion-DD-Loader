@@ -664,7 +664,9 @@ static void scenario_plugin_forwarding(void) {
     CHECK(strcmp(first_string(), "temperature") == 0 && strcmp(second_string(), "time") == 0);
     CHECK(size_pointer() == &size);
     CHECK(read_data != NULL);
-    CHECK(size == 5005);
+    /* al_plugin_read_data shares its response computation with al_read_data
+     * (issue #68), whose own default fixed size is 4004. */
+    CHECK(size == 4004);
     CHECK(al_plugin_write_data(709, "temperature", "time", &write_data, 3, 0, NULL).code == 0);
     CHECK_PLUGIN_CALL(17, "al_plugin_write_data");
     CHECK(last_ctx() == 709 && pointer_value() == &write_data);

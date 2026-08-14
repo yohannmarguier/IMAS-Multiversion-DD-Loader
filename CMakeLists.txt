@@ -923,6 +923,12 @@ if(IMAS_MVDD_BUILD_TESTS)
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
 
+    add_test(NAME write-delete-plugin-write-matching-context-forwards-unchanged
+        COMMAND write_delete_conversion_test plugin-write-matching-context-forwards-unchanged)
+    set_tests_properties(write-delete-plugin-write-matching-context-forwards-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
     add_test(NAME write-delete-delete-matching-context-forwards-unchanged
         COMMAND write_delete_conversion_test delete-matching-context-forwards-unchanged)
     set_tests_properties(write-delete-delete-matching-context-forwards-unchanged PROPERTIES
@@ -1271,6 +1277,47 @@ if(IMAS_MVDD_BUILD_TESTS)
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
 
+    # --- Issue #68: al_plugin_read_data follows al_read_data's policy exactly ---
+    add_test(NAME plugin-reentry-policy-plugin-read-translates-field-under-mismatch
+        COMMAND plugin_reentry_policy_test plugin-read-translates-field-under-mismatch)
+    set_tests_properties(plugin-reentry-policy-plugin-read-translates-field-under-mismatch
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME plugin-reentry-policy-plugin-read-refusal-before-core
+        COMMAND plugin_reentry_policy_test plugin-read-refusal-before-core)
+    set_tests_properties(plugin-reentry-policy-plugin-read-refusal-before-core PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME plugin-reentry-policy-plugin-read-no-source-returns-null-without-core-call
+        COMMAND plugin_reentry_policy_test
+            plugin-read-no-source-returns-null-without-core-call)
+    set_tests_properties(
+        plugin-reentry-policy-plugin-read-no-source-returns-null-without-core-call PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+
+    add_test(NAME plugin-reentry-policy-plugin-read-merged-candidate-falls-through
+        COMMAND plugin_reentry_policy_test plugin-read-merged-candidate-falls-through)
+    set_tests_properties(plugin-reentry-policy-plugin-read-merged-candidate-falls-through
+        PROPERTIES ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_NOT_FOUND_FIELD=time_slice/ggd/b_field_phi")
+
+    add_test(NAME plugin-reentry-policy-plugin-read-sign-flip-negates-values
+        COMMAND plugin_reentry_policy_test plugin-read-sign-flip-negates-values)
+    set_tests_properties(plugin-reentry-policy-plugin-read-sign-flip-negates-values PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_DOUBLE=1")
+
+    add_test(NAME plugin-reentry-policy-plugin-read-through-child-context-retains-loss-on-root
+        COMMAND plugin_reentry_policy_test
+            plugin-read-through-child-context-retains-loss-on-root)
+    set_tests_properties(
+        plugin-reentry-policy-plugin-read-through-child-context-retains-loss-on-root PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
     if(IMAS_MVDD_REAL_CORE_TESTS)
         # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
     #
@@ -1314,7 +1361,8 @@ if(IMAS_MVDD_BUILD_TESTS)
         ${HDF5_C_INCLUDE_DIRS})
     target_compile_definitions(real_core_forwarding_test PRIVATE
         "REAL_CORE_TEST_PLUGIN_DIR=\"$<TARGET_FILE_DIR:real_core_test_plugin>\""
-        "REAL_CORE_TEST_PLUGIN_NAME=\"mvddtest\"")
+        "REAL_CORE_TEST_PLUGIN_NAME=\"mvddtest\""
+        "EQUILIBRIUM_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/imas-python-fixtures/fixtures\"")
     # The test uses HDF5 only to seed malformed on-disk DD-version metadata;
     # the slice/time-range operations themselves use the public shim/Core ABI.
     target_link_libraries(real_core_forwarding_test PRIVATE

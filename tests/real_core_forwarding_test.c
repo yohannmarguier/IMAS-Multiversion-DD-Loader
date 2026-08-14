@@ -25,6 +25,9 @@
 #ifndef REAL_CORE_TEST_PLUGIN_NAME
 #error "REAL_CORE_TEST_PLUGIN_NAME must name the fixture plugin"
 #endif
+#ifndef EQUILIBRIUM_FIXTURE_DIR
+#error "EQUILIBRIUM_FIXTURE_DIR must name the equilibrium fixture directory"
+#endif
 
 #define CHECK(condition)                                                        \
     do {                                                                        \
@@ -274,6 +277,40 @@ static void check_plugin_reentry(int pulse_ctx) {
     CHECK_OK(al_plugin_end_action(op_ctx));
 }
 
+/* The recording stub covers the full mismatch policy matrix. This real-Core
+ * probe covers the important integration seam: a plugin-opened context must
+ * still translate a DD path and apply its value transformation against an
+ * actual IMAS-Core HDF5 read. */
+static void check_plugin_read_conversion_against_real_core(void) {
+    char uri[1024];
+    int length = snprintf(uri, sizeof uri, "imas:hdf5?path=%s/dd-3.39.0", EQUILIBRIUM_FIXTURE_DIR);
+    CHECK(length > 0 && (size_t)length < sizeof uri);
+
+    int pulse_ctx = -1;
+    CHECK_OK(al_begin_dataentry_action(uri, OPEN_PULSE, &pulse_ctx));
+
+    int op_ctx = -1;
+    CHECK_OK(al_plugin_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
+    int size = -1;
+    int aos_ctx = -1;
+    CHECK_OK(al_plugin_begin_arraystruct_action(op_ctx, "time_slice", "", &size, &aos_ctx));
+    CHECK(size == 2);
+
+    double value = 0.0;
+    void *buffer = &value;
+    int shape[MAXDIM] = {0};
+    CHECK_OK(al_plugin_read_data(aos_ctx, "global_quantities/psi_axis", "", &buffer,
+                                 DOUBLE_DATA, 0, shape));
+    /* The fixture stores DD 3.39.0's COCOS-11 value -0.75. The 4.1.1 HLI
+     * asks for psi_axis and must receive the translated +0.75 value. */
+    CHECK(buffer == &value);
+    CHECK(value == 0.75);
+
+    CHECK_OK(al_plugin_end_action(aos_ctx));
+    CHECK_OK(al_plugin_end_action(op_ctx));
+    CHECK_OK(al_close_pulse(pulse_ctx, CLOSE_PULSE));
+}
+
 /* Drive all eleven plugin-management/configuration exports across the shim's
  * real-Core boundary. The loadable fixture makes registration legal and logs
  * the setter arguments so this checks forwarding, not only symbol presence. */
@@ -394,6 +431,7 @@ int main(void) {
      * ordinary twins, so exercise its successful real-Core lifecycle while
      * magnetics still has its valid matching stamp. */
     check_plugin_reentry(pulse_ctx);
+    check_plugin_read_conversion_against_real_core();
 
     set_dd_version_stamp(magnetics_file, "not-a-version");
 
