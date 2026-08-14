@@ -32,8 +32,9 @@ before drawing conclusions from that list.
 
 ## Scope and limitations
 
-These are deliberate boundaries, not gaps awaiting a patch. Each is asserted by
-the test suite rather than merely asserted here.
+These are deliberate boundaries, not gaps awaiting a patch. Most are pinned by a
+named test, so they cannot quietly stop being true; the deployment one below is
+the exception, and says why.
 
 - **One DD version per process.** The calling HLI's DD version latches once, on
   the first `imas_mvdd_set_hli_dd_version()` call or from
@@ -65,11 +66,12 @@ the test suite rather than merely asserted here.
   other version pair, is forwarded unconverted — as is an occurrence whose
   stamp matches the HLI or is absent
   (`docs/adr/0007-unstamped-ids-occurrences-match-hli.md`).
-- **Conversion is best-effort and explicitly lossy.** `al_list_filled_paths`
-  still returns paths in the *stored* version's spelling, and `al_bind_plugin`
-  / `al_unbind_plugin` still take a `fieldPath` in it; those three are
-  conversion-relevant seams this project has decided not to translate yet, and
-  `scoped_passthrough_test` pins that decision so it cannot change by accident.
+- **Three conversion-relevant seams are deliberately not translated.**
+  `al_list_filled_paths` still returns paths in the *stored* version's
+  spelling, and `al_bind_plugin` / `al_unbind_plugin` still take a `fieldPath`
+  in it. CLAUDE.md lists all three as seams that will eventually need
+  translation; until they get it, `scoped-passthrough-*` pins the current
+  behaviour so it cannot change by accident in either direction.
 
 ## Toolchain
 
