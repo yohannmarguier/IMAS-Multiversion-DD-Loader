@@ -382,7 +382,9 @@ static void scenario_no_source_returns_null_without_core_call(void) {
           0);
     CHECK(data == NULL);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
-    check_no_loss_entry(operation_ctx);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/contour_tree/critical_point",
+                  IMAS_MVDD_FIDELITY_LOSSY);
 
     printf("read_path_test no-source-returns-null-without-core-call: no stored path was read\\n");
 }

@@ -1403,23 +1403,26 @@ pub(crate) unsafe fn context_loss_at(
             "imas_mvdd_context_loss_at buffer length must not be negative",
         );
     };
-    let Some((path, fidelity)) = REGISTRY.loss_at(ctx_id, index) else {
+    let Some(copy_result) = REGISTRY.with_loss_at(ctx_id, index, |path, fidelity| {
+        if path.len() >= buf_len {
+            return Err("imas_mvdd_context_loss_at buffer is too small for this path");
+        }
+        // SAFETY: `path_buf` is non-null and at least `buf_len` bytes long
+        // per this function's safety contract, and `path.len() < buf_len`
+        // leaves room for the trailing NUL written just past it.
+        unsafe {
+            std::ptr::copy_nonoverlapping(path.as_ptr().cast::<c_char>(), path_buf, path.len());
+            *path_buf.add(path.len()) = 0;
+            *verdict = fidelity_verdict_code(fidelity);
+        }
+        Ok(())
+    }) else {
         return crate::conversion_refusal(
             "imas_mvdd_context_loss_at index is out of range for this context",
         );
     };
-    if path.len() >= buf_len {
-        return crate::conversion_refusal(
-            "imas_mvdd_context_loss_at buffer is too small for this path",
-        );
-    }
-    // SAFETY: `path_buf` is non-null and at least `buf_len` bytes long per
-    // this function's safety contract, and `path.len() < buf_len` leaves
-    // room for the trailing NUL written just past it.
-    unsafe {
-        std::ptr::copy_nonoverlapping(path.as_ptr().cast::<c_char>(), path_buf, path.len());
-        *path_buf.add(path.len()) = 0;
-        *verdict = fidelity_verdict_code(fidelity);
+    if let Err(reason) = copy_result {
+        return crate::conversion_refusal(reason);
     }
     al_status_t::default()
 }

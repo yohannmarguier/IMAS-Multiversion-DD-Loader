@@ -357,17 +357,25 @@ impl ContextRegistry {
         state.loss_logs.get(&record.root_id).map_or(0, Vec::len)
     }
 
-    /// Returns a clone of the `index`-th loss-log entry retained for
-    /// `ctx_id`'s root context, in the order `record_read_loss` appended
-    /// them, or `None` for an out-of-range index. This single bounds check
-    /// also covers every untracked `ctx_id`, whose count is always zero.
-    pub(crate) fn loss_at(&self, ctx_id: ContextId, index: usize) -> Option<(String, Fidelity)> {
+    /// Calls `read` with the `index`-th loss-log entry retained for `ctx_id`'s
+    /// root context, in the order `record_read_loss` appended them, or
+    /// returns `None` for an out-of-range index. Holding the registry lock
+    /// only for the callback lets query exports copy directly from the
+    /// retained string instead of cloning it onto the heap. This single
+    /// bounds check also covers every untracked `ctx_id`, whose count is
+    /// always zero.
+    pub(crate) fn with_loss_at<T>(
+        &self,
+        ctx_id: ContextId,
+        index: usize,
+        read: impl FnOnce(&str, Fidelity) -> T,
+    ) -> Option<T> {
         let state = self.state.lock().unwrap();
         let Some(Entry::Conversion(record)) = state.entries.get(&ctx_id) else {
             return None;
         };
         let loss = state.loss_logs.get(&record.root_id)?.get(index)?;
-        Some((loss.hli_path.clone(), loss.fidelity))
+        Some(read(&loss.hli_path, loss.fidelity))
     }
 
     /// Removes exactly the record at `ctx_id`, if any (mirrors a successful
@@ -1072,11 +1080,11 @@ mod tests {
         registry.record_read_loss(5, "field/b".to_string(), Fidelity::Unmappable);
 
         assert_eq!(
-            registry.loss_at(5, 0),
+            registry.with_loss_at(5, 0, |path, fidelity| (path.to_string(), fidelity)),
             Some(("field/a".to_string(), Fidelity::Lossy))
         );
         assert_eq!(
-            registry.loss_at(5, 1),
+            registry.with_loss_at(5, 1, |path, fidelity| (path.to_string(), fidelity)),
             Some(("field/b".to_string(), Fidelity::Unmappable))
         );
     }
@@ -1087,7 +1095,7 @@ mod tests {
         assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
         registry.record_read_loss(5, "field/a".to_string(), Fidelity::Lossy);
 
-        assert_eq!(registry.loss_at(5, 1), None);
+        assert_eq!(registry.with_loss_at(5, 1, |_, _| ()), None);
     }
 
     #[test]
@@ -1095,8 +1103,8 @@ mod tests {
         let registry = ContextRegistry::new();
         registry.record_dataentry(10);
 
-        assert_eq!(registry.loss_at(10, 0), None);
-        assert_eq!(registry.loss_at(999, 0), None);
+        assert_eq!(registry.with_loss_at(10, 0, |_, _| ()), None);
+        assert_eq!(registry.with_loss_at(999, 0, |_, _| ()), None);
     }
 
     #[test]
@@ -1109,6 +1117,6 @@ mod tests {
         registry.remove(5);
 
         assert_eq!(registry.loss_count(5), 0);
-        assert_eq!(registry.loss_at(5, 0), None);
+        assert_eq!(registry.with_loss_at(5, 0, |_, _| ()), None);
     }
 }
