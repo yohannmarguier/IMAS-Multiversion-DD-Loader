@@ -390,6 +390,10 @@ int main(void) {
     check_slice_read(pulse_ctx);
     check_timerange_read(pulse_ctx);
     check_arraystruct_read(pulse_ctx);
+    /* Plugin reentry now performs the same version-stamp discovery as its
+     * ordinary twins, so exercise its successful real-Core lifecycle while
+     * magnetics still has its valid matching stamp. */
+    check_plugin_reentry(pulse_ctx);
 
     set_dd_version_stamp(magnetics_file, "not-a-version");
 
@@ -398,7 +402,6 @@ int main(void) {
      * context internally; the HLI therefore must not end either `op_ctx`. */
     check_slice_refuses_malformed_stamp(pulse_ctx);
     check_timerange_refuses_malformed_stamp(pulse_ctx);
-    check_plugin_reentry(pulse_ctx);
 
     char plugin_log[1024];
     int plugin_log_length = snprintf(plugin_log, sizeof plugin_log, "%s/plugin.log", temp_dir);
