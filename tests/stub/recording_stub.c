@@ -477,17 +477,12 @@ static al_status_t stamp_read_response(void **data, int *size) {
     return status;
 }
 
-al_status_t al_read_data(int ctxID, const char *field, const char *timebase, void **data,
-                          int datatype, int dim, int *size) {
-    g_read_call_count++;
-    g_read_ctx_id = ctxID;
-    free(g_read_field);
-    g_read_field = record_str(field);
-    free(g_read_timebase);
-    g_read_timebase = record_str(timebase);
-    g_read_datatype = datatype;
-    g_read_dim = dim;
-
+/* Shared by al_read_data and al_plugin_read_data (issue #68): both seams must
+ * present identical not-found, failure, and value-shape behavior to the shim
+ * so the same test fixtures can prove policy parity between them. Each
+ * caller keeps its own call-recording state (g_read_* vs the plugin
+ * introspection globals); only the response computation is shared. */
+static al_status_t compute_read_response(const char *field, void **data, int dim, int *size) {
     if (field != NULL && strcmp(field, VERSION_STAMP_FIELD) == 0) {
         return stamp_read_response(data, size);
     }
@@ -566,6 +561,20 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
         strncpy(status.message, "recording-stub: read ok", sizeof status.message - 1);
     }
     return status;
+}
+
+al_status_t al_read_data(int ctxID, const char *field, const char *timebase, void **data,
+                          int datatype, int dim, int *size) {
+    g_read_call_count++;
+    g_read_ctx_id = ctxID;
+    free(g_read_field);
+    g_read_field = record_str(field);
+    free(g_read_timebase);
+    g_read_timebase = record_str(timebase);
+    g_read_datatype = datatype;
+    g_read_dim = dim;
+
+    return compute_read_response(field, data, dim, size);
 }
 
 /* --- al_write_data ------------------------------------------------------------ */
@@ -927,19 +936,10 @@ al_status_t al_plugin_read_data(int ctx_id, const char *field, const char *timeb
     g_plugin_first_int = datatype;
     g_plugin_second_int = dim;
     g_plugin_size_pointer = size;
-    static char plugin_read_buffer[] = "recording-stub: plugin read data payload";
     (void)ctx_id;
-    (void)field;
     (void)timebase;
-    (void)datatype;
-    (void)dim;
-    if (data != NULL) {
-        *data = plugin_read_buffer;
-    }
-    if (size != NULL) {
-        size[0] = 5005;
-    }
-    return ok_status();
+
+    return compute_read_response(field, data, dim, size);
 }
 
 al_status_t al_plugin_write_data(int ctx_id, const char *field, const char *timebase, void *data,

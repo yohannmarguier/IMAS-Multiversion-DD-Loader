@@ -1177,7 +1177,61 @@ pub(crate) fn end_action(ctx_id: c_int) -> al_status_t {
 }
 
 /// Forwards to IMAS-Core's real `al_read_data`, resolving IMAS-Core lazily
-/// on first use.
+/// on first use. See [`read_data_impl`] for the shared policy.
+///
+/// # Safety
+/// `field` and `timebase` must be valid, NUL-terminated C strings, or null
+/// where IMAS-Core's own contract allows it. `data` and `size` must be
+/// valid, writable pointers, matching IMAS-Core's own contract for this
+/// function.
+pub(crate) unsafe fn read_data(
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    let forward = |field: *const c_char, timebase: *const c_char| {
+        forward_status!(read_data(
+            ctx_id, field, timebase, data, datatype, dim, size
+        ))
+    };
+    // SAFETY: same contract as `read_data_impl`, already upheld by this
+    // function's own `unsafe fn` contract.
+    unsafe { read_data_impl(ctx_id, field, timebase, data, datatype, dim, size, forward) }
+}
+
+/// Mirrors `read_data`'s policy exactly (issue #68): the same registry
+/// snapshot, conversion-map resolution, merged/split candidate loop, value
+/// transformation, and fidelity retention as an ordinary read — forwarded
+/// through IMAS-Core's plugin reentry read symbol rather than its ordinary
+/// twin, so a plugin re-entering the ABI gets the same translation an HLI
+/// would.
+///
+/// # Safety
+/// Same contract as [`read_data`].
+pub(crate) unsafe fn plugin_read_data(
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    let forward = |field: *const c_char, timebase: *const c_char| {
+        forward_status!(plugin_read_data(
+            ctx_id, field, timebase, data, datatype, dim, size
+        ))
+    };
+    // SAFETY: same contract as `read_data_impl`, already upheld by this
+    // function's own `unsafe fn` contract.
+    unsafe { read_data_impl(ctx_id, field, timebase, data, datatype, dim, size, forward) }
+}
+
+/// The policy shared by `read_data` and `plugin_read_data` (issue #68).
 ///
 /// When `ctx_id` names no live conversion record — no mismatch was ever
 /// discovered, the occurrence matched or was unstamped, or the HLI DD
@@ -1194,9 +1248,9 @@ pub(crate) fn end_action(ctx_id: c_int) -> al_status_t {
 /// - No claimed source on the stored side returns success with a null data
 ///   pointer, matching IMAS-Core's own not-found convention, without calling
 ///   IMAS-Core at all.
-/// - Otherwise the translated field reaches IMAS-Core and its returned
-///   allocation is forwarded to the HLI exactly as received: the shim
-///   neither substitutes nor frees it.
+/// - Otherwise the translated field reaches IMAS-Core through `forward` and
+///   its returned allocation is forwarded to the HLI exactly as received:
+///   the shim neither substitutes nor frees it.
 ///
 /// `field` and `timebase` are resolved independently through the same
 /// version pair. A no-source result for either means this read cannot find
@@ -1207,8 +1261,11 @@ pub(crate) fn end_action(ctx_id: c_int) -> al_status_t {
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null
 /// where IMAS-Core's own contract allows it. `data` and `size` must be
 /// valid, writable pointers, matching IMAS-Core's own contract for this
-/// function.
-pub(crate) unsafe fn read_data(
+/// function. `forward` must call through to the matching real IMAS-Core
+/// read symbol with the given (possibly translated) field/timebase and
+/// this function's own `data`/`datatype`/`dim`/`size`.
+#[allow(clippy::too_many_arguments)]
+unsafe fn read_data_impl(
     ctx_id: c_int,
     field: *const c_char,
     timebase: *const c_char,
@@ -1216,11 +1273,10 @@ pub(crate) unsafe fn read_data(
     datatype: c_int,
     dim: c_int,
     size: *mut c_int,
+    forward: impl Fn(*const c_char, *const c_char) -> al_status_t,
 ) -> al_status_t {
     let Some(record) = REGISTRY.lookup(ctx_id) else {
-        return forward_status!(read_data(
-            ctx_id, field, timebase, data, datatype, dim, size
-        ));
+        return forward(field, timebase);
     };
 
     let translated_field = match resolve_read_path(&record, field) {
@@ -1285,16 +1341,8 @@ pub(crate) unsafe fn read_data(
                 );
                 return read_refusal(&record, reason, &field_dd_path);
             }
-            let status = forward_status!(read_data(
-                ctx_id,
-                field_attempt.path,
-                timebase_attempt.path,
-                data,
-                datatype,
-                dim,
-                size,
-            ));
-            // SAFETY: `data` is valid and writable by `read_data`'s own
+            let status = forward(field_attempt.path, timebase_attempt.path);
+            // SAFETY: `data` is valid and writable by `read_data_impl`'s own
             // safety contract, and the just-finished IMAS-Core call has
             // initialized it.
             match read_outcome::classify(&status, unsafe { *data }) {
@@ -2205,20 +2253,14 @@ pub(crate) fn plugin_end_action(ctx_id: c_int) -> al_status_t {
     status
 }
 
-pub(crate) unsafe fn plugin_read_data(
-    ctx_id: c_int,
-    field: *const c_char,
-    timebase: *const c_char,
-    data: *mut *mut c_void,
-    datatype: c_int,
-    dim: c_int,
-    size: *mut c_int,
-) -> al_status_t {
-    forward_status!(plugin_read_data(
-        ctx_id, field, timebase, data, datatype, dim, size,
-    ))
-}
-
+/// Follows the same rule as [`write_data`] (issue #64), forwarded through
+/// IMAS-Core's plugin reentry write symbol rather than its ordinary twin: a
+/// live conversion record on `ctx_id` refuses before IMAS-Core is called;
+/// otherwise this forwards unchanged. No path translation is introduced for
+/// writes, ordinary or plugin.
+///
+/// # Safety
+/// Same contract as [`write_data`].
 pub(crate) unsafe fn plugin_write_data(
     ctx_id: c_int,
     field: *const c_char,

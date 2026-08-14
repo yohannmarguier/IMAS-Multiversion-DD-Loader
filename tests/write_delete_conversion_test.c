@@ -133,6 +133,25 @@ static void scenario_plugin_write_refuses_under_known_mismatched_root_before_cor
            "IMAS-Core was never called and the caller's buffers were untouched\\n");
 }
 
+static void scenario_plugin_write_matching_context_forwards_unchanged(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    double sentinel = 7.5;
+    int size[1] = {1};
+
+    al_status_t status = al_plugin_write_data(
+        operation_ctx, "time_slice/global_quantities/beta_tor_norm", "time", &sentinel,
+        52 /* DOUBLE_DATA */, 1, size);
+
+    CHECK(status.code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"),
+                 "time_slice/global_quantities/beta_tor_norm") == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_second_string"), "time") == 0);
+    CHECK(pointer_from_stub("recording_stub_plugin_pointer") == &sentinel);
+
+    printf("write_delete_conversion_test plugin-write-matching-context-forwards-unchanged: a "
+           "matching stamp was forwarded verbatim through the plugin reentry seam\n");
+}
+
 static void scenario_write_nested_child_context_refuses_through_mismatched_root(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int size = -1;
@@ -289,6 +308,7 @@ int main(int argc, char **argv) {
                 "usage: %s <write-refuses-under-known-mismatched-root-before-core-call|"
                 "delete-refuses-under-known-mismatched-root-before-core-call|"
                 "plugin-write-refuses-under-known-mismatched-root-before-core-call|"
+                "plugin-write-matching-context-forwards-unchanged|"
                 "write-nested-child-context-refuses-through-mismatched-root|"
                 "delete-nested-child-context-refuses-through-mismatched-root|"
                 "write-matching-context-forwards-unchanged|"
@@ -313,6 +333,10 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "plugin-write-refuses-under-known-mismatched-root-before-core-call") ==
         0) {
         scenario_plugin_write_refuses_under_known_mismatched_root_before_core_call();
+        return 0;
+    }
+    if (strcmp(argv[1], "plugin-write-matching-context-forwards-unchanged") == 0) {
+        scenario_plugin_write_matching_context_forwards_unchanged();
         return 0;
     }
     if (strcmp(argv[1], "write-nested-child-context-refuses-through-mismatched-root") == 0) {
