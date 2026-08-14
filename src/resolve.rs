@@ -1837,8 +1837,23 @@ fn refusal_reason_message(reason: RefusalReason) -> String {
     }
 }
 
+/// A short, stable refusal message for a write seam whose `ctx_id`
+/// carries a live conversion record (ADR 0002: "If known versions differ,
+/// return failure without calling IMAS-Core"). Unlike the read path, this is
+/// a blanket refusal keyed only on the context, never on `field`/`path`
+/// content — write-path translation is not introduced by this seam.
+fn mismatched_context_write_refusal(function_name: &str) -> String {
+    format!("{function_name} refuses on a context with a known DD version mismatch")
+}
+
 /// Forwards to IMAS-Core's real `al_write_data`, resolving IMAS-Core
 /// lazily on first use.
+///
+/// When `ctx_id` names a live conversion record — a known mismatched root,
+/// or a child context that inherited one — this refuses before IMAS-Core is
+/// called, leaving `data` and `size` untouched. Matching, unknown,
+/// unstamped, and conversion-disabled contexts carry no record and forward
+/// unchanged.
 ///
 /// # Safety
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null
@@ -1853,6 +1868,9 @@ pub(crate) unsafe fn write_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
+    if REGISTRY.lookup(ctx_id).is_some() {
+        return crate::conversion_refusal(&mismatched_context_write_refusal("al_write_data"));
+    }
     forward_status!(write_data(
         ctx_id, field, timebase, data, datatype, dim, size,
     ))
@@ -1861,10 +1879,17 @@ pub(crate) unsafe fn write_data(
 /// Forwards to IMAS-Core's real `al_delete_data`, resolving IMAS-Core
 /// lazily on first use.
 ///
+/// Follows the same rule as [`write_data`]: a live conversion record on
+/// `ctx_id` refuses before IMAS-Core is called; otherwise this forwards
+/// unchanged.
+///
 /// # Safety
 /// `path` must be a valid, NUL-terminated C string, or null where
 /// IMAS-Core's own contract allows it.
 pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t {
+    if REGISTRY.lookup(ctx).is_some() {
+        return crate::conversion_refusal(&mismatched_context_write_refusal("al_delete_data"));
+    }
     forward_status!(delete_data(ctx, path))
 }
 
@@ -2062,6 +2087,11 @@ pub(crate) unsafe fn plugin_write_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
+    if REGISTRY.lookup(ctx_id).is_some() {
+        return crate::conversion_refusal(&mismatched_context_write_refusal(
+            "al_plugin_write_data",
+        ));
+    }
     forward_status!(plugin_write_data(
         ctx_id, field, timebase, data, datatype, dim, size,
     ))
