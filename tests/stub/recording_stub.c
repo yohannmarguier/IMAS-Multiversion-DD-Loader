@@ -660,6 +660,25 @@ static int g_filled_paths_call_count = 0;
 static int g_filled_paths_pctx_id = 0;
 static char *g_filled_paths_dataobjectname = NULL;
 
+/* RECORDING_STUB_FILLED_PATHS_CSV replaces the two default placeholders with
+ * a caller-chosen list. It exists so a test can have IMAS-Core report DD
+ * paths the loaded conversion map actually has rules for: asserting that
+ * al_list_filled_paths hands those back unchanged (issue #69) is only
+ * meaningful when a rewriting shim would have produced a different string.
+ * Ownership follows IMAS-Core's documented contract either way — the caller
+ * frees the list and every string in it. */
+static const char *g_filled_paths_defaults[] = {"ids/path/one", "ids/path/two"};
+
+static int split_csv_into(char *buffer, const char **out, int capacity) {
+    int count = 0;
+    char *token = strtok(buffer, ",");
+    while (token != NULL && count < capacity) {
+        out[count++] = token;
+        token = strtok(NULL, ",");
+    }
+    return count;
+}
+
 al_status_t al_list_filled_paths(int pctxID, const char *dataobjectname, char ***path_list,
                                   int *size) {
     g_filled_paths_call_count++;
@@ -667,8 +686,25 @@ al_status_t al_list_filled_paths(int pctxID, const char *dataobjectname, char **
     free(g_filled_paths_dataobjectname);
     g_filled_paths_dataobjectname = record_str(dataobjectname);
 
+    const char *entries[RECORDING_STUB_CSV_CAPACITY];
+    int count = (int)(sizeof g_filled_paths_defaults / sizeof g_filled_paths_defaults[0]);
+    for (int i = 0; i < count; ++i) {
+        entries[i] = g_filled_paths_defaults[i];
+    }
+
+    /* strtok writes into its argument, so the override is tokenized in a
+     * local copy that outlives only this call — every entry is copied into
+     * caller-owned storage below before `csv_buffer` goes out of scope. */
+    char csv_buffer[512];
+    const char *paths_csv = getenv("RECORDING_STUB_FILLED_PATHS_CSV");
+    if (paths_csv != NULL) {
+        strncpy(csv_buffer, paths_csv, sizeof csv_buffer - 1);
+        csv_buffer[sizeof csv_buffer - 1] = '\0';
+        count = split_csv_into(csv_buffer, entries, RECORDING_STUB_CSV_CAPACITY);
+    }
+
     if (path_list != NULL) {
-        char **list = malloc(2 * sizeof *list);
+        char **list = malloc((size_t)count * sizeof *list);
         if (list == NULL) {
             al_status_t status = ok_status();
             status.code = -1;
@@ -676,22 +712,24 @@ al_status_t al_list_filled_paths(int pctxID, const char *dataobjectname, char **
                     sizeof status.message - 1);
             return status;
         }
-        list[0] = record_str("ids/path/one");
-        list[1] = record_str("ids/path/two");
-        if (list[0] == NULL || list[1] == NULL) {
-            free(list[0]);
-            free(list[1]);
-            free(list);
-            al_status_t status = ok_status();
-            status.code = -1;
-            strncpy(status.message, "recording-stub: allocation failed",
-                    sizeof status.message - 1);
-            return status;
+        for (int i = 0; i < count; ++i) {
+            list[i] = record_str(entries[i]);
+            if (list[i] == NULL) {
+                for (int freed = 0; freed < i; ++freed) {
+                    free(list[freed]);
+                }
+                free(list);
+                al_status_t status = ok_status();
+                status.code = -1;
+                strncpy(status.message, "recording-stub: allocation failed",
+                        sizeof status.message - 1);
+                return status;
+            }
         }
         *path_list = list;
     }
     if (size != NULL) {
-        *size = 2;
+        *size = count;
     }
     return ok_status();
 }

@@ -1318,6 +1318,41 @@ if(IMAS_MVDD_BUILD_TESTS)
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
 
+    # --- Issue #69: conversion stays inside its declared seam list ---------
+    #
+    # Every scenario runs with the same active conversion the seam tests above
+    # use — HLI 4.1.1 against a 3.39.0 stamp — and asserts the *absence* of
+    # translation outside that list. RECORDING_STUB_FILLED_PATHS_CSV makes
+    # IMAS-Core report a path the loaded artifact has a rename rule for, so
+    # "returned unchanged" is a claim about the shim rather than about a
+    # placeholder string no rule could have touched either way.
+    add_executable(scoped_passthrough_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/scoped_passthrough_test.c")
+    target_link_libraries(scoped_passthrough_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
+    target_compile_definitions(scoped_passthrough_test PRIVATE
+        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+    add_dependencies(scoped_passthrough_test imas_mvdd_capi recording_stub)
+    set_target_properties(scoped_passthrough_test PROPERTIES
+        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+    function(add_scoped_passthrough_test name scenario)
+        add_test(NAME "${name}" COMMAND scoped_passthrough_test "${scenario}")
+        set_tests_properties("${name}" PROPERTIES
+            ENVIRONMENT
+                "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_FILLED_PATHS_CSV=time_slice/global_quantities/beta_normal,time_slice/global_quantities/ip")
+    endfunction()
+
+    add_scoped_passthrough_test(scoped-passthrough-get-occurrences-forwards-ids-name-unchanged
+        get-occurrences-forwards-ids-name-unchanged)
+    add_scoped_passthrough_test(
+        scoped-passthrough-list-filled-paths-forwards-name-and-returns-stored-paths-unchanged
+        list-filled-paths-forwards-name-and-returns-stored-paths-unchanged)
+    add_scoped_passthrough_test(
+        scoped-passthrough-bind-and-unbind-plugin-forward-field-path-unchanged
+        bind-and-unbind-plugin-forward-field-path-unchanged)
+    add_scoped_passthrough_test(scoped-passthrough-remaining-non-seam-exports-forward-unchanged
+        remaining-non-seam-exports-forward-unchanged)
+
     if(IMAS_MVDD_REAL_CORE_TESTS)
         # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
     #
@@ -1414,10 +1449,32 @@ if(IMAS_MVDD_BUILD_TESTS)
         LABELS real-core
         RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
 
-    add_test(NAME equilibrium-read-reverse-merged-read-falls-through-to-stored-alias
+    add_test(NAME equilibrium-read-forward-merged-read-falls-through-to-stored-alias
         COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-            $<TARGET_FILE:equilibrium_read_test> reverse-merged-read-falls-through-to-stored-alias)
-    set_tests_properties(equilibrium-read-reverse-merged-read-falls-through-to-stored-alias PROPERTIES
+            $<TARGET_FILE:equilibrium_read_test> forward-merged-read-falls-through-to-stored-alias)
+    set_tests_properties(equilibrium-read-forward-merged-read-falls-through-to-stored-alias PROPERTIES
+        LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+
+    add_test(NAME equilibrium-read-reverse-merged-read-resolves-single-stored-destination
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test>
+            reverse-merged-read-resolves-single-stored-destination)
+    set_tests_properties(equilibrium-read-reverse-merged-read-resolves-single-stored-destination
+        PROPERTIES LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
+
+    # Issue #69: the refusal half of the matrix. Both scenarios open a real
+    # pulse whose contents are never reached — the assertion is that the shim
+    # stops before IMAS-Core, in whichever direction the artifact says it must.
+    add_test(NAME equilibrium-read-reverse-refuses-unservable-paths
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> reverse-refuses-unservable-paths)
+    set_tests_properties(equilibrium-read-reverse-refuses-unservable-paths PROPERTIES
+        LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
+
+    add_test(NAME equilibrium-read-forward-refuses-unservable-paths
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> forward-refuses-unservable-paths)
+    set_tests_properties(equilibrium-read-forward-refuses-unservable-paths PROPERTIES
         LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
 
     add_test(NAME equilibrium-read-reverse-split-read-uses-first-destination-and-flips-value
