@@ -111,6 +111,11 @@ static const void *pointer_from_stub(const char *symbol_name) {
 static int open_mismatched_equilibrium(int *operation_ctx) {
     int pulse_ctx = -1;
     CHECK(al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, &pulse_ctx).code == 0);
+    CHECK(int_from_stub("recording_stub_dataentry_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_dataentry_uri"),
+                 "imas:hdf5?path=/tmp/pulse")
+          == 0);
+    CHECK(int_from_stub("recording_stub_dataentry_mode") == 7);
 
     *operation_ctx = -1;
     CHECK(al_begin_global_action(pulse_ctx, "equilibrium", "", 30, operation_ctx).code == 0);
@@ -347,11 +352,40 @@ static void check_utility_and_version_accessors_forward_unchanged(int operation_
 
 static void scenario_remaining_non_seam_exports_forward_unchanged(void) {
     int operation_ctx = -1;
-    (void)open_mismatched_equilibrium(&operation_ctx);
+    int pulse_ctx = open_mismatched_equilibrium(&operation_ctx);
 
     check_plugin_management_forwards_unchanged(operation_ctx);
     check_parameter_setters_forward_unchanged();
     check_utility_and_version_accessors_forward_unchanged(operation_ctx);
+
+    /* Exercise the remaining lifecycle exports while the root conversion
+     * record is still live. The child inherits that record, so iteration and
+     * both successful closes are also checked for identity forwarding rather
+     * than only being covered by setup/teardown in other scenarios. */
+    int aos_size = -1;
+    int aos_ctx = -1;
+    CHECK(al_begin_arraystruct_action(operation_ctx, "time_slice", "", &aos_size, &aos_ctx)
+              .code
+          == 0);
+    CHECK(aos_size == 3003);
+
+    CHECK(al_iterate_over_arraystruct(aos_ctx, 1).code == 0);
+    CHECK(int_from_stub("recording_stub_iterate_call_count") == 1);
+    CHECK(int_from_stub("recording_stub_iterate_aosctx") == aos_ctx);
+    CHECK(int_from_stub("recording_stub_iterate_step") == 1);
+
+    CHECK(al_end_action(aos_ctx).code == 0);
+    CHECK(int_from_stub("recording_stub_end_action_call_count") == 1);
+    CHECK(int_from_stub("recording_stub_end_action_ctx_id") == aos_ctx);
+
+    CHECK(al_end_action(operation_ctx).code == 0);
+    CHECK(int_from_stub("recording_stub_end_action_call_count") == 2);
+    CHECK(int_from_stub("recording_stub_end_action_ctx_id") == operation_ctx);
+
+    CHECK(al_close_pulse(pulse_ctx, 42).code == 0);
+    CHECK(int_from_stub("recording_stub_close_pulse_call_count") == 1);
+    CHECK(int_from_stub("recording_stub_close_pulse_ctx") == pulse_ctx);
+    CHECK(int_from_stub("recording_stub_close_pulse_mode") == 42);
 
     printf("scoped_passthrough_test remaining-non-seam-exports-forward-unchanged: every export "
            "outside the declared seam list kept its identity contract under an active "
