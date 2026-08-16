@@ -392,7 +392,7 @@ static void scenario_no_source_returns_null_without_core_call(void) {
 static void scenario_rank_changing_retype_refuses_without_core_call(void) {
     int operation_ctx = open_mismatched_equilibrium();
     check_read_refusal(
-        operation_ctx, "grids_ggd/grid/space/coordinates_type", 2 /* INTEGER_DATA */,
+        operation_ctx, "grids_ggd/grid/space/coordinates_type", 51 /* INTEGER_DATA */,
         "IMAS-MVDD: this path's container changed shape and cannot be served; "
         "DD path: grids_ggd/grid/space/coordinates_type; HLI DD version: 4.1.1; "
         "stored DD version: 3.39.0");
@@ -404,7 +404,7 @@ static void scenario_rank_changing_retype_refuses_without_core_call(void) {
 static void scenario_unit_redefinition_refuses_without_core_call(void) {
     int operation_ctx = open_mismatched_equilibrium();
     check_read_refusal(
-        operation_ctx, "time_slice/constraints/strike_point/chi_squared_r", 3 /* DOUBLE_DATA */,
+        operation_ctx, "time_slice/constraints/strike_point/chi_squared_r", 52 /* DOUBLE_DATA */,
         "IMAS-MVDD: this path's unit was redefined and cannot be converted; "
         "DD path: time_slice/constraints/strike_point/chi_squared_r; "
         "HLI DD version: 4.1.1; stored DD version: 3.39.0");
@@ -415,7 +415,7 @@ static void scenario_unit_redefinition_refuses_without_core_call(void) {
 
 static void scenario_unsupported_sign_flip_types_refuse_without_core_call(void) {
     int operation_ctx = open_mismatched_equilibrium();
-    const int unsupported_types[] = {2 /* INTEGER_DATA */, 4 /* COMPLEX_DATA */};
+    const int unsupported_types[] = {51 /* INTEGER_DATA */, 53 /* COMPLEX_DATA */};
 
     for (size_t i = 0; i < sizeof unsupported_types / sizeof unsupported_types[0]; ++i) {
         check_read_refusal(

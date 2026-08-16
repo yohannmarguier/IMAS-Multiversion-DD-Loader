@@ -7,8 +7,9 @@ pkg-config file — are produced by [cargo-c]; CMake drives cargo-c rather than
 compiling anything itself, so consumers depend on this project the way they
 depend on IMAS-Core.
 
-**Status: runtime binding proven on all 37 linkable IMAS-Core C exports; no conversion
-logic yet.** `al_context_info`, six utility/version accessors, thirteen
+**Status: runtime binding proven on all 37 linkable IMAS-Core C exports;
+read-path DD conversion implemented for one IDS and one version pair.**
+`al_context_info`, six utility/version accessors, thirteen
 data-entry/action-lifecycle/data-operation functions, and seventeen
 plugin-management/reentry functions use the runtime-binding architecture
 (`src/resolve.rs`, `src/dl.rs`): the shim resolves IMAS-Core lazily via
@@ -17,8 +18,61 @@ plugin-management/reentry functions use the runtime-binding architecture
 public declaration is unlinkable upstream; `al_begin_array_struct_action` is
 not an IMAS-Core export. The signatures and exported symbol list are checked
 mechanically against IMAS-Core, and the forwarding seams are exercised against
-both a recording stub and a real Core. DD path/version conversion remains
-unimplemented.
+both a recording stub and a real Core.
+
+On top of that, reads of a stored equilibrium occurrence are converted between
+DD 3.39.0 and DD 4.1.1 in both directions: the shim discovers the stored DD
+version from the occurrence's own `ids_properties/version_put/data_dictionary`
+stamp, translates `al_read_data`'s `field` and `timebase` (including beneath
+nested arraystruct contexts), applies COCOS sign flips, refuses paths the
+conversion map declares unservable, and reports non-exact reads through a loss
+log the caller drains from the root context. Writes and deletes against a
+mismatched occurrence refuse rather than convert. Read the limitations below
+before drawing conclusions from that list.
+
+## Scope and limitations
+
+These are deliberate boundaries, not gaps awaiting a patch. The first, fifth and
+sixth are pinned by a named test, so they cannot quietly stop being true. The
+other three are scoping decisions no test can express — which is itself worth
+knowing when reading a green suite.
+
+- **One DD version per process.** The calling HLI's DD version latches once, on
+  the first `imas_mvdd_set_hli_dd_version()` call or from
+  `IMAS_MVDD_HLI_DD_VERSION` at the first open, and never changes afterwards
+  (`docs/adr/0005-hli-dd-version-entry-point.md`). It cannot vary per pulse,
+  per `DBEntry`-equivalent, or per thread. Reading two different HLI DD
+  versions therefore takes two processes, and because the fallback is an
+  environment variable, the version is a property of how the process was
+  launched. Every conversion test in the suite is registered as its own CTest
+  process for exactly this reason.
+- **Self-converting clients are excluded.** imas-python is not a client: it
+  converts DD versions itself and holds one DD version per `DBEntry` rather
+  than one per process, so stacking this shim beneath it would convert twice.
+  The criterion is the client's shape — one DD version for the life of the
+  process, no conversion of its own — not the language it is written in.
+- **Validation is IMAS-Fortran-first.** The conversion behaviour is proven at
+  this project's own C ABI, which is the ABI imas-Fortran consumes. imas-CPP is
+  expected to fit the same client shape but has not been validated here;
+  imas-Matlab and imas-Java have not been judged at all.
+- **A green suite is not a deployment mechanism.** The tests call this library
+  directly. They do not place it in front of a real HLI, do not substitute it
+  for IMAS-Core in any HLI's link line or runtime search path, and so do not
+  demonstrate that any HLI can be made to load it. How an HLI comes to resolve
+  `libal`'s symbols to this shim in a real deployment is a separate, unsolved
+  question, and no amount of green here answers it.
+- **Conversion coverage is one IDS and one version pair.** equilibrium
+  3.39.0 ⇄ 4.1.1, served from the single conversion-map artifact embedded in
+  `src/known_artifacts.rs` (`docs/3.39.0--4.1.1.xml`). Any other IDS, or any
+  other version pair, is forwarded unconverted — as is an occurrence whose
+  stamp matches the HLI or is absent
+  (`docs/adr/0007-unstamped-ids-occurrences-match-hli.md`).
+- **Three conversion-relevant seams are deliberately not translated.**
+  `al_list_filled_paths` still returns paths in the *stored* version's
+  spelling, and `al_bind_plugin` / `al_unbind_plugin` still take a `fieldPath`
+  in it. CLAUDE.md lists all three as seams that will eventually need
+  translation; until they get it, `scoped-passthrough-*` pins the current
+  behaviour so it cannot change by accident in either direction.
 
 ## Toolchain
 
@@ -166,6 +220,26 @@ next to the equivalent `pkg-config` check.
   thirteen data, and all seventeen callable plugin seams through a legal
   temporary HDF5 lifecycle against a real IMAS-Core. Its loadable fixture
   verifies plugin registration, binding and parameter values end to end.
+- `hli-dd-version-*`, `version-discovery-*`, `read-path-*`,
+  `write-delete-*`, `arraystruct-path-*`, `nested-context-read-*`,
+  `context-lifecycle-*` and `plugin-reentry-policy-*` — the conversion seams
+  against the recording stub, one CTest process per scenario because both the
+  HLI DD version latch and the context registry are process-wide.
+- `scoped-passthrough-*` — the other half of that claim: with a mismatched
+  equilibrium occurrence open and converting, `al_get_occurrences`,
+  `al_list_filled_paths`, `al_bind_plugin`/`al_unbind_plugin` and every
+  remaining non-seam export must still forward unchanged. The path arguments
+  are ones the loaded artifact has rules for, so a shim that started rewriting
+  them would fail rather than pass by coincidence.
+- `equilibrium-read-*` — the same conversion behaviour end to end against the
+  checked-in equilibrium HDF5 fixture pair and a real IMAS-Core, in both
+  directions: renames, merged and split paths, COCOS sign flips, refusals, and
+  the matching-version and conversion-disabled cases that must stay untouched.
+  "forward" names an HLI declaring 4.1.1 reading the 3.39.0 fixture, "reverse"
+  the other way round.
+- `equilibrium-artifact-coverage-floor` — runs the artifact's
+  autoconvert-equivalence floor check, including its deliberately reduced
+  fixture, so an apparent identity-only map is rejected.
 - `tests/consumer/` isn't registered with ctest — it needs an installed tree
   to configure against, so CI drives it directly after the install step.
 
