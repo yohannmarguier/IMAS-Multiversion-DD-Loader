@@ -284,6 +284,7 @@ static void scenario_reverse_merged_read_resolves_single_stored_destination(void
      * nested arraystruct contexts (issue #66). */
     int count = -1;
     CHECK_OK(imas_mvdd_context_loss_count(op_ctx, &count));
+    fprintf(stderr, "reverse merged loss count: %d\\n", count);
     CHECK(count == 1);
     char path[256] = {0};
     int verdict = -1;
