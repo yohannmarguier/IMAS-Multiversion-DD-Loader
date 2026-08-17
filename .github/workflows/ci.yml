@@ -68,6 +68,9 @@ jobs:
       - name: Check a staged (DESTDIR) install
         run: bash tests/check-staged-install.sh build
 
+      - name: Check an install under a relative prefix
+        run: bash tests/check-relative-prefix-install.sh build
+
   full:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -124,3 +127,6 @@ jobs:
 
       - name: Check a staged (DESTDIR) install
         run: bash tests/check-staged-install.sh build
+
+      - name: Check an install under a relative prefix
+        run: bash tests/check-relative-prefix-install.sh build

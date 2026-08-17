@@ -1540,25 +1540,40 @@ endif()
 
 # The prefix must be resolved when `cmake --install` runs, not now, so that
 # `--install --prefix` and DESTDIR are both honoured. These two hold the
-# literal text `${CMAKE_INSTALL_PREFIX}/...` for the install script to expand.
+# literal text `${_prefix}/...` for the install script to expand against the
+# absolute prefix it computes below.
 foreach(dir LIBDIR INCLUDEDIR)
     if(IS_ABSOLUTE "${CMAKE_INSTALL_${dir}}")
         set(IMAS_MVDD_INSTALL_${dir} "${CMAKE_INSTALL_${dir}}")
     else()
-        set(IMAS_MVDD_INSTALL_${dir} "\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_${dir}}")
+        set(IMAS_MVDD_INSTALL_${dir} "\${_prefix}/${CMAKE_INSTALL_${dir}}")
     endif()
 endforeach()
 
 install(CODE "
+# `cmake --install --prefix` accepts a relative path; CMake resolves it against
+# the working directory of the install run. cargo-c has two rules of its own
+# that a relative prefix collides with: it joins a *relative* --libdir onto
+# --prefix, and it runs with WORKING_DIRECTORY set to the source tree below,
+# not to wherever the user invoked `cmake --install`. Passing the prefix through
+# unresolved therefore split one install in two -- CMake's own files landing in
+# <prefix>/lib/cmake relative to the caller's directory, cargo-c's header and
+# libraries in <prefix>/<prefix>/{include,lib} relative to the source tree. So
+# resolve it here, in the install script, where get_filename_component and
+# CMake's own relative-prefix rule share the same base directory.
+set(_prefix \"\${CMAKE_INSTALL_PREFIX}\")
+if(NOT IS_ABSOLUTE \"\${_prefix}\")
+    get_filename_component(_prefix \"\${_prefix}\" ABSOLUTE)
+endif()
 set(_cargo_cmd [==[${CMAKE_COMMAND};-E;env;--unset=MAKEFLAGS;--unset=MFLAGS;--unset=IMAS_CORE_BUILD_RPATH;--;${CARGO_EXECUTABLE};cinstall;${CARGO_COMMON_ARGS}]==])
 list(APPEND _cargo_cmd
-    --prefix \"\${CMAKE_INSTALL_PREFIX}\"
+    --prefix \"\${_prefix}\"
     --libdir \"${IMAS_MVDD_INSTALL_LIBDIR}\"
     --includedir \"${IMAS_MVDD_INSTALL_INCLUDEDIR}\")
 if(NOT \"\$ENV{DESTDIR}\" STREQUAL \"\")
     list(APPEND _cargo_cmd --destdir \"\$ENV{DESTDIR}\")
 endif()
-message(STATUS \"Installing ${IMAS_MVDD_LIB_NAME} via cargo-c into \${CMAKE_INSTALL_PREFIX}\")
+message(STATUS \"Installing ${IMAS_MVDD_LIB_NAME} via cargo-c into \${_prefix}\")
 execute_process(
     COMMAND \${_cargo_cmd}
     WORKING_DIRECTORY \"${CMAKE_CURRENT_SOURCE_DIR}\"

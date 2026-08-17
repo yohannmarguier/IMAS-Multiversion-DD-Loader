@@ -139,6 +139,11 @@ foreach(job IN ITEMS fast_job full_job)
         "exercise both installed-package consumption interfaces")
     require_line(${job} "run: bash tests/check-staged-install.sh build"
         "verify a staged (DESTDIR) install as well as a plain prefix")
+    # The install step above deliberately passes an absolute prefix, which is
+    # the one form that hides the relative-prefix defect entirely, so this
+    # cannot be left to the steps that already exist.
+    require_line(${job} "run: bash tests/check-relative-prefix-install.sh build"
+        "verify an install under a relative prefix as well as an absolute one")
 endforeach()
 
 if("-DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON" IN_LIST fast_job)
