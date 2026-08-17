@@ -449,6 +449,44 @@
             identically. Both targets take the COCOS sign flip.</note>
     </rule>
 
+    <!-- ================================================================
+         7. True renames found by the issue #50 completeness proof: every
+         path under these four subtrees fell through to <default
+         rel="identical"/> on both sides even though the container itself was
+         renamed at DD4's 4.0.0 boundary, so no path was actually identical.
+         Confirmed via the imas-dd version history (each old spelling
+         path_removed and each new spelling path_added at the same 4.0.0
+         step) rather than assumed from name similarity.
+         ================================================================ -->
+
+    <rule id="rename-bpol-probe" rel="renamed"
+          left="time_slice/constraints/bpol_probe"
+          right="time_slice/constraints/b_field_pol_probe"
+          subtree="yes" source="derived">
+      <fidelity forward="exact" reverse="exact"/>
+    </rule>
+
+    <rule id="rename-mse-polarisation-angle" rel="renamed"
+          left="time_slice/constraints/mse_polarisation_angle"
+          right="time_slice/constraints/mse_polarization_angle"
+          subtree="yes" source="derived">
+      <fidelity forward="exact" reverse="exact"/>
+    </rule>
+
+    <rule id="rename-magnetisation-r" rel="renamed"
+          left="time_slice/constraints/iron_core_segment/magnetisation_r"
+          right="time_slice/constraints/iron_core_segment/magnetization_r"
+          subtree="yes" source="derived">
+      <fidelity forward="exact" reverse="exact"/>
+    </rule>
+
+    <rule id="rename-magnetisation-z" rel="renamed"
+          left="time_slice/constraints/iron_core_segment/magnetisation_z"
+          right="time_slice/constraints/iron_core_segment/magnetization_z"
+          subtree="yes" source="derived">
+      <fidelity forward="exact" reverse="exact"/>
+    </rule>
+
   </rules>
 
   <!-- ================================================================

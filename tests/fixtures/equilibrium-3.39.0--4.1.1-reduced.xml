@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Deliberately omits every path-level rule: issue #51's floor gate must
+     reject this apparent identity-only conversion map. -->
+<ids-map ids="equilibrium" format-version="1">
+  <side id="left" dd="3.39.0" cocos="11"/>
+  <side id="right" dd="4.1.1" cocos="17"/>
+  <default rel="identical"/>
+</ids-map>

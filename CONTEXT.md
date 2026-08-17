@@ -63,7 +63,10 @@ The future part of the project that derives chronological DD changes for every D
 The meaning of a conversion rule: whether it matches a DD path and what path or value transformation it requires. Only the shim executes rule semantics.
 
 **rule explanation**:
-Test information from the shim that identifies the rule selected for a requested DD path, its match kind, precedence, path result, and value transformations.
+Test information from the shim that identifies the rule selected for a requested DD path, its match kind, selector stage, precedence, path result, and value transformations. A `merged`/`split` rule's ambiguous direction (the side with more than one declared source) resolves to an ordered list of candidate paths — one per declared precedence, each with its own value transformation — instead of one path result, since only reading each can settle which one actually holds data (ADR 0006). The other direction still resolves to one path result and reports the matched source's own precedence.
+
+**selector stage**:
+Which of the three selector kinds a rule explanation's selector matched at: exact, subtree, or glob, tried in that order (ADR 0004). Distinct from match kind, which only says whether an explicit rule or the document-level default applied — a `Default` match kind has no selector stage. Two selectors of the same stage claiming the same path invalidates the conversion-map artifact rather than depending on XML document order.
 
 **glob**:
 A DD-path selector with wildcard characters. It is a fallback and applies only when no exact or subtree selector matches.
@@ -95,6 +98,13 @@ The explicit priority of a source path within one path-level rule. A lower numbe
 
 **coverage record**:
 A generated record of the DD paths that a conversion-map artifact covers. It is not hand-edited and does not define rule execution.
+
+**completeness proof**:
+`ConversionMap::check_completeness`'s result: whether every path in a real, checked-in path inventory pair is claimed by an explicit rule or a valid document-level default, and whether every rule's own primary selector corresponds to something real rather than a hallucinated path. It replaces trust in the hand-authored coverage record with an executable check; it never runs inside `resolve` and has no bearing on rule execution. See `docs/adr/0013-completeness-proven-against-real-inventories.md`.
+
+**path inventory**:
+A checked-in, real listing of the DD leaf paths for one IDS at one specific DD version, consulted only by the completeness proof.
+_Avoid_: coverage record — a different, hand-authored concept the proof supersedes for verification purposes.
 
 **conversion chain**:
 An ordered in-memory representation of DD changes between two DD versions. The initial special-case artifact does not need a conversion chain. The future generator's chain and merge design is not decided yet.

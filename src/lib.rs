@@ -4,8 +4,21 @@
 //! the path-bearing entry points. The shared constants and `al_status_t` are
 //! here, and the runtime-binding architecture (see `src/resolve.rs` and
 //! `docs/adr/0001-runtime-binding-not-linking.md`) is proven end to end on
-//! all 37 linkable exported IMAS-Core C symbols. DD path/version conversion is still
-//! unimplemented.
+//! all 37 linkable exported IMAS-Core C symbols. DD path/version conversion
+//! is wired for the data-entry and global-action seams (issue #53): the
+//! process-wide HLI DD version latch (`src/hli_version.rs`, ADR 0005), the
+//! context registry (`src/context_registry.rs`, ADR 0003), and DD-version
+//! stamp discovery (`src/version_stamp.rs`, ADR 0007) together decide, per
+//! `al_begin_global_action` open, whether an IDS occurrence's stored DD
+//! version differs from the HLI's and registers a conversion record only
+//! then. `al_begin_arraystruct_action` registers a child record when its own
+//! context already carries one, and `al_read_data` resolves `field` through
+//! that record's shared conversion map before forwarding the translated
+//! field to IMAS-Core (issue #54) — proven bidirectionally against the
+//! checked-in equilibrium fixture pair for an explicit `renamed`/identity
+//! path. `merged`/`split` reads (issue #57) try stored candidates in declared
+//! precedence order and apply a selected COCOS sign flip in place (issue #59);
+//! IMAS-Core's returned allocation is still forwarded unchanged.
 
 // The mirrored ABI dictates the names; matching IMAS-Core exactly is the point.
 #![allow(non_camel_case_types)]
@@ -15,14 +28,34 @@ use std::ffi::c_double;
 use std::ffi::c_int;
 use std::ffi::c_void;
 
+mod context_registry;
+pub mod conversion_map;
+mod dd_version;
 mod dl;
+mod hli_version;
+mod known_artifacts;
+mod read_outcome;
 mod resolve;
+mod version_stamp;
 
 /// Length of `al_status_t::message`, mirroring IMAS-Core's `MAX_ERR_MSG_LEN`.
 pub const MAX_ERR_MSG_LEN: usize = 256;
 
 /// Maximum array rank accepted across the ABI, mirroring IMAS-Core's `MAXDIM`.
 pub const MAXDIM: usize = 7;
+
+/// Shim-owned refusal code (ADR 0010, ADR 0012): returned instead of an
+/// IMAS-Core code whenever the shim itself refuses a call rather than
+/// forwarding it. The shim reserves `-1000..=-1099` and allocates only this
+/// value here; every other failure propagates IMAS-Core's own code unchanged.
+pub const IMAS_MVDD_CONVERSION_ERROR: c_int = -1000;
+
+/// Fidelity verdict codes `imas_mvdd_context_loss_at` writes to its
+/// `verdict` output (ADR 0008, ADR 0012). The loss log never retains an
+/// exact-fidelity read, so no code names it.
+pub const IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY: c_int = 0;
+pub const IMAS_MVDD_FIDELITY_LOSSY: c_int = 1;
+pub const IMAS_MVDD_FIDELITY_UNMAPPABLE: c_int = 2;
 
 /// Status returned by every ABI entry point. `code == 0` means success.
 ///
@@ -42,6 +75,93 @@ impl Default for al_status_t {
             message: [0; MAX_ERR_MSG_LEN],
         }
     }
+}
+
+/// Writes as much of `message` as fits in `buffer`, always leaving room for
+/// the trailing NUL and never splitting a UTF-8 code point.
+pub(crate) fn write_truncated(buffer: &mut [c_char; MAX_ERR_MSG_LEN], message: &str) {
+    let capacity = MAX_ERR_MSG_LEN - 1; // always leave room for the NUL
+    let mut len = message.len().min(capacity);
+    while len > 0 && !message.is_char_boundary(len) {
+        len -= 1;
+    }
+    for (slot, byte) in buffer.iter_mut().zip(message.as_bytes()[..len].iter()) {
+        *slot = *byte as c_char;
+    }
+}
+
+/// Builds a shim-originated refusal `al_status_t`: `IMAS_MVDD_CONVERSION_ERROR`
+/// with a message prefixed `IMAS-MVDD:` (ADR 0010), truncated to fit the
+/// fixed-size ABI buffer without ever panicking or overflowing.
+pub(crate) fn conversion_refusal(reason: &str) -> al_status_t {
+    let mut status = al_status_t {
+        code: IMAS_MVDD_CONVERSION_ERROR,
+        message: [0; MAX_ERR_MSG_LEN],
+    };
+    write_truncated(&mut status.message, &format!("IMAS-MVDD: {reason}"));
+    status
+}
+
+/// Builds a refusal raised while converting an `al_read_data` path. Unlike
+/// the generic conversion refusal used before a context exists, a read has a
+/// DD path and both ends of its version pair available to explain what could
+/// not be served (ADR 0010, ADR 0012).
+pub(crate) fn read_conversion_refusal(
+    reason: &str,
+    dd_path: &str,
+    hli_version: &dd_version::DdVersion,
+    stored_version: &dd_version::DdVersion,
+) -> al_status_t {
+    let mut status = al_status_t {
+        code: IMAS_MVDD_CONVERSION_ERROR,
+        message: [0; MAX_ERR_MSG_LEN],
+    };
+    write_truncated(
+        &mut status.message,
+        &format_read_refusal_message(reason, dd_path, hli_version, stored_version),
+    );
+    status
+}
+
+fn format_read_refusal_message(
+    reason: &str,
+    dd_path: &str,
+    hli_version: &dd_version::DdVersion,
+    stored_version: &dd_version::DdVersion,
+) -> String {
+    let prefix = format!("IMAS-MVDD: {reason}; DD path: ");
+    let versions = format!("; HLI DD version: {hli_version}; stored DD version: {stored_version}");
+    let full = format!("{prefix}{dd_path}{versions}");
+    if full.len() < MAX_ERR_MSG_LEN {
+        return full;
+    }
+
+    let without_versions = format!("{prefix}{dd_path}");
+    if without_versions.len() < MAX_ERR_MSG_LEN {
+        return without_versions;
+    }
+
+    let path_capacity = (MAX_ERR_MSG_LEN - 1).saturating_sub(prefix.len());
+    format!(
+        "{prefix}{}",
+        truncate_path_from_left(dd_path, path_capacity)
+    )
+}
+
+fn truncate_path_from_left(path: &str, capacity: usize) -> String {
+    if path.len() <= capacity {
+        return path.to_string();
+    }
+    if capacity <= 3 {
+        return ".".repeat(capacity);
+    }
+
+    let suffix_capacity = capacity - 3;
+    let mut suffix_start = path.len() - suffix_capacity;
+    while !path.is_char_boundary(suffix_start) {
+        suffix_start += 1;
+    }
+    format!("...{}", &path[suffix_start..])
 }
 
 /// Mirrors IMAS-Core's `al_context_info` exactly — same name, same
@@ -130,6 +250,73 @@ pub extern "C" fn getDDVersion() -> *const c_char {
     resolve::get_dd_version()
 }
 
+/// Shim-owned export (ADR 0005) — the `imas_mvdd_` prefix marks it as a
+/// symbol this project defines rather than mirrors from IMAS-Core, and it is
+/// listed explicitly on the export-drift check's owned-exports manifest
+/// (`tests/owned_exports.def`). Reports the calling HLI's process-wide DD
+/// version once, before any open. The value latches on first use for the
+/// life of the process: an identical repeat is accepted, a conflicting
+/// repeat is refused naming both versions, and the call is safe from any
+/// thread. A version arriving after the process already latched to unset —
+/// an earlier open with no setter call and no valid
+/// `IMAS_MVDD_HLI_DD_VERSION` — is refused too. An invalid version string
+/// fails immediately and never touches the latch.
+///
+/// # Safety
+/// `version` must be a valid, NUL-terminated C string, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn imas_mvdd_set_hli_dd_version(version: *const c_char) -> al_status_t {
+    unsafe { hli_version::set_from_c(version) }
+}
+
+/// Shim-owned export (ADR 0012) — listed on `tests/owned_exports.def`
+/// alongside `imas_mvdd_set_hli_dd_version`. Reports, without allocating,
+/// the number of non-exact read outcomes retained on `ctxID`'s root
+/// conversion context (a query on a child context resolves to the same
+/// root log). Every context that never produced a loss entry — a
+/// data-entry pulse, an unrecorded or already-ended id, or an operation
+/// whose stored and HLI DD versions matched — reports `0` rather than a
+/// refusal.
+///
+/// # Safety
+/// `count` must be a valid, writable `*mut c_int`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn imas_mvdd_context_loss_count(
+    ctx_id: c_int,
+    count: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::context_loss_count(ctx_id, count) }
+}
+
+/// Shim-owned export (ADR 0012) — listed on `tests/owned_exports.def`
+/// alongside `imas_mvdd_set_hli_dd_version`. Copies the `index`-th loss-log
+/// entry retained on `ctxID`'s root conversion context into caller-owned
+/// storage: the DD path exactly as the HLI requested it, NUL-terminated in
+/// `path_buf`, and its fidelity verdict
+/// (`IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY`, `IMAS_MVDD_FIDELITY_LOSSY`, or
+/// `IMAS_MVDD_FIDELITY_UNMAPPABLE`) in `*verdict`. No internal struct or
+/// pointer is published and nothing is allocated.
+///
+/// Refuses — leaving every output untouched — for a null `path_buf` or
+/// `verdict`, a negative `index` or `buf_len`, an index at or past
+/// `imas_mvdd_context_loss_count`'s reported count (which also covers every
+/// untracked context, whose count is always zero), and a `buf_len` too
+/// small to hold the path and its trailing NUL.
+///
+/// # Safety
+/// `path_buf` must be a valid, writable buffer of at least `buf_len` bytes,
+/// or null. `verdict` must be a valid, writable `*mut c_int`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn imas_mvdd_context_loss_at(
+    ctx_id: c_int,
+    index: c_int,
+    path_buf: *mut c_char,
+    buf_len: c_int,
+    verdict: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::context_loss_at(ctx_id, index, path_buf, buf_len, verdict) }
+}
+
 /// Mirrors IMAS-Core's `al_begin_dataentry_action` exactly and forwards
 /// unchanged. Opens a pulse addressed by `uri` and reports the resulting
 /// context id in `*dectxID`.
@@ -171,9 +358,10 @@ pub unsafe extern "C" fn al_begin_global_action(
     unsafe { resolve::begin_global_action(pctx_id, dataobjectname, datapath, rwmode, octx_id) }
 }
 
-/// Mirrors IMAS-Core's `al_begin_slice_action` exactly and forwards
-/// unchanged. `dataobjectname` is a seam argument: this ticket forwards it
-/// verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's `al_begin_slice_action` exactly and applies the same
+/// stored-version discovery and occurrence-registration rule as
+/// `al_begin_global_action` (issue #55). `dataobjectname` is always
+/// forwarded unchanged — IDS names are stable across DD versions.
 ///
 /// # Safety
 /// `dataobjectname` must be a valid, NUL-terminated C string, or null
@@ -193,9 +381,10 @@ pub unsafe extern "C" fn al_begin_slice_action(
     }
 }
 
-/// Mirrors IMAS-Core's `al_begin_timerange_action` exactly and forwards
-/// unchanged. `dataobjectname` is a seam argument: this ticket forwards it
-/// verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's `al_begin_timerange_action` exactly and applies the
+/// same stored-version discovery and occurrence-registration rule as
+/// `al_begin_global_action` (issue #55). `dataobjectname` is always
+/// forwarded unchanged — IDS names are stable across DD versions.
 ///
 /// # Safety
 /// `dataobjectname` must be a valid, NUL-terminated C string, or null
@@ -230,9 +419,10 @@ pub unsafe extern "C" fn al_begin_timerange_action(
     }
 }
 
-/// Mirrors IMAS-Core's `al_begin_arraystruct_action` exactly and forwards
-/// unchanged. `path` and `timebase` are seam arguments: this ticket
-/// forwards them verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's `al_begin_arraystruct_action` exactly. When its parent
+/// carries a conversion record, it resolves `path` and `timebase` before
+/// opening the AOS and registers the opened `actxID` as its child, so a later
+/// `al_read_data` can translate relative fields under a renamed container.
 ///
 /// # Safety
 /// `path` and `timebase` must be valid, NUL-terminated C strings, or null
@@ -260,9 +450,14 @@ pub extern "C" fn al_end_action(ctx_id: c_int) -> al_status_t {
     resolve::end_action(ctx_id)
 }
 
-/// Mirrors IMAS-Core's `al_read_data` exactly and forwards unchanged.
-/// `field` and `timebase` are seam arguments: this ticket forwards them
-/// verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's `al_read_data` exactly. When `ctxID` carries no live
+/// conversion record, this is a plain forward, unchanged from before issue
+/// #54. Otherwise `field` and `timebase` are resolved independently through
+/// the record's conversion map and translated to the stored spelling before
+/// IMAS-Core is called. A no-source outcome returns normal success with a
+/// null data pointer; refusals still stop before IMAS-Core (see
+/// `src/resolve.rs`). IMAS-Core's returned allocation is forwarded exactly
+/// as received: the shim neither substitutes nor frees it.
 ///
 /// # Safety
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null
@@ -282,9 +477,10 @@ pub unsafe extern "C" fn al_read_data(
     unsafe { resolve::read_data(ctx_id, field, timebase, data, datatype, dim, size) }
 }
 
-/// Mirrors IMAS-Core's `al_write_data` exactly and forwards unchanged.
-/// `field` and `timebase` are seam arguments: this ticket forwards them
-/// verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's `al_write_data` exactly. A context with a known DD
+/// version mismatch refuses before IMAS-Core is called; other contexts forward
+/// unchanged. `field` and `timebase` remain verbatim: write-path translation
+/// is not introduced here.
 ///
 /// # Safety
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null
@@ -303,9 +499,10 @@ pub unsafe extern "C" fn al_write_data(
     unsafe { resolve::write_data(ctx_id, field, timebase, data, datatype, dim, size) }
 }
 
-/// Mirrors IMAS-Core's `al_delete_data` exactly and forwards unchanged.
-/// `path` is a seam argument: this ticket forwards it verbatim, DD path
-/// translation is future work.
+/// Mirrors IMAS-Core's `al_delete_data` exactly. A context with a known DD
+/// version mismatch refuses before IMAS-Core is called; other contexts forward
+/// unchanged. `path` remains verbatim: write-path translation is not
+/// introduced here.
 ///
 /// # Safety
 /// `path` must be a valid, NUL-terminated C string, or null where
@@ -515,9 +712,12 @@ pub unsafe extern "C" fn al_setvalue_double_scalar_parameter_plugin(
 // too — a plugin re-entering the ABI must get the same translation an HLI
 // does, or the two would disagree about which DD version a path is written in.
 
-/// Mirrors IMAS-Core's plugin reentry global-action function exactly.
-/// `dataobjectname` and `datapath` are seam arguments: this ticket forwards
-/// them verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's plugin reentry global-action function exactly and
+/// applies the same stored-version discovery, `datapath` translation and
+/// root-registration policy as `al_begin_global_action` (issue #67): a
+/// malformed-stamp refusal ends the just-opened context through
+/// `al_plugin_end_action` rather than `al_end_action`, since a context this
+/// seam opened is closed through its own reentry family.
 ///
 /// # Safety
 /// String and output pointers must meet IMAS-Core's action-lifecycle contract.
@@ -534,9 +734,9 @@ pub unsafe extern "C" fn al_plugin_begin_global_action(
     }
 }
 
-/// Mirrors IMAS-Core's plugin reentry slice-action function exactly.
-/// `dataobjectname` is a seam argument: this ticket forwards it verbatim, DD
-/// path translation is future work.
+/// Mirrors IMAS-Core's plugin reentry slice-action function exactly and
+/// applies the same stored-version discovery and root-registration policy as
+/// `al_begin_slice_action` (issue #67).
 ///
 /// # Safety
 /// String and output pointers must meet IMAS-Core's action-lifecycle contract.
@@ -561,9 +761,9 @@ pub unsafe extern "C" fn al_plugin_begin_slice_action(
     }
 }
 
-/// Mirrors IMAS-Core's plugin reentry arraystruct-action function exactly.
-/// `path` and `timebase` are seam arguments: this ticket forwards them
-/// verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's plugin reentry arraystruct-action function exactly
+/// and applies the same `path`/`timebase` translation and child-record
+/// registration policy as `al_begin_arraystruct_action` (issue #67).
 ///
 /// # Safety
 /// String and output pointers must meet IMAS-Core's action-lifecycle contract.
@@ -578,7 +778,9 @@ pub unsafe extern "C" fn al_plugin_begin_arraystruct_action(
     unsafe { resolve::plugin_begin_arraystruct_action(ctx_id, path, timebase, size, actx_id) }
 }
 
-/// Mirrors IMAS-Core's plugin reentry end-action function exactly.
+/// Mirrors IMAS-Core's plugin reentry end-action function exactly and
+/// removes only `ctx_id`'s own registry record on success (issue #67),
+/// matching `al_end_action`'s rule.
 #[unsafe(no_mangle)]
 pub extern "C" fn al_plugin_end_action(ctx_id: c_int) -> al_status_t {
     resolve::plugin_end_action(ctx_id)
@@ -603,9 +805,10 @@ pub unsafe extern "C" fn al_plugin_read_data(
     unsafe { resolve::plugin_read_data(ctx_id, field, timebase, data, datatype, dim, size) }
 }
 
-/// Mirrors IMAS-Core's plugin reentry write-data function exactly.
-/// `field` and `timebase` are seam arguments: this ticket forwards them
-/// verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's plugin reentry write-data function exactly. A context
+/// with a known DD version mismatch refuses before IMAS-Core is called; other
+/// contexts forward unchanged. `field` and `timebase` remain verbatim:
+/// write-path translation is not introduced here.
 ///
 /// # Safety
 /// All pointers must meet IMAS-Core's data-access contract.
@@ -624,10 +827,60 @@ pub unsafe extern "C" fn al_plugin_write_data(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::CStr;
+
     use super::*;
 
     #[test]
     fn status_default_is_success() {
         assert_eq!(al_status_t::default().code, 0);
+    }
+
+    #[test]
+    fn read_refusal_drops_versions_before_left_truncating_an_overlong_path() {
+        let hli_version = "4.1.1".parse().unwrap();
+        let stored_version = "3.39.0".parse().unwrap();
+        let path = format!("{}coordinates_type", "grids_ggd/grid/space/".repeat(20));
+
+        let status = read_conversion_refusal(
+            "this path's container changed shape and cannot be served",
+            &path,
+            &hli_version,
+            &stored_version,
+        );
+        let message = unsafe { CStr::from_ptr(status.message.as_ptr()) }
+            .to_str()
+            .unwrap();
+
+        assert_eq!(status.code, IMAS_MVDD_CONVERSION_ERROR);
+        assert_eq!(status.message[MAX_ERR_MSG_LEN - 1], 0);
+        assert!(message.starts_with(
+            "IMAS-MVDD: this path's container changed shape and cannot be served; DD path: ..."
+        ));
+        assert!(message.ends_with("coordinates_type"));
+        assert!(!message.contains("HLI DD version"));
+        assert!(!message.contains("stored DD version"));
+    }
+
+    #[test]
+    fn read_refusal_drops_both_versions_together_before_truncating_the_path() {
+        let hli_version = "4.1.1".parse().unwrap();
+        let stored_version = "3.39.0".parse().unwrap();
+        let path = format!("{}coordinates_type", "grids_ggd/grid/space/".repeat(6));
+
+        let status = read_conversion_refusal(
+            "this path's container changed shape and cannot be served",
+            &path,
+            &hli_version,
+            &stored_version,
+        );
+        let message = unsafe { CStr::from_ptr(status.message.as_ptr()) }
+            .to_str()
+            .unwrap();
+
+        assert_eq!(status.code, IMAS_MVDD_CONVERSION_ERROR);
+        assert!(message.ends_with(&path));
+        assert!(!message.contains("HLI DD version"));
+        assert!(!message.contains("stored DD version"));
     }
 }

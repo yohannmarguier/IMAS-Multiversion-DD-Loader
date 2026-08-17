@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include <al_const.h>
+#include <hdf5.h>
 #include <imas_mvdd_loader.h>
 
 #ifndef REAL_CORE_TEST_PLUGIN_DIR
@@ -23,6 +24,9 @@
 #endif
 #ifndef REAL_CORE_TEST_PLUGIN_NAME
 #error "REAL_CORE_TEST_PLUGIN_NAME must name the fixture plugin"
+#endif
+#ifndef EQUILIBRIUM_FIXTURE_DIR
+#error "EQUILIBRIUM_FIXTURE_DIR must name the equilibrium fixture directory"
 #endif
 
 #define CHECK(condition)                                                        \
@@ -92,6 +96,46 @@ static void write_int_scalar(int ctx, const char *field, int value) {
     CHECK_OK(al_write_data(ctx, field, "", &value, INTEGER_DATA, 0, NULL));
 }
 
+/* IMAS-Core's public write API cannot create or update this scalar metadata
+ * dataset, so seed stored DD-version metadata directly after the write action
+ * has closed.
+ * Slice/time-range calls below still traverse only the public shim/Core ABI. */
+static void set_dd_version_stamp(const char *ids_file, const char *version) {
+    hid_t file = H5Fopen(ids_file, H5F_ACC_RDWR, H5P_DEFAULT);
+    CHECK(file >= 0);
+    hid_t group = H5Gopen2(file, "/magnetics", H5P_DEFAULT);
+    CHECK(group >= 0);
+    const char *dataset_name = "ids_properties&version_put&data_dictionary";
+    htri_t exists = H5Lexists(group, dataset_name, H5P_DEFAULT);
+    CHECK(exists >= 0);
+    hid_t datatype = H5I_INVALID_HID;
+    hid_t dataset = H5I_INVALID_HID;
+    if (exists) {
+        dataset = H5Dopen2(group, dataset_name, H5P_DEFAULT);
+        CHECK(dataset >= 0);
+        datatype = H5Dget_type(dataset);
+        CHECK(datatype >= 0);
+    } else {
+        datatype = H5Tcopy(H5T_C_S1);
+        CHECK(datatype >= 0);
+        CHECK(H5Tset_size(datatype, H5T_VARIABLE) >= 0);
+        CHECK(H5Tset_cset(datatype, H5T_CSET_UTF8) >= 0);
+        hid_t dataspace = H5Screate(H5S_SCALAR);
+        CHECK(dataspace >= 0);
+        dataset = H5Dcreate2(group, dataset_name, datatype, dataspace, H5P_DEFAULT, H5P_DEFAULT,
+                             H5P_DEFAULT);
+        CHECK(H5Sclose(dataspace) >= 0);
+    }
+    CHECK(dataset >= 0);
+    CHECK(H5Tis_variable_str(datatype) > 0);
+    const char *value = version;
+    CHECK(H5Dwrite(dataset, datatype, H5S_ALL, H5S_ALL, H5P_DEFAULT, &value) >= 0);
+    CHECK(H5Tclose(datatype) >= 0);
+    CHECK(H5Dclose(dataset) >= 0);
+    CHECK(H5Gclose(group) >= 0);
+    CHECK(H5Fclose(file) >= 0);
+}
+
 static int read_int_scalar(int ctx, const char *field) {
     int value = -1;
     int shape[MAXDIM] = {0};
@@ -142,6 +186,25 @@ static void check_timerange_read(int pulse_ctx) {
     CHECK(((double *)buffer)[1] == 20.0);
     free(buffer);
     CHECK_OK(al_end_action(op_ctx));
+}
+
+static void check_slice_refuses_malformed_stamp(int pulse_ctx) {
+    int op_ctx = -1;
+    al_status_t status =
+        al_begin_slice_action(pulse_ctx, "magnetics", READ_OP, 1.4, CLOSEST_INTERP, &op_ctx);
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(strstr(status.message, "malformed DD-version stamp") != NULL);
+}
+
+static void check_timerange_refuses_malformed_stamp(int pulse_ctx) {
+    int op_ctx = -1;
+    double dtime = 0.0;
+    int dtime_shape = 0;
+    al_status_t status = al_begin_timerange_action(pulse_ctx, "magnetics", READ_OP, 1.0, 2.0,
+                                                    &dtime, &dtime_shape, UNDEFINED_INTERP,
+                                                    &op_ctx);
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(strstr(status.message, "malformed DD-version stamp") != NULL);
 }
 
 static void check_arraystruct_read(int pulse_ctx) {
@@ -214,6 +277,40 @@ static void check_plugin_reentry(int pulse_ctx) {
     CHECK_OK(al_plugin_end_action(op_ctx));
 }
 
+/* The recording stub covers the full mismatch policy matrix. This real-Core
+ * probe covers the important integration seam: a plugin-opened context must
+ * still translate a DD path and apply its value transformation against an
+ * actual IMAS-Core HDF5 read. */
+static void check_plugin_read_conversion_against_real_core(void) {
+    char uri[1024];
+    int length = snprintf(uri, sizeof uri, "imas:hdf5?path=%s/dd-3.39.0", EQUILIBRIUM_FIXTURE_DIR);
+    CHECK(length > 0 && (size_t)length < sizeof uri);
+
+    int pulse_ctx = -1;
+    CHECK_OK(al_begin_dataentry_action(uri, OPEN_PULSE, &pulse_ctx));
+
+    int op_ctx = -1;
+    CHECK_OK(al_plugin_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
+    int size = -1;
+    int aos_ctx = -1;
+    CHECK_OK(al_plugin_begin_arraystruct_action(op_ctx, "time_slice", "", &size, &aos_ctx));
+    CHECK(size == 2);
+
+    double value = 0.0;
+    void *buffer = &value;
+    int shape[MAXDIM] = {0};
+    CHECK_OK(al_plugin_read_data(aos_ctx, "global_quantities/psi_axis", "", &buffer,
+                                 DOUBLE_DATA, 0, shape));
+    /* The fixture stores DD 3.39.0's COCOS-11 value -0.75. The 4.1.1 HLI
+     * asks for psi_axis and must receive the translated +0.75 value. */
+    CHECK(buffer == &value);
+    CHECK(value == 0.75);
+
+    CHECK_OK(al_plugin_end_action(aos_ctx));
+    CHECK_OK(al_plugin_end_action(op_ctx));
+    CHECK_OK(al_close_pulse(pulse_ctx, CLOSE_PULSE));
+}
+
 /* Drive all eleven plugin-management/configuration exports across the shim's
  * real-Core boundary. The loadable fixture makes registration legal and logs
  * the setter arguments so this checks forwarding, not only symbol presence. */
@@ -267,6 +364,7 @@ static void check_plugin_management(int pulse_ctx, const char *log_path) {
 
 int main(void) {
     CHECK(getenv("IMAS_CORE_LIBRARY") == NULL);
+    CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
 
     char temp_dir[] = "/tmp/imas-mvdd-real-core-XXXXXX";
     CHECK(mkdtemp(temp_dir) != NULL);
@@ -320,10 +418,28 @@ int main(void) {
     }
     free(paths);
 
+    char magnetics_file[1024];
+    int magnetics_file_length =
+        snprintf(magnetics_file, sizeof magnetics_file, "%s/magnetics.h5", pulse_dir);
+    CHECK(magnetics_file_length > 0 && (size_t)magnetics_file_length < sizeof magnetics_file);
+    set_dd_version_stamp(magnetics_file, "4.1.1");
+
     check_slice_read(pulse_ctx);
     check_timerange_read(pulse_ctx);
     check_arraystruct_read(pulse_ctx);
+    /* Plugin reentry now performs the same version-stamp discovery as its
+     * ordinary twins, so exercise its successful real-Core lifecycle while
+     * magnetics still has its valid matching stamp. */
     check_plugin_reentry(pulse_ctx);
+    check_plugin_read_conversion_against_real_core();
+
+    set_dd_version_stamp(magnetics_file, "not-a-version");
+
+    /* A present but invalid stamp must turn the next successful real-Core
+     * open into a shim refusal. Both operation seams end the just-opened
+     * context internally; the HLI therefore must not end either `op_ctx`. */
+    check_slice_refuses_malformed_stamp(pulse_ctx);
+    check_timerange_refuses_malformed_stamp(pulse_ctx);
 
     char plugin_log[1024];
     int plugin_log_length = snprintf(plugin_log, sizeof plugin_log, "%s/plugin.log", temp_dir);

@@ -418,14 +418,14 @@ static void scenario_verbatim_forwarding(void) {
 
         void *data = NULL;
         int size[1] = {0};
-        al_status_t status = al_read_data(2001, "temperature", "time", &data, 3 /* DOUBLE_DATA */,
+        al_status_t status = al_read_data(2001, "temperature", "time", &data, 52 /* DOUBLE_DATA */,
                                            1, size);
         CHECK(status.code == 0);
         CHECK(call_count() == 1);
         CHECK(ctx_id() == 2001);
         CHECK(strcmp(field(), "temperature") == 0);
         CHECK(strcmp(timebase(), "time") == 0);
-        CHECK(datatype() == 3);
+        CHECK(datatype() == 52 /* DOUBLE_DATA */);
         CHECK(dim() == 1);
         CHECK(data == buffer_address());
         CHECK(size[0] == 4004);
@@ -465,14 +465,14 @@ static void scenario_verbatim_forwarding(void) {
         double payload[2] = {3.14, 2.71};
         int size[1] = {2};
         al_status_t status =
-            al_write_data(2001, "temperature", "time", payload, 3 /* DOUBLE_DATA */, 1, size);
+            al_write_data(2001, "temperature", "time", payload, 52 /* DOUBLE_DATA */, 1, size);
         CHECK(status.code == 0);
         CHECK(call_count() == 1);
         CHECK(ctx_id() == 2001);
         CHECK(strcmp(field(), "temperature") == 0);
         CHECK(strcmp(timebase(), "time") == 0);
         CHECK(data_ptr() == payload);
-        CHECK(datatype() == 3);
+        CHECK(datatype() == 52 /* DOUBLE_DATA */);
         CHECK(dim() == 1);
         CHECK(size_first() == 2);
     }
@@ -664,7 +664,9 @@ static void scenario_plugin_forwarding(void) {
     CHECK(strcmp(first_string(), "temperature") == 0 && strcmp(second_string(), "time") == 0);
     CHECK(size_pointer() == &size);
     CHECK(read_data != NULL);
-    CHECK(size == 5005);
+    /* al_plugin_read_data shares its response computation with al_read_data
+     * (issue #68), whose own default fixed size is 4004. */
+    CHECK(size == 4004);
     CHECK(al_plugin_write_data(709, "temperature", "time", &write_data, 3, 0, NULL).code == 0);
     CHECK_PLUGIN_CALL(17, "al_plugin_write_data");
     CHECK(last_ctx() == 709 && pointer_value() == &write_data);
