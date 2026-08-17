@@ -166,7 +166,10 @@ that the C smoke test and in-tree consumers link against.
 ```
 
 `<libdir>` is selected by `GNUInstallDirs` and may be `lib`, `lib64` or a
-platform-specific multiarch directory.
+platform-specific multiarch directory. A relative `--prefix` produces the same
+layout as an absolute one, resolved — as CMake resolves it — against the
+working directory of the `cmake --install` run, not the source tree
+(`tests/check-relative-prefix-install.sh`).
 
 cargo-c produces the library, header and `.pc` file directly; the CMake
 package config (`cmake/imas-mvdd-loaderConfig.cmake.in`) is authored by hand
