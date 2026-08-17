@@ -22,7 +22,7 @@
 #define CHECK(condition)                                                       \
     do {                                                                       \
         if (!(condition)) {                                                    \
-            fprintf(stderr, "check failed at %s:%d: %s\\n", __FILE__, __LINE__, \
+            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
                     #condition);                                               \
             exit(EXIT_FAILURE);                                                \
         }                                                                      \
@@ -35,7 +35,7 @@ typedef const void *(*pointer_accessor_fn)(void);
 static void *dlsym_or_die(void *handle, const char *name) {
     void *symbol = dlsym(handle, name);
     if (symbol == NULL) {
-        fprintf(stderr, "recording stub has no symbol '%s': %s\\n", name, dlerror());
+        fprintf(stderr, "recording stub has no symbol '%s': %s\n", name, dlerror());
         abort();
     }
     return symbol;
@@ -44,7 +44,7 @@ static void *dlsym_or_die(void *handle, const char *name) {
 static void *open_stub(void) {
     void *stub = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
     if (stub == NULL) {
-        fprintf(stderr, "failed to open recording stub: %s\\n", dlerror());
+        fprintf(stderr, "failed to open recording stub: %s\n", dlerror());
         abort();
     }
     return stub;
@@ -97,7 +97,7 @@ static void scenario_write_refuses_under_known_mismatched_root_before_core_call(
     CHECK(size[0] == 73);
 
     printf("write_delete_conversion_test write-refuses-under-known-mismatched-root-before-core-call: "
-           "IMAS-Core was never called and the caller's buffers were untouched\\n");
+           "IMAS-Core was never called and the caller's buffers were untouched\n");
 }
 
 static void scenario_delete_refuses_under_known_mismatched_root_before_core_call(void) {
@@ -111,7 +111,7 @@ static void scenario_delete_refuses_under_known_mismatched_root_before_core_call
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
 
     printf("write_delete_conversion_test delete-refuses-under-known-mismatched-root-before-core-call: "
-           "IMAS-Core was never called\\n");
+           "IMAS-Core was never called\n");
 }
 
 static void scenario_plugin_write_refuses_under_known_mismatched_root_before_core_call(void) {
@@ -130,7 +130,7 @@ static void scenario_plugin_write_refuses_under_known_mismatched_root_before_cor
     CHECK(size[0] == 73);
 
     printf("write_delete_conversion_test plugin-write-refuses-under-known-mismatched-root-before-core-call: "
-           "IMAS-Core was never called and the caller's buffers were untouched\\n");
+           "IMAS-Core was never called and the caller's buffers were untouched\n");
 }
 
 static void scenario_plugin_write_matching_context_forwards_unchanged(void) {
@@ -169,7 +169,7 @@ static void scenario_write_nested_child_context_refuses_through_mismatched_root(
     CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
 
     printf("write_delete_conversion_test write-nested-child-context-refuses-through-mismatched-root: "
-           "a child arraystruct context inherited its root's refusal\\n");
+           "a child arraystruct context inherited its root's refusal\n");
 }
 
 static void scenario_delete_nested_child_context_refuses_through_mismatched_root(void) {
@@ -186,7 +186,7 @@ static void scenario_delete_nested_child_context_refuses_through_mismatched_root
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
 
     printf("write_delete_conversion_test delete-nested-child-context-refuses-through-mismatched-root: "
-           "a child arraystruct context inherited its root's refusal\\n");
+           "a child arraystruct context inherited its root's refusal\n");
 }
 
 static void scenario_write_matching_context_forwards_unchanged(void) {
@@ -205,7 +205,7 @@ static void scenario_write_matching_context_forwards_unchanged(void) {
     CHECK(pointer_from_stub("recording_stub_write_data") == &sentinel);
 
     printf("write_delete_conversion_test write-matching-context-forwards-unchanged: a matching "
-           "stamp was forwarded verbatim\\n");
+           "stamp was forwarded verbatim\n");
 }
 
 static void scenario_write_unknown_context_forwards_unchanged(void) {
@@ -222,7 +222,7 @@ static void scenario_write_unknown_context_forwards_unchanged(void) {
           0);
 
     printf("write_delete_conversion_test write-unknown-context-forwards-unchanged: an unavailable "
-           "artifact was forwarded\\n");
+           "artifact was forwarded\n");
 }
 
 static void scenario_write_unstamped_context_forwards_unchanged(void) {
@@ -236,7 +236,7 @@ static void scenario_write_unstamped_context_forwards_unchanged(void) {
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
     printf("write_delete_conversion_test write-unstamped-context-forwards-unchanged: an unstamped "
-           "occurrence was forwarded\\n");
+           "occurrence was forwarded\n");
 }
 
 static void scenario_write_conversion_disabled_forwards_unchanged(void) {
@@ -250,7 +250,7 @@ static void scenario_write_conversion_disabled_forwards_unchanged(void) {
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
     printf("write_delete_conversion_test write-conversion-disabled-forwards-unchanged: an unset "
-           "HLI version was forwarded\\n");
+           "HLI version was forwarded\n");
 }
 
 static void scenario_delete_matching_context_forwards_unchanged(void) {
@@ -263,7 +263,7 @@ static void scenario_delete_matching_context_forwards_unchanged(void) {
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
     printf("write_delete_conversion_test delete-matching-context-forwards-unchanged: a matching "
-           "stamp was forwarded verbatim\\n");
+           "stamp was forwarded verbatim\n");
 }
 
 static void scenario_delete_unknown_context_forwards_unchanged(void) {
@@ -277,7 +277,7 @@ static void scenario_delete_unknown_context_forwards_unchanged(void) {
           0);
 
     printf("write_delete_conversion_test delete-unknown-context-forwards-unchanged: an unavailable "
-           "artifact was forwarded\\n");
+           "artifact was forwarded\n");
 }
 
 static void scenario_delete_unstamped_context_forwards_unchanged(void) {
@@ -288,7 +288,7 @@ static void scenario_delete_unstamped_context_forwards_unchanged(void) {
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
     printf("write_delete_conversion_test delete-unstamped-context-forwards-unchanged: an unstamped "
-           "occurrence was forwarded\\n");
+           "occurrence was forwarded\n");
 }
 
 static void scenario_delete_conversion_disabled_forwards_unchanged(void) {
@@ -299,7 +299,7 @@ static void scenario_delete_conversion_disabled_forwards_unchanged(void) {
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
     printf("write_delete_conversion_test delete-conversion-disabled-forwards-unchanged: an unset "
-           "HLI version was forwarded\\n");
+           "HLI version was forwarded\n");
 }
 
 int main(int argc, char **argv) {
@@ -318,7 +318,7 @@ int main(int argc, char **argv) {
                 "delete-matching-context-forwards-unchanged|"
                 "delete-unknown-context-forwards-unchanged|"
                 "delete-unstamped-context-forwards-unchanged|"
-                "delete-conversion-disabled-forwards-unchanged>\\n",
+                "delete-conversion-disabled-forwards-unchanged>\n",
                 argv[0]);
         return 2;
     }
@@ -379,6 +379,6 @@ int main(int argc, char **argv) {
         scenario_delete_conversion_disabled_forwards_unchanged();
         return 0;
     }
-    fprintf(stderr, "unknown scenario: %s\\n", argv[1]);
+    fprintf(stderr, "unknown scenario: %s\n", argv[1]);
     return 2;
 }
