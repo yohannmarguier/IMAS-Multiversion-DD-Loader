@@ -295,7 +295,18 @@ static void scenario_reverse_merged_read_resolves_single_stored_destination(void
      * reentrant read through the shim retaining its own loss — which is a
      * defect in the shim, not platform noise to absorb. The dump below names
      * the extra entry so a failure here diagnoses itself instead of leaving
-     * the next reader to re-derive it. */
+     * the next reader to re-derive it.
+     *
+     * On Linux real-Core (CI run 32046056999) the dump reports, in order:
+     *   [0] time_slice/profiles_2d/b_field_phi (POTENTIALLY_LOSSY)
+     *   [1] time_slice/profiles_2d/b_tor       (POTENTIALLY_LOSSY)
+     * [1] is this read. [0] is keyed on the *stored* spelling this read
+     * translated `b_tor` into, and is logged first — from inside the outer
+     * read. So a reentrant read reaches the shim carrying an already-translated
+     * path and is resolved through the conversion map a second time, which is
+     * the double conversion `READ_POLICY_STATE` (src/resolve.rs) suppresses for
+     * the sign flip only. Fixing that is review finding P8's scope, not this
+     * assertion's. */
     int count = -1;
     CHECK_OK(imas_mvdd_context_loss_count(op_ctx, &count));
     if (count != 1) {
