@@ -1738,10 +1738,12 @@ fn translated_read_fidelity(path: Option<&TranslatedReadPath>) -> Fidelity {
         .map_or(Fidelity::Exact, |path| path.fidelity)
 }
 
-/// A conversion-map outcome narrowed to what a path-bearing ABI argument can
+/// A conversion-map outcome narrowed to what a structure-path ABI argument can
 /// pass to IMAS-Core: one concrete stored spelling, no source, or a refusal.
-/// Merged/split plans and value transformations deliberately have no single
-/// spelling for these seams to pass through yet.
+/// A merged/split plan and a value transformation are both things only a data
+/// read can carry out — a candidate plan needs somewhere to try each candidate
+/// in turn, and a transformation needs a buffer to apply itself to. Neither
+/// reduces to the single stored spelling these seams must hand IMAS-Core.
 enum ConcreteStoredPath {
     Path(String),
     NoSource,
@@ -1946,6 +1948,13 @@ fn stored_anchor(record: &crate::context_registry::ConversionRecord) -> Result<S
     }
 }
 
+/// Narrows a resolved rule to the one stored spelling a structure-path
+/// argument can carry. The two refusals below are not unimplemented work: a
+/// data read resolves both cases (it tries a candidate plan in order and flips
+/// signs in the returned buffer), but an AOS container path and a context
+/// anchor are resolved *before* any data exists, so serving either here would
+/// mean picking one candidate arbitrarily or dropping a declared
+/// transformation silently.
 fn concrete_stored_path(outcome: Outcome) -> ConcreteStoredPath {
     match outcome {
         Outcome::Refusal(reason) => ConcreteStoredPath::Refusal(refusal_reason_message(reason)),
@@ -1955,14 +1964,16 @@ fn concrete_stored_path(outcome: Outcome) -> ConcreteStoredPath {
             value_transformation: _,
             candidates,
         } if !candidates.is_empty() => ConcreteStoredPath::Refusal(
-            "resolving a merged/split path is not yet implemented (issue #57)".to_string(),
+            "this path is served by several stored candidates, and only a data read can try them \
+             in turn"
+                .to_string(),
         ),
         Outcome::Path {
             resolved_path: _,
             value_transformation,
             candidates: _,
         } if value_transformation != ValueTransformation::None => ConcreteStoredPath::Refusal(
-            "value-transform execution is not yet implemented (issue #59)".to_string(),
+            "this path needs a value transformation, which only a data read can apply".to_string(),
         ),
         Outcome::Path { resolved_path, .. } => ConcreteStoredPath::Path(resolved_path),
     }
