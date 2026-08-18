@@ -57,6 +57,19 @@ question. Keep it there rather than restating it in prose that can drift.
 
 [cargo-c]: https://github.com/lu-zero/cargo-c
 
+Adding a C ABI test: include `tests/shim_test_support.h` rather than writing a
+prologue. It owns `CHECK`/`CHECK_OK`, IMAS-Core's four data-type codes, the
+recording-stub accessors (`string_from_stub`, `int_from_stub`,
+`double_from_stub`, `pointer_from_stub`, over one `open_recording_stub`),
+`open_mismatched_occurrence`, and the `{name, function}` scenario table that
+`RUN_NAMED_SCENARIO` dispatches `argv[1]` through. Register the scenario with
+`add_stub_test(<ctest-name> <executable> <scenario> [HLI_DD_VERSION v]
+[STAMP_VERSION v] [ENV "KNOB=value"...])`, which owns the shared environment.
+Twelve copies of that prologue and a hundred inlined environment strings is
+where they came from, and one of those copies printed `\n` as text in four
+suites' failure messages for months; a new copy starts that over.
+
+
 Reference documents:
 - `docs/IMAS-CORE_FUNCTIONALITY_INVENTORY.md` — the primary technical reference (938 lines). A per-capability, code-verified inventory of the IMAS-Core surface this project must mirror. Read this before designing anything.
 - `docs/PROTOTYPE_CRITIC.md` — critique of the earlier `dd-maps/` + `middleware/` prototype: which of its choices were load-bearing and which should not be inherited without a decision.
