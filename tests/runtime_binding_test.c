@@ -439,7 +439,7 @@ static void scenario_verbatim_forwarding(void) {
         void *not_found_data = &data; /* poisoned: must become NULL */
         int not_found_size[1] = {99};
         al_status_t not_found_status = al_read_data(2001, "missing_field", "time", &not_found_data,
-                                                      3, 1, not_found_size);
+                                                      52 /* DOUBLE_DATA */, 1, not_found_size);
         unsetenv("RECORDING_STUB_READ_NOT_FOUND");
         CHECK(not_found_status.code == 0);
         CHECK(not_found_data == NULL);
@@ -621,12 +621,13 @@ static void scenario_plugin_forwarding(void) {
     CHECK(al_write_plugins_metadata(703).code == 0);
     CHECK_PLUGIN_CALL(8, "al_write_plugins_metadata");
     CHECK(last_ctx() == 703);
-    CHECK(al_setvalue_parameter_plugin("coefficients", 2, 1, &size, values,
+    CHECK(al_setvalue_parameter_plugin("coefficients", 51 /* INTEGER_DATA */, 1, &size, values,
                                        "recording-plugin").code == 0);
     CHECK_PLUGIN_CALL(9, "al_setvalue_parameter_plugin");
     CHECK(strcmp(first_string(), "coefficients") == 0);
     CHECK(strcmp(second_string(), "recording-plugin") == 0);
-    CHECK(first_int() == 2 && second_int() == 1 && pointer_value() == values);
+    CHECK(first_int() == 51 /* INTEGER_DATA */ && second_int() == 1
+          && pointer_value() == values);
     CHECK(size_pointer() == &size);
     CHECK(al_setvalue_int_scalar_parameter_plugin("iterations", 37,
                                                    "recording-plugin").code == 0);
@@ -658,19 +659,21 @@ static void scenario_plugin_forwarding(void) {
     CHECK(al_plugin_end_action(707).code == 0);
     CHECK_PLUGIN_CALL(15, "al_plugin_end_action");
     CHECK(last_ctx() == 707);
-    CHECK(al_plugin_read_data(708, "temperature", "time", &read_data, 3, 1, &size).code == 0);
+    CHECK(al_plugin_read_data(708, "temperature", "time", &read_data, 52 /* DOUBLE_DATA */, 1,
+                              &size).code == 0);
     CHECK_PLUGIN_CALL(16, "al_plugin_read_data");
-    CHECK(last_ctx() == 708 && first_int() == 3 && second_int() == 1);
+    CHECK(last_ctx() == 708 && first_int() == 52 /* DOUBLE_DATA */ && second_int() == 1);
     CHECK(strcmp(first_string(), "temperature") == 0 && strcmp(second_string(), "time") == 0);
     CHECK(size_pointer() == &size);
     CHECK(read_data != NULL);
     /* al_plugin_read_data shares its response computation with al_read_data
      * (issue #68), whose own default fixed size is 4004. */
     CHECK(size == 4004);
-    CHECK(al_plugin_write_data(709, "temperature", "time", &write_data, 3, 0, NULL).code == 0);
+    CHECK(al_plugin_write_data(709, "temperature", "time", &write_data, 52 /* DOUBLE_DATA */, 0,
+                               NULL).code == 0);
     CHECK_PLUGIN_CALL(17, "al_plugin_write_data");
     CHECK(last_ctx() == 709 && pointer_value() == &write_data);
-    CHECK(first_int() == 3 && second_int() == 0);
+    CHECK(first_int() == 52 /* DOUBLE_DATA */ && second_int() == 0);
     CHECK(strcmp(first_string(), "temperature") == 0 && strcmp(second_string(), "time") == 0);
     CHECK(size_pointer() == NULL);
     CHECK(call_count() == 17);

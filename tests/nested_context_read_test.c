@@ -33,7 +33,7 @@
 #define CHECK(condition)                                                      \
     do {                                                                      \
         if (!(condition)) {                                                   \
-            fprintf(stderr, "check failed at %s:%d: %s\\n", __FILE__, __LINE__, \
+            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
                     #condition);                                             \
             exit(EXIT_FAILURE);                                               \
         }                                                                     \
@@ -135,7 +135,7 @@ static void scenario_relative_field_and_timebase_resolve_through_renamed_child(v
     check_no_loss_entry(operation_ctx);
 
     printf("nested_context_read_test relative-field-and-timebase-resolve-through-renamed-child: "
-           "a relative read beneath a renamed AOS anchor reached the stored spelling\\n");
+           "a relative read beneath a renamed AOS anchor reached the stored spelling\n");
 }
 
 /* --- absolute resolution ignores the live child's own anchor ------------ */
@@ -162,7 +162,7 @@ static void scenario_absolute_field_outside_child_subtree_resolves_from_ids_root
     check_stub_paths("/time_slice/global_quantities/beta_normal", "");
 
     printf("nested_context_read_test absolute-field-outside-child-subtree-resolves-from-ids-root: "
-           "an absolute read ignored the live child's own renamed anchor\\n");
+           "an absolute read ignored the live child's own renamed anchor\n");
 }
 
 /* --- no-source and refusal are unaffected by nesting --------------------- */
@@ -179,7 +179,7 @@ static void scenario_no_source_returns_null_through_nested_child(void) {
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
 
     printf("nested_context_read_test no-source-returns-null-through-nested-child: an absent "
-           "stored counterpart returned success with no data, without calling IMAS-Core\\n");
+           "stored counterpart returned success with no data, without calling IMAS-Core\n");
 }
 
 static void scenario_refusal_stops_before_core_through_nested_child(void) {
@@ -214,7 +214,7 @@ static void scenario_refusal_stops_before_core_through_nested_child(void) {
 
     printf("nested_context_read_test refusal-stops-before-core-through-nested-child: an "
            "unmappable unit redefinition refused before IMAS-Core, addressed relative to a "
-           "live arraystruct context\\n");
+           "live arraystruct context\n");
 }
 
 /* --- a supported value transformation still applies when nested --------- */
@@ -243,7 +243,7 @@ static void scenario_sign_flip_applies_through_nested_child(void) {
     check_no_loss_entry(operation_ctx);
 
     printf("nested_context_read_test sign-flip-applies-through-nested-child: a COCOS sign flip "
-           "was applied to a field read relative to a live arraystruct context\\n");
+           "was applied to a field read relative to a live arraystruct context\n");
 }
 
 /* --- issue #66: a nested non-exact read attributes to its root ---------- */
@@ -273,7 +273,7 @@ static void scenario_moved_read_through_nested_child_retains_lossy_verdict_on_ro
                   IMAS_MVDD_FIDELITY_LOSSY);
 
     printf("nested_context_read_test moved-read-through-nested-child-retains-lossy-verdict-on-root: "
-           "a certainly-lossy nested read appended the complete DD path to its root's loss log\\n");
+           "a certainly-lossy nested read appended the complete DD path to its root's loss log\n");
 }
 
 static void scenario_merged_read_through_nested_child_retains_potentially_lossy_verdict(void) {
@@ -298,7 +298,7 @@ static void scenario_merged_read_through_nested_child_retains_potentially_lossy_
 
     printf("nested_context_read_test "
            "merged-read-through-nested-child-retains-potentially-lossy-verdict: a merged rule's "
-           "verdict reached the root's loss log with the complete nested DD path\\n");
+           "verdict reached the root's loss log with the complete nested DD path\n");
 }
 
 static void scenario_ending_root_before_child_destroys_the_shared_loss_log(void) {
@@ -321,7 +321,7 @@ static void scenario_ending_root_before_child_destroys_the_shared_loss_log(void)
 
     printf("nested_context_read_test "
            "ending-root-before-child-destroys-the-shared-loss-log: the loss log died with its "
-           "root even though a child context closed non-LIFO\\n");
+           "root even though a child context closed non-LIFO\n");
 }
 
 int main(int argc, char **argv) {
@@ -334,7 +334,7 @@ int main(int argc, char **argv) {
                 "sign-flip-applies-through-nested-child|"
                 "moved-read-through-nested-child-retains-lossy-verdict-on-root|"
                 "merged-read-through-nested-child-retains-potentially-lossy-verdict|"
-                "ending-root-before-child-destroys-the-shared-loss-log>\\n",
+                "ending-root-before-child-destroys-the-shared-loss-log>\n",
                 argv[0]);
         return 2;
     }
@@ -370,6 +370,6 @@ int main(int argc, char **argv) {
         scenario_ending_root_before_child_destroys_the_shared_loss_log();
         return 0;
     }
-    fprintf(stderr, "unknown scenario: %s\\n", argv[1]);
+    fprintf(stderr, "unknown scenario: %s\n", argv[1]);
     return 2;
 }

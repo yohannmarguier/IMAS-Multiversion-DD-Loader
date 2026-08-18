@@ -15,7 +15,7 @@
 #define CHECK(condition)                                                       \
     do {                                                                       \
         if (!(condition)) {                                                    \
-            fprintf(stderr, "check failed at %s:%d: %s\\n", __FILE__, __LINE__, \
+            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
                     #condition);                                              \
             exit(EXIT_FAILURE);                                                \
         }                                                                      \
@@ -82,7 +82,7 @@ static void scenario_translates_renamed_container_and_timebase(void) {
                  "/time_slice/constraints/bpol_probe/measured") == 0);
 
     printf("arraystruct_path_test translates-renamed-container-and-timebase: the stored "
-           "AOS spelling opened and retained a child conversion record\\n");
+           "AOS spelling opened and retained a child conversion record\n");
 }
 
 static void scenario_translates_absolute_path_and_relative_timebase(void) {
@@ -100,7 +100,7 @@ static void scenario_translates_absolute_path_and_relative_timebase(void) {
                  "time_slice/constraints/bpol_probe/time") == 0);
 
     printf("arraystruct_path_test translates-absolute-path-and-relative-timebase: both "
-           "argument roots resolved through the conversion map\\n");
+           "argument roots resolved through the conversion map\n");
 }
 
 static void scenario_failed_open_propagates_without_child_record(void) {
@@ -124,7 +124,7 @@ static void scenario_failed_open_propagates_without_child_record(void) {
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
     printf("arraystruct_path_test failed-open-propagates-without-child-record: Core failure "
-           "was preserved and did not register a child\\n");
+           "was preserved and did not register a child\n");
 }
 
 static void scenario_no_source_refuses_before_core(void) {
@@ -149,7 +149,7 @@ static void scenario_no_source_refuses_before_core(void) {
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
     printf("arraystruct_path_test no-source-refuses-before-core: absent stored AOS did not "
-           "open or register a child\\n");
+           "open or register a child\n");
 }
 
 static void scenario_plain_parent_forwards_unchanged(void) {
@@ -167,7 +167,7 @@ static void scenario_plain_parent_forwards_unchanged(void) {
                  "/time_slice/constraints/b_field_pol_probe/time") == 0);
 
     printf("arraystruct_path_test plain-parent-forwards-unchanged: an unconverted parent "
-           "left both arguments untouched\\n");
+           "left both arguments untouched\n");
 }
 
 static void scenario_unknown_parent_forwards_unchanged(void) {
@@ -185,7 +185,7 @@ static void scenario_unknown_parent_forwards_unchanged(void) {
                  "/time_slice/constraints/b_field_pol_probe/time") == 0);
 
     printf("arraystruct_path_test unknown-parent-forwards-unchanged: a parent without an "
-           "artifact left both arguments untouched\\n");
+           "artifact left both arguments untouched\n");
 }
 
 int main(int argc, char **argv) {
@@ -194,7 +194,7 @@ int main(int argc, char **argv) {
                 "usage: %s <translates-renamed-container-and-timebase|"
                 "translates-absolute-path-and-relative-timebase|"
                 "failed-open-propagates-without-child-record|no-source-refuses-before-core|"
-                "plain-parent-forwards-unchanged|unknown-parent-forwards-unchanged>\\n",
+                "plain-parent-forwards-unchanged|unknown-parent-forwards-unchanged>\n",
                 argv[0]);
         return 2;
     }
@@ -222,6 +222,6 @@ int main(int argc, char **argv) {
         scenario_unknown_parent_forwards_unchanged();
         return 0;
     }
-    fprintf(stderr, "unknown scenario: %s\\n", argv[1]);
+    fprintf(stderr, "unknown scenario: %s\n", argv[1]);
     return 2;
 }

@@ -20,7 +20,7 @@
 #define CHECK(condition)                                                       \
     do {                                                                       \
         if (!(condition)) {                                                    \
-            fprintf(stderr, "check failed at %s:%d: %s\\n", __FILE__, __LINE__, \
+            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
                     #condition);                                               \
             exit(EXIT_FAILURE);                                                \
         }                                                                      \
@@ -28,11 +28,13 @@
 
 typedef const char *(*string_accessor_fn)(void);
 typedef int (*int_accessor_fn)(void);
+typedef al_status_t (*read_data_fn)(int, const char *, const char *, void **, int, int, int *);
+typedef void (*set_reentrant_read_fn)(read_data_fn, const char *);
 
 static void *dlsym_or_die(void *handle, const char *name) {
     void *symbol = dlsym(handle, name);
     if (symbol == NULL) {
-        fprintf(stderr, "recording stub has no symbol '%s': %s\\n", name, dlerror());
+        fprintf(stderr, "recording stub has no symbol '%s': %s\n", name, dlerror());
         abort();
     }
     return symbol;
@@ -41,7 +43,7 @@ static void *dlsym_or_die(void *handle, const char *name) {
 static const char *string_from_stub(const char *symbol_name) {
     void *stub = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
     if (stub == NULL) {
-        fprintf(stderr, "failed to open recording stub: %s\\n", dlerror());
+        fprintf(stderr, "failed to open recording stub: %s\n", dlerror());
         abort();
     }
     string_accessor_fn accessor = (string_accessor_fn)dlsym_or_die(stub, symbol_name);
@@ -51,11 +53,26 @@ static const char *string_from_stub(const char *symbol_name) {
 static int int_from_stub(const char *symbol_name) {
     void *stub = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
     if (stub == NULL) {
-        fprintf(stderr, "failed to open recording stub: %s\\n", dlerror());
+        fprintf(stderr, "failed to open recording stub: %s\n", dlerror());
         abort();
     }
     int_accessor_fn accessor = (int_accessor_fn)dlsym_or_die(stub, symbol_name);
     return accessor();
+}
+
+/* Arms the stub to call back into the shim's own `al_read_data` once, while
+ * the shim's read is still on the stack, with `field` as its argument — what
+ * real IMAS-Core does on ELF, where its internal call to its own public
+ * `al_read_data` binds to the shim's exported definition. */
+static void arm_reentrant_read(const char *field) {
+    void *stub = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
+    if (stub == NULL) {
+        fprintf(stderr, "failed to open recording stub: %s\n", dlerror());
+        abort();
+    }
+    set_reentrant_read_fn arm =
+        (set_reentrant_read_fn)dlsym_or_die(stub, "recording_stub_set_reentrant_read");
+    arm(al_read_data, field);
 }
 
 static int open_mismatched_equilibrium(void) {
@@ -126,7 +143,7 @@ static void scenario_translates_field_and_timebase_independently(void) {
     check_no_loss_entry(operation_ctx);
 
     printf("read_path_test translates-field-and-timebase-independently: both paths reached "
-           "the stored DD spelling\\n");
+           "the stored DD spelling\n");
 }
 
 static void scenario_forward_direction_translates_and_reports_no_source(void) {
@@ -147,7 +164,7 @@ static void scenario_forward_direction_translates_and_reports_no_source(void) {
     check_loss_at(operation_ctx, 0, "time_slice/boundary/lcfs", IMAS_MVDD_FIDELITY_LOSSY);
 
     printf("read_path_test forward-direction-translates-and-reports-no-source: 3.39.0 HLI "
-           "paths used 4.1.1 spellings or returned not found\\n");
+           "paths used 4.1.1 spellings or returned not found\n");
 }
 
 static void scenario_identity_rule_returns_data(void) {
@@ -159,7 +176,7 @@ static void scenario_identity_rule_returns_data(void) {
     check_stub_paths("time", "");
     check_no_loss_entry(operation_ctx);
 
-    printf("read_path_test identity-rule-returns-data: identity rule read the stored path\\n");
+    printf("read_path_test identity-rule-returns-data: identity rule read the stored path\n");
 }
 
 static void scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log(void) {
@@ -179,7 +196,71 @@ static void scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log(void) {
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY);
 
     printf("read_path_test merged-read-retains-a-lossy-verdict-in-the-loss-log: a merged "
-           "rule's lossy verdict reached the queryable loss log\\n");
+           "rule's lossy verdict reached the queryable loss log\n");
+}
+
+/* ADR 0014: a read arriving while the shim's own read is in flight was issued
+ * from underneath IMAS-Core, not by the HLI, and carries a path the shim has
+ * already translated - so it is forwarded exactly as received, with no
+ * resolution, no transformation and no loss retention.
+ *
+ * Mirrors the real-Core failure this policy was written for: the same field the
+ * caller asked for arrives again, mid-read, and must not be converted a second
+ * time. `move-gap` is the field because in this direction it both renames
+ * (boundary_separatrix -> boundary) and is declared lossy, so a second
+ * conversion shows up twice over - the stub would receive the stored spelling
+ * rather than what it sent, and the root loss log would hold two entries for a
+ * caller that issued one read. */
+static void scenario_reentrant_read_is_forwarded_unchanged(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    arm_reentrant_read("time_slice/boundary_separatrix/gap/r");
+
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/boundary_separatrix/gap/r", "", &data).code == 0);
+    CHECK(data != NULL);
+
+    /* The caller's own read still converts, and still records its loss. */
+    check_stub_paths("time_slice/boundary/gap/r", "");
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r",
+                  IMAS_MVDD_FIDELITY_LOSSY);
+
+    /* The reentrant one reached IMAS-Core exactly as the stub sent it. */
+    CHECK(int_from_stub("recording_stub_reentrant_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_field"),
+                 "time_slice/boundary_separatrix/gap/r")
+          == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_timebase"), "") == 0);
+
+    printf("read_path_test reentrant-read-is-forwarded-unchanged: a read re-entering beneath "
+           "an in-flight read was forwarded without conversion or loss retention\n");
+}
+
+/* The value-transform half of the same policy. The stub hands both legs the
+ * same static buffer, so a reentrant read that still applied the COCOS flip
+ * would negate it a second time and hand the caller its original signs back —
+ * silently wrong data, and the failure mode the earlier address-keyed dedup
+ * was guarding against by a weaker means. */
+static void scenario_reentrant_read_does_not_reapply_a_sign_flip(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    arm_reentrant_read("time_slice/profiles_1d/psi");
+
+    int size[1] = {0};
+    void *data = NULL;
+    CHECK(al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
+                       52 /* DOUBLE_DATA */, 1, size)
+              .code == 0);
+    CHECK(data != NULL);
+    CHECK(size[0] == 4);
+    const double *values = (const double *)data;
+    CHECK(values[0] == -1.5);
+    CHECK(values[1] == -9e40); /* EMPTY_DOUBLE stays untouched */
+    CHECK(values[2] == -3.2);
+    CHECK(values[3] == 4.0);
+    CHECK(int_from_stub("recording_stub_reentrant_call_count") == 1);
+
+    printf("read_path_test reentrant-read-does-not-reapply-a-sign-flip: the COCOS flip was "
+           "applied exactly once despite a read re-entering mid-flight\n");
 }
 
 static void scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log(void) {
@@ -198,7 +279,7 @@ static void scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log(void) {
     check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r", IMAS_MVDD_FIDELITY_LOSSY);
 
     printf("read_path_test moved-read-retains-a-lossy-verdict-in-the-loss-log: a plain "
-           "moved rule's lossy verdict reached the queryable loss log\\n");
+           "moved rule's lossy verdict reached the queryable loss log\n");
 }
 
 static void scenario_ending_context_destroys_its_loss_log(void) {
@@ -212,7 +293,7 @@ static void scenario_ending_context_destroys_its_loss_log(void) {
     check_no_loss_entry(operation_ctx);
 
     printf("read_path_test ending-context-destroys-its-loss-log: al_end_action removed the "
-           "loss log along with its context\\n");
+           "loss log along with its context\n");
 }
 
 static void scenario_loss_count_null_output_is_refused(void) {
@@ -225,7 +306,7 @@ static void scenario_loss_count_null_output_is_refused(void) {
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
 
     printf("read_path_test loss-count-null-output-is-refused: a null count output was "
-           "rejected without dereferencing it\\n");
+           "rejected without dereferencing it\n");
 }
 
 static void scenario_loss_at_null_path_buffer_is_refused(void) {
@@ -240,7 +321,7 @@ static void scenario_loss_at_null_path_buffer_is_refused(void) {
     CHECK(verdict == -1);
 
     printf("read_path_test loss-at-null-path-buffer-is-refused: a null path buffer was "
-           "rejected without writing to verdict\\n");
+           "rejected without writing to verdict\n");
 }
 
 static void scenario_loss_at_null_verdict_is_refused(void) {
@@ -255,7 +336,7 @@ static void scenario_loss_at_null_verdict_is_refused(void) {
     CHECK(path_buf[0] == 0);
 
     printf("read_path_test loss-at-null-verdict-is-refused: a null verdict output was "
-           "rejected without writing to the path buffer\\n");
+           "rejected without writing to the path buffer\n");
 }
 
 static void scenario_loss_at_negative_index_is_refused(void) {
@@ -272,7 +353,7 @@ static void scenario_loss_at_negative_index_is_refused(void) {
     CHECK(path_buf[0] == 0);
 
     printf("read_path_test loss-at-negative-index-is-refused: a negative index was "
-           "rejected safely\\n");
+           "rejected safely\n");
 }
 
 static void scenario_loss_at_out_of_range_index_is_refused(void) {
@@ -290,7 +371,7 @@ static void scenario_loss_at_out_of_range_index_is_refused(void) {
     CHECK(path_buf[0] == 0);
 
     printf("read_path_test loss-at-out-of-range-index-is-refused: an index at the reported "
-           "count was rejected safely\\n");
+           "count was rejected safely\n");
 }
 
 static void scenario_loss_at_insufficient_buffer_is_refused(void) {
@@ -307,7 +388,7 @@ static void scenario_loss_at_insufficient_buffer_is_refused(void) {
     CHECK(path_buf[0] == 'X');
 
     printf("read_path_test loss-at-insufficient-buffer-is-refused: a too-small buffer was "
-           "rejected without a partial write\\n");
+           "rejected without a partial write\n");
 }
 
 static void scenario_merged_read_falls_through_to_next_candidate(void) {
@@ -386,7 +467,7 @@ static void scenario_no_source_returns_null_without_core_call(void) {
     check_loss_at(operation_ctx, 0, "time_slice/contour_tree/critical_point",
                   IMAS_MVDD_FIDELITY_LOSSY);
 
-    printf("read_path_test no-source-returns-null-without-core-call: no stored path was read\\n");
+    printf("read_path_test no-source-returns-null-without-core-call: no stored path was read\n");
 }
 
 static void scenario_rank_changing_retype_refuses_without_core_call(void) {
@@ -398,7 +479,7 @@ static void scenario_rank_changing_retype_refuses_without_core_call(void) {
         "stored DD version: 3.39.0");
 
     printf("read_path_test rank-changing-retype-refuses-without-core-call: refusal preserved "
-           "caller storage and never reached IMAS-Core\\n");
+           "caller storage and never reached IMAS-Core\n");
 }
 
 static void scenario_unit_redefinition_refuses_without_core_call(void) {
@@ -410,7 +491,7 @@ static void scenario_unit_redefinition_refuses_without_core_call(void) {
         "HLI DD version: 4.1.1; stored DD version: 3.39.0");
 
     printf("read_path_test unit-redefinition-refuses-without-core-call: refusal preserved "
-           "caller storage and never reached IMAS-Core\\n");
+           "caller storage and never reached IMAS-Core\n");
 }
 
 static void scenario_unsupported_sign_flip_types_refuse_without_core_call(void) {
@@ -427,7 +508,7 @@ static void scenario_unsupported_sign_flip_types_refuse_without_core_call(void) 
     }
 
     printf("read_path_test unsupported-sign-flip-types-refuse-without-core-call: integer "
-           "and complex reads were refused before IMAS-Core\\n");
+           "and complex reads were refused before IMAS-Core\n");
 }
 
 static void scenario_sign_flip_array_negates_values_and_preserves_empty_double(void) {
@@ -450,7 +531,7 @@ static void scenario_sign_flip_array_negates_values_and_preserves_empty_double(v
     check_stub_paths("time_slice/profiles_1d/psi", "");
 
     printf("read_path_test sign-flip-array-negates-values-and-preserves-empty-double: every "
-           "real element was negated and the EMPTY_DOUBLE sentinel was left unchanged\\n");
+           "real element was negated and the EMPTY_DOUBLE sentinel was left unchanged\n");
 }
 
 static void scenario_sign_flip_rank_exceeding_maxdim_refuses_without_core_call(void) {
@@ -475,7 +556,7 @@ static void scenario_sign_flip_rank_exceeding_maxdim_refuses_without_core_call(v
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
 
     printf("read_path_test sign-flip-rank-exceeding-maxdim-refuses-without-core-call: a "
-           "rank-8 sign-flip read was refused before IMAS-Core was ever called\\n");
+           "rank-8 sign-flip read was refused before IMAS-Core was ever called\n");
 }
 
 static void scenario_sign_flip_invalid_shape_refuses_without_modifying_buffer(void) {
@@ -500,7 +581,7 @@ static void scenario_sign_flip_invalid_shape_refuses_without_modifying_buffer(vo
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 1);
 
     printf("read_path_test sign-flip-invalid-shape-refuses-without-modifying-buffer: an "
-           "overflowing dimension product was refused without flipping any element\\n");
+           "overflowing dimension product was refused without flipping any element\n");
 }
 
 static void scenario_sign_flip_shape_override_respects_read_rank(void) {
@@ -517,7 +598,7 @@ static void scenario_sign_flip_shape_override_respects_read_rank(void) {
     CHECK(size[1] == 73);
 
     printf("read_path_test sign-flip-shape-override-respects-read-rank: the recording "
-           "stub changed only the one extent the ABI supplied\\n");
+           "stub changed only the one extent the ABI supplied\n");
 }
 
 static void scenario_sign_flip_not_found_skips_value_transformation(void) {
@@ -535,7 +616,7 @@ static void scenario_sign_flip_not_found_skips_value_transformation(void) {
     check_stub_paths("time_slice/profiles_1d/psi", "");
 
     printf("read_path_test sign-flip-not-found-skips-value-transformation: a successful "
-           "not-found COCOS read remained null\\n");
+           "not-found COCOS read remained null\n");
 }
 
 static void scenario_resolves_relative_field_and_absolute_timebase(void) {
@@ -554,7 +635,7 @@ static void scenario_resolves_relative_field_and_absolute_timebase(void) {
                      "/time_slice/global_quantities/beta_normal");
 
     printf("read_path_test resolves-relative-field-and-absolute-timebase: each path resolved "
-           "through the correct context root\\n");
+           "through the correct context root\n");
 }
 
 static void scenario_matching_context_bypasses_conversion(void) {
@@ -569,7 +650,7 @@ static void scenario_matching_context_bypasses_conversion(void) {
                      "time_slice/global_quantities/beta_tor_norm");
     check_no_loss_entry(operation_ctx);
 
-    printf("read_path_test matching-context-bypasses-conversion: matching stamp was forwarded\\n");
+    printf("read_path_test matching-context-bypasses-conversion: matching stamp was forwarded\n");
 }
 
 static void scenario_unknown_context_bypasses_conversion(void) {
@@ -584,7 +665,7 @@ static void scenario_unknown_context_bypasses_conversion(void) {
     check_stub_paths("profiles_1d/electrons/density", "time");
     check_no_loss_entry(operation_ctx);
 
-    printf("read_path_test unknown-context-bypasses-conversion: unavailable artifact was forwarded\\n");
+    printf("read_path_test unknown-context-bypasses-conversion: unavailable artifact was forwarded\n");
 }
 
 static void scenario_unstamped_context_bypasses_conversion(void) {
@@ -600,7 +681,7 @@ static void scenario_unstamped_context_bypasses_conversion(void) {
     check_no_loss_entry(operation_ctx);
 
     printf("read_path_test unstamped-context-bypasses-conversion: unstamped occurrence was "
-           "forwarded\\n");
+           "forwarded\n");
 }
 
 static void scenario_conversion_disabled_bypasses_conversion(void) {
@@ -616,7 +697,7 @@ static void scenario_conversion_disabled_bypasses_conversion(void) {
     check_no_loss_entry(operation_ctx);
 
     printf("read_path_test conversion-disabled-bypasses-conversion: unset HLI version was "
-           "forwarded\\n");
+           "forwarded\n");
 }
 
 static void scenario_core_failure_propagates_unchanged(void) {
@@ -630,7 +711,7 @@ static void scenario_core_failure_propagates_unchanged(void) {
     check_stub_paths("time_slice/global_quantities/beta_normal",
                      "time_slice/global_quantities/beta_normal");
 
-    printf("read_path_test core-failure-propagates-unchanged: IMAS-Core status was preserved\\n");
+    printf("read_path_test core-failure-propagates-unchanged: IMAS-Core status was preserved\n");
 }
 
 int main(int argc, char **argv) {
@@ -664,7 +745,9 @@ int main(int argc, char **argv) {
                 "loss-at-null-verdict-is-refused|"
                 "loss-at-negative-index-is-refused|"
                 "loss-at-out-of-range-index-is-refused|"
-                "loss-at-insufficient-buffer-is-refused>\\n",
+                "loss-at-insufficient-buffer-is-refused|"
+                "reentrant-read-is-forwarded-unchanged|"
+                "reentrant-read-does-not-reapply-a-sign-flip>\n",
                 argv[0]);
         return 2;
     }
@@ -791,6 +874,14 @@ int main(int argc, char **argv) {
         scenario_loss_at_insufficient_buffer_is_refused();
         return 0;
     }
-    fprintf(stderr, "unknown scenario: %s\\n", argv[1]);
+    if (strcmp(argv[1], "reentrant-read-is-forwarded-unchanged") == 0) {
+        scenario_reentrant_read_is_forwarded_unchanged();
+        return 0;
+    }
+    if (strcmp(argv[1], "reentrant-read-does-not-reapply-a-sign-flip") == 0) {
+        scenario_reentrant_read_does_not_reapply_a_sign_flip();
+        return 0;
+    }
+    fprintf(stderr, "unknown scenario: %s\n", argv[1]);
     return 2;
 }

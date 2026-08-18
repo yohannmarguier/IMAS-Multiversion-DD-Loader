@@ -4,21 +4,43 @@
 //! the path-bearing entry points. The shared constants and `al_status_t` are
 //! here, and the runtime-binding architecture (see `src/resolve.rs` and
 //! `docs/adr/0001-runtime-binding-not-linking.md`) is proven end to end on
-//! all 37 linkable exported IMAS-Core C symbols. DD path/version conversion
-//! is wired for the data-entry and global-action seams (issue #53): the
-//! process-wide HLI DD version latch (`src/hli_version.rs`, ADR 0005), the
-//! context registry (`src/context_registry.rs`, ADR 0003), and DD-version
-//! stamp discovery (`src/version_stamp.rs`, ADR 0007) together decide, per
-//! `al_begin_global_action` open, whether an IDS occurrence's stored DD
-//! version differs from the HLI's and registers a conversion record only
-//! then. `al_begin_arraystruct_action` registers a child record when its own
-//! context already carries one, and `al_read_data` resolves `field` through
-//! that record's shared conversion map before forwarding the translated
-//! field to IMAS-Core (issue #54) — proven bidirectionally against the
-//! checked-in equilibrium fixture pair for an explicit `renamed`/identity
-//! path. `merged`/`split` reads (issue #57) try stored candidates in declared
-//! precedence order and apply a selected COCOS sign flip in place (issue #59);
-//! IMAS-Core's returned allocation is still forwarded unchanged.
+//! all 37 linkable exported IMAS-Core C symbols.
+//!
+//! Read-path DD conversion is wired end to end. The process-wide HLI DD
+//! version latch (`src/hli_version.rs`, ADR 0005), the context registry
+//! (`src/context_registry.rs`, ADR 0003) and DD-version stamp discovery
+//! (`src/version_stamp.rs`, ADR 0007) together decide, at every
+//! occurrence-opening seam — `al_begin_global_action`,
+//! `al_begin_slice_action`, `al_begin_timerange_action` and their
+//! `al_plugin_` reentry twins — whether an occurrence's stored DD version
+//! differs from the HLI's, and register a root conversion record only then.
+//! `al_begin_arraystruct_action` registers a child record beneath a context
+//! that already carries one. `al_read_data` then resolves `field` and
+//! `timebase` independently through that record's shared conversion map
+//! before IMAS-Core is called: identity and `renamed` rules reach their
+//! stored spelling, `merged`/`split` rules try stored candidates in declared
+//! precedence order, a selected COCOS sign flip is applied in place, and a
+//! rule the shim cannot serve refuses before IMAS-Core rather than returning
+//! wrong data. Every non-exact successful read reaches its root context's
+//! loss log, drainable through `imas_mvdd_context_loss_count` /
+//! `imas_mvdd_context_loss_at` (ADR 0008, ADR 0012). IMAS-Core's returned
+//! allocation is forwarded unchanged throughout: the shim neither
+//! substitutes nor frees it.
+//!
+//! A read that re-enters the shim while one of its own reads is still in
+//! flight — IMAS-Core calling back into the public ABI, or a plugin below the
+//! shim — is forwarded untouched: it already carries a stored-version path, so
+//! resolving it again would translate twice, flip a sign twice, and log a loss
+//! the caller never earned (ADR 0014).
+//!
+//! The write path is deliberately not translated. `al_write_data`,
+//! `al_delete_data` and `al_plugin_write_data` refuse before IMAS-Core is
+//! called whenever the context carries a live conversion record, and forward
+//! unchanged otherwise (ADR 0002).
+//!
+//! Each entry point below documents its own seam behaviour, but the policy
+//! itself lives beside its implementation in `src/resolve.rs` — go there for
+//! the per-seam detail rather than restating it here.
 
 // The mirrored ABI dictates the names; matching IMAS-Core exactly is the point.
 #![allow(non_camel_case_types)]
@@ -317,9 +339,15 @@ pub unsafe extern "C" fn imas_mvdd_context_loss_at(
     unsafe { resolve::context_loss_at(ctx_id, index, path_buf, buf_len, verdict) }
 }
 
-/// Mirrors IMAS-Core's `al_begin_dataentry_action` exactly and forwards
-/// unchanged. Opens a pulse addressed by `uri` and reports the resulting
-/// context id in `*dectxID`.
+/// Mirrors IMAS-Core's `al_begin_dataentry_action` exactly. Opens a pulse
+/// addressed by `uri` and reports the resulting context id in `*dectxID`.
+/// `uri` and `mode` are forwarded unchanged in every case — this seam has no
+/// DD version of its own to translate against (ADR 0002) — but the call is
+/// not a bare forward: it resolves the process-wide HLI DD version latch
+/// (ADR 0005) first and refuses without calling IMAS-Core if that latch
+/// cannot be established, and on success registers the opened pulse context
+/// in the context registry (ADR 0003) so operation records opened beneath it
+/// can carry its ID. See `resolve::begin_dataentry_action`.
 ///
 /// # Safety
 /// `uri` must be a valid, NUL-terminated C string. `dectxID` must be a
@@ -339,9 +367,19 @@ pub extern "C" fn al_close_pulse(pulse_ctx: c_int, mode: c_int) -> al_status_t {
     resolve::close_pulse(pulse_ctx, mode)
 }
 
-/// Mirrors IMAS-Core's `al_begin_global_action` exactly and forwards
-/// unchanged. `dataobjectname` and `datapath` are seam arguments: this
-/// ticket forwards them verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's `al_begin_global_action` exactly and applies ADR
+/// 0002's global-action seam policy. `dataobjectname` (the IDS name, plus
+/// occurrence) is always forwarded unchanged — IDS names are stable across DD
+/// versions. `datapath` is translated only once an *earlier* open of the same
+/// occurrence cached a mismatch; on first use it forwards unchanged, since
+/// the version that would justify translating it is not yet known at the
+/// point IMAS-Core must be called. Once the real open succeeds, the
+/// occurrence's DD-version stamp is read and classified (ADR 0007): a
+/// mismatch this project has an artifact for registers a root conversion
+/// record, a matching or absent stamp registers nothing, and a present but
+/// malformed stamp refuses — ending the just-opened context rather than
+/// leaking it. With the HLI DD version unset this is a plain forward. See
+/// `resolve::begin_global_action` for the full rule.
 ///
 /// # Safety
 /// `dataobjectname` and `datapath` must be valid, NUL-terminated C
@@ -444,7 +482,11 @@ pub unsafe extern "C" fn al_begin_arraystruct_action(
 // exported this compatibility alias. Adding it would make the shim's ABI
 // surface differ from IMAS-Core's (issue #8).
 
-/// Mirrors IMAS-Core's `al_end_action` exactly and forwards unchanged.
+/// Mirrors IMAS-Core's `al_end_action` exactly, forwarding `ctxID` unchanged.
+/// On success it removes only `ctxID`'s own conversion record, if any (ADR
+/// 0002, ADR 0003): a parent never owns a child context's lifetime, so
+/// closing either leaves the other's record live, and a refused close leaves
+/// the record intact. Removing an unrecorded `ctxID` is a harmless no-op.
 #[unsafe(no_mangle)]
 pub extern "C" fn al_end_action(ctx_id: c_int) -> al_status_t {
     resolve::end_action(ctx_id)
@@ -519,9 +561,12 @@ pub extern "C" fn al_iterate_over_arraystruct(aosctx: c_int, step: c_int) -> al_
     resolve::iterate_over_arraystruct(aosctx, step)
 }
 
-/// Mirrors IMAS-Core's `al_get_occurrences` exactly and forwards
-/// unchanged. `ids_name` is a seam argument: this ticket forwards it
-/// verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's `al_get_occurrences` exactly and forwards unchanged,
+/// including with a mismatched occurrence open and converting. `ids_name` is
+/// a conversion-relevant seam argument that is deliberately still
+/// untranslated; the `scoped-passthrough-*` tests pin that so it cannot
+/// change by accident in either direction (see README, "Scope and
+/// limitations").
 ///
 /// # Safety
 /// `ids_name` must be a valid, NUL-terminated C string. `occurrences_list`
@@ -540,10 +585,14 @@ pub unsafe extern "C" fn al_get_occurrences(
     unsafe { resolve::get_occurrences(pctx_id, ids_name, occurrences_list, size) }
 }
 
-/// Mirrors IMAS-Core's `al_list_filled_paths` exactly and forwards
-/// unchanged. `dataobjectname` is a seam argument on the way down, and the
-/// returned `*path_list` is the main up-conversion seam — this ticket
-/// forwards both verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's `al_list_filled_paths` exactly and forwards unchanged,
+/// including with a mismatched occurrence open and converting.
+/// `dataobjectname` is a conversion-relevant seam argument on the way down,
+/// and the returned `*path_list` is the main up-conversion seam — both are
+/// deliberately still untranslated, so the returned paths carry the *stored*
+/// version's spelling. The `scoped-passthrough-*` tests pin that (see README,
+/// "Scope and limitations"); note that translating the list later also means
+/// taking on its ownership contract, documented below.
 ///
 /// # Safety
 /// `dataobjectname` must be a valid, NUL-terminated C string. `path_list`
@@ -588,9 +637,12 @@ pub unsafe extern "C" fn al_unregister_plugin(plugin_name: *const c_char) -> al_
     unsafe { resolve::unregister_plugin(plugin_name) }
 }
 
-/// Mirrors IMAS-Core's `al_bind_plugin` exactly and forwards unchanged.
-/// `field_path` is a seam argument: this ticket forwards it verbatim, DD path
-/// translation is future work.
+/// Mirrors IMAS-Core's `al_bind_plugin` exactly and forwards unchanged,
+/// including with a mismatched occurrence open and converting. `field_path`
+/// is a conversion-relevant seam argument that is deliberately still
+/// untranslated, so it must be given in the *stored* version's spelling; the
+/// `scoped-passthrough-*` tests pin that (see README, "Scope and
+/// limitations").
 ///
 /// # Safety
 /// `field_path` and `plugin_name` must be valid, NUL-terminated C strings.
@@ -602,9 +654,9 @@ pub unsafe extern "C" fn al_bind_plugin(
     unsafe { resolve::bind_plugin(field_path, plugin_name) }
 }
 
-/// Mirrors IMAS-Core's `al_unbind_plugin` exactly and forwards unchanged.
-/// `field_path` is a seam argument: this ticket forwards it verbatim, DD path
-/// translation is future work.
+/// Mirrors IMAS-Core's `al_unbind_plugin` exactly and forwards unchanged,
+/// including with a mismatched occurrence open and converting. `field_path`
+/// is deliberately still untranslated on the same terms as `al_bind_plugin`.
 /// Its silent no-op for an unbound path is an upstream behaviour preserved by
 /// this thin forwarding layer (issue #7).
 ///
@@ -786,9 +838,13 @@ pub extern "C" fn al_plugin_end_action(ctx_id: c_int) -> al_status_t {
     resolve::plugin_end_action(ctx_id)
 }
 
-/// Mirrors IMAS-Core's plugin reentry read-data function exactly.
-/// `field` and `timebase` are seam arguments: this ticket forwards them
-/// verbatim, DD path translation is future work.
+/// Mirrors IMAS-Core's plugin reentry read-data function exactly, and carries
+/// exactly `al_read_data`'s policy: the same registry lookup,
+/// conversion-map resolution, `merged`/`split` candidate loop, COCOS value
+/// transformation, read-outcome classification and root loss-log retention,
+/// forwarded through IMAS-Core's plugin reentry read symbol rather than its
+/// ordinary twin. Both are thin wrappers over one shared `read_data_impl`, so
+/// a plugin re-entering the ABI gets the translation an HLI would.
 ///
 /// # Safety
 /// All pointers must meet IMAS-Core's data-access contract.

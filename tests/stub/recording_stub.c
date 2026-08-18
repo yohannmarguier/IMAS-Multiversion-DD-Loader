@@ -563,8 +563,59 @@ static al_status_t compute_read_response(const char *field, void **data, int dim
     return status;
 }
 
+/* --- reentrant-read knob ---------------------------------------------------
+ *
+ * Reproduces, deterministically and on any platform, what real IMAS-Core does
+ * on ELF: its internal call to its own public al_read_data binds to the shim's
+ * exported definition, so a read arrives at the shim while the shim's own read
+ * is still on the stack, carrying a path the shim has already translated. The
+ * test arms this with the shim's al_read_data and the field to re-enter with;
+ * `recording_stub_reentrant_seen_field` then reports what the shim passed back
+ * down, which is what ADR 0014's policy is asserted on.
+ *
+ * A function pointer supplied by the caller, rather than dlsym here: this stub
+ * exports `al_read_data` itself, so any RTLD_DEFAULT lookup would find the
+ * stub's own definition and recurse instead of reaching the shim. */
+typedef al_status_t (*recording_stub_read_fn)(int, const char *, const char *, void **, int, int,
+                                             int *);
+static recording_stub_read_fn g_reentrant_read = NULL;
+static char *g_reentrant_field = NULL;
+static int g_reentrant_active = 0;
+static int g_reentrant_call_count = 0;
+static char *g_reentrant_seen_field = NULL;
+static char *g_reentrant_seen_timebase = NULL;
+
+void recording_stub_set_reentrant_read(recording_stub_read_fn reentrant_read, const char *field) {
+    g_reentrant_read = reentrant_read;
+    free(g_reentrant_field);
+    g_reentrant_field = record_str(field);
+}
+
+int recording_stub_reentrant_call_count(void) {
+    return g_reentrant_call_count;
+}
+
+const char *recording_stub_reentrant_seen_field(void) {
+    return g_reentrant_seen_field;
+}
+
+const char *recording_stub_reentrant_seen_timebase(void) {
+    return g_reentrant_seen_timebase;
+}
+
 al_status_t al_read_data(int ctxID, const char *field, const char *timebase, void **data,
                           int datatype, int dim, int *size) {
+    /* The reentrant leg records separately: the outer call's recorded
+     * arguments must survive it, since that is what the test asserts on. */
+    if (g_reentrant_active) {
+        g_reentrant_call_count++;
+        free(g_reentrant_seen_field);
+        g_reentrant_seen_field = record_str(field);
+        free(g_reentrant_seen_timebase);
+        g_reentrant_seen_timebase = record_str(timebase);
+        return compute_read_response(field, data, dim, size);
+    }
+
     g_read_call_count++;
     g_read_ctx_id = ctxID;
     free(g_read_field);
@@ -573,6 +624,17 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
     g_read_timebase = record_str(timebase);
     g_read_datatype = datatype;
     g_read_dim = dim;
+
+    /* Excluding the version stamp keeps the reentry attributable to the one
+     * read a test issues, rather than to stamp discovery at open time. */
+    if (g_reentrant_read != NULL && field != NULL && strcmp(field, VERSION_STAMP_FIELD) != 0) {
+        g_reentrant_active = 1;
+        void *reentrant_data = NULL;
+        int reentrant_size[RECORDING_STUB_MAXDIM] = {0};
+        g_reentrant_read(ctxID, g_reentrant_field, "", &reentrant_data, datatype, dim,
+                         reentrant_size);
+        g_reentrant_active = 0;
+    }
 
     return compute_read_response(field, data, dim, size);
 }
