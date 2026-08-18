@@ -362,12 +362,26 @@ if(IMAS_MVDD_BUILD_TESTS)
     # The artifact's autoconvert-equivalence floor is an external contract:
     # run the validation command itself, including its deliberately reduced
     # fixture, rather than testing an internal helper (issue #51).
+    #
+    # The two supported-coverage floors are the only numbers this gate cannot
+    # derive from a checked-in file, so they are pinned here where a reviewer
+    # reads them next to the test that enforces them. They are floors, not
+    # equalities: coverage rising is the point of every new rule. Measured
+    # 342/428 forward and 358/393 reverse on the approved artifact -- raise a
+    # floor deliberately when new rules earn it, never to make a red gate green.
     add_test(NAME equilibrium-artifact-coverage-floor
         COMMAND "${CMAKE_COMMAND}"
             "-DCARGO_EXECUTABLE=${CARGO_EXECUTABLE}"
             "-DCARGO_MANIFEST_PATH=${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
             "-DAPPROVED_ARTIFACT=${CMAKE_CURRENT_SOURCE_DIR}/docs/3.39.0--4.1.1.xml"
             "-DREDUCED_ARTIFACT=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/equilibrium-3.39.0--4.1.1-reduced.xml"
+            "-DLEFT_INVENTORY=${CMAKE_CURRENT_SOURCE_DIR}/docs/inventory/equilibrium-3.39.0.txt"
+            "-DRIGHT_INVENTORY=${CMAKE_CURRENT_SOURCE_DIR}/docs/inventory/equilibrium-4.1.1.txt"
+            "-DBASELINE_TSV=${CMAKE_CURRENT_SOURCE_DIR}/docs/inventory/equilibrium-3.39.0--4.1.1-imas-python-renames.tsv"
+            "-DNEAR_BOUNDARY_RULE_ID=rename-beta-normal"
+            "-DFORWARD_SUPPORTED_FLOOR=342"
+            "-DREVERSE_SUPPORTED_FLOOR=358"
+            "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_artifact_coverage_floor.cmake")
 
     add_executable(abi_smoke "${CMAKE_CURRENT_SOURCE_DIR}/tests/abi_smoke.c")
