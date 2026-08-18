@@ -36,7 +36,7 @@ use std::env;
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::OnceLock;
 
-use crate::context_registry::{MapCacheKey, REGISTRY};
+use crate::context_registry::{ConversionRecord, MapCacheKey, REGISTRY};
 use crate::conversion_map::{
     ConversionMap, Fidelity, Outcome, RefusalReason, Rel, ValueTransformation,
 };
@@ -1166,7 +1166,7 @@ unsafe fn begin_arraystruct_action_impl(
     actx_id: *mut c_int,
     forward: impl FnOnce(*const c_char, *const c_char) -> al_status_t,
 ) -> al_status_t {
-    let Some(parent) = REGISTRY.lookup(ctx_id) else {
+    let Some(parent) = live_conversion_record(ctx_id) else {
         return forward(path, timebase);
     };
 
@@ -1240,6 +1240,37 @@ pub(crate) unsafe fn read_data(
     unsafe { read_data_impl(ctx_id, field, timebase, data, datatype, dim, size, forward) }
 }
 
+/// Forwards one read straight to IMAS-Core's real `al_read_data` with none of
+/// [`read_data_impl`]'s conversion policy: no registry lookup, no rule
+/// resolution, no value transformation, no loss retention. It does enter the
+/// thread's read depth (ADR 0014), so a read arriving from underneath the
+/// IMAS-Core call still recognises itself as reentrant.
+///
+/// This exists for version-stamp discovery (ADR 0007, ADR 0009), which is the
+/// shim's own read rather than a caller's: the path is fixed, spelled the same
+/// in every DD version this project serves, and read precisely to decide
+/// whether conversion applies to this occurrence at all. Sending it through the
+/// converting wrapper would re-enter the conversion layer from inside the code
+/// that produces its input, and would only forward unchanged because no record
+/// for that context exists yet — an ordering accident, not an invariant.
+///
+/// # Safety
+/// Same contract as [`read_data`].
+pub(crate) unsafe fn read_data_unconverted(
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    let (_depth_guard, _already_reading) = ReadDepthGuard::enter();
+    forward_status!(read_data(
+        ctx_id, field, timebase, data, datatype, dim, size
+    ))
+}
+
 /// Mirrors `read_data`'s policy exactly (issue #68): the same registry
 /// snapshot, conversion-map resolution, merged/split candidate loop, value
 /// transformation, and fidelity retention as an ordinary read — forwarded
@@ -1273,7 +1304,9 @@ pub(crate) unsafe fn plugin_read_data(
 /// When `ctx_id` names no live conversion record — no mismatch was ever
 /// discovered, the occurrence matched or was unstamped, or the HLI DD
 /// version is unset — this is a plain forward, unchanged from before issue
-/// #54. Otherwise `field` is resolved through the record's conversion map,
+/// #54. The unset case is answered by [`live_conversion_record`] from the
+/// version latch, without taking the registry's lock at all.
+/// Otherwise `field` is resolved through the record's conversion map,
 /// in the direction that reaches the stored DD spelling, before IMAS-Core is
 /// called:
 ///
@@ -1324,7 +1357,7 @@ unsafe fn read_data_impl(
     if already_reading {
         return forward(field, timebase);
     }
-    let Some(record) = REGISTRY.lookup(ctx_id) else {
+    let Some(record) = live_conversion_record(ctx_id) else {
         return forward(field, timebase);
     };
 
@@ -2052,6 +2085,33 @@ fn refusal_reason_message(reason: RefusalReason) -> String {
     }
 }
 
+/// The live conversion record for `ctx_id`, or `None` — with the
+/// conversion-disabled case answered before the registry's lock is taken.
+///
+/// Every seam keyed on a context ID goes through this rather than
+/// [`ContextRegistry::lookup`] directly. A record exists only where
+/// `discover_and_register_occurrence` made one, which requires a latched HLI DD
+/// version, and the latch is an `OnceLock` that can never fall back to unset —
+/// so with no conversion basis the answer is `None` by construction, and
+/// acquiring the registry's mutex to rediscover that is cost with no result. It
+/// is per `al_read_data` call, on the path every non-converting HLI takes for
+/// every field it reads: issue #56 AC5 asks for exactly this
+/// ("Matching, unknown, unstamped, and conversion-disabled contexts bypass
+/// registry lookup and rule resolution"), and the `begin_*` seams have always
+/// short-circuited the same way — they call `hli_version::current` because they
+/// go on to use the version, while these seams only need to know whether one
+/// exists.
+///
+/// The *unknown* and *matching* halves of that criterion still cost one lookup:
+/// they are not knowable without asking the registry, and ADR 0003 budgets one
+/// lookup for them by design.
+fn live_conversion_record(ctx_id: c_int) -> Option<ConversionRecord> {
+    if !crate::hli_version::conversion_is_possible() {
+        return None;
+    }
+    REGISTRY.lookup(ctx_id)
+}
+
 /// A short, stable refusal message for a write seam whose `ctx_id`
 /// carries a live conversion record (ADR 0002: "If known versions differ,
 /// return failure without calling IMAS-Core"). Unlike the read path, this is
@@ -2083,7 +2143,7 @@ pub(crate) unsafe fn write_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
-    if REGISTRY.lookup(ctx_id).is_some() {
+    if live_conversion_record(ctx_id).is_some() {
         return crate::conversion_refusal(&mismatched_context_write_refusal("al_write_data"));
     }
     forward_status!(write_data(
@@ -2102,7 +2162,7 @@ pub(crate) unsafe fn write_data(
 /// `path` must be a valid, NUL-terminated C string, or null where
 /// IMAS-Core's own contract allows it.
 pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t {
-    if REGISTRY.lookup(ctx).is_some() {
+    if live_conversion_record(ctx).is_some() {
         return crate::conversion_refusal(&mismatched_context_write_refusal("al_delete_data"));
     }
     forward_status!(delete_data(ctx, path))
@@ -2354,7 +2414,7 @@ pub(crate) unsafe fn plugin_write_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
-    if REGISTRY.lookup(ctx_id).is_some() {
+    if live_conversion_record(ctx_id).is_some() {
         return crate::conversion_refusal(&mismatched_context_write_refusal(
             "al_plugin_write_data",
         ));
@@ -2367,6 +2427,52 @@ pub(crate) unsafe fn plugin_write_data(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #56 AC5: "Matching, unknown, unstamped, and conversion-disabled
+    /// contexts bypass registry lookup and rule resolution." The
+    /// conversion-disabled half is the one a seam can act on by itself, and
+    /// this proves it acts on it *before* the registry rather than after.
+    ///
+    /// `hli_version`'s latch is deliberately never set in-process (its module
+    /// comment explains why a unit test cannot set it), so
+    /// `conversion_is_possible()` is false for the whole `cargo test` run.
+    /// Registering a genuine root record and still getting `None` back is the
+    /// observable proof: the record is unquestionably there, so a lookup that
+    /// ran could not have missed it.
+    #[test]
+    fn a_data_path_seam_answers_before_the_registry_when_conversion_is_disabled() {
+        // Far from the small IDs every other registry test uses, so this one
+        // cannot collide with a concurrently running test in the same process.
+        const CTX_ID: c_int = 0x5D00;
+        let stored: crate::dd_version::DdVersion = "3.39.0".parse().expect("known release");
+        let hli: crate::dd_version::DdVersion = "4.1.1".parse().expect("known release");
+        let artifact = known_artifacts::lookup("equilibrium", &stored, &hli)
+            .expect("the embedded equilibrium artifact serves this pair");
+        let direction = artifact.direction_to_stored;
+        assert!(REGISTRY.record_root(
+            CTX_ID,
+            String::new(),
+            CTX_ID,
+            MapCacheKey::new("equilibrium".to_string(), stored, hli),
+            direction,
+            || load_artifact(&artifact),
+        ));
+
+        assert!(
+            !crate::hli_version::conversion_is_possible(),
+            "no unit test can latch an HLI DD version, so conversion is off here"
+        );
+        assert!(
+            REGISTRY.lookup(CTX_ID).is_some(),
+            "the record must really be in the registry for this test to prove anything"
+        );
+        assert!(
+            live_conversion_record(CTX_ID).is_none(),
+            "the seam must answer from the latch, without consulting the registry"
+        );
+
+        REGISTRY.remove(CTX_ID);
+    }
 
     #[test]
     fn join_hli_path_appends_a_relative_path_under_a_nonempty_anchor() {
