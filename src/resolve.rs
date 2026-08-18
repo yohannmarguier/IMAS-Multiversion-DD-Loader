@@ -1714,8 +1714,10 @@ fn no_source_read(data: *mut *mut c_void) -> al_status_t {
 /// The result of resolving one path-bearing context argument against a
 /// mismatched conversion record.
 enum ContextPathResolution {
-    /// No usable caller path or no matching rule/default: forward it unchanged.
+    /// No usable caller path at all: forward it unchanged.
     Forward,
+    /// A real path argument no rule and no document-level default claims.
+    Unclaimed,
     /// A concrete stored-DD spelling for IMAS-Core to receive.
     Translated(CString),
     /// The artifact says no stored counterpart exists.
@@ -1808,14 +1810,10 @@ fn resolve_arraystruct_argument(
         ContextPathResolution::Translated(path) => Ok(Some(path)),
         ContextPathResolution::Refusal(reason) => Err(reason),
         ContextPathResolution::NoSource => Err(format!("arraystruct {label} has no stored source")),
-        ContextPathResolution::Forward => {
-            match c_str_or_none(raw).filter(|path| !path.is_empty()) {
-                Some(_) => Err(format!(
-                    "arraystruct {label} is unclaimed by the conversion map"
-                )),
-                None => Ok(None),
-            }
-        }
+        ContextPathResolution::Unclaimed => Err(format!(
+            "arraystruct {label} is unclaimed by the conversion map"
+        )),
+        ContextPathResolution::Forward => Ok(None),
     }
 }
 
@@ -1828,23 +1826,46 @@ struct ClaimedArgument {
     explanation: crate::conversion_map::RuleExplanation,
 }
 
+/// What one path-bearing ABI argument amounts to, before
+/// [`resolve_context_path`] and [`resolve_read_path`] differ on what to do
+/// with it.
+///
+/// The two reasons an argument yields no rule are kept apart here on purpose.
+/// They used to share one `None`, which forced every caller to re-derive the
+/// distinction from `raw` after the fact — `resolve_arraystruct_argument` did,
+/// and the read seam did not, which is how an unclaimed read path came to be
+/// forwarded to IMAS-Core.
+enum ReadArgument {
+    /// No usable path to translate: null, or empty as `timebase` routinely
+    /// is. There is nothing to resolve, so the argument is forwarded exactly
+    /// as received.
+    Absent,
+    /// A real path argument that no rule and no document-level default
+    /// claims. The embedded artifact carries an identity default so this
+    /// cannot arise from it today, but a future artifact may not, and an
+    /// absent rule is never permission to invent a stored spelling.
+    Unclaimed,
+    /// The conversion map claims it, with the rule that explains it attached.
+    Claimed(ClaimedArgument),
+}
+
 /// The preamble [`resolve_context_path`] and [`resolve_read_path`] share.
-/// `None` means forward the argument unchanged, for either of the two reasons
-/// that verdict can arise: there is no usable path to translate, or no rule
-/// claims the one there is. The embedded artifact has an identity default, but
-/// a future artifact may not, and an absent rule or default is never
-/// permission to invent a stored spelling.
 fn claimed_argument(
     record: &crate::context_registry::ConversionRecord,
     raw: *const c_char,
-) -> Option<ClaimedArgument> {
-    let raw = c_str_or_none(raw).filter(|path| !path.is_empty())?;
+) -> ReadArgument {
+    let Some(raw) = c_str_or_none(raw).filter(|path| !path.is_empty()) else {
+        return ReadArgument::Absent;
+    };
     let is_absolute = raw.starts_with('/');
     let hli_absolute = join_hli_path(&record.resolved_path, raw);
-    let explanation = record
+    let Some(explanation) = record
         .map
-        .resolve(&hli_absolute, record.direction_to_stored)?;
-    Some(ClaimedArgument {
+        .resolve(&hli_absolute, record.direction_to_stored)
+    else {
+        return ReadArgument::Unclaimed;
+    };
+    ReadArgument::Claimed(ClaimedArgument {
         is_absolute,
         hli_absolute,
         explanation,
@@ -1859,8 +1880,10 @@ fn resolve_context_path(
     record: &crate::context_registry::ConversionRecord,
     raw: *const c_char,
 ) -> ContextPathResolution {
-    let Some(argument) = claimed_argument(record, raw) else {
-        return ContextPathResolution::Forward;
+    let argument = match claimed_argument(record, raw) {
+        ReadArgument::Absent => return ContextPathResolution::Forward,
+        ReadArgument::Unclaimed => return ContextPathResolution::Unclaimed,
+        ReadArgument::Claimed(argument) => argument,
     };
     let ClaimedArgument {
         is_absolute,
@@ -1887,8 +1910,17 @@ fn resolve_read_path(
     record: &crate::context_registry::ConversionRecord,
     raw: *const c_char,
 ) -> ReadPath {
-    let Some(argument) = claimed_argument(record, raw) else {
-        return ReadPath::Forward;
+    let argument = match claimed_argument(record, raw) {
+        ReadArgument::Absent => return ReadPath::Forward,
+        // User story 47: "a path that no rule claims a source for [must]
+        // return not-found (code == 0, null data), so that an unclaimed path
+        // is never silently forwarded under the wrong DD spelling". Forwarding
+        // it would hand IMAS-Core an HLI-DD spelling against stored data of a
+        // different DD version, on the one code path that knows no rule
+        // vouches for it. The verdict is retained as unmappable, so a caller
+        // draining the loss log sees why the read came back empty.
+        ReadArgument::Unclaimed => return ReadPath::NoSource(Fidelity::Unmappable),
+        ReadArgument::Claimed(argument) => argument,
     };
     let ClaimedArgument {
         is_absolute,
@@ -2427,6 +2459,95 @@ pub(crate) unsafe fn plugin_write_data(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// User story 47: "As an HLI reading through a known version mismatch, I
+    /// want a path that no rule claims a source for to return not-found
+    /// (`code == 0`, null data), so that an unclaimed path is never silently
+    /// forwarded under the wrong DD spelling."
+    ///
+    /// This is asserted here rather than through the C ABI because the
+    /// embedded artifact carries `<default rel="identical"/>`, so
+    /// `ConversionMap::resolve` never returns `None` for it and no stub test
+    /// can reach the branch. A fixture artifact with no document-level default
+    /// is the only way to reach it, and `record_root`'s map-creating closure is
+    /// the seam that admits one.
+    #[test]
+    fn an_unclaimed_read_path_returns_not_found_rather_than_forwarding() {
+        // Far from the small IDs every other registry test uses, so this one
+        // cannot collide with a concurrently running test in the same process.
+        const CTX_ID: c_int = 0x5D01;
+        // No <default>: a path no rule claims is genuinely unclaimed here.
+        const NO_DEFAULT_ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="rename-claimed" rel="renamed" left="claimed" right="claimed_new">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let stored: crate::dd_version::DdVersion = "3.39.0".parse().expect("known release");
+        let hli: crate::dd_version::DdVersion = "4.1.1".parse().expect("known release");
+        assert!(REGISTRY.record_root(
+            CTX_ID,
+            String::new(),
+            CTX_ID,
+            MapCacheKey::new("equilibrium".to_string(), stored, hli),
+            crate::conversion_map::Direction::Forward,
+            || ConversionMap::load(NO_DEFAULT_ARTIFACT).expect("fixture artifact must load"),
+        ));
+        let record = REGISTRY
+            .lookup(CTX_ID)
+            .expect("the root record was just registered");
+
+        // The rule the fixture does carry still resolves, so an unclaimed
+        // verdict below cannot be the whole map failing to match anything.
+        let claimed = CString::new("claimed").expect("no interior NUL");
+        assert!(
+            matches!(
+                resolve_read_path(&record, claimed.as_ptr()),
+                ReadPath::Translated(_)
+            ),
+            "the fixture's own rule must still translate"
+        );
+
+        let unclaimed = CString::new("nothing/claims/this").expect("no interior NUL");
+        match resolve_read_path(&record, unclaimed.as_ptr()) {
+            ReadPath::NoSource(fidelity) => assert_eq!(
+                fidelity,
+                Fidelity::Unmappable,
+                "the caller must be able to see why the read came back empty"
+            ),
+            ReadPath::Forward => panic!(
+                "an unclaimed path was forwarded to IMAS-Core under the HLI's own \
+                 DD spelling, which user story 47 forbids"
+            ),
+            _ => panic!("an unclaimed path must resolve to not-found"),
+        }
+
+        // An argument with no path at all is a different thing entirely and
+        // must still forward: `timebase` is routinely empty, and forwarding it
+        // is how a read without one works.
+        let empty = CString::new("").expect("no interior NUL");
+        assert!(
+            matches!(
+                resolve_read_path(&record, empty.as_ptr()),
+                ReadPath::Forward
+            ),
+            "an empty argument is absent, not unclaimed"
+        );
+        assert!(
+            matches!(
+                resolve_read_path(&record, std::ptr::null()),
+                ReadPath::Forward
+            ),
+            "a null argument is absent, not unclaimed"
+        );
+
+        REGISTRY.remove(CTX_ID);
+    }
 
     /// Issue #56 AC5: "Matching, unknown, unstamped, and conversion-disabled
     /// contexts bypass registry lookup and rule resolution." The
