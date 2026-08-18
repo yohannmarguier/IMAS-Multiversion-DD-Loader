@@ -17,7 +17,7 @@
 
 #include <al_const.h>
 #include <hdf5.h>
-#include <imas_mvdd_loader.h>
+#include "shim_test_support.h"
 
 #ifndef REAL_CORE_TEST_PLUGIN_DIR
 #error "REAL_CORE_TEST_PLUGIN_DIR must name the directory containing the fixture plugin"
@@ -28,25 +28,6 @@
 #ifndef EQUILIBRIUM_FIXTURE_DIR
 #error "EQUILIBRIUM_FIXTURE_DIR must name the equilibrium fixture directory"
 #endif
-
-#define CHECK(condition)                                                        \
-    do {                                                                        \
-        if (!(condition)) {                                                     \
-            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
-                    #condition);                                                \
-            exit(EXIT_FAILURE);                                                 \
-        }                                                                       \
-    } while (0)
-
-static void check_ok(al_status_t status, const char *expression, int line) {
-    if (status.code != 0) {
-        fprintf(stderr, "IMAS-Core call failed at %s:%d: %s: code=%d message=%s\n", __FILE__,
-                line, expression, status.code, status.message);
-        exit(EXIT_FAILURE);
-    }
-}
-
-#define CHECK_OK(expression) check_ok((expression), #expression, __LINE__)
 
 static int contains_int(const int *values, int size, int expected) {
     for (int i = 0; i < size; ++i) {

@@ -14,52 +14,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <imas_mvdd_loader.h>
-
 #ifndef RECORDING_STUB_PATH
 #error "RECORDING_STUB_PATH must be defined by CMakeLists.txt"
 #endif
 
-#define CHECK(condition)                                                       \
-    do {                                                                       \
-        if (!(condition)) {                                                    \
-            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
-                    #condition);                                               \
-            exit(EXIT_FAILURE);                                                \
-        }                                                                      \
-    } while (0)
-
-typedef int (*int_accessor_fn)(void);
-typedef const char *(*string_accessor_fn)(void);
-
-static void *dlsym_or_die(void *handle, const char *name) {
-    void *symbol = dlsym(handle, name);
-    if (symbol == NULL) {
-        fprintf(stderr, "recording stub has no symbol '%s': %s\n", name, dlerror());
-        abort();
-    }
-    return symbol;
-}
-
-static void *open_stub_for_introspection(void) {
-    void *handle = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
-    if (handle == NULL) {
-        fprintf(stderr, "failed to dlopen the recording stub for introspection: %s\n", dlerror());
-        abort();
-    }
-    return handle;
-}
-
-static int int_from_stub(const char *symbol_name) {
-    int_accessor_fn accessor = (int_accessor_fn)dlsym_or_die(open_stub_for_introspection(), symbol_name);
-    return accessor();
-}
-
-static const char *string_from_stub(const char *symbol_name) {
-    string_accessor_fn accessor =
-        (string_accessor_fn)dlsym_or_die(open_stub_for_introspection(), symbol_name);
-    return accessor();
-}
+#include "shim_test_support.h"
 
 static al_status_t open_dataentry(int *dectxID) {
     return al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, dectxID);
