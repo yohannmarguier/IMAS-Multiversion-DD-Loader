@@ -451,60 +451,21 @@ static void scenario_conversion_disabled_read_is_unaffected(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,
-                "usage: %s "
-                "<reverse-reads-renamed-value-through-own-spelling|"
-                "forward-reads-renamed-value-through-own-spelling|"
-                "forward-merged-read-falls-through-to-stored-alias|"
-                "reverse-merged-read-resolves-single-stored-destination|"
-                "reverse-split-read-uses-first-destination-and-flips-value|"
-                "forward-split-read-uses-single-source-and-flips-value|"
-                "reverse-refuses-unservable-paths|"
-                "forward-refuses-unservable-paths|"
-                "reverse-reads-renamed-nested-container-field|"
-                "forward-reads-renamed-nested-container-field|"
-                "reverse-sign-flip-applies-through-nested-container|"
-                "forward-sign-flip-applies-through-nested-container|"
-                "same-version-read-is-unaffected|"
-                "conversion-disabled-read-is-unaffected>\n",
-                argv[0]);
-        return 2;
-    }
-
-    const char *scenario = argv[1];
-    if (strcmp(scenario, "reverse-reads-renamed-value-through-own-spelling") == 0) {
-        scenario_reverse_reads_renamed_value_through_own_spelling();
-    } else if (strcmp(scenario, "forward-reads-renamed-value-through-own-spelling") == 0) {
-        scenario_forward_reads_renamed_value_through_own_spelling();
-    } else if (strcmp(scenario, "forward-merged-read-falls-through-to-stored-alias") == 0) {
-        scenario_forward_merged_read_falls_through_to_stored_alias();
-    } else if (strcmp(scenario, "reverse-merged-read-resolves-single-stored-destination") == 0) {
-        scenario_reverse_merged_read_resolves_single_stored_destination();
-    } else if (strcmp(scenario, "reverse-refuses-unservable-paths") == 0) {
-        scenario_reverse_refuses_unservable_paths();
-    } else if (strcmp(scenario, "forward-refuses-unservable-paths") == 0) {
-        scenario_forward_refuses_unservable_paths();
-    } else if (strcmp(scenario, "reverse-split-read-uses-first-destination-and-flips-value") == 0) {
-        scenario_reverse_split_read_uses_first_destination_and_flips_value();
-    } else if (strcmp(scenario, "forward-split-read-uses-single-source-and-flips-value") == 0) {
-        scenario_forward_split_read_uses_single_source_and_flips_value();
-    } else if (strcmp(scenario, "reverse-reads-renamed-nested-container-field") == 0) {
-        scenario_reverse_reads_renamed_nested_container_field();
-    } else if (strcmp(scenario, "forward-reads-renamed-nested-container-field") == 0) {
-        scenario_forward_reads_renamed_nested_container_field();
-    } else if (strcmp(scenario, "reverse-sign-flip-applies-through-nested-container") == 0) {
-        scenario_reverse_sign_flip_applies_through_nested_container();
-    } else if (strcmp(scenario, "forward-sign-flip-applies-through-nested-container") == 0) {
-        scenario_forward_sign_flip_applies_through_nested_container();
-    } else if (strcmp(scenario, "same-version-read-is-unaffected") == 0) {
-        scenario_same_version_read_is_unaffected();
-    } else if (strcmp(scenario, "conversion-disabled-read-is-unaffected") == 0) {
-        scenario_conversion_disabled_read_is_unaffected();
-    } else {
-        fprintf(stderr, "unknown scenario: %s\n", scenario);
-        return 2;
-    }
-
-    return 0;
+    static const shim_test_scenario scenarios[] = {
+        {"reverse-reads-renamed-value-through-own-spelling", scenario_reverse_reads_renamed_value_through_own_spelling},
+        {"forward-reads-renamed-value-through-own-spelling", scenario_forward_reads_renamed_value_through_own_spelling},
+        {"forward-merged-read-falls-through-to-stored-alias", scenario_forward_merged_read_falls_through_to_stored_alias},
+        {"reverse-merged-read-resolves-single-stored-destination", scenario_reverse_merged_read_resolves_single_stored_destination},
+        {"reverse-refuses-unservable-paths", scenario_reverse_refuses_unservable_paths},
+        {"forward-refuses-unservable-paths", scenario_forward_refuses_unservable_paths},
+        {"reverse-split-read-uses-first-destination-and-flips-value", scenario_reverse_split_read_uses_first_destination_and_flips_value},
+        {"forward-split-read-uses-single-source-and-flips-value", scenario_forward_split_read_uses_single_source_and_flips_value},
+        {"reverse-reads-renamed-nested-container-field", scenario_reverse_reads_renamed_nested_container_field},
+        {"forward-reads-renamed-nested-container-field", scenario_forward_reads_renamed_nested_container_field},
+        {"reverse-sign-flip-applies-through-nested-container", scenario_reverse_sign_flip_applies_through_nested_container},
+        {"forward-sign-flip-applies-through-nested-container", scenario_forward_sign_flip_applies_through_nested_container},
+        {"same-version-read-is-unaffected", scenario_same_version_read_is_unaffected},
+        {"conversion-disabled-read-is-unaffected", scenario_conversion_disabled_read_is_unaffected},
+    };
+    return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

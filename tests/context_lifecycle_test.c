@@ -251,43 +251,14 @@ static void scenario_ending_dataentry_context_leaves_live_operation_and_child_re
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,
-                "usage: %s "
-                "<ending-child-removes-only-its-own-record|"
-                "ending-root-removes-only-its-own-record|"
-                "failed-end-action-leaves-the-record-intact|"
-                "recycled-id-cannot-observe-the-released-record|"
-                "iterate-over-arraystruct-forwards-unchanged-and-mutates-nothing|"
-                "close-pulse-forwards-unchanged-and-never-mutates-the-registry|"
-                "ending-dataentry-context-leaves-live-operation-and-child-records-intact>\n",
-                argv[0]);
-        return 2;
-    }
-
-    const char *scenario = argv[1];
-    if (strcmp(scenario, "ending-child-removes-only-its-own-record") == 0) {
-        scenario_ending_child_removes_only_its_own_record();
-    } else if (strcmp(scenario, "ending-root-removes-only-its-own-record") == 0) {
-        scenario_ending_root_removes_only_its_own_record();
-    } else if (strcmp(scenario, "failed-end-action-leaves-the-record-intact") == 0) {
-        scenario_failed_end_action_leaves_the_record_intact();
-    } else if (strcmp(scenario, "recycled-id-cannot-observe-the-released-record") == 0) {
-        scenario_recycled_id_cannot_observe_the_released_record();
-    } else if (strcmp(scenario,
-                       "iterate-over-arraystruct-forwards-unchanged-and-mutates-nothing") == 0) {
-        scenario_iterate_over_arraystruct_forwards_unchanged_and_mutates_nothing();
-    } else if (strcmp(scenario,
-                       "close-pulse-forwards-unchanged-and-never-mutates-the-registry") == 0) {
-        scenario_close_pulse_forwards_unchanged_and_never_mutates_the_registry();
-    } else if (strcmp(scenario,
-                       "ending-dataentry-context-leaves-live-operation-and-child-records-intact") ==
-               0) {
-        scenario_ending_dataentry_context_leaves_live_operation_and_child_records_intact();
-    } else {
-        fprintf(stderr, "unknown scenario: %s\n", scenario);
-        return 2;
-    }
-
-    return 0;
+    static const shim_test_scenario scenarios[] = {
+        {"ending-child-removes-only-its-own-record", scenario_ending_child_removes_only_its_own_record},
+        {"ending-root-removes-only-its-own-record", scenario_ending_root_removes_only_its_own_record},
+        {"failed-end-action-leaves-the-record-intact", scenario_failed_end_action_leaves_the_record_intact},
+        {"recycled-id-cannot-observe-the-released-record", scenario_recycled_id_cannot_observe_the_released_record},
+        {"iterate-over-arraystruct-forwards-unchanged-and-mutates-nothing", scenario_iterate_over_arraystruct_forwards_unchanged_and_mutates_nothing},
+        {"close-pulse-forwards-unchanged-and-never-mutates-the-registry", scenario_close_pulse_forwards_unchanged_and_never_mutates_the_registry},
+        {"ending-dataentry-context-leaves-live-operation-and-child-records-intact", scenario_ending_dataentry_context_leaves_live_operation_and_child_records_intact},
+    };
+    return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

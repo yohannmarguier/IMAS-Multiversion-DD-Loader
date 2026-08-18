@@ -569,89 +569,29 @@ static void scenario_plugin_read_through_child_context_retains_loss_on_root(void
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,
-                "usage: %s "
-                "<plugin-global-hli-unset-is-plain-forward|"
-                "plugin-global-unstamped-forwards-datapath-unchanged|"
-                "plugin-global-matching-version-forwards-datapath-unchanged|"
-                "plugin-global-mismatch-translates-datapath-on-second-open|"
-                "plugin-global-malformed-stamp-refuses-and-ends-context|"
-                "plugin-global-failure-forwards-status-unchanged|"
-                "plugin-slice-hli-unset-is-plain-forward|"
-                "plugin-slice-mismatch-registers-occurrence-for-plugin-global-action|"
-                "plugin-slice-malformed-stamp-refuses-and-ends-context|"
-                "plugin-slice-failure-forwards-status-unchanged|"
-                "plugin-arraystruct-translates-under-mismatch|"
-                "plugin-arraystruct-failed-open-propagates-without-child-record|"
-                "plugin-arraystruct-no-source-refuses-before-core|"
-                "plugin-arraystruct-unknown-parent-forwards-unchanged|"
-                "plugin-end-action-removes-only-its-own-record|"
-                "plugin-end-action-failed-leaves-the-record-intact|"
-                "plugin-read-translates-field-under-mismatch|"
-                "plugin-read-refusal-before-core|"
-                "plugin-read-no-source-returns-null-without-core-call|"
-                "plugin-read-merged-candidate-falls-through|"
-                "plugin-read-sign-flip-negates-values|"
-                "plugin-read-through-child-context-retains-loss-on-root>\n",
-                argv[0]);
-        return 2;
-    }
-
-    const char *scenario = argv[1];
-    if (strcmp(scenario, "plugin-global-hli-unset-is-plain-forward") == 0) {
-        scenario_plugin_global_hli_unset_is_plain_forward();
-    } else if (strcmp(scenario, "plugin-global-unstamped-forwards-datapath-unchanged") == 0) {
-        scenario_plugin_global_unstamped_forwards_datapath_unchanged();
-    } else if (strcmp(scenario, "plugin-global-matching-version-forwards-datapath-unchanged") ==
-               0) {
-        scenario_plugin_global_matching_version_forwards_datapath_unchanged();
-    } else if (strcmp(scenario, "plugin-global-mismatch-translates-datapath-on-second-open") ==
-               0) {
-        scenario_plugin_global_mismatch_translates_datapath_on_second_open();
-    } else if (strcmp(scenario, "plugin-global-malformed-stamp-refuses-and-ends-context") == 0) {
-        scenario_plugin_global_malformed_stamp_refuses_and_ends_context();
-    } else if (strcmp(scenario, "plugin-global-failure-forwards-status-unchanged") == 0) {
-        scenario_plugin_global_failure_forwards_status_unchanged();
-    } else if (strcmp(scenario, "plugin-slice-hli-unset-is-plain-forward") == 0) {
-        scenario_plugin_slice_hli_unset_is_plain_forward();
-    } else if (strcmp(scenario,
-                       "plugin-slice-mismatch-registers-occurrence-for-plugin-global-action") ==
-               0) {
-        scenario_plugin_slice_mismatch_registers_occurrence_for_plugin_global_action();
-    } else if (strcmp(scenario, "plugin-slice-malformed-stamp-refuses-and-ends-context") == 0) {
-        scenario_plugin_slice_malformed_stamp_refuses_and_ends_context();
-    } else if (strcmp(scenario, "plugin-slice-failure-forwards-status-unchanged") == 0) {
-        scenario_plugin_slice_failure_forwards_status_unchanged();
-    } else if (strcmp(scenario, "plugin-arraystruct-translates-under-mismatch") == 0) {
-        scenario_plugin_arraystruct_translates_under_mismatch();
-    } else if (strcmp(scenario,
-                       "plugin-arraystruct-failed-open-propagates-without-child-record") == 0) {
-        scenario_plugin_arraystruct_failed_open_propagates_without_child_record();
-    } else if (strcmp(scenario, "plugin-arraystruct-no-source-refuses-before-core") == 0) {
-        scenario_plugin_arraystruct_no_source_refuses_before_core();
-    } else if (strcmp(scenario, "plugin-arraystruct-unknown-parent-forwards-unchanged") == 0) {
-        scenario_plugin_arraystruct_unknown_parent_forwards_unchanged();
-    } else if (strcmp(scenario, "plugin-end-action-removes-only-its-own-record") == 0) {
-        scenario_plugin_end_action_removes_only_its_own_record();
-    } else if (strcmp(scenario, "plugin-end-action-failed-leaves-the-record-intact") == 0) {
-        scenario_plugin_end_action_failed_leaves_the_record_intact();
-    } else if (strcmp(scenario, "plugin-read-translates-field-under-mismatch") == 0) {
-        scenario_plugin_read_translates_field_under_mismatch();
-    } else if (strcmp(scenario, "plugin-read-refusal-before-core") == 0) {
-        scenario_plugin_read_refusal_before_core();
-    } else if (strcmp(scenario, "plugin-read-no-source-returns-null-without-core-call") == 0) {
-        scenario_plugin_read_no_source_returns_null_without_core_call();
-    } else if (strcmp(scenario, "plugin-read-merged-candidate-falls-through") == 0) {
-        scenario_plugin_read_merged_candidate_falls_through();
-    } else if (strcmp(scenario, "plugin-read-sign-flip-negates-values") == 0) {
-        scenario_plugin_read_sign_flip_negates_values();
-    } else if (strcmp(scenario, "plugin-read-through-child-context-retains-loss-on-root") == 0) {
-        scenario_plugin_read_through_child_context_retains_loss_on_root();
-    } else {
-        fprintf(stderr, "unknown scenario: %s\n", scenario);
-        return 2;
-    }
-
-    return 0;
+    static const shim_test_scenario scenarios[] = {
+        {"plugin-global-hli-unset-is-plain-forward", scenario_plugin_global_hli_unset_is_plain_forward},
+        {"plugin-global-unstamped-forwards-datapath-unchanged", scenario_plugin_global_unstamped_forwards_datapath_unchanged},
+        {"plugin-global-matching-version-forwards-datapath-unchanged", scenario_plugin_global_matching_version_forwards_datapath_unchanged},
+        {"plugin-global-mismatch-translates-datapath-on-second-open", scenario_plugin_global_mismatch_translates_datapath_on_second_open},
+        {"plugin-global-malformed-stamp-refuses-and-ends-context", scenario_plugin_global_malformed_stamp_refuses_and_ends_context},
+        {"plugin-global-failure-forwards-status-unchanged", scenario_plugin_global_failure_forwards_status_unchanged},
+        {"plugin-slice-hli-unset-is-plain-forward", scenario_plugin_slice_hli_unset_is_plain_forward},
+        {"plugin-slice-mismatch-registers-occurrence-for-plugin-global-action", scenario_plugin_slice_mismatch_registers_occurrence_for_plugin_global_action},
+        {"plugin-slice-malformed-stamp-refuses-and-ends-context", scenario_plugin_slice_malformed_stamp_refuses_and_ends_context},
+        {"plugin-slice-failure-forwards-status-unchanged", scenario_plugin_slice_failure_forwards_status_unchanged},
+        {"plugin-arraystruct-translates-under-mismatch", scenario_plugin_arraystruct_translates_under_mismatch},
+        {"plugin-arraystruct-failed-open-propagates-without-child-record", scenario_plugin_arraystruct_failed_open_propagates_without_child_record},
+        {"plugin-arraystruct-no-source-refuses-before-core", scenario_plugin_arraystruct_no_source_refuses_before_core},
+        {"plugin-arraystruct-unknown-parent-forwards-unchanged", scenario_plugin_arraystruct_unknown_parent_forwards_unchanged},
+        {"plugin-end-action-removes-only-its-own-record", scenario_plugin_end_action_removes_only_its_own_record},
+        {"plugin-end-action-failed-leaves-the-record-intact", scenario_plugin_end_action_failed_leaves_the_record_intact},
+        {"plugin-read-translates-field-under-mismatch", scenario_plugin_read_translates_field_under_mismatch},
+        {"plugin-read-refusal-before-core", scenario_plugin_read_refusal_before_core},
+        {"plugin-read-no-source-returns-null-without-core-call", scenario_plugin_read_no_source_returns_null_without_core_call},
+        {"plugin-read-merged-candidate-falls-through", scenario_plugin_read_merged_candidate_falls_through},
+        {"plugin-read-sign-flip-negates-values", scenario_plugin_read_sign_flip_negates_values},
+        {"plugin-read-through-child-context-retains-loss-on-root", scenario_plugin_read_through_child_context_retains_loss_on_root},
+    };
+    return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

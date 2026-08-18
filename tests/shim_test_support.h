@@ -25,6 +25,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <imas_mvdd_loader.h>
 
@@ -50,6 +51,48 @@ static inline void shim_test_check_ok(al_status_t status, const char *expression
 }
 
 #define CHECK_OK(expression) shim_test_check_ok((expression), #expression, __FILE__, __LINE__)
+
+/* One scenario a suite can be asked to run, under the name ctest registers it
+ * as. Every suite here is one process per scenario — both the HLI DD version
+ * latch and the context registry are process-wide — so `argv[1]` selects which
+ * one runs.
+ *
+ * Each suite used to hand-roll that selection as a chain of strcmp calls plus a
+ * hand-maintained usage string, which meant a scenario's name was written out
+ * up to four times: in the usage text, in the strcmp, in the function name, and
+ * in the CMake registration. Three of those four are now one table entry, and
+ * the fourth (CMake) is the only spelling a rename still has to chase. The
+ * usage text can no longer disagree with the dispatch, because it is generated
+ * from the same table. */
+typedef struct {
+    const char *name;
+    void (*run)(void);
+} shim_test_scenario;
+
+/* Runs the scenario `argv[1]` names and returns the process's exit status: 0 if
+ * it ran (a scenario that fails an assertion exits from inside CHECK), or 2 for
+ * a missing or unknown name, listing every scenario the suite has. */
+static inline int run_named_scenario(int argc, char **argv, const shim_test_scenario *scenarios,
+                                    size_t count) {
+    if (argc == 2) {
+        for (size_t i = 0; i < count; ++i) {
+            if (strcmp(argv[1], scenarios[i].name) == 0) {
+                scenarios[i].run();
+                return 0;
+            }
+        }
+        fprintf(stderr, "unknown scenario: %s\n", argv[1]);
+    }
+
+    fprintf(stderr, "usage: %s <scenario>\nscenarios:\n", argv[0]);
+    for (size_t i = 0; i < count; ++i) {
+        fprintf(stderr, "  %s\n", scenarios[i].name);
+    }
+    return 2;
+}
+
+#define RUN_NAMED_SCENARIO(argc, argv, scenarios)                                                  \
+    run_named_scenario((argc), (argv), (scenarios), sizeof(scenarios) / sizeof(*(scenarios)))
 
 /* IMAS-Core's data-type codes, spelled out because the recording-stub profile
  * deliberately acquires no IMAS-Core and so has no al_const.h to include.

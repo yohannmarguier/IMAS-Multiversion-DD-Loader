@@ -145,39 +145,13 @@ static void scenario_unknown_parent_forwards_unchanged(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,
-                "usage: %s <translates-renamed-container-and-timebase|"
-                "translates-absolute-path-and-relative-timebase|"
-                "failed-open-propagates-without-child-record|no-source-refuses-before-core|"
-                "plain-parent-forwards-unchanged|unknown-parent-forwards-unchanged>\\n",
-                argv[0]);
-        return 2;
-    }
-    if (strcmp(argv[1], "translates-renamed-container-and-timebase") == 0) {
-        scenario_translates_renamed_container_and_timebase();
-        return 0;
-    }
-    if (strcmp(argv[1], "translates-absolute-path-and-relative-timebase") == 0) {
-        scenario_translates_absolute_path_and_relative_timebase();
-        return 0;
-    }
-    if (strcmp(argv[1], "failed-open-propagates-without-child-record") == 0) {
-        scenario_failed_open_propagates_without_child_record();
-        return 0;
-    }
-    if (strcmp(argv[1], "no-source-refuses-before-core") == 0) {
-        scenario_no_source_refuses_before_core();
-        return 0;
-    }
-    if (strcmp(argv[1], "plain-parent-forwards-unchanged") == 0) {
-        scenario_plain_parent_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "unknown-parent-forwards-unchanged") == 0) {
-        scenario_unknown_parent_forwards_unchanged();
-        return 0;
-    }
-    fprintf(stderr, "unknown scenario: %s\\n", argv[1]);
-    return 2;
+    static const shim_test_scenario scenarios[] = {
+        {"translates-renamed-container-and-timebase", scenario_translates_renamed_container_and_timebase},
+        {"translates-absolute-path-and-relative-timebase", scenario_translates_absolute_path_and_relative_timebase},
+        {"failed-open-propagates-without-child-record", scenario_failed_open_propagates_without_child_record},
+        {"no-source-refuses-before-core", scenario_no_source_refuses_before_core},
+        {"plain-parent-forwards-unchanged", scenario_plain_parent_forwards_unchanged},
+        {"unknown-parent-forwards-unchanged", scenario_unknown_parent_forwards_unchanged},
+    };
+    return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }
