@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 foreach(required_variable CARGO_EXECUTABLE CARGO_MANIFEST_PATH APPROVED_ARTIFACT REDUCED_ARTIFACT
-        LEFT_INVENTORY RIGHT_INVENTORY BASELINE_TSV NEAR_BOUNDARY_RULE_ID
+        LEFT_INVENTORY RIGHT_INVENTORY BASELINE_TSV NEAR_BOUNDARY_RULE_ID COMPLETENESS_RULE_ID
         FORWARD_SUPPORTED_FLOOR REVERSE_SUPPORTED_FLOOR WORK_DIR)
     if(NOT DEFINED ${required_variable})
         message(FATAL_ERROR "${required_variable} must be supplied")
@@ -116,9 +116,15 @@ if(reverse_supported LESS REVERSE_SUPPORTED_FLOOR)
         "floor of ${REVERSE_SUPPORTED_FLOOR}:\n${approved_output}")
 endif()
 
+# The completeness line is asserted here, with both inventory sizes read from
+# the inventory files, because the command reporting a coverage summary is not
+# evidence that it also ran the completeness proof -- for most of this branch's
+# life it did not, and check_completeness had no call site outside #[cfg(test)]
+# even though issues #50 and #51 name the same command as their test seam.
 foreach(expected_line
         "IMAS-Python rename-only floor 3.39.0 -> 4.1.1: ${baseline_size}/${baseline_size} mappings served"
-        "IMAS-Python rename-only floor 4.1.1 -> 3.39.0: ${baseline_size}/${baseline_size} mappings served")
+        "IMAS-Python rename-only floor 4.1.1 -> 3.39.0: ${baseline_size}/${baseline_size} mappings served"
+        "completeness 3.39.0 <-> 4.1.1: ${left_inventory_size} + ${right_inventory_size} inventory paths claimed")
     string(FIND "${approved_output}" "${expected_line}" expected_line_offset)
     if(expected_line_offset EQUAL -1)
         message(FATAL_ERROR
@@ -163,4 +169,39 @@ if(NOT near_boundary_output MATCHES "3\\.39\\.0 -> 4\\.1\\.1 ${one_short}/${base
     message(FATAL_ERROR
         "dropping rule `${NEAR_BOUNDARY_RULE_ID}` must report exactly "
         "${one_short}/${baseline_size} mappings served forward:\n${near_boundary_output}")
+endif()
+
+# The floor fixtures above cannot exercise the completeness half: both fall
+# below the IMAS-Python floor first, and that error is deliberately raised
+# before the proof runs so those two keep proving what they were built to
+# prove. So the proof gets its own near-boundary fixture -- the approved
+# artifact minus one left_only rule, again generated here rather than checked
+# in so it cannot drift. Removing it leaves that rule's DD3-only path claimed
+# by nothing but <default rel="identical"/>, whose identity assumption is then
+# false because the path does not exist on the right at all.
+string(REGEX REPLACE
+    "<rule id=\"${COMPLETENESS_RULE_ID}\"[^<]*<fidelity[^<]*</rule>"
+    ""
+    incomplete_artifact_text "${approved_artifact_text}")
+if(incomplete_artifact_text STREQUAL approved_artifact_text)
+    message(FATAL_ERROR
+        "could not strip rule `${COMPLETENESS_RULE_ID}` from ${APPROVED_ARTIFACT}")
+endif()
+set(incomplete_artifact "${WORK_DIR}/equilibrium-3.39.0--4.1.1-one-rule-unclaimed.xml")
+file(WRITE "${incomplete_artifact}" "${incomplete_artifact_text}")
+
+run_validator("${incomplete_artifact}" incomplete_result incomplete_output)
+if(incomplete_result EQUAL 0)
+    message(FATAL_ERROR
+        "dropping rule `${COMPLETENESS_RULE_ID}` must be rejected: its path is then claimed "
+        "only by the identity default, which has no counterpart on the right:\n${incomplete_output}")
+endif()
+if(NOT incomplete_output MATCHES "is not complete against its own inventories")
+    message(FATAL_ERROR
+        "dropping rule `${COMPLETENESS_RULE_ID}` must be rejected by the completeness proof, "
+        "not by some other check:\n${incomplete_output}")
+endif()
+if(NOT incomplete_output MATCHES "DefaultAssumesMissingCounterpart")
+    message(FATAL_ERROR
+        "the completeness failure must name the violation that fired:\n${incomplete_output}")
 endif()

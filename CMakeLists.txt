@@ -416,6 +416,7 @@ if(IMAS_MVDD_BUILD_TESTS)
             "-DRIGHT_INVENTORY=${CMAKE_CURRENT_SOURCE_DIR}/docs/inventory/equilibrium-4.1.1.txt"
             "-DBASELINE_TSV=${CMAKE_CURRENT_SOURCE_DIR}/docs/inventory/equilibrium-3.39.0--4.1.1-imas-python-renames.tsv"
             "-DNEAR_BOUNDARY_RULE_ID=rename-beta-normal"
+            "-DCOMPLETENESS_RULE_ID=drop-b-flux-pol-norm"
             "-DFORWARD_SUPPORTED_FLOOR=342"
             "-DREVERSE_SUPPORTED_FLOOR=335"
             "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}"
