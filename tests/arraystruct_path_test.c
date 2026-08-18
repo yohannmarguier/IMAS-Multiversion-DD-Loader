@@ -92,6 +92,8 @@ static void scenario_no_source_refuses_before_core(void) {
     al_status_t status = al_begin_arraystruct_action(
         operation_ctx, "time_slice/constraints/j_parallel", "", &size, &arraystruct_ctx);
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "arraystruct path has no stored source",
+                          "time_slice/constraints/j_parallel", "4.1.1", "3.39.0");
     CHECK(int_from_stub("recording_stub_arraystruct_call_count") == calls_before);
     CHECK(arraystruct_ctx == 1777);
 

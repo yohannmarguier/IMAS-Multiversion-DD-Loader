@@ -1172,11 +1172,11 @@ unsafe fn begin_arraystruct_action_impl(
 
     let translated_path = match resolve_arraystruct_argument(&parent, path, "path") {
         Ok(path) => path,
-        Err(message) => return crate::conversion_refusal(&message),
+        Err(message) => return contextual_refusal(&parent, &message, path),
     };
     let translated_timebase = match resolve_arraystruct_argument(&parent, timebase, "timebase") {
-        Ok(path) => path,
-        Err(message) => return crate::conversion_refusal(&message),
+        Ok(resolved) => resolved,
+        Err(message) => return contextual_refusal(&parent, &message, timebase),
     };
 
     let status = forward(
@@ -1696,7 +1696,34 @@ fn read_refusal(
     reason: &str,
     dd_path: &str,
 ) -> al_status_t {
-    crate::read_conversion_refusal(reason, dd_path, &record.hli_version, &record.stored_version)
+    crate::path_conversion_refusal(reason, dd_path, &record.hli_version, &record.stored_version)
+}
+
+/// A refusal from a seam that holds a live conversion record but has not
+/// resolved a path through the map — the write/delete seams, whose refusal is
+/// a blanket context-keyed check that deliberately never consults a rule
+/// (issue #64), and the arraystruct opens, whose own resolution already
+/// failed.
+///
+/// Issue #58 AC3 asks that *every* refusal message name the reason, the DD
+/// path and both DD versions, and these seams used to emit the reason alone.
+/// Not having resolved a path is no reason to withhold the rest: the record
+/// that triggered the refusal carries both versions, and `raw_path` is the
+/// caller's own argument, which is the spelling AC3 asks to see anyway.
+///
+/// A seam whose path argument is null or empty — `al_delete_data` where
+/// IMAS-Core's contract allows it — falls back to the context's own resolved
+/// path, and says so plainly when there is no path at either place rather
+/// than inventing one.
+fn contextual_refusal(
+    record: &crate::context_registry::ConversionRecord,
+    reason: &str,
+    raw_path: *const c_char,
+) -> al_status_t {
+    let dd_path = joined_argument_path(record, raw_path)
+        .or_else(|| (!record.resolved_path.is_empty()).then(|| record.resolved_path.clone()))
+        .unwrap_or_else(|| "(no path argument)".to_string());
+    read_refusal(record, reason, &dd_path)
 }
 
 /// Returns the C ABI's normal not-found outcome for a path the artifact says
@@ -2175,8 +2202,12 @@ pub(crate) unsafe fn write_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
-    if live_conversion_record(ctx_id).is_some() {
-        return crate::conversion_refusal(&mismatched_context_write_refusal("al_write_data"));
+    if let Some(record) = live_conversion_record(ctx_id) {
+        return contextual_refusal(
+            &record,
+            &mismatched_context_write_refusal("al_write_data"),
+            field,
+        );
     }
     forward_status!(write_data(
         ctx_id, field, timebase, data, datatype, dim, size,
@@ -2194,8 +2225,12 @@ pub(crate) unsafe fn write_data(
 /// `path` must be a valid, NUL-terminated C string, or null where
 /// IMAS-Core's own contract allows it.
 pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t {
-    if live_conversion_record(ctx).is_some() {
-        return crate::conversion_refusal(&mismatched_context_write_refusal("al_delete_data"));
+    if let Some(record) = live_conversion_record(ctx) {
+        return contextual_refusal(
+            &record,
+            &mismatched_context_write_refusal("al_delete_data"),
+            path,
+        );
     }
     forward_status!(delete_data(ctx, path))
 }
@@ -2446,10 +2481,12 @@ pub(crate) unsafe fn plugin_write_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
-    if live_conversion_record(ctx_id).is_some() {
-        return crate::conversion_refusal(&mismatched_context_write_refusal(
-            "al_plugin_write_data",
-        ));
+    if let Some(record) = live_conversion_record(ctx_id) {
+        return contextual_refusal(
+            &record,
+            &mismatched_context_write_refusal("al_plugin_write_data"),
+            field,
+        );
     }
     forward_status!(plugin_write_data(
         ctx_id, field, timebase, data, datatype, dim, size,
