@@ -993,24 +993,28 @@ pub(crate) unsafe fn begin_slice_action(
         ))
     };
     let end_on_refusal = |ctx| forward_status!(end_action(ctx));
-    // SAFETY: same contract as `begin_slice_action_impl`, already upheld by
+    // SAFETY: same contract as `begin_occurrence_action_impl`, already upheld by
     // this function's own `unsafe fn` contract.
-    unsafe { begin_slice_action_impl(pctx_id, dataobjectname, octx_id, forward, end_on_refusal) }
+    unsafe {
+        begin_occurrence_action_impl(pctx_id, dataobjectname, octx_id, forward, end_on_refusal)
+    }
 }
 
-/// The policy shared by `begin_slice_action` and `plugin_begin_slice_action`
-/// (issue #67): the stored-version discovery and root-registration rule,
-/// factored out of both so only the forwarded ABI symbol and the matching
-/// end-action twin differ between the ordinary and plugin reentry seams.
-/// `dataobjectname` carries no `datapath` argument to translate, so unlike
-/// [`begin_global_action_impl`], `forward` takes no arguments.
+/// The policy shared by every occurrence-opening seam whose only path-bearing
+/// argument is the IDS name: `begin_slice_action` and
+/// `plugin_begin_slice_action` (issue #67), and `begin_timerange_action`. The
+/// stored-version discovery and root-registration rule is factored out of all
+/// three so only the forwarded ABI symbol and the matching end-action twin
+/// differ between them. Because none of them carries a `datapath` argument to
+/// translate, `forward` takes no arguments, unlike
+/// [`begin_global_action_impl`]'s.
 ///
 /// # Safety
 /// Same contract as [`begin_slice_action`]: `dataobjectname` must be a valid,
 /// NUL-terminated C string, or null where IMAS-Core's own contract allows
 /// it, and `octx_id` must be a valid, writable `*mut c_int` once `forward`
 /// reports success.
-unsafe fn begin_slice_action_impl(
+unsafe fn begin_occurrence_action_impl(
     pctx_id: c_int,
     dataobjectname: *const c_char,
     octx_id: *mut c_int,
@@ -1071,8 +1075,8 @@ pub(crate) unsafe fn begin_timerange_action(
     interpmode: c_int,
     octx_id: *mut c_int,
 ) -> al_status_t {
-    let Some(hli) = crate::hli_version::current() else {
-        return forward_status!(begin_timerange_action(
+    let forward = || {
+        forward_status!(begin_timerange_action(
             pctx_id,
             dataobjectname,
             rwmode,
@@ -1082,39 +1086,15 @@ pub(crate) unsafe fn begin_timerange_action(
             dtime_shape,
             interpmode,
             octx_id,
-        ));
+        ))
     };
+    let end_on_refusal = |ctx| forward_status!(end_action(ctx));
 
-    let dataobjectname_str = c_str_or_none(dataobjectname);
-    let ids_name = dataobjectname_str.map(ids_name_from);
-
-    let status = forward_status!(begin_timerange_action(
-        pctx_id,
-        dataobjectname,
-        rwmode,
-        tmin,
-        tmax,
-        dtime_buffer,
-        dtime_shape,
-        interpmode,
-        octx_id,
-    ));
-    if status.code != 0 {
-        return status;
+    // SAFETY: same contract as `begin_occurrence_action_impl`, already upheld by
+    // this function's own safety contract.
+    unsafe {
+        begin_occurrence_action_impl(pctx_id, dataobjectname, octx_id, forward, end_on_refusal)
     }
-
-    // SAFETY: IMAS-Core's own contract requires `octx_id` to be a valid,
-    // writable pointer, already relied on by the forwarded call above.
-    let opened_octx_id = unsafe { *octx_id };
-    discover_and_register_occurrence(
-        pctx_id,
-        dataobjectname_str,
-        ids_name,
-        opened_octx_id,
-        &hli,
-        status,
-        |ctx| forward_status!(end_action(ctx)),
-    )
 }
 
 /// Forwards to IMAS-Core's real `al_begin_arraystruct_action`, resolving
@@ -1784,6 +1764,38 @@ fn resolve_arraystruct_argument(
     }
 }
 
+/// One path-bearing ABI argument that the conversion map claims, in the form
+/// both path resolvers need before they can differ: whether the caller spelled
+/// it absolutely, its absolute HLI-DD spelling, and the rule that explains it.
+struct ClaimedArgument {
+    is_absolute: bool,
+    hli_absolute: String,
+    explanation: crate::conversion_map::RuleExplanation,
+}
+
+/// The preamble [`resolve_context_path`] and [`resolve_read_path`] share.
+/// `None` means forward the argument unchanged, for either of the two reasons
+/// that verdict can arise: there is no usable path to translate, or no rule
+/// claims the one there is. The embedded artifact has an identity default, but
+/// a future artifact may not, and an absent rule or default is never
+/// permission to invent a stored spelling.
+fn claimed_argument(
+    record: &crate::context_registry::ConversionRecord,
+    raw: *const c_char,
+) -> Option<ClaimedArgument> {
+    let raw = c_str_or_none(raw).filter(|path| !path.is_empty())?;
+    let is_absolute = raw.starts_with('/');
+    let hli_absolute = join_hli_path(&record.resolved_path, raw);
+    let explanation = record
+        .map
+        .resolve(&hli_absolute, record.direction_to_stored)?;
+    Some(ClaimedArgument {
+        is_absolute,
+        hli_absolute,
+        explanation,
+    })
+}
+
 /// Resolves one path-bearing context argument independently, preserving the
 /// caller's relative-vs-absolute spelling after conversion has selected the
 /// stored-DD path. `al_read_data` and `al_begin_arraystruct_action` share this
@@ -1792,47 +1804,22 @@ fn resolve_context_path(
     record: &crate::context_registry::ConversionRecord,
     raw: *const c_char,
 ) -> ContextPathResolution {
-    let Some(raw) = c_str_or_none(raw).filter(|path| !path.is_empty()) else {
+    let Some(argument) = claimed_argument(record, raw) else {
         return ContextPathResolution::Forward;
     };
-    let is_absolute = raw.starts_with('/');
-    let hli_absolute = join_hli_path(&record.resolved_path, raw);
-    let Some(explanation) = record
-        .map
-        .resolve(&hli_absolute, record.direction_to_stored)
-    else {
-        // The embedded artifact has an identity default, but a future
-        // artifact may not. An absent rule/default is never permission to
-        // invent a stored spelling.
-        return ContextPathResolution::Forward;
-    };
+    let ClaimedArgument {
+        is_absolute,
+        explanation,
+        ..
+    } = argument;
 
     match concrete_stored_path(explanation.outcome) {
         ConcreteStoredPath::NoSource => ContextPathResolution::NoSource,
         ConcreteStoredPath::Refusal(reason) => ContextPathResolution::Refusal(reason),
         ConcreteStoredPath::Path(resolved_path) => {
-            let translated = if is_absolute {
-                format!("/{resolved_path}")
-            } else {
-                let stored_anchor = match stored_anchor(record) {
-                    Ok(anchor) => anchor,
-                    Err(reason) => {
-                        return ContextPathResolution::Refusal(reason);
-                    }
-                };
-                let Some(translated) = strip_anchor(&stored_anchor, &resolved_path) else {
-                    return ContextPathResolution::Refusal(
-                        "translated path does not lie beneath this context's stored anchor"
-                            .to_string(),
-                    );
-                };
-                translated
-            };
-            match CString::new(translated) {
+            match stored_c_path(record, &resolved_path, is_absolute) {
                 Ok(path) => ContextPathResolution::Translated(path),
-                Err(_) => ContextPathResolution::Refusal(
-                    "translated field contains an interior NUL byte".to_string(),
-                ),
+                Err(reason) => ContextPathResolution::Refusal(reason),
             }
         }
     }
@@ -1845,17 +1832,14 @@ fn resolve_read_path(
     record: &crate::context_registry::ConversionRecord,
     raw: *const c_char,
 ) -> ReadPath {
-    let Some(raw) = c_str_or_none(raw).filter(|path| !path.is_empty()) else {
+    let Some(argument) = claimed_argument(record, raw) else {
         return ReadPath::Forward;
     };
-    let is_absolute = raw.starts_with('/');
-    let hli_absolute = join_hli_path(&record.resolved_path, raw);
-    let Some(explanation) = record
-        .map
-        .resolve(&hli_absolute, record.direction_to_stored)
-    else {
-        return ReadPath::Forward;
-    };
+    let ClaimedArgument {
+        is_absolute,
+        hli_absolute,
+        explanation,
+    } = argument;
 
     let fidelity = read_fidelity(explanation.fidelity, explanation.rel);
     match explanation.outcome {
@@ -1921,6 +1905,25 @@ fn translated_read_component(
     fidelity: Fidelity,
     value_transformation: ValueTransformation,
 ) -> Result<ResolvedReadPath, String> {
+    stored_c_path(record, resolved_path, is_absolute).map(|path| ResolvedReadPath {
+        path,
+        fidelity,
+        value_transformation,
+    })
+}
+
+/// Turns a resolved stored-DD path into the exact spelling IMAS-Core must
+/// receive: absolute when the caller spelled its argument absolutely,
+/// otherwise stripped back to this context's own stored anchor. Both
+/// path-bearing seams — [`resolve_context_path`] for an arraystruct open and
+/// [`translated_read_component`] for a read — decide that spelling here, so
+/// the two cannot drift apart and the two refusals it can produce are worded
+/// once rather than twice.
+fn stored_c_path(
+    record: &crate::context_registry::ConversionRecord,
+    resolved_path: &str,
+    is_absolute: bool,
+) -> Result<CString, String> {
     let translated = if is_absolute {
         format!("/{resolved_path}")
     } else {
@@ -1930,11 +1933,6 @@ fn translated_read_component(
         })?
     };
     CString::new(translated)
-        .map(|path| ResolvedReadPath {
-            path,
-            fidelity,
-            value_transformation,
-        })
         .map_err(|_| "translated field contains an interior NUL byte".to_string())
 }
 
@@ -2276,9 +2274,11 @@ pub(crate) unsafe fn plugin_begin_slice_action(
         ))
     };
     let end_on_refusal = |ctx| forward_status!(plugin_end_action(ctx));
-    // SAFETY: same contract as `begin_slice_action_impl`, already upheld by
+    // SAFETY: same contract as `begin_occurrence_action_impl`, already upheld by
     // this function's own `unsafe fn` contract.
-    unsafe { begin_slice_action_impl(pctx_id, dataobjectname, octx_id, forward, end_on_refusal) }
+    unsafe {
+        begin_occurrence_action_impl(pctx_id, dataobjectname, octx_id, forward, end_on_refusal)
+    }
 }
 
 /// Mirrors `begin_arraystruct_action`'s policy exactly (issue #67): the same
