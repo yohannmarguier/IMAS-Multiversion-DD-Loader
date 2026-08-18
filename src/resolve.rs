@@ -32,27 +32,75 @@ const CORE_LIBRARY_ENV_VAR: &str = "IMAS_CORE_LIBRARY";
 /// `IMAS_CORE_VERSION` pin.
 const BUILT_AGAINST_VERSION: &str = env!("IMAS_CORE_VERSION");
 
-thread_local! {
-    static READ_POLICY_STATE: Cell<(u32, Option<usize>)> = const { Cell::new((0, None)) };
+/// How deep this thread currently is inside the shim's own read seam, and
+/// which returned buffer a value transformation has already been applied to at
+/// that nesting.
+///
+/// This exists to enforce ADR 0010's "the shim therefore cannot apply a sign
+/// change twice" in the one situation where it could: a read that re-enters the
+/// shim's read seam. Two callers do that today — `version_stamp::discover`
+/// reads the stamp through [`read_data`] while opening a context, and the
+/// plugin reentry family calls back into the shim — so without a guard one
+/// IMAS-Core buffer could be handed to `apply_value_transformation` on both the
+/// inner and the outer call, silently negating a COCOS-flipped value back to
+/// its stored sign. Recording *which* buffer was already transformed, rather
+/// than merely that one was, is what lets a genuinely different buffer read on
+/// the same thread still get its own flip.
+///
+/// The identity of "the same buffer" is its address, which is the part of this
+/// mechanism that is a judgement call rather than a settled invariant: an
+/// allocator is free to hand back an address a previous buffer has released,
+/// and a required flip would then be skipped. Finding P8 of the read-path
+/// review raises exactly that, and the question of whether ADR 0010 should
+/// specify the mechanism at all, so treat the keying as open rather than
+/// decided. What *is* relied on here: the outermost read clears the record on
+/// the way out, so a remembered address never outlives the call stack that
+/// observed it, and the state is thread-local, so two threads reading
+/// concurrently cannot suppress each other's transformation.
+#[derive(Copy, Clone)]
+struct ReadNesting {
+    depth: u32,
+    transformed_buffer: Option<usize>,
 }
 
-struct ReadPolicyGuard;
+thread_local! {
+    static READ_NESTING: Cell<ReadNesting> = const {
+        Cell::new(ReadNesting {
+            depth: 0,
+            transformed_buffer: None,
+        })
+    };
+}
 
-impl ReadPolicyGuard {
+/// Tracks one read's nesting for as long as it is on the stack. Held by
+/// [`read_data_impl`] for the whole of its body, so the depth it reports is the
+/// number of shim reads between here and the HLI's own call.
+struct ReadNestingGuard;
+
+impl ReadNestingGuard {
     fn enter() -> Self {
-        READ_POLICY_STATE.with(|state| {
-            let (depth, pointer) = state.get();
-            state.set((depth + 1, pointer));
+        READ_NESTING.with(|state| {
+            let nesting = state.get();
+            state.set(ReadNesting {
+                depth: nesting.depth + 1,
+                ..nesting
+            });
         });
         Self
     }
 }
 
-impl Drop for ReadPolicyGuard {
+impl Drop for ReadNestingGuard {
     fn drop(&mut self) {
-        READ_POLICY_STATE.with(|state| {
-            let (depth, pointer) = state.get();
-            state.set((depth - 1, (depth > 1).then_some(pointer).flatten()));
+        READ_NESTING.with(|state| {
+            let nesting = state.get();
+            // Leaving the outermost read ends the call stack that observed the
+            // buffer, so the address stops meaning anything and is dropped.
+            let still_nested = nesting.depth > 1;
+            state.set(ReadNesting {
+                depth: nesting.depth - 1,
+                transformed_buffer: still_nested.then_some(nesting.transformed_buffer).flatten(),
+            });
         });
     }
 }
@@ -1281,7 +1329,7 @@ unsafe fn read_data_impl(
     size: *mut c_int,
     forward: impl Fn(*const c_char, *const c_char) -> al_status_t,
 ) -> al_status_t {
-    let _policy_guard = ReadPolicyGuard::enter();
+    let _nesting_guard = ReadNestingGuard::enter();
     let Some(record) = REGISTRY.lookup(ctx_id) else {
         return forward(field, timebase);
     };
@@ -1364,15 +1412,21 @@ unsafe fn read_data_impl(
                     return status;
                 }
                 ReadOutcome::Data => {
+                    // ADR 0010: this buffer's one transformation applies once.
+                    // A reentrant read (see `ReadNesting`) can reach the same
+                    // buffer twice, so claim it before transforming it.
                     let should_transform = field_attempt.value_transformation
                         != ValueTransformation::None
-                        && READ_POLICY_STATE.with(|state| {
-                            let (depth, transformed_pointer) = state.get();
-                            let pointer = unsafe { *data } as usize;
-                            if transformed_pointer == Some(pointer) {
+                        && READ_NESTING.with(|state| {
+                            let nesting = state.get();
+                            let buffer = unsafe { *data } as usize;
+                            if nesting.transformed_buffer == Some(buffer) {
                                 false
                             } else {
-                                state.set((depth, Some(pointer)));
+                                state.set(ReadNesting {
+                                    transformed_buffer: Some(buffer),
+                                    ..nesting
+                                });
                                 true
                             }
                         });
