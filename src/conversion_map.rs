@@ -882,6 +882,16 @@ impl ConversionMap {
     pub fn resolve(&self, path: &str, direction: Direction) -> Option<RuleExplanation> {
         if let Some(found) = self.best_match(path, direction) {
             let rule = &self.rules[found.rule_index];
+            let fidelity = fidelity_for(rule, direction);
+
+            if let Some(reason) = Self::refusal_before_resolution(rule.rel, fidelity) {
+                return Some(Self::explicit_match(
+                    rule,
+                    &found,
+                    fidelity,
+                    Outcome::Refusal(reason),
+                ));
+            }
 
             return match rule.rel {
                 Rel::Renamed | Rel::Moved => {
@@ -889,20 +899,14 @@ impl ConversionMap {
                 }
                 Rel::Merged => Some(self.resolve_merged(rule, path, direction, &found)),
                 Rel::Split => Some(self.resolve_split(rule, path, direction, &found)),
-                Rel::Retyped => Some(Self::explicit_match(
+                Rel::LeftOnly | Rel::RightOnly => Some(Self::explicit_match(
                     rule,
                     &found,
-                    fidelity_for(rule, direction),
-                    Outcome::Refusal(RefusalReason::UnservableRetype),
+                    fidelity,
+                    Outcome::NoSource,
                 )),
-                Rel::LeftOnly | Rel::RightOnly => {
-                    let fidelity = fidelity_for(rule, direction);
-                    let outcome = if fidelity == Fidelity::Unmappable {
-                        Outcome::Refusal(RefusalReason::Unmappable)
-                    } else {
-                        Outcome::NoSource
-                    };
-                    Some(Self::explicit_match(rule, &found, fidelity, outcome))
+                Rel::Retyped => {
+                    unreachable!("a retyped rule is always claimed by refusal_before_resolution")
                 }
             };
         }
@@ -912,6 +916,31 @@ impl ConversionMap {
         }
 
         None
+    }
+
+    /// The refusal a matched rule owes before any path is resolved, or
+    /// `None` when resolution may proceed.
+    ///
+    /// The order of the two arms is load-bearing. A `retyped` rule refuses on
+    /// shape whatever fidelity it declares — the shim cannot reshape an int
+    /// array into an array of identifier structures, so a conversion that is
+    /// lossless in principle is unavailable in practice, and the approved
+    /// artifact's one retype is in fact declared `exact` in both directions.
+    ///
+    /// An `unmappable` fidelity then refuses for every other rule kind alike.
+    /// It is a statement the artifact makes about a *direction*, not about a
+    /// rule shape, so it must not be a per-resolver check that a new or
+    /// edited resolver can forget — which is exactly what happened:
+    /// `resolve_single_path` checked it while `resolve_merged` and
+    /// `resolve_split` did not, so a `merged`/`split` rule declared
+    /// `unmappable` produced a candidate read plan for the read path to
+    /// execute instead of the refusal the artifact asked for.
+    fn refusal_before_resolution(rel: Rel, fidelity: Fidelity) -> Option<RefusalReason> {
+        match (rel, fidelity) {
+            (Rel::Retyped, _) => Some(RefusalReason::UnservableRetype),
+            (_, Fidelity::Unmappable) => Some(RefusalReason::Unmappable),
+            _ => None,
+        }
     }
 
     /// Resolves a `renamed` or `moved` rule's single path on the other side.
@@ -926,14 +955,6 @@ impl ConversionMap {
             Direction::Forward => (&rule.right, rule.fidelity_forward),
             Direction::Reverse => (&rule.left, rule.fidelity_reverse),
         };
-        if fidelity == Fidelity::Unmappable {
-            return Self::explicit_match(
-                rule,
-                found,
-                fidelity,
-                Outcome::Refusal(RefusalReason::Unmappable),
-            );
-        }
         let target = target
             .as_ref()
             .expect("renamed or moved rule always carries both paths");
@@ -2298,6 +2319,110 @@ mod tests {
             .map(|c| c.path.as_str())
             .collect();
         assert_eq!(paths, vec!["left/first", "left/second"]);
+    }
+
+    #[test]
+    fn a_merged_rule_declared_unmappable_refuses_instead_of_planning_candidates() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="fold" rel="merged" right="b">
+                  <from left="a1" precedence="1"/>
+                  <from left="a2" precedence="2"/>
+                  <fidelity forward="unmappable" reverse="unmappable"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+
+        // Forward, the declared alias must not resolve to the canonical path.
+        let forward = map
+            .resolve("a1", Direction::Forward)
+            .expect("a declared alias matches its merged rule");
+        assert_eq!(forward.match_kind, MatchKind::Explicit);
+        assert_eq!(forward.rule_id.as_deref(), Some("fold"));
+        assert_eq!(forward.fidelity, Fidelity::Unmappable);
+        assert_eq!(
+            forward.outcome,
+            Outcome::Refusal(RefusalReason::Unmappable),
+            "a merged rule declared unmappable must refuse, not resolve"
+        );
+
+        // Reverse is the direction that would otherwise hand the read path a
+        // candidate plan to execute against IMAS-Core.
+        let reverse = map
+            .resolve("b", Direction::Reverse)
+            .expect("the canonical path matches its merged rule");
+        assert_eq!(reverse.fidelity, Fidelity::Unmappable);
+        assert_eq!(
+            reverse.outcome,
+            Outcome::Refusal(RefusalReason::Unmappable),
+            "a merged rule declared unmappable must not produce a candidate read plan"
+        );
+    }
+
+    #[test]
+    fn a_split_rule_declared_unmappable_refuses_instead_of_planning_candidates() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="fan" rel="split" left="a">
+                  <from right="b1" precedence="1"/>
+                  <from right="b2" precedence="2"/>
+                  <fidelity forward="unmappable" reverse="unmappable"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+
+        // Forward is the candidate-plan direction for a split rule.
+        let forward = map
+            .resolve("a", Direction::Forward)
+            .expect("the single source matches its split rule");
+        assert_eq!(forward.match_kind, MatchKind::Explicit);
+        assert_eq!(forward.rule_id.as_deref(), Some("fan"));
+        assert_eq!(forward.fidelity, Fidelity::Unmappable);
+        assert_eq!(
+            forward.outcome,
+            Outcome::Refusal(RefusalReason::Unmappable),
+            "a split rule declared unmappable must not produce a candidate read plan"
+        );
+
+        let reverse = map
+            .resolve("b1", Direction::Reverse)
+            .expect("a declared destination matches its split rule");
+        assert_eq!(reverse.fidelity, Fidelity::Unmappable);
+        assert_eq!(reverse.outcome, Outcome::Refusal(RefusalReason::Unmappable));
+    }
+
+    #[test]
+    fn a_retype_refuses_on_shape_even_when_it_declares_unmappable() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="reshape" rel="retyped" left="a" right="a">
+                  <fidelity forward="unmappable" reverse="unmappable"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+
+        // Pins the precedence between the two pre-resolution refusals: the
+        // shape reason wins, so a retype never reports the generic one.
+        let explanation = map.resolve("a", Direction::Forward).expect("rule matches");
+        assert_eq!(
+            explanation.outcome,
+            Outcome::Refusal(RefusalReason::UnservableRetype)
+        );
     }
 
     #[test]
