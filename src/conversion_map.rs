@@ -450,6 +450,23 @@ pub enum CompletenessViolation {
     /// default, but no path by that same spelling exists in the other
     /// side's raw inventory — the default's identity assumption is false.
     DefaultAssumesMissingCounterpart { side: InventorySide, path: String },
+    /// A `left_only`/`right_only` rule declares its path gone on the other
+    /// side, and that side's raw inventory lists it anyway: the artifact and
+    /// the inventory contradict each other about the same DD path. `side`
+    /// names the inventory that should not have contained it.
+    ///
+    /// [`Self::DefaultAssumesMissingCounterpart`] cannot catch this. That
+    /// assertion compares the two inventories *with each other*, so a path
+    /// wrongly listed on both sides satisfies it and is then claimed by the
+    /// identity default and counted as supported coverage. Only comparing a
+    /// rule's own declaration against the inventory catches a path the
+    /// artifact says is gone while the inventory still lists it.
+    SideOnlyRuleContradictedByInventory {
+        rule_id: String,
+        side: InventorySide,
+        pattern: String,
+        path: String,
+    },
     /// A rule's own primary selector (`left`/`right`, never a `merged`/
     /// `split` rule's `<from>` candidates — see
     /// [`ConversionMap::check_completeness`]'s doc comment) corresponds to
@@ -1336,6 +1353,25 @@ impl ConversionMap {
                     pattern: selector.pattern().to_string(),
                 });
             }
+
+            // A side-only rule states an absence, and an absence is only
+            // provable against the inventory that should not contain it.
+            let declared_absent_from = match rule.rel {
+                Rel::LeftOnly => Some((&rule.left, right_inventory, InventorySide::Right)),
+                Rel::RightOnly => Some((&rule.right, left_inventory, InventorySide::Left)),
+                _ => None,
+            };
+            if let Some((selector, inventory, side)) = declared_absent_from
+                && let Some(selector) = selector
+                && let Some(path) = Self::selector_first_match(selector, inventory)
+            {
+                violations.push(CompletenessViolation::SideOnlyRuleContradictedByInventory {
+                    rule_id: rule.id.clone(),
+                    side,
+                    pattern: selector.pattern().to_string(),
+                    path: path.clone(),
+                });
+            }
         }
 
         if violations.is_empty() {
@@ -1376,17 +1412,30 @@ impl ConversionMap {
     /// `inventory`: literal membership for `Exact`, self-or-descendant
     /// membership for `Subtree`, and at least one matching entry for `Glob`.
     fn selector_backed_by_inventory(selector: &Selector, inventory: &[String]) -> bool {
+        Self::selector_first_match(selector, inventory).is_some()
+    }
+
+    /// The first `inventory` entry `selector` claims, or `None` when it
+    /// claims none. One matcher serves both completeness assertions that
+    /// need it, from opposite directions: a rule's own selector must match
+    /// its side's inventory, and a side-only rule's selector must match
+    /// nothing in the other side's. The offending entry is returned rather
+    /// than a bool so the second one can name the path in its violation.
+    fn selector_first_match<'a>(
+        selector: &Selector,
+        inventory: &'a [String],
+    ) -> Option<&'a String> {
         match selector {
-            Selector::Exact(pattern) => inventory.iter().any(|entry| entry == pattern),
-            Selector::Subtree(anchor) => inventory.iter().any(|entry| {
-                entry == anchor
+            Selector::Exact(pattern) => inventory.iter().find(|entry| *entry == pattern),
+            Selector::Subtree(anchor) => inventory.iter().find(|entry| {
+                *entry == anchor
                     || entry
                         .strip_prefix(anchor.as_str())
                         .is_some_and(|rest| rest.starts_with('/'))
             }),
             Selector::Glob(pattern) => inventory
                 .iter()
-                .any(|entry| glob_match(pattern, entry).is_some()),
+                .find(|entry| glob_match(pattern, entry).is_some()),
         }
     }
 }
@@ -3053,6 +3102,75 @@ mod tests {
     /// The same reachability fact from the other side: the load-bearing
     /// violation fires against the *shipped* map, not only against a
     /// hand-built toy one, when a real inventory path loses its counterpart.
+    #[test]
+    fn a_side_only_rule_contradicted_by_the_other_inventory_fails_completeness_check() {
+        let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
+        let left_inventory = parse_inventory(LEFT_INVENTORY_339);
+        // drop-timeslice-ggd-grid declares the whole time_slice/ggd/grid
+        // subtree gone in DD4, and the imas-dd path sets agree. The shipped
+        // 4.1.1 inventory listed 23 of its paths anyway; because they were
+        // then present on both sides, DefaultAssumesMissingCounterpart stayed
+        // silent, the identity default claimed them, and the reverse coverage
+        // figure counted all 23 as supported. Reintroducing one is enough to
+        // reproduce that, and it must now be rejected.
+        let reintroduced = "time_slice/ggd/grid/path";
+        assert!(left_inventory.iter().any(|path| path == reintroduced));
+        let mut right_inventory = parse_inventory(RIGHT_INVENTORY_411);
+        assert!(!right_inventory.iter().any(|path| path == reintroduced));
+        right_inventory.push(reintroduced.to_string());
+
+        let violations = map
+            .check_completeness(&left_inventory, &right_inventory)
+            .expect_err("a left_only rule's own path must not exist on the right");
+        assert!(
+            violations.contains(
+                &CompletenessViolation::SideOnlyRuleContradictedByInventory {
+                    rule_id: "drop-timeslice-ggd-grid".to_string(),
+                    side: InventorySide::Right,
+                    pattern: "time_slice/ggd/grid".to_string(),
+                    path: reintroduced.to_string(),
+                }
+            ),
+            "{violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_right_only_rule_contradicted_by_the_left_inventory_fails_completeness_check() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <default rel="identical"/>
+              <rules>
+                <rule id="new-b" rel="right_only" right="a/b">
+                  <fidelity forward="unmappable" reverse="lossy"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+        // The rule says a/b is new on the right, so the left inventory
+        // listing it is the same contradiction in the mirror direction.
+        let left_inventory = vec!["a/b".to_string()];
+        let right_inventory = vec!["a/b".to_string()];
+
+        let violations = map
+            .check_completeness(&left_inventory, &right_inventory)
+            .expect_err("a right_only rule's own path must not exist on the left");
+        assert!(
+            violations.contains(
+                &CompletenessViolation::SideOnlyRuleContradictedByInventory {
+                    rule_id: "new-b".to_string(),
+                    side: InventorySide::Left,
+                    pattern: "a/b".to_string(),
+                    path: "a/b".to_string(),
+                }
+            ),
+            "{violations:?}"
+        );
+    }
+
     #[test]
     fn the_approved_artifact_rejects_a_real_path_whose_counterpart_disappears() {
         let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
