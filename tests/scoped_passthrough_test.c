@@ -31,8 +31,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <imas_mvdd_loader.h>
-
 #ifndef RECORDING_STUB_PATH
 #error "RECORDING_STUB_PATH must be defined by CMakeLists.txt"
 #endif
@@ -40,90 +38,35 @@
 #error "EXPECTED_AL_VERSION must be defined by CMakeLists.txt"
 #endif
 
+#include "shim_test_support.h"
+
 /* The two spellings of the one path `rename-beta-normal` relates. Reaching
  * IMAS-Core, or coming back from it, as the *other* one of this pair is
  * exactly the failure these scenarios exist to catch. */
 #define HLI_SPELLING "time_slice/global_quantities/beta_tor_norm"
 #define STORED_SPELLING "time_slice/global_quantities/beta_normal"
 
-/* IMAS-Core's data-type codes, spelled out because the recording-stub profile
- * deliberately acquires no IMAS-Core and so has no al_const.h to include.
- * The values are `DATA_TYPE_0` (50) plus an offset, per IMAS-Core's
- * al_defs.h.in — not small ordinals, which is an easy and silent mistake to
- * make in a test that passes a bare literal. */
-#define IMAS_CHAR_DATA 50
-#define IMAS_INTEGER_DATA 51
-#define IMAS_DOUBLE_DATA 52
-#define IMAS_COMPLEX_DATA 53
-
-#define CHECK(condition)                                                       \
-    do {                                                                       \
-        if (!(condition)) {                                                    \
-            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
-                    #condition);                                               \
-            exit(EXIT_FAILURE);                                                \
-        }                                                                      \
-    } while (0)
-
-typedef const char *(*string_accessor_fn)(void);
-typedef int (*int_accessor_fn)(void);
-typedef double (*double_accessor_fn)(void);
-typedef const void *(*pointer_accessor_fn)(void);
-
-static void *stub_handle(void) {
-    void *stub = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
-    if (stub == NULL) {
-        fprintf(stderr, "failed to open recording stub: %s\n", dlerror());
-        abort();
-    }
-    return stub;
-}
-
-static void *dlsym_or_die(const char *name) {
-    void *symbol = dlsym(stub_handle(), name);
-    if (symbol == NULL) {
-        fprintf(stderr, "recording stub has no symbol '%s': %s\n", name, dlerror());
-        abort();
-    }
-    return symbol;
-}
-
-static const char *string_from_stub(const char *symbol_name) {
-    return ((string_accessor_fn)dlsym_or_die(symbol_name))();
-}
-
-static int int_from_stub(const char *symbol_name) {
-    return ((int_accessor_fn)dlsym_or_die(symbol_name))();
-}
-
-static double double_from_stub(const char *symbol_name) {
-    return ((double_accessor_fn)dlsym_or_die(symbol_name))();
-}
-
-static const void *pointer_from_stub(const char *symbol_name) {
-    return ((pointer_accessor_fn)dlsym_or_die(symbol_name))();
-}
-
-/* Opens the pulse and an equilibrium global action whose supplied stamp makes
- * the stored DD version differ from the latched HLI one, leaving the resulting
- * mismatch record live for the caller's whole scenario. Returns the pulse
- * context, since the two enumeration seams below are addressed by it. */
-static int open_mismatched_equilibrium(int *operation_ctx) {
+/* Opens the mismatched occurrence every scenario here needs and then proves,
+ * before the scenario's own assertions run, that the resulting record really
+ * is converting: the same rule whose two spellings those assertions use
+ * translates an ordinary read. Without that proof a passthrough assertion
+ * could pass simply because the mismatch was never registered.
+ *
+ * This is deliberately a local extension of the shared
+ * `open_mismatched_occurrence` rather than a widening of it — the proving read
+ * moves the stub's shared call recorders, which the suites that count them
+ * would see. Returns the pulse context, since the two enumeration seams below
+ * are addressed by it. */
+static int open_converting_equilibrium(int *operation_ctx) {
     int pulse_ctx = -1;
-    CHECK(al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, &pulse_ctx).code == 0);
+    *operation_ctx = open_mismatched_occurrence("equilibrium", &pulse_ctx);
+
     CHECK(int_from_stub("recording_stub_dataentry_call_count") == 1);
     CHECK(strcmp(string_from_stub("recording_stub_dataentry_uri"),
                  "imas:hdf5?path=/tmp/pulse")
           == 0);
     CHECK(int_from_stub("recording_stub_dataentry_mode") == 7);
 
-    *operation_ctx = -1;
-    CHECK(al_begin_global_action(pulse_ctx, "equilibrium", "", 30, operation_ctx).code == 0);
-
-    /* Conversion really is active on this context: the same rule whose two
-     * spellings the passthrough assertions use translates an ordinary read.
-     * Without this, a scenario below could pass simply because the mismatch
-     * was never registered. */
     void *data = NULL;
     int size[1] = {0};
     CHECK(al_read_data(*operation_ctx, HLI_SPELLING, "", &data, IMAS_DOUBLE_DATA, 1, size).code
@@ -135,7 +78,7 @@ static int open_mismatched_equilibrium(int *operation_ctx) {
 
 static void scenario_get_occurrences_forwards_ids_name_unchanged(void) {
     int operation_ctx = -1;
-    int pulse_ctx = open_mismatched_equilibrium(&operation_ctx);
+    int pulse_ctx = open_converting_equilibrium(&operation_ctx);
 
     int *occurrences = NULL;
     int size = -1;
@@ -158,7 +101,7 @@ static void scenario_get_occurrences_forwards_ids_name_unchanged(void) {
 
 static void scenario_list_filled_paths_forwards_name_and_returns_stored_paths_unchanged(void) {
     int operation_ctx = -1;
-    int pulse_ctx = open_mismatched_equilibrium(&operation_ctx);
+    int pulse_ctx = open_converting_equilibrium(&operation_ctx);
 
     char **paths = NULL;
     int size = -1;
@@ -192,7 +135,7 @@ static void scenario_list_filled_paths_forwards_name_and_returns_stored_paths_un
 
 static void scenario_bind_and_unbind_plugin_forward_field_path_unchanged(void) {
     int operation_ctx = -1;
-    (void)open_mismatched_equilibrium(&operation_ctx);
+    (void)open_converting_equilibrium(&operation_ctx);
 
     int calls_before = int_from_stub("recording_stub_plugin_call_count");
 
@@ -352,7 +295,7 @@ static void check_utility_and_version_accessors_forward_unchanged(int operation_
 
 static void scenario_remaining_non_seam_exports_forward_unchanged(void) {
     int operation_ctx = -1;
-    int pulse_ctx = open_mismatched_equilibrium(&operation_ctx);
+    int pulse_ctx = open_converting_equilibrium(&operation_ctx);
 
     check_plugin_management_forwards_unchanged(operation_ctx);
     check_parameter_setters_forward_unchanged();

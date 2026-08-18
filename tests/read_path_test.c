@@ -6,82 +6,25 @@
  * its public C ABI and observe its behavior through the arguments the stub
  * receives. */
 
-#include <dlfcn.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-#include <imas_mvdd_loader.h>
 
 #ifndef RECORDING_STUB_PATH
 #error "RECORDING_STUB_PATH must be defined by CMakeLists.txt"
 #endif
 
-#define CHECK(condition)                                                       \
-    do {                                                                       \
-        if (!(condition)) {                                                    \
-            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
-                    #condition);                                               \
-            exit(EXIT_FAILURE);                                                \
-        }                                                                      \
-    } while (0)
+#include "shim_test_support.h"
 
-typedef const char *(*string_accessor_fn)(void);
-typedef int (*int_accessor_fn)(void);
 typedef al_status_t (*read_data_fn)(int, const char *, const char *, void **, int, int, int *);
 typedef void (*set_reentrant_read_fn)(read_data_fn, const char *);
-
-static void *dlsym_or_die(void *handle, const char *name) {
-    void *symbol = dlsym(handle, name);
-    if (symbol == NULL) {
-        fprintf(stderr, "recording stub has no symbol '%s': %s\n", name, dlerror());
-        abort();
-    }
-    return symbol;
-}
-
-static const char *string_from_stub(const char *symbol_name) {
-    void *stub = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
-    if (stub == NULL) {
-        fprintf(stderr, "failed to open recording stub: %s\n", dlerror());
-        abort();
-    }
-    string_accessor_fn accessor = (string_accessor_fn)dlsym_or_die(stub, symbol_name);
-    return accessor();
-}
-
-static int int_from_stub(const char *symbol_name) {
-    void *stub = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
-    if (stub == NULL) {
-        fprintf(stderr, "failed to open recording stub: %s\n", dlerror());
-        abort();
-    }
-    int_accessor_fn accessor = (int_accessor_fn)dlsym_or_die(stub, symbol_name);
-    return accessor();
-}
 
 /* Arms the stub to call back into the shim's own `al_read_data` once, while
  * the shim's read is still on the stack, with `field` as its argument — what
  * real IMAS-Core does on ELF, where its internal call to its own public
  * `al_read_data` binds to the shim's exported definition. */
 static void arm_reentrant_read(const char *field) {
-    void *stub = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
-    if (stub == NULL) {
-        fprintf(stderr, "failed to open recording stub: %s\n", dlerror());
-        abort();
-    }
     set_reentrant_read_fn arm =
-        (set_reentrant_read_fn)dlsym_or_die(stub, "recording_stub_set_reentrant_read");
+        (set_reentrant_read_fn)stub_symbol_or_die("recording_stub_set_reentrant_read");
     arm(al_read_data, field);
-}
-
-static int open_mismatched_equilibrium(void) {
-    int pulse_ctx = -1;
-    CHECK(al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, &pulse_ctx).code == 0);
-
-    int operation_ctx = -1;
-    CHECK(al_begin_global_action(pulse_ctx, "equilibrium", "", 30, &operation_ctx).code == 0);
-    return operation_ctx;
 }
 
 static al_status_t read_data(int ctx_id, const char *field, const char *timebase, void **data) {

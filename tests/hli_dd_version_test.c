@@ -19,46 +19,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <imas_mvdd_loader.h>
-
 #ifndef RECORDING_STUB_PATH
 #error "RECORDING_STUB_PATH must be defined by the build (see CMakeLists.txt)"
 #endif
 
-#define CHECK(condition)                                                       \
-    do {                                                                       \
-        if (!(condition)) {                                                    \
-            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
-                    #condition);                                               \
-            exit(EXIT_FAILURE);                                                \
-        }                                                                      \
-    } while (0)
-
-typedef int (*int_accessor_fn)(void);
-
-static void *dlsym_or_die(void *handle, const char *name) {
-    void *symbol = dlsym(handle, name);
-    if (symbol == NULL) {
-        fprintf(stderr, "recording stub has no symbol '%s': %s\n", name, dlerror());
-        abort();
-    }
-    return symbol;
-}
-
-static void *open_stub_for_introspection(void) {
-    void *handle = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
-    if (handle == NULL) {
-        fprintf(stderr, "failed to dlopen the recording stub for introspection: %s\n", dlerror());
-        abort();
-    }
-    return handle;
-}
+#include "shim_test_support.h"
 
 static int dataentry_call_count(void) {
-    void *stub = open_stub_for_introspection();
-    int_accessor_fn call_count =
-        (int_accessor_fn)dlsym_or_die(stub, "recording_stub_dataentry_call_count");
-    return call_count();
+    return int_from_stub("recording_stub_dataentry_call_count");
 }
 
 static al_status_t open_dataentry(void) {

@@ -13,66 +13,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <imas_mvdd_loader.h>
-
 #ifndef RECORDING_STUB_PATH
 #error "RECORDING_STUB_PATH must be defined by CMakeLists.txt"
 #endif
 
-#define CHECK(condition)                                                       \
-    do {                                                                       \
-        if (!(condition)) {                                                    \
-            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
-                    #condition);                                               \
-            exit(EXIT_FAILURE);                                                \
-        }                                                                      \
-    } while (0)
-
-typedef const char *(*string_accessor_fn)(void);
-typedef int (*int_accessor_fn)(void);
-typedef const void *(*pointer_accessor_fn)(void);
-
-static void *dlsym_or_die(void *handle, const char *name) {
-    void *symbol = dlsym(handle, name);
-    if (symbol == NULL) {
-        fprintf(stderr, "recording stub has no symbol '%s': %s\n", name, dlerror());
-        abort();
-    }
-    return symbol;
-}
-
-static void *open_stub(void) {
-    void *stub = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
-    if (stub == NULL) {
-        fprintf(stderr, "failed to open recording stub: %s\n", dlerror());
-        abort();
-    }
-    return stub;
-}
-
-static const char *string_from_stub(const char *symbol_name) {
-    string_accessor_fn accessor = (string_accessor_fn)dlsym_or_die(open_stub(), symbol_name);
-    return accessor();
-}
-
-static int int_from_stub(const char *symbol_name) {
-    int_accessor_fn accessor = (int_accessor_fn)dlsym_or_die(open_stub(), symbol_name);
-    return accessor();
-}
-
-static const void *pointer_from_stub(const char *symbol_name) {
-    pointer_accessor_fn accessor = (pointer_accessor_fn)dlsym_or_die(open_stub(), symbol_name);
-    return accessor();
-}
-
-static int open_mismatched_equilibrium(void) {
-    int pulse_ctx = -1;
-    CHECK(al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, &pulse_ctx).code == 0);
-
-    int operation_ctx = -1;
-    CHECK(al_begin_global_action(pulse_ctx, "equilibrium", "", 30, &operation_ctx).code == 0);
-    return operation_ctx;
-}
+#include "shim_test_support.h"
 
 static al_status_t write_field(int ctx_id, const char *field, const char *timebase, void *data,
                                 int *size) {

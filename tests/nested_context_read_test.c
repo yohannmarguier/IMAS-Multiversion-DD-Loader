@@ -24,48 +24,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <imas_mvdd_loader.h>
-
 #ifndef RECORDING_STUB_PATH
 #error "RECORDING_STUB_PATH must be defined by CMakeLists.txt"
 #endif
 
-#define CHECK(condition)                                                      \
-    do {                                                                      \
-        if (!(condition)) {                                                   \
-            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
-                    #condition);                                             \
-            exit(EXIT_FAILURE);                                               \
-        }                                                                     \
-    } while (0)
-
-typedef const char *(*string_accessor_fn)(void);
-typedef int (*int_accessor_fn)(void);
-
-static const char *string_from_stub(const char *symbol_name) {
-    void *stub = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
-    CHECK(stub != NULL);
-    string_accessor_fn accessor = (string_accessor_fn)dlsym(stub, symbol_name);
-    CHECK(accessor != NULL);
-    return accessor();
-}
-
-static int int_from_stub(const char *symbol_name) {
-    void *stub = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
-    CHECK(stub != NULL);
-    int_accessor_fn accessor = (int_accessor_fn)dlsym(stub, symbol_name);
-    CHECK(accessor != NULL);
-    return accessor();
-}
-
-static int open_mismatched_equilibrium(void) {
-    int pulse_ctx = -1;
-    CHECK(al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, &pulse_ctx).code == 0);
-
-    int operation_ctx = -1;
-    CHECK(al_begin_global_action(pulse_ctx, "equilibrium", "", 30, &operation_ctx).code == 0);
-    return operation_ctx;
-}
+#include "shim_test_support.h"
 
 static int open_time_slice(int operation_ctx) {
     int size = -1;
