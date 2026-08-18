@@ -18,7 +18,7 @@ Call depth is the property that actually distinguishes the two cases, it needs n
 
 A plugin that reads through `al_plugin_read_data` at top level — not underneath an in-flight read — is a first-level caller and still gets the full conversion policy that ADR 0002 and the plugin reentry seam specify. Every existing plugin-seam scenario drives the seam that way, and its behaviour is unchanged.
 
-Version-stamp discovery (`src/version_stamp.rs`) reads through the shim's own converting wrapper from inside `al_begin_global_action`, at depth zero. It forwards unchanged because no conversion record exists for that context yet, not because of this rule; that ordering is a separate concern, noted where it is relied upon.
+Version-stamp discovery (`src/version_stamp.rs`) does not go through the converting wrapper at all. It calls `resolve::read_data_unconverted`, which forwards to the same real `al_read_data` binding with none of the read policy, because that read is the shim's own and is what *decides* whether conversion applies to the occurrence: subjecting it to conversion would re-enter the layer from inside the code that supplies its input. It used to call `resolve::read_data` and forward unchanged only because no conversion record for that context existed yet — an ordering accident, and the one caller for which "it happens to be safe today" was the whole argument. It still enters the depth counter, so a read arriving from underneath the IMAS-Core call is reentrant by this rule rather than by that accident.
 
 ## Consequences
 

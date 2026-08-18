@@ -3,8 +3,11 @@
 //! Immediately after `al_begin_global_action` opens successfully, the shim
 //! reads `ids_properties/version_put/data_dictionary` — `CHAR_DATA` at
 //! `dim == 1` — through the same `al_read_data` binding every ordinary read
-//! goes through, and classifies the outcome with the one read-outcome
-//! classifier ([`crate::read_outcome`]). IMAS-Core allocates this buffer and,
+//! reaches, but deliberately *not* through the converting wrapper around it:
+//! this read decides whether conversion applies to the occurrence at all, so
+//! it cannot be subject to it ([`crate::resolve::read_data_unconverted`]).
+//! The outcome is classified with the one read-outcome classifier
+//! ([`crate::read_outcome`]). IMAS-Core allocates this buffer and,
 //! because this read is entirely shim-internal (the HLI never sees it), the
 //! shim frees it itself exactly once — the ordinary "HLI frees it" ownership
 //! contract (ADR 0006) does not apply here, since there is no HLI-visible
@@ -51,7 +54,9 @@ pub(crate) fn decode(bytes: &[u8]) -> Option<DdVersion> {
 }
 
 /// Reads and classifies the DD-version stamp for the occurrence just opened
-/// at `octx_id`, via the real IMAS-Core `al_read_data` binding.
+/// at `octx_id`, via the real IMAS-Core `al_read_data` binding — reached
+/// through [`crate::resolve::read_data_unconverted`], which forwards without
+/// any of the conversion policy an ordinary read carries.
 pub(crate) fn discover(octx_id: c_int) -> StampOutcome {
     let field = VERSION_STAMP_FIELD.as_ptr().cast::<c_char>();
     let mut data: *mut c_void = std::ptr::null_mut();
@@ -59,7 +64,7 @@ pub(crate) fn discover(octx_id: c_int) -> StampOutcome {
     // SAFETY: `field` is a valid NUL-terminated C string for the lifetime of
     // this call; `data` and `size` are valid, writable local out-params.
     let status = unsafe {
-        crate::resolve::read_data(
+        crate::resolve::read_data_unconverted(
             octx_id,
             field,
             c"".as_ptr(),

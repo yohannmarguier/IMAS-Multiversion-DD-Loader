@@ -1238,6 +1238,37 @@ pub(crate) unsafe fn read_data(
     unsafe { read_data_impl(ctx_id, field, timebase, data, datatype, dim, size, forward) }
 }
 
+/// Forwards one read straight to IMAS-Core's real `al_read_data` with none of
+/// [`read_data_impl`]'s conversion policy: no registry lookup, no rule
+/// resolution, no value transformation, no loss retention. It does enter the
+/// thread's read depth (ADR 0014), so a read arriving from underneath the
+/// IMAS-Core call still recognises itself as reentrant.
+///
+/// This exists for version-stamp discovery (ADR 0007, ADR 0009), which is the
+/// shim's own read rather than a caller's: the path is fixed, spelled the same
+/// in every DD version this project serves, and read precisely to decide
+/// whether conversion applies to this occurrence at all. Sending it through the
+/// converting wrapper would re-enter the conversion layer from inside the code
+/// that produces its input, and would only forward unchanged because no record
+/// for that context exists yet — an ordering accident, not an invariant.
+///
+/// # Safety
+/// Same contract as [`read_data`].
+pub(crate) unsafe fn read_data_unconverted(
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    let (_depth_guard, _already_reading) = ReadDepthGuard::enter();
+    forward_status!(read_data(
+        ctx_id, field, timebase, data, datatype, dim, size
+    ))
+}
+
 /// Mirrors `read_data`'s policy exactly (issue #68): the same registry
 /// snapshot, conversion-map resolution, merged/split candidate loop, value
 /// transformation, and fidelity retention as an ordinary read — forwarded
