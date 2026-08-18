@@ -109,6 +109,22 @@ pub(crate) fn current() -> Option<DdVersion> {
     }
 }
 
+/// Whether this process has any conversion basis at all — the same question
+/// [`current`] answers, without cloning the version out of the latch.
+///
+/// The data-path seams (`al_read_data`, `al_write_data`, `al_delete_data` and
+/// their plugin reentry twins) ask it once per call, ahead of any registry
+/// lookup: with the latch unset, invalid, or not yet resolved, no context can
+/// carry a conversion record, so taking the registry's lock to discover that
+/// would be pure cost on the hot path every non-converting HLI takes for every
+/// field it reads (issue #56's "conversion-disabled contexts bypass registry
+/// lookup and rule resolution", ADR 0003's one-lookup budget). The `begin_*`
+/// seams short-circuit on [`current`] instead, since they go on to use the
+/// version itself.
+pub(crate) fn conversion_is_possible() -> bool {
+    matches!(LATCH.get(), Some(Latch::Set(_)))
+}
+
 /// C entry point for `imas_mvdd_set_hli_dd_version`: validates the pointer
 /// itself (null, non-UTF-8) as an immediate refusal before parsing the
 /// version string.
