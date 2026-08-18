@@ -348,6 +348,43 @@ if(IMAS_MVDD_BUILD_TESTS)
     target_compile_definitions(recording_stub PRIVATE
         "RECORDING_STUB_DEFAULT_VERSION=\"${IMAS_CORE_VERSION}\"")
 
+    # Registers one scenario of a recording-stub suite as its own ctest test.
+    #
+    # Every such scenario needs IMAS_CORE_LIBRARY pointing at the stub, and
+    # nearly all of them also pin the HLI DD version to latch and the stamp
+    # version the stub reports back. One scenario per process is not a style
+    # choice: both the version latch (ADR 0005) and the context registry are
+    # process-wide, so varying either one means a fresh process.
+    #
+    # That trio was previously spelled out at 100-odd call sites — the same
+    # literal 35 times — with four near-identical wrapper functions over parts
+    # of it. Here it is expressed once, so a new scenario states only what is
+    # peculiar to it.
+    #
+    #   add_stub_test(<ctest-name> <executable> [<scenario-argument>...]
+    #                 [HLI_DD_VERSION <version>] [STAMP_VERSION <version>]
+    #                 [ENV <NAME=value>...])
+    #
+    # ENV entries are appended to the environment verbatim, in the order given,
+    # and are how a scenario reaches the recording stub's own fixture knobs.
+    function(add_stub_test name executable)
+        cmake_parse_arguments(PARSE_ARGV 2 ARG "" "HLI_DD_VERSION;STAMP_VERSION" "ENV")
+
+        set(environment "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+        if(DEFINED ARG_HLI_DD_VERSION)
+            list(APPEND environment "IMAS_MVDD_HLI_DD_VERSION=${ARG_HLI_DD_VERSION}")
+        endif()
+        if(DEFINED ARG_STAMP_VERSION)
+            list(APPEND environment "RECORDING_STUB_STAMP_VERSION=${ARG_STAMP_VERSION}")
+        endif()
+        foreach(entry IN LISTS ARG_ENV)
+            list(APPEND environment "${entry}")
+        endforeach()
+
+        add_test(NAME "${name}" COMMAND ${executable} ${ARG_UNPARSED_ARGUMENTS})
+        set_tests_properties("${name}" PROPERTIES ENVIRONMENT "${environment}")
+    endfunction()
+
     if(IMAS_MVDD_REAL_CORE_TESTS)
         get_target_property(_imas_core_include_dirs ${IMAS_CORE_AL_TARGET}
             INTERFACE_INCLUDE_DIRECTORIES)
@@ -395,9 +432,7 @@ if(IMAS_MVDD_BUILD_TESTS)
             COMMAND "${CMAKE_COMMAND}" -E env
                 --unset=IMAS_CORE_LIBRARY -- $<TARGET_FILE:abi_smoke>)
     else()
-        add_test(NAME abi-smoke COMMAND abi_smoke)
-        set_tests_properties(abi-smoke PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+        add_stub_test(abi-smoke abi_smoke)
     endif()
 
     if(IMAS_MVDD_REAL_CORE_TESTS)
@@ -463,9 +498,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_target_properties(runtime_binding_test PROPERTIES
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
-    add_test(NAME runtime-binding-success COMMAND runtime_binding_test success)
-    set_tests_properties(runtime-binding-success PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+    add_stub_test(runtime-binding-success runtime_binding_test success)
 
     add_test(NAME runtime-binding-version-drift-tolerated
         COMMAND runtime_binding_test version-drift)
@@ -475,33 +508,24 @@ if(IMAS_MVDD_BUILD_TESTS)
         PASS_REGULAR_EXPRESSION
             "tolerating IMAS-Core version drift.*built against ${IMAS_CORE_VERSION}, found ${IMAS_CORE_DRIFT_VERSION}")
 
-    add_test(NAME runtime-binding-version-mismatch COMMAND runtime_binding_test version-mismatch)
-    set_tests_properties(runtime-binding-version-mismatch PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_VERSION=${IMAS_CORE_INCOMPATIBLE_VERSION}")
+    add_stub_test(runtime-binding-version-mismatch runtime_binding_test version-mismatch
+        ENV "RECORDING_STUB_VERSION=${IMAS_CORE_INCOMPATIBLE_VERSION}")
 
-    add_test(NAME runtime-binding-null-version COMMAND runtime_binding_test null-version)
-    set_tests_properties(runtime-binding-null-version PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_NULL_VERSION=1")
+    add_stub_test(runtime-binding-null-version runtime_binding_test null-version
+        ENV "RECORDING_STUB_NULL_VERSION=1")
 
     add_test(NAME runtime-binding-missing-library COMMAND runtime_binding_test missing-library)
     set_tests_properties(runtime-binding-missing-library PROPERTIES ENVIRONMENT
         "IMAS_CORE_LIBRARY=${CMAKE_CURRENT_BINARY_DIR}/does-not-exist.so")
 
-    add_test(NAME runtime-binding-verbatim-forwarding COMMAND runtime_binding_test verbatim-forwarding)
-    set_tests_properties(runtime-binding-verbatim-forwarding PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+    add_stub_test(runtime-binding-verbatim-forwarding runtime_binding_test verbatim-forwarding)
 
-    add_test(NAME runtime-binding-plugin-forwarding COMMAND runtime_binding_test plugin-forwarding)
-    set_tests_properties(runtime-binding-plugin-forwarding PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+    add_stub_test(runtime-binding-plugin-forwarding runtime_binding_test plugin-forwarding)
 
     add_test(NAME runtime-binding-plugin-timerange-omitted
         COMMAND runtime_binding_test plugin-timerange-omitted)
 
-    add_test(NAME runtime-binding-utility-forwarding
-        COMMAND runtime_binding_test utility-forwarding)
-    set_tests_properties(runtime-binding-utility-forwarding PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+    add_stub_test(runtime-binding-utility-forwarding runtime_binding_test utility-forwarding)
 
     add_test(NAME runtime-binding-bare-soname COMMAND runtime_binding_test bare-soname)
     if(APPLE)
@@ -542,22 +566,17 @@ if(IMAS_MVDD_BUILD_TESTS)
     add_test(NAME hli-dd-version-concurrent-identical-setters-all-succeed
         COMMAND hli_dd_version_test concurrent-identical-setters-all-succeed)
 
-    add_test(NAME hli-dd-version-setter-precedes-environment
-        COMMAND hli_dd_version_test setter-precedes-environment)
-    set_tests_properties(hli-dd-version-setter-precedes-environment PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=not-a-version")
+    add_stub_test(hli-dd-version-setter-precedes-environment
+        hli_dd_version_test setter-precedes-environment
+        HLI_DD_VERSION not-a-version)
 
-    add_test(NAME hli-dd-version-valid-environment-latches-on-first-open
-        COMMAND hli_dd_version_test valid-environment-latches-on-first-open)
-    set_tests_properties(hli-dd-version-valid-environment-latches-on-first-open PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+    add_stub_test(hli-dd-version-valid-environment-latches-on-first-open
+        hli_dd_version_test valid-environment-latches-on-first-open
+        HLI_DD_VERSION 4.1.1)
 
-    add_test(NAME hli-dd-version-invalid-environment-fails-first-open
-        COMMAND hli_dd_version_test invalid-environment-fails-first-open)
-    set_tests_properties(hli-dd-version-invalid-environment-fails-first-open PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=not-a-version")
+    add_stub_test(hli-dd-version-invalid-environment-fails-first-open
+        hli_dd_version_test invalid-environment-fails-first-open
+        HLI_DD_VERSION not-a-version)
 
     add_test(NAME hli-dd-version-unset-first-open-then-setter-refused
         COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
@@ -582,16 +601,11 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_target_properties(version_discovery_test PROPERTIES
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
-    add_test(NAME version-discovery-dataentry-success-forwards-uri-and-mode
-        COMMAND version_discovery_test dataentry-success-forwards-uri-and-mode)
-    set_tests_properties(version-discovery-dataentry-success-forwards-uri-and-mode PROPERTIES
-        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+    add_stub_test(version-discovery-dataentry-success-forwards-uri-and-mode version_discovery_test dataentry-success-forwards-uri-and-mode)
 
-    add_test(NAME version-discovery-dataentry-failure-forwards-status-unchanged
-        COMMAND version_discovery_test dataentry-failure-forwards-status-unchanged)
-    set_tests_properties(version-discovery-dataentry-failure-forwards-status-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_DATAENTRY_FAIL=1")
+    add_stub_test(version-discovery-dataentry-failure-forwards-status-unchanged
+        version_discovery_test dataentry-failure-forwards-status-unchanged
+        ENV "RECORDING_STUB_DATAENTRY_FAIL=1")
 
     add_test(NAME version-discovery-hli-unset-global-action-is-plain-forward
         COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
@@ -599,41 +613,32 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(version-discovery-hli-unset-global-action-is-plain-forward PROPERTIES
         ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
 
-    add_test(NAME version-discovery-unstamped-occurrence-forwards-datapath-unchanged
-        COMMAND version_discovery_test unstamped-occurrence-forwards-datapath-unchanged)
-    set_tests_properties(version-discovery-unstamped-occurrence-forwards-datapath-unchanged
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+    add_stub_test(version-discovery-unstamped-occurrence-forwards-datapath-unchanged
+        version_discovery_test unstamped-occurrence-forwards-datapath-unchanged
+        HLI_DD_VERSION 4.1.1)
 
-    add_test(NAME version-discovery-matching-version-forwards-datapath-unchanged
-        COMMAND version_discovery_test matching-version-forwards-datapath-unchanged)
-    set_tests_properties(version-discovery-matching-version-forwards-datapath-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(version-discovery-matching-version-forwards-datapath-unchanged
+        version_discovery_test matching-version-forwards-datapath-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME version-discovery-mismatch-translates-datapath-on-second-open
-        COMMAND version_discovery_test mismatch-translates-datapath-on-second-open)
-    set_tests_properties(version-discovery-mismatch-translates-datapath-on-second-open PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(version-discovery-mismatch-translates-datapath-on-second-open
+        version_discovery_test mismatch-translates-datapath-on-second-open
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME version-discovery-unstamped-stamp-clears-an-earlier-mismatch
-        COMMAND version_discovery_test unstamped-stamp-clears-an-earlier-mismatch)
-    set_tests_properties(version-discovery-unstamped-stamp-clears-an-earlier-mismatch PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+    add_stub_test(version-discovery-unstamped-stamp-clears-an-earlier-mismatch
+        version_discovery_test unstamped-stamp-clears-an-earlier-mismatch
+        HLI_DD_VERSION 4.1.1)
 
-    add_test(NAME version-discovery-failed-stamp-read-clears-an-earlier-mismatch
-        COMMAND version_discovery_test failed-stamp-read-clears-an-earlier-mismatch)
-    set_tests_properties(version-discovery-failed-stamp-read-clears-an-earlier-mismatch PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+    add_stub_test(version-discovery-failed-stamp-read-clears-an-earlier-mismatch
+        version_discovery_test failed-stamp-read-clears-an-earlier-mismatch
+        HLI_DD_VERSION 4.1.1)
 
-    add_test(NAME version-discovery-malformed-stamp-refuses-and-ends-context
-        COMMAND version_discovery_test malformed-stamp-refuses-and-ends-context)
-    set_tests_properties(version-discovery-malformed-stamp-refuses-and-ends-context PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=not-a-version")
+    add_stub_test(version-discovery-malformed-stamp-refuses-and-ends-context
+        version_discovery_test malformed-stamp-refuses-and-ends-context
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION not-a-version)
 
     # --- al_begin_slice_action / al_begin_timerange_action apply the same
     # rule as global action (issue #55) ---
@@ -644,37 +649,29 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(version-discovery-slice-action-hli-unset-is-plain-forward PROPERTIES
         ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
 
-    add_test(NAME version-discovery-slice-action-unstamped-forwards-ids-name-unchanged
-        COMMAND version_discovery_test slice-action-unstamped-forwards-ids-name-unchanged)
-    set_tests_properties(version-discovery-slice-action-unstamped-forwards-ids-name-unchanged
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+    add_stub_test(version-discovery-slice-action-unstamped-forwards-ids-name-unchanged
+        version_discovery_test slice-action-unstamped-forwards-ids-name-unchanged
+        HLI_DD_VERSION 4.1.1)
 
-    add_test(NAME version-discovery-slice-action-matching-version-forwards-ids-name-unchanged
-        COMMAND version_discovery_test slice-action-matching-version-forwards-ids-name-unchanged)
-    set_tests_properties(version-discovery-slice-action-matching-version-forwards-ids-name-unchanged
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(version-discovery-slice-action-matching-version-forwards-ids-name-unchanged
+        version_discovery_test slice-action-matching-version-forwards-ids-name-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME version-discovery-slice-action-mismatch-registers-occurrence-for-global-action
-        COMMAND version_discovery_test
-            slice-action-mismatch-registers-occurrence-for-global-action)
-    set_tests_properties(
-        version-discovery-slice-action-mismatch-registers-occurrence-for-global-action
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(version-discovery-slice-action-mismatch-registers-occurrence-for-global-action
+        version_discovery_test slice-action-mismatch-registers-occurrence-for-global-action
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME version-discovery-slice-action-malformed-stamp-refuses-and-ends-context
-        COMMAND version_discovery_test slice-action-malformed-stamp-refuses-and-ends-context)
-    set_tests_properties(version-discovery-slice-action-malformed-stamp-refuses-and-ends-context
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=not-a-version")
+    add_stub_test(version-discovery-slice-action-malformed-stamp-refuses-and-ends-context
+        version_discovery_test slice-action-malformed-stamp-refuses-and-ends-context
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION not-a-version)
 
-    add_test(NAME version-discovery-slice-action-failure-forwards-status-unchanged
-        COMMAND version_discovery_test slice-action-failure-forwards-status-unchanged)
-    set_tests_properties(version-discovery-slice-action-failure-forwards-status-unchanged
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_SLICE_FAIL=1")
+    add_stub_test(version-discovery-slice-action-failure-forwards-status-unchanged
+        version_discovery_test slice-action-failure-forwards-status-unchanged
+        HLI_DD_VERSION 4.1.1
+        ENV "RECORDING_STUB_SLICE_FAIL=1")
 
     add_test(NAME version-discovery-timerange-action-hli-unset-is-plain-forward
         COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
@@ -682,40 +679,29 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(version-discovery-timerange-action-hli-unset-is-plain-forward PROPERTIES
         ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
 
-    add_test(NAME version-discovery-timerange-action-unstamped-forwards-ids-name-unchanged
-        COMMAND version_discovery_test timerange-action-unstamped-forwards-ids-name-unchanged)
-    set_tests_properties(version-discovery-timerange-action-unstamped-forwards-ids-name-unchanged
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+    add_stub_test(version-discovery-timerange-action-unstamped-forwards-ids-name-unchanged
+        version_discovery_test timerange-action-unstamped-forwards-ids-name-unchanged
+        HLI_DD_VERSION 4.1.1)
 
-    add_test(NAME version-discovery-timerange-action-matching-version-forwards-ids-name-unchanged
-        COMMAND version_discovery_test
-            timerange-action-matching-version-forwards-ids-name-unchanged)
-    set_tests_properties(
-        version-discovery-timerange-action-matching-version-forwards-ids-name-unchanged
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(version-discovery-timerange-action-matching-version-forwards-ids-name-unchanged
+        version_discovery_test timerange-action-matching-version-forwards-ids-name-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME
-        version-discovery-timerange-action-mismatch-registers-occurrence-for-global-action
-        COMMAND version_discovery_test
-            timerange-action-mismatch-registers-occurrence-for-global-action)
-    set_tests_properties(
-        version-discovery-timerange-action-mismatch-registers-occurrence-for-global-action
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(version-discovery-timerange-action-mismatch-registers-occurrence-for-global-action
+        version_discovery_test timerange-action-mismatch-registers-occurrence-for-global-action
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME version-discovery-timerange-action-malformed-stamp-refuses-and-ends-context
-        COMMAND version_discovery_test timerange-action-malformed-stamp-refuses-and-ends-context)
-    set_tests_properties(version-discovery-timerange-action-malformed-stamp-refuses-and-ends-context
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=not-a-version")
+    add_stub_test(version-discovery-timerange-action-malformed-stamp-refuses-and-ends-context
+        version_discovery_test timerange-action-malformed-stamp-refuses-and-ends-context
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION not-a-version)
 
-    add_test(NAME version-discovery-timerange-action-failure-forwards-status-unchanged
-        COMMAND version_discovery_test timerange-action-failure-forwards-status-unchanged)
-    set_tests_properties(version-discovery-timerange-action-failure-forwards-status-unchanged
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_TIMERANGE_FAIL=1")
+    add_stub_test(version-discovery-timerange-action-failure-forwards-status-unchanged
+        version_discovery_test timerange-action-failure-forwards-status-unchanged
+        HLI_DD_VERSION 4.1.1
+        ENV "RECORDING_STUB_TIMERANGE_FAIL=1")
 
     # --- Issue #56: ordinary read-path outcomes through the public C ABI ---
     add_executable(read_path_test
@@ -727,58 +713,56 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_target_properties(read_path_test PROPERTIES
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
-    add_test(NAME read-path-translates-field-and-timebase-independently
-        COMMAND read_path_test translates-field-and-timebase-independently)
-    set_tests_properties(read-path-translates-field-and-timebase-independently PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(read-path-translates-field-and-timebase-independently
+        read_path_test translates-field-and-timebase-independently
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME read-path-forward-direction-translates-and-reports-no-source
-        COMMAND read_path_test forward-direction-translates-and-reports-no-source)
-    set_tests_properties(read-path-forward-direction-translates-and-reports-no-source PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(read-path-forward-direction-translates-and-reports-no-source
+        read_path_test forward-direction-translates-and-reports-no-source
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME read-path-identity-rule-returns-data
-        COMMAND read_path_test identity-rule-returns-data)
-    set_tests_properties(read-path-identity-rule-returns-data PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(read-path-identity-rule-returns-data read_path_test identity-rule-returns-data
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME read-path-merged-read-falls-through-to-next-candidate
-        COMMAND read_path_test merged-read-falls-through-to-next-candidate)
-    set_tests_properties(read-path-merged-read-falls-through-to-next-candidate PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_NOT_FOUND_FIELD=time_slice/ggd/b_field_phi")
-    add_test(NAME read-path-merged-read-stops-at-first-candidate-with-data
-        COMMAND read_path_test merged-read-stops-at-first-candidate-with-data)
-    set_tests_properties(read-path-merged-read-stops-at-first-candidate-with-data PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
-    add_test(NAME read-path-merged-read-returns-not-found-when-all-candidates-are-absent
-        COMMAND read_path_test merged-read-returns-not-found-when-all-candidates-are-absent)
-    set_tests_properties(read-path-merged-read-returns-not-found-when-all-candidates-are-absent PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_NOT_FOUND=1")
-    add_test(NAME read-path-split-plan-reads-and-flips-its-first-stored-destination
-        COMMAND read_path_test split-plan-reads-and-flips-its-first-stored-destination)
-    set_tests_properties(read-path-split-plan-reads-and-flips-its-first-stored-destination PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1;RECORDING_STUB_READ_DOUBLE=1")
-    add_test(NAME read-path-reverse-split-read-flips-its-single-stored-source
-        COMMAND read_path_test reverse-split-read-flips-its-single-stored-source)
-    set_tests_properties(read-path-reverse-split-read-flips-its-single-stored-source PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_DOUBLE=1")
+    add_stub_test(read-path-merged-read-falls-through-to-next-candidate
+        read_path_test merged-read-falls-through-to-next-candidate
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_READ_NOT_FOUND_FIELD=time_slice/ggd/b_field_phi")
+    add_stub_test(read-path-merged-read-stops-at-first-candidate-with-data
+        read_path_test merged-read-stops-at-first-candidate-with-data
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(read-path-merged-read-returns-not-found-when-all-candidates-are-absent
+        read_path_test merged-read-returns-not-found-when-all-candidates-are-absent
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_READ_NOT_FOUND=1")
+    add_stub_test(read-path-split-plan-reads-and-flips-its-first-stored-destination
+        read_path_test split-plan-reads-and-flips-its-first-stored-destination
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1
+        ENV "RECORDING_STUB_READ_DOUBLE=1")
+    add_stub_test(read-path-reverse-split-read-flips-its-single-stored-source
+        read_path_test reverse-split-read-flips-its-single-stored-source
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_READ_DOUBLE=1")
 
-    add_test(NAME read-path-no-source-returns-null-without-core-call
-        COMMAND read_path_test no-source-returns-null-without-core-call)
-    set_tests_properties(read-path-no-source-returns-null-without-core-call PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(read-path-no-source-returns-null-without-core-call
+        read_path_test no-source-returns-null-without-core-call
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
     # All conversion-refusal scenarios need the same known mismatched
     # occurrence. Keep that shared seam setup in one place.
     function(add_read_path_refusal_test name scenario)
-        add_test(NAME "${name}" COMMAND read_path_test "${scenario}")
-        set_tests_properties("${name}" PROPERTIES
-            ENVIRONMENT
-                "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+        add_stub_test("${name}" read_path_test "${scenario}"
+            HLI_DD_VERSION 4.1.1
+            STAMP_VERSION 3.39.0)
     endfunction()
 
     add_read_path_refusal_test(read-path-rank-changing-retype-refuses-without-core-call
@@ -790,68 +774,64 @@ if(IMAS_MVDD_BUILD_TESTS)
     add_read_path_refusal_test(read-path-sign-flip-rank-exceeding-maxdim-refuses-without-core-call
         sign-flip-rank-exceeding-maxdim-refuses-without-core-call)
 
-    add_test(NAME read-path-sign-flip-array-negates-values-and-preserves-empty-double
-        COMMAND read_path_test sign-flip-array-negates-values-and-preserves-empty-double)
-    set_tests_properties(read-path-sign-flip-array-negates-values-and-preserves-empty-double PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-9e40,3.2,-4.0")
+    add_stub_test(read-path-sign-flip-array-negates-values-and-preserves-empty-double
+        read_path_test sign-flip-array-negates-values-and-preserves-empty-double
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-9e40,3.2,-4.0")
 
     # ADR 0014: a read re-entering the shim beneath an in-flight read is
     # forwarded untouched. The stub's reentrant-read knob reproduces on any
     # platform what real IMAS-Core only does on ELF.
-    add_test(NAME read-path-reentrant-read-is-forwarded-unchanged
-        COMMAND read_path_test reentrant-read-is-forwarded-unchanged)
-    set_tests_properties(read-path-reentrant-read-is-forwarded-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(read-path-reentrant-read-is-forwarded-unchanged
+        read_path_test reentrant-read-is-forwarded-unchanged
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME read-path-reentrant-read-does-not-reapply-a-sign-flip
-        COMMAND read_path_test reentrant-read-does-not-reapply-a-sign-flip)
-    set_tests_properties(read-path-reentrant-read-does-not-reapply-a-sign-flip PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-9e40,3.2,-4.0")
+    add_stub_test(read-path-reentrant-read-does-not-reapply-a-sign-flip
+        read_path_test reentrant-read-does-not-reapply-a-sign-flip
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-9e40,3.2,-4.0")
 
-    add_test(NAME read-path-sign-flip-invalid-shape-refuses-without-modifying-buffer
-        COMMAND read_path_test sign-flip-invalid-shape-refuses-without-modifying-buffer)
-    set_tests_properties(read-path-sign-flip-invalid-shape-refuses-without-modifying-buffer PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_DOUBLE=1;RECORDING_STUB_READ_SIZE_CSV=2147483647,2147483647,2147483647")
+    add_stub_test(read-path-sign-flip-invalid-shape-refuses-without-modifying-buffer
+        read_path_test sign-flip-invalid-shape-refuses-without-modifying-buffer
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_READ_DOUBLE=1"
+        "RECORDING_STUB_READ_SIZE_CSV=2147483647,2147483647,2147483647")
 
-    add_test(NAME read-path-sign-flip-shape-override-respects-read-rank
-        COMMAND read_path_test sign-flip-shape-override-respects-read-rank)
-    set_tests_properties(read-path-sign-flip-shape-override-respects-read-rank PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_DOUBLE=1;RECORDING_STUB_READ_SIZE_CSV=1,42")
+    add_stub_test(read-path-sign-flip-shape-override-respects-read-rank
+        read_path_test sign-flip-shape-override-respects-read-rank
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_READ_DOUBLE=1"
+        "RECORDING_STUB_READ_SIZE_CSV=1,42")
 
-    add_test(NAME read-path-sign-flip-not-found-skips-value-transformation
-        COMMAND read_path_test sign-flip-not-found-skips-value-transformation)
-    set_tests_properties(read-path-sign-flip-not-found-skips-value-transformation PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_NOT_FOUND=1")
+    add_stub_test(read-path-sign-flip-not-found-skips-value-transformation
+        read_path_test sign-flip-not-found-skips-value-transformation
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_READ_NOT_FOUND=1")
 
-    add_test(NAME read-path-resolves-relative-field-and-absolute-timebase
-        COMMAND read_path_test resolves-relative-field-and-absolute-timebase)
-    set_tests_properties(read-path-resolves-relative-field-and-absolute-timebase PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(read-path-resolves-relative-field-and-absolute-timebase
+        read_path_test resolves-relative-field-and-absolute-timebase
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME read-path-matching-context-bypasses-conversion
-        COMMAND read_path_test matching-context-bypasses-conversion)
-    set_tests_properties(read-path-matching-context-bypasses-conversion PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(read-path-matching-context-bypasses-conversion
+        read_path_test matching-context-bypasses-conversion
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME read-path-unknown-context-bypasses-conversion
-        COMMAND read_path_test unknown-context-bypasses-conversion)
-    set_tests_properties(read-path-unknown-context-bypasses-conversion PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(read-path-unknown-context-bypasses-conversion
+        read_path_test unknown-context-bypasses-conversion
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME read-path-unstamped-context-bypasses-conversion
-        COMMAND read_path_test unstamped-context-bypasses-conversion)
-    set_tests_properties(read-path-unstamped-context-bypasses-conversion PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+    add_stub_test(read-path-unstamped-context-bypasses-conversion
+        read_path_test unstamped-context-bypasses-conversion
+        HLI_DD_VERSION 4.1.1)
 
     add_test(NAME read-path-conversion-disabled-bypasses-conversion
         COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
@@ -859,42 +839,38 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(read-path-conversion-disabled-bypasses-conversion PROPERTIES
         ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
 
-    add_test(NAME read-path-core-failure-propagates-unchanged
-        COMMAND read_path_test core-failure-propagates-unchanged)
-    set_tests_properties(read-path-core-failure-propagates-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_FAIL=1")
+    add_stub_test(read-path-core-failure-propagates-unchanged
+        read_path_test core-failure-propagates-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_READ_FAIL=1")
 
     # --- Issue #65: the root-context fidelity loss log and its query exports ---
     # Both scenarios below need the HLI reading in its own, 3.39.0 spelling
     # (Direction::Forward) to hit a rule this artifact declares lossy in that
     # direction: fold-ggd-bfield (merged) and move-gap (moved).
-    add_test(NAME read-path-merged-read-retains-a-lossy-verdict-in-the-loss-log
-        COMMAND read_path_test merged-read-retains-a-lossy-verdict-in-the-loss-log)
-    set_tests_properties(read-path-merged-read-retains-a-lossy-verdict-in-the-loss-log PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(read-path-merged-read-retains-a-lossy-verdict-in-the-loss-log
+        read_path_test merged-read-retains-a-lossy-verdict-in-the-loss-log
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME read-path-moved-read-retains-a-lossy-verdict-in-the-loss-log
-        COMMAND read_path_test moved-read-retains-a-lossy-verdict-in-the-loss-log)
-    set_tests_properties(read-path-moved-read-retains-a-lossy-verdict-in-the-loss-log PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(read-path-moved-read-retains-a-lossy-verdict-in-the-loss-log
+        read_path_test moved-read-retains-a-lossy-verdict-in-the-loss-log
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME read-path-ending-context-destroys-its-loss-log
-        COMMAND read_path_test ending-context-destroys-its-loss-log)
-    set_tests_properties(read-path-ending-context-destroys-its-loss-log PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(read-path-ending-context-destroys-its-loss-log
+        read_path_test ending-context-destroys-its-loss-log
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
 
     # The remaining query-export safety scenarios only need any live
     # non-exact loss entry to query against, so they reuse the standard
     # mismatched occurrence fixture like the refusal scenarios above.
     function(add_loss_query_test name scenario)
-        add_test(NAME "${name}" COMMAND read_path_test "${scenario}")
-        set_tests_properties("${name}" PROPERTIES
-            ENVIRONMENT
-                "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+        add_stub_test("${name}" read_path_test "${scenario}"
+            HLI_DD_VERSION 3.39.0
+            STAMP_VERSION 4.1.1)
     endfunction()
 
     add_loss_query_test(read-path-loss-count-null-output-is-refused
@@ -923,10 +899,9 @@ if(IMAS_MVDD_BUILD_TESTS)
     # All scenarios below need the same known mismatched equilibrium
     # occurrence. Keep that shared seam setup in one place.
     function(add_write_delete_mismatched_test name scenario)
-        add_test(NAME "${name}" COMMAND write_delete_conversion_test "${scenario}")
-        set_tests_properties("${name}" PROPERTIES
-            ENVIRONMENT
-                "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+        add_stub_test("${name}" write_delete_conversion_test "${scenario}"
+            HLI_DD_VERSION 4.1.1
+            STAMP_VERSION 3.39.0)
     endfunction()
 
     add_write_delete_mismatched_test(write-delete-write-refuses-under-known-mismatched-root-before-core-call
@@ -940,35 +915,29 @@ if(IMAS_MVDD_BUILD_TESTS)
     add_write_delete_mismatched_test(write-delete-delete-nested-child-context-refuses-through-mismatched-root
         delete-nested-child-context-refuses-through-mismatched-root)
 
-    add_test(NAME write-delete-write-unstamped-context-forwards-unchanged
-        COMMAND write_delete_conversion_test write-unstamped-context-forwards-unchanged)
-    set_tests_properties(write-delete-write-unstamped-context-forwards-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+    add_stub_test(write-delete-write-unstamped-context-forwards-unchanged
+        write_delete_conversion_test write-unstamped-context-forwards-unchanged
+        HLI_DD_VERSION 4.1.1)
 
-    add_test(NAME write-delete-write-matching-context-forwards-unchanged
-        COMMAND write_delete_conversion_test write-matching-context-forwards-unchanged)
-    set_tests_properties(write-delete-write-matching-context-forwards-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(write-delete-write-matching-context-forwards-unchanged
+        write_delete_conversion_test write-matching-context-forwards-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME write-delete-plugin-write-matching-context-forwards-unchanged
-        COMMAND write_delete_conversion_test plugin-write-matching-context-forwards-unchanged)
-    set_tests_properties(write-delete-plugin-write-matching-context-forwards-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(write-delete-plugin-write-matching-context-forwards-unchanged
+        write_delete_conversion_test plugin-write-matching-context-forwards-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME write-delete-delete-matching-context-forwards-unchanged
-        COMMAND write_delete_conversion_test delete-matching-context-forwards-unchanged)
-    set_tests_properties(write-delete-delete-matching-context-forwards-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(write-delete-delete-matching-context-forwards-unchanged
+        write_delete_conversion_test delete-matching-context-forwards-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME write-delete-write-unknown-context-forwards-unchanged
-        COMMAND write_delete_conversion_test write-unknown-context-forwards-unchanged)
-    set_tests_properties(write-delete-write-unknown-context-forwards-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(write-delete-write-unknown-context-forwards-unchanged
+        write_delete_conversion_test write-unknown-context-forwards-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
     add_test(NAME write-delete-write-conversion-disabled-forwards-unchanged
         COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
@@ -976,17 +945,14 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(write-delete-write-conversion-disabled-forwards-unchanged PROPERTIES
         ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
 
-    add_test(NAME write-delete-delete-unknown-context-forwards-unchanged
-        COMMAND write_delete_conversion_test delete-unknown-context-forwards-unchanged)
-    set_tests_properties(write-delete-delete-unknown-context-forwards-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(write-delete-delete-unknown-context-forwards-unchanged
+        write_delete_conversion_test delete-unknown-context-forwards-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME write-delete-delete-unstamped-context-forwards-unchanged
-        COMMAND write_delete_conversion_test delete-unstamped-context-forwards-unchanged)
-    set_tests_properties(write-delete-delete-unstamped-context-forwards-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+    add_stub_test(write-delete-delete-unstamped-context-forwards-unchanged
+        write_delete_conversion_test delete-unstamped-context-forwards-unchanged
+        HLI_DD_VERSION 4.1.1)
 
     add_test(NAME write-delete-delete-conversion-disabled-forwards-unchanged
         COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
@@ -1004,47 +970,40 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_target_properties(arraystruct_path_test PROPERTIES
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
-    add_test(NAME arraystruct-path-translates-renamed-container-and-timebase
-        COMMAND arraystruct_path_test translates-renamed-container-and-timebase)
-    set_tests_properties(arraystruct-path-translates-renamed-container-and-timebase PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(arraystruct-path-translates-renamed-container-and-timebase
+        arraystruct_path_test translates-renamed-container-and-timebase
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME arraystruct-path-translates-absolute-path-and-relative-timebase
-        COMMAND arraystruct_path_test translates-absolute-path-and-relative-timebase)
-    set_tests_properties(arraystruct-path-translates-absolute-path-and-relative-timebase PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(arraystruct-path-translates-absolute-path-and-relative-timebase
+        arraystruct_path_test translates-absolute-path-and-relative-timebase
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME arraystruct-path-failed-open-propagates-without-child-record
-        COMMAND arraystruct_path_test failed-open-propagates-without-child-record)
-    set_tests_properties(arraystruct-path-failed-open-propagates-without-child-record PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_ARRAYSTRUCT_FAIL=1")
+    add_stub_test(arraystruct-path-failed-open-propagates-without-child-record
+        arraystruct_path_test failed-open-propagates-without-child-record
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_ARRAYSTRUCT_FAIL=1")
 
-    add_test(NAME arraystruct-path-no-source-refuses-before-core
-        COMMAND arraystruct_path_test no-source-refuses-before-core)
-    set_tests_properties(arraystruct-path-no-source-refuses-before-core PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(arraystruct-path-no-source-refuses-before-core
+        arraystruct_path_test no-source-refuses-before-core
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME arraystruct-path-matching-parent-forwards-unchanged
-        COMMAND arraystruct_path_test plain-parent-forwards-unchanged)
-    set_tests_properties(arraystruct-path-matching-parent-forwards-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(arraystruct-path-matching-parent-forwards-unchanged
+        arraystruct_path_test plain-parent-forwards-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME arraystruct-path-unstamped-parent-forwards-unchanged
-        COMMAND arraystruct_path_test plain-parent-forwards-unchanged)
-    set_tests_properties(arraystruct-path-unstamped-parent-forwards-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+    add_stub_test(arraystruct-path-unstamped-parent-forwards-unchanged
+        arraystruct_path_test plain-parent-forwards-unchanged
+        HLI_DD_VERSION 4.1.1)
 
-    add_test(NAME arraystruct-path-unknown-parent-forwards-unchanged
-        COMMAND arraystruct_path_test unknown-parent-forwards-unchanged)
-    set_tests_properties(arraystruct-path-unknown-parent-forwards-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(arraystruct-path-unknown-parent-forwards-unchanged
+        arraystruct_path_test unknown-parent-forwards-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
     add_test(NAME arraystruct-path-conversion-disabled-parent-forwards-unchanged
         COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
@@ -1062,64 +1021,47 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_target_properties(nested_context_read_test PROPERTIES
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
-    add_test(NAME nested-context-read-relative-field-and-timebase-resolve-through-renamed-child
-        COMMAND nested_context_read_test
-            relative-field-and-timebase-resolve-through-renamed-child)
-    set_tests_properties(
-        nested-context-read-relative-field-and-timebase-resolve-through-renamed-child PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(nested-context-read-relative-field-and-timebase-resolve-through-renamed-child
+        nested_context_read_test relative-field-and-timebase-resolve-through-renamed-child
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME nested-context-read-absolute-field-outside-child-subtree-resolves-from-ids-root
-        COMMAND nested_context_read_test
-            absolute-field-outside-child-subtree-resolves-from-ids-root)
-    set_tests_properties(
-        nested-context-read-absolute-field-outside-child-subtree-resolves-from-ids-root PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(nested-context-read-absolute-field-outside-child-subtree-resolves-from-ids-root
+        nested_context_read_test absolute-field-outside-child-subtree-resolves-from-ids-root
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME nested-context-read-no-source-returns-null-through-nested-child
-        COMMAND nested_context_read_test no-source-returns-null-through-nested-child)
-    set_tests_properties(nested-context-read-no-source-returns-null-through-nested-child PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(nested-context-read-no-source-returns-null-through-nested-child
+        nested_context_read_test no-source-returns-null-through-nested-child
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME nested-context-read-refusal-stops-before-core-through-nested-child
-        COMMAND nested_context_read_test refusal-stops-before-core-through-nested-child)
-    set_tests_properties(nested-context-read-refusal-stops-before-core-through-nested-child PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(nested-context-read-refusal-stops-before-core-through-nested-child
+        nested_context_read_test refusal-stops-before-core-through-nested-child
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME nested-context-read-sign-flip-applies-through-nested-child
-        COMMAND nested_context_read_test sign-flip-applies-through-nested-child)
-    set_tests_properties(nested-context-read-sign-flip-applies-through-nested-child PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1;RECORDING_STUB_READ_DOUBLE=1")
+    add_stub_test(nested-context-read-sign-flip-applies-through-nested-child
+        nested_context_read_test sign-flip-applies-through-nested-child
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1
+        ENV "RECORDING_STUB_READ_DOUBLE=1")
 
     # --- Issue #66: nested non-exact reads attribute to their root's loss log ---
-    add_test(NAME nested-context-read-moved-read-through-nested-child-retains-lossy-verdict-on-root
-        COMMAND nested_context_read_test
-            moved-read-through-nested-child-retains-lossy-verdict-on-root)
-    set_tests_properties(
-        nested-context-read-moved-read-through-nested-child-retains-lossy-verdict-on-root
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(nested-context-read-moved-read-through-nested-child-retains-lossy-verdict-on-root
+        nested_context_read_test moved-read-through-nested-child-retains-lossy-verdict-on-root
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME nested-context-read-merged-read-through-nested-child-retains-potentially-lossy-verdict
-        COMMAND nested_context_read_test
-            merged-read-through-nested-child-retains-potentially-lossy-verdict)
-    set_tests_properties(
-        nested-context-read-merged-read-through-nested-child-retains-potentially-lossy-verdict
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(nested-context-read-merged-read-through-nested-child-retains-potentially-lossy-verdict
+        nested_context_read_test merged-read-through-nested-child-retains-potentially-lossy-verdict
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME nested-context-read-ending-root-before-child-destroys-the-shared-loss-log
-        COMMAND nested_context_read_test
-            ending-root-before-child-destroys-the-shared-loss-log)
-    set_tests_properties(
-        nested-context-read-ending-root-before-child-destroys-the-shared-loss-log PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(nested-context-read-ending-root-before-child-destroys-the-shared-loss-log
+        nested_context_read_test ending-root-before-child-destroys-the-shared-loss-log
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
     # --- Issue #63: context lifecycle (al_end_action,
     # al_iterate_over_arraystruct, al_close_pulse) against the recording
     # stub --------------------------------------------------------------
@@ -1132,53 +1074,38 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_target_properties(context_lifecycle_test PROPERTIES
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
-    add_test(NAME context-lifecycle-ending-child-removes-only-its-own-record
-        COMMAND context_lifecycle_test ending-child-removes-only-its-own-record)
-    set_tests_properties(context-lifecycle-ending-child-removes-only-its-own-record PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(context-lifecycle-ending-child-removes-only-its-own-record
+        context_lifecycle_test ending-child-removes-only-its-own-record
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME context-lifecycle-ending-root-removes-only-its-own-record
-        COMMAND context_lifecycle_test ending-root-removes-only-its-own-record)
-    set_tests_properties(context-lifecycle-ending-root-removes-only-its-own-record PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(context-lifecycle-ending-root-removes-only-its-own-record
+        context_lifecycle_test ending-root-removes-only-its-own-record
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME context-lifecycle-failed-end-action-leaves-the-record-intact
-        COMMAND context_lifecycle_test failed-end-action-leaves-the-record-intact)
-    set_tests_properties(context-lifecycle-failed-end-action-leaves-the-record-intact PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(context-lifecycle-failed-end-action-leaves-the-record-intact
+        context_lifecycle_test failed-end-action-leaves-the-record-intact
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME context-lifecycle-recycled-id-cannot-observe-the-released-record
-        COMMAND context_lifecycle_test recycled-id-cannot-observe-the-released-record)
-    set_tests_properties(context-lifecycle-recycled-id-cannot-observe-the-released-record
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+    add_stub_test(context-lifecycle-recycled-id-cannot-observe-the-released-record
+        context_lifecycle_test recycled-id-cannot-observe-the-released-record
+        HLI_DD_VERSION 4.1.1)
 
-    add_test(NAME context-lifecycle-iterate-over-arraystruct-forwards-unchanged-and-mutates-nothing
-        COMMAND context_lifecycle_test
-            iterate-over-arraystruct-forwards-unchanged-and-mutates-nothing)
-    set_tests_properties(
-        context-lifecycle-iterate-over-arraystruct-forwards-unchanged-and-mutates-nothing
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(context-lifecycle-iterate-over-arraystruct-forwards-unchanged-and-mutates-nothing
+        context_lifecycle_test iterate-over-arraystruct-forwards-unchanged-and-mutates-nothing
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME context-lifecycle-close-pulse-forwards-unchanged-and-never-mutates-the-registry
-        COMMAND context_lifecycle_test
-            close-pulse-forwards-unchanged-and-never-mutates-the-registry)
-    set_tests_properties(
-        context-lifecycle-close-pulse-forwards-unchanged-and-never-mutates-the-registry
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+    add_stub_test(context-lifecycle-close-pulse-forwards-unchanged-and-never-mutates-the-registry
+        context_lifecycle_test close-pulse-forwards-unchanged-and-never-mutates-the-registry
+        HLI_DD_VERSION 4.1.1)
 
-    add_test(NAME context-lifecycle-ending-dataentry-context-leaves-live-operation-and-child-records-intact
-        COMMAND context_lifecycle_test
-            ending-dataentry-context-leaves-live-operation-and-child-records-intact)
-    set_tests_properties(
-        context-lifecycle-ending-dataentry-context-leaves-live-operation-and-child-records-intact
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(context-lifecycle-ending-dataentry-context-leaves-live-operation-and-child-records-intact
+        context_lifecycle_test ending-dataentry-context-leaves-live-operation-and-child-records-intact
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
     # --- Issue #67: give the al_plugin_* reentry twins the same context
     # creation, path translation, and lifecycle behavior as their ordinary
@@ -1198,42 +1125,29 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(plugin-reentry-policy-plugin-global-hli-unset-is-plain-forward PROPERTIES
         ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
 
-    add_test(NAME plugin-reentry-policy-plugin-global-unstamped-forwards-datapath-unchanged
-        COMMAND plugin_reentry_policy_test plugin-global-unstamped-forwards-datapath-unchanged)
-    set_tests_properties(
-        plugin-reentry-policy-plugin-global-unstamped-forwards-datapath-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1")
+    add_stub_test(plugin-reentry-policy-plugin-global-unstamped-forwards-datapath-unchanged
+        plugin_reentry_policy_test plugin-global-unstamped-forwards-datapath-unchanged
+        HLI_DD_VERSION 4.1.1)
 
-    add_test(NAME plugin-reentry-policy-plugin-global-matching-version-forwards-datapath-unchanged
-        COMMAND plugin_reentry_policy_test
-            plugin-global-matching-version-forwards-datapath-unchanged)
-    set_tests_properties(
-        plugin-reentry-policy-plugin-global-matching-version-forwards-datapath-unchanged
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(plugin-reentry-policy-plugin-global-matching-version-forwards-datapath-unchanged
+        plugin_reentry_policy_test plugin-global-matching-version-forwards-datapath-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 4.1.1)
 
-    add_test(NAME plugin-reentry-policy-plugin-global-mismatch-translates-datapath-on-second-open
-        COMMAND plugin_reentry_policy_test
-            plugin-global-mismatch-translates-datapath-on-second-open)
-    set_tests_properties(
-        plugin-reentry-policy-plugin-global-mismatch-translates-datapath-on-second-open
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(plugin-reentry-policy-plugin-global-mismatch-translates-datapath-on-second-open
+        plugin_reentry_policy_test plugin-global-mismatch-translates-datapath-on-second-open
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME plugin-reentry-policy-plugin-global-malformed-stamp-refuses-and-ends-context
-        COMMAND plugin_reentry_policy_test
-            plugin-global-malformed-stamp-refuses-and-ends-context)
-    set_tests_properties(
-        plugin-reentry-policy-plugin-global-malformed-stamp-refuses-and-ends-context PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=not-a-version")
+    add_stub_test(plugin-reentry-policy-plugin-global-malformed-stamp-refuses-and-ends-context
+        plugin_reentry_policy_test plugin-global-malformed-stamp-refuses-and-ends-context
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION not-a-version)
 
-    add_test(NAME plugin-reentry-policy-plugin-global-failure-forwards-status-unchanged
-        COMMAND plugin_reentry_policy_test plugin-global-failure-forwards-status-unchanged)
-    set_tests_properties(plugin-reentry-policy-plugin-global-failure-forwards-status-unchanged
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_PLUGIN_GLOBAL_FAIL=1")
+    add_stub_test(plugin-reentry-policy-plugin-global-failure-forwards-status-unchanged
+        plugin_reentry_policy_test plugin-global-failure-forwards-status-unchanged
+        HLI_DD_VERSION 4.1.1
+        ENV "RECORDING_STUB_PLUGIN_GLOBAL_FAIL=1")
 
     add_test(NAME plugin-reentry-policy-plugin-slice-hli-unset-is-plain-forward
         COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
@@ -1241,111 +1155,84 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(plugin-reentry-policy-plugin-slice-hli-unset-is-plain-forward PROPERTIES
         ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
 
-    add_test(NAME
-        plugin-reentry-policy-plugin-slice-mismatch-registers-occurrence-for-plugin-global-action
-        COMMAND plugin_reentry_policy_test
-            plugin-slice-mismatch-registers-occurrence-for-plugin-global-action)
-    set_tests_properties(
-        plugin-reentry-policy-plugin-slice-mismatch-registers-occurrence-for-plugin-global-action
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(plugin-reentry-policy-plugin-slice-mismatch-registers-occurrence-for-plugin-global-action
+        plugin_reentry_policy_test plugin-slice-mismatch-registers-occurrence-for-plugin-global-action
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME plugin-reentry-policy-plugin-slice-malformed-stamp-refuses-and-ends-context
-        COMMAND plugin_reentry_policy_test
-            plugin-slice-malformed-stamp-refuses-and-ends-context)
-    set_tests_properties(
-        plugin-reentry-policy-plugin-slice-malformed-stamp-refuses-and-ends-context PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=not-a-version")
+    add_stub_test(plugin-reentry-policy-plugin-slice-malformed-stamp-refuses-and-ends-context
+        plugin_reentry_policy_test plugin-slice-malformed-stamp-refuses-and-ends-context
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION not-a-version)
 
-    add_test(NAME plugin-reentry-policy-plugin-slice-failure-forwards-status-unchanged
-        COMMAND plugin_reentry_policy_test plugin-slice-failure-forwards-status-unchanged)
-    set_tests_properties(plugin-reentry-policy-plugin-slice-failure-forwards-status-unchanged
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_PLUGIN_SLICE_FAIL=1")
+    add_stub_test(plugin-reentry-policy-plugin-slice-failure-forwards-status-unchanged
+        plugin_reentry_policy_test plugin-slice-failure-forwards-status-unchanged
+        HLI_DD_VERSION 4.1.1
+        ENV "RECORDING_STUB_PLUGIN_SLICE_FAIL=1")
 
-    add_test(NAME plugin-reentry-policy-plugin-arraystruct-translates-under-mismatch
-        COMMAND plugin_reentry_policy_test plugin-arraystruct-translates-under-mismatch)
-    set_tests_properties(plugin-reentry-policy-plugin-arraystruct-translates-under-mismatch
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(plugin-reentry-policy-plugin-arraystruct-translates-under-mismatch
+        plugin_reentry_policy_test plugin-arraystruct-translates-under-mismatch
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME
-        plugin-reentry-policy-plugin-arraystruct-failed-open-propagates-without-child-record
-        COMMAND plugin_reentry_policy_test
-            plugin-arraystruct-failed-open-propagates-without-child-record)
-    set_tests_properties(
-        plugin-reentry-policy-plugin-arraystruct-failed-open-propagates-without-child-record
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_PLUGIN_ARRAYSTRUCT_FAIL=1")
+    add_stub_test(plugin-reentry-policy-plugin-arraystruct-failed-open-propagates-without-child-record
+        plugin_reentry_policy_test plugin-arraystruct-failed-open-propagates-without-child-record
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_PLUGIN_ARRAYSTRUCT_FAIL=1")
 
-    add_test(NAME plugin-reentry-policy-plugin-arraystruct-no-source-refuses-before-core
-        COMMAND plugin_reentry_policy_test plugin-arraystruct-no-source-refuses-before-core)
-    set_tests_properties(plugin-reentry-policy-plugin-arraystruct-no-source-refuses-before-core
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(plugin-reentry-policy-plugin-arraystruct-no-source-refuses-before-core
+        plugin_reentry_policy_test plugin-arraystruct-no-source-refuses-before-core
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME plugin-reentry-policy-plugin-arraystruct-unknown-parent-forwards-unchanged
-        COMMAND plugin_reentry_policy_test plugin-arraystruct-unknown-parent-forwards-unchanged)
-    set_tests_properties(
-        plugin-reentry-policy-plugin-arraystruct-unknown-parent-forwards-unchanged PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(plugin-reentry-policy-plugin-arraystruct-unknown-parent-forwards-unchanged
+        plugin_reentry_policy_test plugin-arraystruct-unknown-parent-forwards-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME plugin-reentry-policy-plugin-end-action-removes-only-its-own-record
-        COMMAND plugin_reentry_policy_test plugin-end-action-removes-only-its-own-record)
-    set_tests_properties(plugin-reentry-policy-plugin-end-action-removes-only-its-own-record
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(plugin-reentry-policy-plugin-end-action-removes-only-its-own-record
+        plugin_reentry_policy_test plugin-end-action-removes-only-its-own-record
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME plugin-reentry-policy-plugin-end-action-failed-leaves-the-record-intact
-        COMMAND plugin_reentry_policy_test
-            plugin-end-action-failed-leaves-the-record-intact)
-    set_tests_properties(
-        plugin-reentry-policy-plugin-end-action-failed-leaves-the-record-intact PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(plugin-reentry-policy-plugin-end-action-failed-leaves-the-record-intact
+        plugin_reentry_policy_test plugin-end-action-failed-leaves-the-record-intact
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
     # --- Issue #68: al_plugin_read_data follows al_read_data's policy exactly ---
-    add_test(NAME plugin-reentry-policy-plugin-read-translates-field-under-mismatch
-        COMMAND plugin_reentry_policy_test plugin-read-translates-field-under-mismatch)
-    set_tests_properties(plugin-reentry-policy-plugin-read-translates-field-under-mismatch
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(plugin-reentry-policy-plugin-read-translates-field-under-mismatch
+        plugin_reentry_policy_test plugin-read-translates-field-under-mismatch
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME plugin-reentry-policy-plugin-read-refusal-before-core
-        COMMAND plugin_reentry_policy_test plugin-read-refusal-before-core)
-    set_tests_properties(plugin-reentry-policy-plugin-read-refusal-before-core PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(plugin-reentry-policy-plugin-read-refusal-before-core
+        plugin_reentry_policy_test plugin-read-refusal-before-core
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME plugin-reentry-policy-plugin-read-no-source-returns-null-without-core-call
-        COMMAND plugin_reentry_policy_test
-            plugin-read-no-source-returns-null-without-core-call)
-    set_tests_properties(
-        plugin-reentry-policy-plugin-read-no-source-returns-null-without-core-call PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0")
+    add_stub_test(plugin-reentry-policy-plugin-read-no-source-returns-null-without-core-call
+        plugin_reentry_policy_test plugin-read-no-source-returns-null-without-core-call
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-    add_test(NAME plugin-reentry-policy-plugin-read-merged-candidate-falls-through
-        COMMAND plugin_reentry_policy_test plugin-read-merged-candidate-falls-through)
-    set_tests_properties(plugin-reentry-policy-plugin-read-merged-candidate-falls-through
-        PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_NOT_FOUND_FIELD=time_slice/ggd/b_field_phi")
+    add_stub_test(plugin-reentry-policy-plugin-read-merged-candidate-falls-through
+        plugin_reentry_policy_test plugin-read-merged-candidate-falls-through
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_READ_NOT_FOUND_FIELD=time_slice/ggd/b_field_phi")
 
-    add_test(NAME plugin-reentry-policy-plugin-read-sign-flip-negates-values
-        COMMAND plugin_reentry_policy_test plugin-read-sign-flip-negates-values)
-    set_tests_properties(plugin-reentry-policy-plugin-read-sign-flip-negates-values PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_DOUBLE=1")
+    add_stub_test(plugin-reentry-policy-plugin-read-sign-flip-negates-values
+        plugin_reentry_policy_test plugin-read-sign-flip-negates-values
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_READ_DOUBLE=1")
 
-    add_test(NAME plugin-reentry-policy-plugin-read-through-child-context-retains-loss-on-root
-        COMMAND plugin_reentry_policy_test
-            plugin-read-through-child-context-retains-loss-on-root)
-    set_tests_properties(
-        plugin-reentry-policy-plugin-read-through-child-context-retains-loss-on-root PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+    add_stub_test(plugin-reentry-policy-plugin-read-through-child-context-retains-loss-on-root
+        plugin_reentry_policy_test plugin-read-through-child-context-retains-loss-on-root
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
 
     # --- Issue #69: conversion stays inside its declared seam list ---------
     #
@@ -1366,10 +1253,10 @@ if(IMAS_MVDD_BUILD_TESTS)
         BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
     function(add_scoped_passthrough_test name scenario)
-        add_test(NAME "${name}" COMMAND scoped_passthrough_test "${scenario}")
-        set_tests_properties("${name}" PROPERTIES
-            ENVIRONMENT
-                "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_FILLED_PATHS_CSV=time_slice/global_quantities/beta_normal,time_slice/global_quantities/ip")
+        add_stub_test("${name}" scoped_passthrough_test "${scenario}"
+            HLI_DD_VERSION 4.1.1
+            STAMP_VERSION 3.39.0
+            ENV "RECORDING_STUB_FILLED_PATHS_CSV=time_slice/global_quantities/beta_normal,time_slice/global_quantities/ip")
     endfunction()
 
     add_scoped_passthrough_test(scoped-passthrough-get-occurrences-forwards-ids-name-unchanged

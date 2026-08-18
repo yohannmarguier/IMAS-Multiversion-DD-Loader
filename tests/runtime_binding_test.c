@@ -25,8 +25,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <imas_mvdd_loader.h>
-
 #ifndef RECORDING_STUB_PATH
 #error "RECORDING_STUB_PATH must be defined by the build (see CMakeLists.txt)"
 #endif
@@ -40,20 +38,13 @@
 #error "SHIM_LIBRARY_PATH must be defined by the build"
 #endif
 
+#include "shim_test_support.h"
+
 typedef int (*int_accessor_fn)(void);
 typedef const char *(*indexed_str_accessor_fn)(int index);
 typedef double (*double_accessor_fn)(void);
 typedef const char *(*str_accessor_fn)(void);
 typedef const void *(*ptr_accessor_fn)(void);
-
-#define CHECK(condition)                                                        \
-    do {                                                                        \
-        if (!(condition)) {                                                     \
-            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
-                    #condition);                                                \
-            exit(EXIT_FAILURE);                                                 \
-        }                                                                       \
-    } while (0)
 
 #define CHECK_PLUGIN_CALL(count, symbol)                                        \
     do {                                                                        \
@@ -70,15 +61,6 @@ static void *dlsym_or_die(void *handle, const char *name) {
     return symbol;
 }
 
-static void *open_stub_for_introspection(void) {
-    void *handle = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
-    if (handle == NULL) {
-        fprintf(stderr, "failed to dlopen the recording stub for introspection: %s\n", dlerror());
-        abort();
-    }
-    return handle;
-}
-
 static void check_context_info(int ctx, const char *expected_info) {
     char *info = NULL;
     al_status_t status = al_context_info(ctx, &info);
@@ -90,7 +72,7 @@ static void check_context_info(int ctx, const char *expected_info) {
 }
 
 static void scenario_success(void) {
-    void *stub = open_stub_for_introspection();
+    void *stub = open_recording_stub();
     int_accessor_fn call_count = (int_accessor_fn)dlsym_or_die(stub, "recording_stub_call_count");
     int_accessor_fn last_ctx = (int_accessor_fn)dlsym_or_die(stub, "recording_stub_last_ctx");
     int_accessor_fn version_call_count =
@@ -111,7 +93,7 @@ static void scenario_success(void) {
 }
 
 static void scenario_version_drift(void) {
-    void *stub = open_stub_for_introspection();
+    void *stub = open_recording_stub();
     int_accessor_fn version_call_count =
         (int_accessor_fn)dlsym_or_die(stub, "recording_stub_version_call_count");
 
@@ -131,7 +113,7 @@ static void scenario_version_drift(void) {
 }
 
 static void scenario_version_mismatch(void) {
-    void *stub = open_stub_for_introspection();
+    void *stub = open_recording_stub();
     int_accessor_fn call_count = (int_accessor_fn)dlsym_or_die(stub, "recording_stub_call_count");
     int_accessor_fn utility_call_count =
         (int_accessor_fn)dlsym_or_die(stub, "recording_stub_utility_call_count");
@@ -174,7 +156,7 @@ static void scenario_version_mismatch(void) {
 }
 
 static void scenario_null_version(void) {
-    void *stub = open_stub_for_introspection();
+    void *stub = open_recording_stub();
     int_accessor_fn call_count = (int_accessor_fn)dlsym_or_die(stub, "recording_stub_call_count");
 
     char *info = NULL;
@@ -229,7 +211,7 @@ static void scenario_bare_soname(void) {
     CHECK(status.code == 0);
     free(info);
 
-    void *stub = open_stub_for_introspection();
+    void *stub = open_recording_stub();
     int_accessor_fn last_ctx = (int_accessor_fn)dlsym_or_die(stub, "recording_stub_last_ctx");
     CHECK(last_ctx() == 11);
 
@@ -242,7 +224,7 @@ static void scenario_bare_soname(void) {
  * arrived unmodified and every output the stub produced comes back through
  * the shim unmodified too. */
 static void scenario_verbatim_forwarding(void) {
-    void *stub = open_stub_for_introspection();
+    void *stub = open_recording_stub();
 
     /* al_begin_dataentry_action */
     {
@@ -565,7 +547,7 @@ static void scenario_verbatim_forwarding(void) {
  * al_plugin_* reentry twins are seams (they carry fieldPath); the rest of
  * this family forwards verbatim with no path argument. */
 static void scenario_plugin_forwarding(void) {
-    void *stub = open_stub_for_introspection();
+    void *stub = open_recording_stub();
     int_accessor_fn call_count =
         (int_accessor_fn)dlsym_or_die(stub, "recording_stub_plugin_call_count");
     str_accessor_fn last_symbol =
@@ -701,7 +683,7 @@ static void scenario_plugin_timerange_omitted(void) {
  * generated header and the runtime forwarding boundary without coupling to
  * resolver internals. */
 static void scenario_utility_forwarding(void) {
-    void *stub = open_stub_for_introspection();
+    void *stub = open_recording_stub();
     int_accessor_fn call_count =
         (int_accessor_fn)dlsym_or_die(stub, "recording_stub_utility_call_count");
     str_accessor_fn last_symbol =
@@ -767,43 +749,18 @@ static void scenario_utility_forwarding(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,
-                "usage: %s "
-                "<success|version-drift|version-mismatch|null-version|missing-library|"
-                "bare-soname|verbatim-forwarding|plugin-forwarding|plugin-timerange-omitted|"
-                "utility-forwarding|real-core>\n",
-                argv[0]);
-        return 2;
-    }
-
-    const char *scenario = argv[1];
-    if (strcmp(scenario, "success") == 0) {
-        scenario_success();
-    } else if (strcmp(scenario, "real-core") == 0) {
-        scenario_real_core();
-    } else if (strcmp(scenario, "version-drift") == 0) {
-        scenario_version_drift();
-    } else if (strcmp(scenario, "version-mismatch") == 0) {
-        scenario_version_mismatch();
-    } else if (strcmp(scenario, "null-version") == 0) {
-        scenario_null_version();
-    } else if (strcmp(scenario, "missing-library") == 0) {
-        scenario_missing_library();
-    } else if (strcmp(scenario, "bare-soname") == 0) {
-        scenario_bare_soname();
-    } else if (strcmp(scenario, "verbatim-forwarding") == 0) {
-        scenario_verbatim_forwarding();
-    } else if (strcmp(scenario, "plugin-forwarding") == 0) {
-        scenario_plugin_forwarding();
-    } else if (strcmp(scenario, "plugin-timerange-omitted") == 0) {
-        scenario_plugin_timerange_omitted();
-    } else if (strcmp(scenario, "utility-forwarding") == 0) {
-        scenario_utility_forwarding();
-    } else {
-        fprintf(stderr, "unknown scenario: %s\n", scenario);
-        return 2;
-    }
-
-    return 0;
+    static const shim_test_scenario scenarios[] = {
+        {"success", scenario_success},
+        {"real-core", scenario_real_core},
+        {"version-drift", scenario_version_drift},
+        {"version-mismatch", scenario_version_mismatch},
+        {"null-version", scenario_null_version},
+        {"missing-library", scenario_missing_library},
+        {"bare-soname", scenario_bare_soname},
+        {"verbatim-forwarding", scenario_verbatim_forwarding},
+        {"plugin-forwarding", scenario_plugin_forwarding},
+        {"plugin-timerange-omitted", scenario_plugin_timerange_omitted},
+        {"utility-forwarding", scenario_utility_forwarding},
+    };
+    return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

@@ -48,7 +48,6 @@
 //! `al_begin_arraystruct_action` registers their live conversion-record
 //! children (issue #54). `al_read_data` then looks up either record to
 //! resolve its field in the stored DD's spelling.
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
@@ -110,6 +109,18 @@ pub(crate) struct ConversionRecord {
     pub hli_version: DdVersion,
     /// The context ID of this record's direct parent, or `None` for a root
     /// record.
+    ///
+    /// Nothing outside this module's tests reads it: conversion resolves a
+    /// child to its root in one lookup through `root_id` (issue #65), never by
+    /// walking ancestry. It is retained because those tests are the only place
+    /// the registry's parentage rules are pinned — that a child records the
+    /// parent it was actually opened under, that a root has none, and that a
+    /// recycled parent ID does not retroactively re-parent an existing child.
+    /// Dropping the field would mean dropping those assertions.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which pin the parentage rules"
+    )]
     parent_id: Option<ContextId>,
 }
 
@@ -268,6 +279,12 @@ impl ContextRegistry {
     /// beneath it — its own ID — if `ctx_id` names a live data-entry
     /// context; `None` otherwise, including for a conversion record or an
     /// unrecorded/recycled ID.
+    ///
+    /// Only this module's tests call it, as the one way to ask from outside
+    /// whether an ID is a live pulse context without going through a seam.
+    /// The seams themselves never need to ask: each already holds the pulse
+    /// context it was called with.
+    #[allow(dead_code, reason = "the tests' only handle on data-entry entries")]
     pub(crate) fn pulse_ctx_id(&self, ctx_id: ContextId) -> Option<ContextId> {
         match self.state.lock().unwrap().entries.get(&ctx_id) {
             Some(Entry::DataEntry(_)) => Some(ctx_id),

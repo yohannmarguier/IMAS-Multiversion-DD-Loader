@@ -11,7 +11,10 @@
 //! because this read is entirely shim-internal (the HLI never sees it), the
 //! shim frees it itself exactly once — the ordinary "HLI frees it" ownership
 //! contract (ADR 0006) does not apply here, since there is no HLI-visible
-//! buffer to hand back.
+//! buffer to hand back. This is the shim's only `free` call, and ADR 0010
+//! records it as the one deliberate exception to its own rule that the shim
+//! never frees an IMAS-Core allocation, so the exception is auditable there
+//! rather than resting on this comment alone.
 //!
 //! The stamp is decoded from the bytes IMAS-Core reported via `size`, never
 //! by scanning for a NUL terminator: a malloc'd CHAR_DATA buffer carries no
@@ -27,9 +30,6 @@ use crate::read_outcome::{self, ReadOutcome};
 /// call (the trailing byte here has nothing to do with how the *returned*
 /// stamp is decoded, which never scans for one).
 const VERSION_STAMP_FIELD: &[u8] = b"ids_properties/version_put/data_dictionary\0";
-
-/// Mirrors `resolve::CHAR_DATA_ID` (`al_const.h`'s `CHAR_DATA`).
-const CHAR_DATA_ID: c_int = 50;
 
 /// The classified result of one DD-version-stamp discovery read.
 pub(crate) enum StampOutcome {
@@ -69,7 +69,7 @@ pub(crate) fn discover(octx_id: c_int) -> StampOutcome {
             field,
             c"".as_ptr(),
             &mut data,
-            CHAR_DATA_ID,
+            crate::resolve::CHAR_DATA_ID,
             1,
             &mut size,
         )

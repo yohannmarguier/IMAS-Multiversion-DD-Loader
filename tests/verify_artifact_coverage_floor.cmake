@@ -33,14 +33,22 @@ function(count_entries file count_variable)
     set("${count_variable}" "${count}" PARENT_SCOPE)
 endfunction()
 
-# Pulls one direction's integers out of the report line. Asserting on the
-# substring `supported=` alone -- which ends at the `=` -- passed whatever
-# followed it, so `supported=5` satisfied a gate meant to protect 342.
+# Pulls one direction's integers out of the report line, and checks that the two
+# decompositions it prints actually add up.
+#
+# This check began as a search for the substrings "supported=", "deliberate
+# refusal=" and "absent stored source=" — each ending at the `=`, so it passed on
+# any report merely shaped like a report, `supported=0` included. That is the
+# kind of easily-satisfied summary check ADR 0013 exists to reject, and a
+# collapse from 342 to 5 would have gone unnoticed.
 function(read_direction output direction supported_variable total_variable)
+    # The version dots are literal, not regex wildcards; a gate must not match a
+    # direction it was not asked about.
+    string(REPLACE "." "\\." direction_pattern "${direction}")
     if(NOT output MATCHES
-            "shim ${direction}: supported=([0-9]+), by rule=([0-9]+), by identity default=([0-9]+), deliberate refusal=([0-9]+), absent stored source=([0-9]+), total=([0-9]+)")
+            "shim ${direction_pattern}: supported=([0-9]+), by rule=([0-9]+), by identity default=([0-9]+), deliberate refusal=([0-9]+), absent stored source=([0-9]+), total=([0-9]+)")
         message(FATAL_ERROR
-            "the report has no parsable `shim ${direction}` line:\n${output}")
+            "the report has no numeric counts for `shim ${direction}`:\n${output}")
     endif()
     set(supported "${CMAKE_MATCH_1}")
     set(by_rule "${CMAKE_MATCH_2}")
@@ -58,8 +66,9 @@ function(read_direction output direction supported_variable total_variable)
     math(EXPR classified_sum "${supported} + ${refusal} + ${absent}")
     if(NOT classified_sum EQUAL total)
         message(FATAL_ERROR
-            "`shim ${direction}`: the three outcome counts sum to ${classified_sum}, "
-            "not total=${total}")
+            "`shim ${direction}`: supported=${supported} + deliberate refusal=${refusal} + "
+            "absent stored source=${absent} is ${classified_sum}, which does not account for "
+            "total=${total}:\n${output}")
     endif()
 
     set("${supported_variable}" "${supported}" PARENT_SCOPE)
@@ -80,7 +89,9 @@ read_direction("${approved_output}" "3.39.0 -> 4.1.1" forward_supported forward_
 read_direction("${approved_output}" "4.1.1 -> 3.39.0" reverse_supported reverse_total)
 
 # The report must have swept every inventory path, not a subset: its own total is
-# checked against the inventory files the artifact names as its two sides.
+# checked against the inventory files the artifact names as its two sides. This
+# subsumes the weaker "the report claims an empty inventory" check it replaces —
+# an empty sweep now fails by naming both numbers.
 if(NOT forward_total EQUAL left_inventory_size)
     message(FATAL_ERROR
         "the forward direction swept ${forward_total} paths but the 3.39.0 inventory "
@@ -148,7 +159,7 @@ if(near_boundary_result EQUAL 0)
         "dropping rule `${NEAR_BOUNDARY_RULE_ID}` must be rejected: the artifact then serves "
         "one baseline mapping fewer than the floor:\n${near_boundary_output}")
 endif()
-if(NOT near_boundary_output MATCHES "3.39.0 -> 4.1.1 ${one_short}/${baseline_size}")
+if(NOT near_boundary_output MATCHES "3\\.39\\.0 -> 4\\.1\\.1 ${one_short}/${baseline_size}")
     message(FATAL_ERROR
         "dropping rule `${NEAR_BOUNDARY_RULE_ID}` must report exactly "
         "${one_short}/${baseline_size} mappings served forward:\n${near_boundary_output}")

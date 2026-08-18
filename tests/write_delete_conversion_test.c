@@ -13,66 +13,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <imas_mvdd_loader.h>
-
 #ifndef RECORDING_STUB_PATH
 #error "RECORDING_STUB_PATH must be defined by CMakeLists.txt"
 #endif
 
-#define CHECK(condition)                                                       \
-    do {                                                                       \
-        if (!(condition)) {                                                    \
-            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
-                    #condition);                                               \
-            exit(EXIT_FAILURE);                                                \
-        }                                                                      \
-    } while (0)
-
-typedef const char *(*string_accessor_fn)(void);
-typedef int (*int_accessor_fn)(void);
-typedef const void *(*pointer_accessor_fn)(void);
-
-static void *dlsym_or_die(void *handle, const char *name) {
-    void *symbol = dlsym(handle, name);
-    if (symbol == NULL) {
-        fprintf(stderr, "recording stub has no symbol '%s': %s\n", name, dlerror());
-        abort();
-    }
-    return symbol;
-}
-
-static void *open_stub(void) {
-    void *stub = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
-    if (stub == NULL) {
-        fprintf(stderr, "failed to open recording stub: %s\n", dlerror());
-        abort();
-    }
-    return stub;
-}
-
-static const char *string_from_stub(const char *symbol_name) {
-    string_accessor_fn accessor = (string_accessor_fn)dlsym_or_die(open_stub(), symbol_name);
-    return accessor();
-}
-
-static int int_from_stub(const char *symbol_name) {
-    int_accessor_fn accessor = (int_accessor_fn)dlsym_or_die(open_stub(), symbol_name);
-    return accessor();
-}
-
-static const void *pointer_from_stub(const char *symbol_name) {
-    pointer_accessor_fn accessor = (pointer_accessor_fn)dlsym_or_die(open_stub(), symbol_name);
-    return accessor();
-}
-
-static int open_mismatched_equilibrium(void) {
-    int pulse_ctx = -1;
-    CHECK(al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, &pulse_ctx).code == 0);
-
-    int operation_ctx = -1;
-    CHECK(al_begin_global_action(pulse_ctx, "equilibrium", "", 30, &operation_ctx).code == 0);
-    return operation_ctx;
-}
+#include "shim_test_support.h"
 
 static al_status_t write_field(int ctx_id, const char *field, const char *timebase, void *data,
                                 int *size) {
@@ -303,82 +248,21 @@ static void scenario_delete_conversion_disabled_forwards_unchanged(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,
-                "usage: %s <write-refuses-under-known-mismatched-root-before-core-call|"
-                "delete-refuses-under-known-mismatched-root-before-core-call|"
-                "plugin-write-refuses-under-known-mismatched-root-before-core-call|"
-                "plugin-write-matching-context-forwards-unchanged|"
-                "write-nested-child-context-refuses-through-mismatched-root|"
-                "delete-nested-child-context-refuses-through-mismatched-root|"
-                "write-matching-context-forwards-unchanged|"
-                "write-unknown-context-forwards-unchanged|"
-                "write-unstamped-context-forwards-unchanged|"
-                "write-conversion-disabled-forwards-unchanged|"
-                "delete-matching-context-forwards-unchanged|"
-                "delete-unknown-context-forwards-unchanged|"
-                "delete-unstamped-context-forwards-unchanged|"
-                "delete-conversion-disabled-forwards-unchanged>\n",
-                argv[0]);
-        return 2;
-    }
-    if (strcmp(argv[1], "write-refuses-under-known-mismatched-root-before-core-call") == 0) {
-        scenario_write_refuses_under_known_mismatched_root_before_core_call();
-        return 0;
-    }
-    if (strcmp(argv[1], "delete-refuses-under-known-mismatched-root-before-core-call") == 0) {
-        scenario_delete_refuses_under_known_mismatched_root_before_core_call();
-        return 0;
-    }
-    if (strcmp(argv[1], "plugin-write-refuses-under-known-mismatched-root-before-core-call") ==
-        0) {
-        scenario_plugin_write_refuses_under_known_mismatched_root_before_core_call();
-        return 0;
-    }
-    if (strcmp(argv[1], "plugin-write-matching-context-forwards-unchanged") == 0) {
-        scenario_plugin_write_matching_context_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "write-nested-child-context-refuses-through-mismatched-root") == 0) {
-        scenario_write_nested_child_context_refuses_through_mismatched_root();
-        return 0;
-    }
-    if (strcmp(argv[1], "delete-nested-child-context-refuses-through-mismatched-root") == 0) {
-        scenario_delete_nested_child_context_refuses_through_mismatched_root();
-        return 0;
-    }
-    if (strcmp(argv[1], "write-matching-context-forwards-unchanged") == 0) {
-        scenario_write_matching_context_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "write-unknown-context-forwards-unchanged") == 0) {
-        scenario_write_unknown_context_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "write-unstamped-context-forwards-unchanged") == 0) {
-        scenario_write_unstamped_context_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "write-conversion-disabled-forwards-unchanged") == 0) {
-        scenario_write_conversion_disabled_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "delete-matching-context-forwards-unchanged") == 0) {
-        scenario_delete_matching_context_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "delete-unknown-context-forwards-unchanged") == 0) {
-        scenario_delete_unknown_context_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "delete-unstamped-context-forwards-unchanged") == 0) {
-        scenario_delete_unstamped_context_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "delete-conversion-disabled-forwards-unchanged") == 0) {
-        scenario_delete_conversion_disabled_forwards_unchanged();
-        return 0;
-    }
-    fprintf(stderr, "unknown scenario: %s\n", argv[1]);
-    return 2;
+    static const shim_test_scenario scenarios[] = {
+        {"write-refuses-under-known-mismatched-root-before-core-call", scenario_write_refuses_under_known_mismatched_root_before_core_call},
+        {"delete-refuses-under-known-mismatched-root-before-core-call", scenario_delete_refuses_under_known_mismatched_root_before_core_call},
+        {"plugin-write-refuses-under-known-mismatched-root-before-core-call", scenario_plugin_write_refuses_under_known_mismatched_root_before_core_call},
+        {"plugin-write-matching-context-forwards-unchanged", scenario_plugin_write_matching_context_forwards_unchanged},
+        {"write-nested-child-context-refuses-through-mismatched-root", scenario_write_nested_child_context_refuses_through_mismatched_root},
+        {"delete-nested-child-context-refuses-through-mismatched-root", scenario_delete_nested_child_context_refuses_through_mismatched_root},
+        {"write-matching-context-forwards-unchanged", scenario_write_matching_context_forwards_unchanged},
+        {"write-unknown-context-forwards-unchanged", scenario_write_unknown_context_forwards_unchanged},
+        {"write-unstamped-context-forwards-unchanged", scenario_write_unstamped_context_forwards_unchanged},
+        {"write-conversion-disabled-forwards-unchanged", scenario_write_conversion_disabled_forwards_unchanged},
+        {"delete-matching-context-forwards-unchanged", scenario_delete_matching_context_forwards_unchanged},
+        {"delete-unknown-context-forwards-unchanged", scenario_delete_unknown_context_forwards_unchanged},
+        {"delete-unstamped-context-forwards-unchanged", scenario_delete_unstamped_context_forwards_unchanged},
+        {"delete-conversion-disabled-forwards-unchanged", scenario_delete_conversion_disabled_forwards_unchanged},
+    };
+    return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }
