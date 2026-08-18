@@ -30,7 +30,7 @@ static void scenario_translates_renamed_container_and_timebase(void) {
     void *data = NULL;
     int shape[1] = {0};
     CHECK(al_read_data(arraystruct_ctx,
-                       "/time_slice/constraints/b_field_pol_probe/measured", "", &data, 3,
+                       "/time_slice/constraints/b_field_pol_probe/measured", "", &data, 52,
                        1, shape)
               .code == 0);
     CHECK(data != NULL);
@@ -73,7 +73,7 @@ static void scenario_failed_open_propagates_without_child_record(void) {
     void *data = NULL;
     int shape[1] = {0};
     CHECK(al_read_data(arraystruct_ctx, "time_slice/global_quantities/beta_tor_norm", "", &data,
-                       3, 1, shape)
+                       52, 1, shape)
               .code == 0);
     CHECK(data != NULL);
     CHECK(strcmp(string_from_stub("recording_stub_read_field"),
@@ -100,7 +100,7 @@ static void scenario_no_source_refuses_before_core(void) {
     void *data = NULL;
     int shape[1] = {0};
     CHECK(al_read_data(arraystruct_ctx, "time_slice/global_quantities/beta_tor_norm", "", &data,
-                       3, 1, shape)
+                       52, 1, shape)
               .code == 0);
     CHECK(data != NULL);
     CHECK(strcmp(string_from_stub("recording_stub_read_field"),
