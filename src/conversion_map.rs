@@ -321,9 +321,35 @@ pub enum Rel {
     Renamed,
     Merged,
     Moved,
+    /// A path whose DD-side data type or rank changed. It always resolves to
+    /// [`RefusalReason::UnservableRetype`], whatever fidelity it declares,
+    /// because the shim cannot reshape a buffer — see
+    /// `ConversionMap::refusal_before_resolution`.
+    ///
+    /// The artifact may also carry a `shape` attribute describing the change
+    /// (the approved artifact's one retype says
+    /// `shape="int_1d:struct_array"`). The loader deliberately does not read
+    /// it: the refusal is unconditional, so no resolution decision could
+    /// depend on it, and parsing a value nothing consumes would imply the
+    /// engine acts on it. It is there for the physicist reviewing the rule.
     Retyped,
     Split,
+    /// A path present only on the artifact's left side.
+    ///
+    /// Only its *forward* fidelity is ever consulted. `ConversionMap::load`
+    /// indexes a `LeftOnly` rule into `left_sources` alone — it has no right
+    /// path to index — so a reverse resolve can never select it. That is not
+    /// a gap: reverse means the right side supplied the path, and this rule
+    /// exists precisely because the path is absent there. A declared
+    /// `reverse="unmappable"` is therefore documentation for the physicist
+    /// ("this cannot be reconstructed from the other version"), never a
+    /// refusal the resolver raises. `LeftOnly`'s mirror applies to
+    /// [`Self::RightOnly`]. `check_completeness` is what holds the
+    /// declaration honest, by proving the path really is absent from the
+    /// side the rule says it is absent from.
     LeftOnly,
+    /// A path present only on the artifact's right side. The mirror of
+    /// [`Self::LeftOnly`]: only its *reverse* fidelity is ever consulted.
     RightOnly,
 }
 
@@ -3149,6 +3175,116 @@ mod tests {
         assert_eq!(
             map.check_completeness(&left_inventory, &right_inventory),
             Ok(())
+        );
+    }
+
+    /// Pins which refusal reasons and selector stages the approved artifact can
+    /// actually reach, by sweeping both real inventories in both directions.
+    /// `check_completeness`'s doc comment already sets the precedent for
+    /// pinning a reachability fact rather than leaving a reader to derive it.
+    ///
+    /// Two of these facts are counter-intuitive and were both mis-read during
+    /// review, which is why they are asserted rather than commented:
+    ///
+    /// - `RefusalReason::Unmappable` is unreachable. The artifact declares
+    ///   `unmappable` thirty-six times, but every one sits on a `left_only`
+    ///   rule's `reverse` or a `right_only` rule's `forward` — the direction
+    ///   that rule can never be selected in, since it has no path indexed on
+    ///   that side (see [`Rel::LeftOnly`]). So the shipped artifact's refusals
+    ///   are only ever the shape one and the unit one, and this variant's real
+    ///   coverage is the synthetic-artifact tests, not this artifact.
+    /// - The glob selector stage is unreachable too: no rule in the artifact
+    ///   uses a glob selector. The four `<redefine glob="...">` entries do,
+    ///   but they are matched by `redefine_for` against a resolved right-side
+    ///   path, not by `best_match`'s stage ladder.
+    ///
+    /// Neither is a defect, and neither should be "fixed" by editing the
+    /// artifact. They bound what a green suite proves: if a future artifact
+    /// makes either reachable, this test fails and the reader is told to go
+    /// add real coverage for the mechanism rather than trusting the synthetic
+    /// tests alone (ADR 0011's "silence is earned by mechanism coverage").
+    #[test]
+    fn the_approved_artifact_reaches_only_its_shape_and_unit_refusals() {
+        let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
+        let left_inventory = parse_inventory(LEFT_INVENTORY_339);
+        let right_inventory = parse_inventory(RIGHT_INVENTORY_411);
+
+        for (label, inventory, direction, expected_retypes) in [
+            ("forward", &left_inventory, Direction::Forward, 1),
+            // The 4.1.1 inventory lists the retype's container and the
+            // `index` child its shape change introduced, so both refuse.
+            ("reverse", &right_inventory, Direction::Reverse, 2),
+        ] {
+            let mut retypes = 0;
+            let mut unit_redefinitions = 0;
+            let mut unmappables = 0;
+            let mut globs = 0;
+
+            for path in inventory {
+                let Some(explanation) = map.resolve(path, direction) else {
+                    continue;
+                };
+                if explanation.selector_stage == Some(SelectorStage::Glob) {
+                    globs += 1;
+                }
+                match explanation.outcome {
+                    Outcome::Refusal(RefusalReason::UnservableRetype) => retypes += 1,
+                    Outcome::Refusal(RefusalReason::UnitRedefinition) => unit_redefinitions += 1,
+                    Outcome::Refusal(RefusalReason::Unmappable) => unmappables += 1,
+                    _ => {}
+                }
+            }
+
+            assert_eq!(retypes, expected_retypes, "{label} retype refusals");
+            assert_eq!(unit_redefinitions, 4, "{label} unit-redefinition refusals");
+            assert_eq!(
+                unmappables, 0,
+                "{label}: RefusalReason::Unmappable became reachable from the approved \
+                 artifact -- its only coverage was synthetic, so add a real-artifact test"
+            );
+            assert_eq!(
+                globs, 0,
+                "{label}: the glob selector stage became reachable from the approved \
+                 artifact -- it had no real-artifact coverage, so add some"
+            );
+        }
+    }
+
+    /// The structural reason `RefusalReason::Unmappable` is unreachable above,
+    /// shown on one concrete rule rather than argued in prose.
+    ///
+    /// `drop-b-flux-pol-norm` is `left_only` over a DD3-only path and declares
+    /// `forward="lossy" reverse="unmappable"`. Forward, it is selected and
+    /// yields no source. Reverse, it cannot be selected at all — so the
+    /// identity default answers instead, and the `unmappable` it declares is
+    /// never consulted by anything.
+    #[test]
+    fn a_left_only_rules_reverse_fidelity_is_never_consulted() {
+        let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
+        let path = "time_slice/boundary/b_flux_pol_norm";
+
+        let forward = map
+            .resolve(path, Direction::Forward)
+            .expect("the left_only rule claims its own side");
+        assert_eq!(forward.match_kind, MatchKind::Explicit);
+        assert_eq!(forward.rule_id.as_deref(), Some("drop-b-flux-pol-norm"));
+        assert_eq!(forward.rel, Some(Rel::LeftOnly));
+        assert_eq!(forward.fidelity, Fidelity::Lossy);
+        assert_eq!(forward.outcome, Outcome::NoSource);
+
+        let reverse = map
+            .resolve(path, Direction::Reverse)
+            .expect("the identity default still answers");
+        assert_eq!(
+            reverse.match_kind,
+            MatchKind::Default,
+            "a left_only rule must not be selectable in reverse"
+        );
+        assert_eq!(reverse.rule_id, None);
+        assert_ne!(
+            reverse.fidelity,
+            Fidelity::Unmappable,
+            "the rule's declared reverse=unmappable is documentation, not a resolver outcome"
         );
     }
 
