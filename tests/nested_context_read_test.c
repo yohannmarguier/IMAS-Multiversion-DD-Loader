@@ -288,51 +288,15 @@ static void scenario_ending_root_before_child_destroys_the_shared_loss_log(void)
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,
-                "usage: %s <relative-field-and-timebase-resolve-through-renamed-child|"
-                "absolute-field-outside-child-subtree-resolves-from-ids-root|"
-                "no-source-returns-null-through-nested-child|"
-                "refusal-stops-before-core-through-nested-child|"
-                "sign-flip-applies-through-nested-child|"
-                "moved-read-through-nested-child-retains-lossy-verdict-on-root|"
-                "merged-read-through-nested-child-retains-potentially-lossy-verdict|"
-                "ending-root-before-child-destroys-the-shared-loss-log>\n",
-                argv[0]);
-        return 2;
-    }
-    if (strcmp(argv[1], "relative-field-and-timebase-resolve-through-renamed-child") == 0) {
-        scenario_relative_field_and_timebase_resolve_through_renamed_child();
-        return 0;
-    }
-    if (strcmp(argv[1], "absolute-field-outside-child-subtree-resolves-from-ids-root") == 0) {
-        scenario_absolute_field_outside_child_subtree_resolves_from_ids_root();
-        return 0;
-    }
-    if (strcmp(argv[1], "no-source-returns-null-through-nested-child") == 0) {
-        scenario_no_source_returns_null_through_nested_child();
-        return 0;
-    }
-    if (strcmp(argv[1], "refusal-stops-before-core-through-nested-child") == 0) {
-        scenario_refusal_stops_before_core_through_nested_child();
-        return 0;
-    }
-    if (strcmp(argv[1], "sign-flip-applies-through-nested-child") == 0) {
-        scenario_sign_flip_applies_through_nested_child();
-        return 0;
-    }
-    if (strcmp(argv[1], "moved-read-through-nested-child-retains-lossy-verdict-on-root") == 0) {
-        scenario_moved_read_through_nested_child_retains_lossy_verdict_on_root();
-        return 0;
-    }
-    if (strcmp(argv[1], "merged-read-through-nested-child-retains-potentially-lossy-verdict") == 0) {
-        scenario_merged_read_through_nested_child_retains_potentially_lossy_verdict();
-        return 0;
-    }
-    if (strcmp(argv[1], "ending-root-before-child-destroys-the-shared-loss-log") == 0) {
-        scenario_ending_root_before_child_destroys_the_shared_loss_log();
-        return 0;
-    }
-    fprintf(stderr, "unknown scenario: %s\n", argv[1]);
-    return 2;
+    static const shim_test_scenario scenarios[] = {
+        {"relative-field-and-timebase-resolve-through-renamed-child", scenario_relative_field_and_timebase_resolve_through_renamed_child},
+        {"absolute-field-outside-child-subtree-resolves-from-ids-root", scenario_absolute_field_outside_child_subtree_resolves_from_ids_root},
+        {"no-source-returns-null-through-nested-child", scenario_no_source_returns_null_through_nested_child},
+        {"refusal-stops-before-core-through-nested-child", scenario_refusal_stops_before_core_through_nested_child},
+        {"sign-flip-applies-through-nested-child", scenario_sign_flip_applies_through_nested_child},
+        {"moved-read-through-nested-child-retains-lossy-verdict-on-root", scenario_moved_read_through_nested_child_retains_lossy_verdict_on_root},
+        {"merged-read-through-nested-child-retains-potentially-lossy-verdict", scenario_merged_read_through_nested_child_retains_potentially_lossy_verdict},
+        {"ending-root-before-child-destroys-the-shared-loss-log", scenario_ending_root_before_child_destroys_the_shared_loss_log},
+    };
+    return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

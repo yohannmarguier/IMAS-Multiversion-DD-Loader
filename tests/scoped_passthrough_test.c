@@ -336,32 +336,11 @@ static void scenario_remaining_non_seam_exports_forward_unchanged(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,
-                "usage: %s "
-                "<get-occurrences-forwards-ids-name-unchanged|"
-                "list-filled-paths-forwards-name-and-returns-stored-paths-unchanged|"
-                "bind-and-unbind-plugin-forward-field-path-unchanged|"
-                "remaining-non-seam-exports-forward-unchanged>\n",
-                argv[0]);
-        return 2;
-    }
-
-    const char *scenario = argv[1];
-    if (strcmp(scenario, "get-occurrences-forwards-ids-name-unchanged") == 0) {
-        scenario_get_occurrences_forwards_ids_name_unchanged();
-    } else if (strcmp(scenario,
-                      "list-filled-paths-forwards-name-and-returns-stored-paths-unchanged")
-               == 0) {
-        scenario_list_filled_paths_forwards_name_and_returns_stored_paths_unchanged();
-    } else if (strcmp(scenario, "bind-and-unbind-plugin-forward-field-path-unchanged") == 0) {
-        scenario_bind_and_unbind_plugin_forward_field_path_unchanged();
-    } else if (strcmp(scenario, "remaining-non-seam-exports-forward-unchanged") == 0) {
-        scenario_remaining_non_seam_exports_forward_unchanged();
-    } else {
-        fprintf(stderr, "unknown scenario: %s\n", scenario);
-        return 2;
-    }
-
-    return 0;
+    static const shim_test_scenario scenarios[] = {
+        {"get-occurrences-forwards-ids-name-unchanged", scenario_get_occurrences_forwards_ids_name_unchanged},
+        {"list-filled-paths-forwards-name-and-returns-stored-paths-unchanged", scenario_list_filled_paths_forwards_name_and_returns_stored_paths_unchanged},
+        {"bind-and-unbind-plugin-forward-field-path-unchanged", scenario_bind_and_unbind_plugin_forward_field_path_unchanged},
+        {"remaining-non-seam-exports-forward-unchanged", scenario_remaining_non_seam_exports_forward_unchanged},
+    };
+    return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

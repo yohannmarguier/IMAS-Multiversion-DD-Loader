@@ -248,82 +248,21 @@ static void scenario_delete_conversion_disabled_forwards_unchanged(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,
-                "usage: %s <write-refuses-under-known-mismatched-root-before-core-call|"
-                "delete-refuses-under-known-mismatched-root-before-core-call|"
-                "plugin-write-refuses-under-known-mismatched-root-before-core-call|"
-                "plugin-write-matching-context-forwards-unchanged|"
-                "write-nested-child-context-refuses-through-mismatched-root|"
-                "delete-nested-child-context-refuses-through-mismatched-root|"
-                "write-matching-context-forwards-unchanged|"
-                "write-unknown-context-forwards-unchanged|"
-                "write-unstamped-context-forwards-unchanged|"
-                "write-conversion-disabled-forwards-unchanged|"
-                "delete-matching-context-forwards-unchanged|"
-                "delete-unknown-context-forwards-unchanged|"
-                "delete-unstamped-context-forwards-unchanged|"
-                "delete-conversion-disabled-forwards-unchanged>\n",
-                argv[0]);
-        return 2;
-    }
-    if (strcmp(argv[1], "write-refuses-under-known-mismatched-root-before-core-call") == 0) {
-        scenario_write_refuses_under_known_mismatched_root_before_core_call();
-        return 0;
-    }
-    if (strcmp(argv[1], "delete-refuses-under-known-mismatched-root-before-core-call") == 0) {
-        scenario_delete_refuses_under_known_mismatched_root_before_core_call();
-        return 0;
-    }
-    if (strcmp(argv[1], "plugin-write-refuses-under-known-mismatched-root-before-core-call") ==
-        0) {
-        scenario_plugin_write_refuses_under_known_mismatched_root_before_core_call();
-        return 0;
-    }
-    if (strcmp(argv[1], "plugin-write-matching-context-forwards-unchanged") == 0) {
-        scenario_plugin_write_matching_context_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "write-nested-child-context-refuses-through-mismatched-root") == 0) {
-        scenario_write_nested_child_context_refuses_through_mismatched_root();
-        return 0;
-    }
-    if (strcmp(argv[1], "delete-nested-child-context-refuses-through-mismatched-root") == 0) {
-        scenario_delete_nested_child_context_refuses_through_mismatched_root();
-        return 0;
-    }
-    if (strcmp(argv[1], "write-matching-context-forwards-unchanged") == 0) {
-        scenario_write_matching_context_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "write-unknown-context-forwards-unchanged") == 0) {
-        scenario_write_unknown_context_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "write-unstamped-context-forwards-unchanged") == 0) {
-        scenario_write_unstamped_context_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "write-conversion-disabled-forwards-unchanged") == 0) {
-        scenario_write_conversion_disabled_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "delete-matching-context-forwards-unchanged") == 0) {
-        scenario_delete_matching_context_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "delete-unknown-context-forwards-unchanged") == 0) {
-        scenario_delete_unknown_context_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "delete-unstamped-context-forwards-unchanged") == 0) {
-        scenario_delete_unstamped_context_forwards_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "delete-conversion-disabled-forwards-unchanged") == 0) {
-        scenario_delete_conversion_disabled_forwards_unchanged();
-        return 0;
-    }
-    fprintf(stderr, "unknown scenario: %s\n", argv[1]);
-    return 2;
+    static const shim_test_scenario scenarios[] = {
+        {"write-refuses-under-known-mismatched-root-before-core-call", scenario_write_refuses_under_known_mismatched_root_before_core_call},
+        {"delete-refuses-under-known-mismatched-root-before-core-call", scenario_delete_refuses_under_known_mismatched_root_before_core_call},
+        {"plugin-write-refuses-under-known-mismatched-root-before-core-call", scenario_plugin_write_refuses_under_known_mismatched_root_before_core_call},
+        {"plugin-write-matching-context-forwards-unchanged", scenario_plugin_write_matching_context_forwards_unchanged},
+        {"write-nested-child-context-refuses-through-mismatched-root", scenario_write_nested_child_context_refuses_through_mismatched_root},
+        {"delete-nested-child-context-refuses-through-mismatched-root", scenario_delete_nested_child_context_refuses_through_mismatched_root},
+        {"write-matching-context-forwards-unchanged", scenario_write_matching_context_forwards_unchanged},
+        {"write-unknown-context-forwards-unchanged", scenario_write_unknown_context_forwards_unchanged},
+        {"write-unstamped-context-forwards-unchanged", scenario_write_unstamped_context_forwards_unchanged},
+        {"write-conversion-disabled-forwards-unchanged", scenario_write_conversion_disabled_forwards_unchanged},
+        {"delete-matching-context-forwards-unchanged", scenario_delete_matching_context_forwards_unchanged},
+        {"delete-unknown-context-forwards-unchanged", scenario_delete_unknown_context_forwards_unchanged},
+        {"delete-unstamped-context-forwards-unchanged", scenario_delete_unstamped_context_forwards_unchanged},
+        {"delete-conversion-disabled-forwards-unchanged", scenario_delete_conversion_disabled_forwards_unchanged},
+    };
+    return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

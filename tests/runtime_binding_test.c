@@ -749,43 +749,18 @@ static void scenario_utility_forwarding(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,
-                "usage: %s "
-                "<success|version-drift|version-mismatch|null-version|missing-library|"
-                "bare-soname|verbatim-forwarding|plugin-forwarding|plugin-timerange-omitted|"
-                "utility-forwarding|real-core>\n",
-                argv[0]);
-        return 2;
-    }
-
-    const char *scenario = argv[1];
-    if (strcmp(scenario, "success") == 0) {
-        scenario_success();
-    } else if (strcmp(scenario, "real-core") == 0) {
-        scenario_real_core();
-    } else if (strcmp(scenario, "version-drift") == 0) {
-        scenario_version_drift();
-    } else if (strcmp(scenario, "version-mismatch") == 0) {
-        scenario_version_mismatch();
-    } else if (strcmp(scenario, "null-version") == 0) {
-        scenario_null_version();
-    } else if (strcmp(scenario, "missing-library") == 0) {
-        scenario_missing_library();
-    } else if (strcmp(scenario, "bare-soname") == 0) {
-        scenario_bare_soname();
-    } else if (strcmp(scenario, "verbatim-forwarding") == 0) {
-        scenario_verbatim_forwarding();
-    } else if (strcmp(scenario, "plugin-forwarding") == 0) {
-        scenario_plugin_forwarding();
-    } else if (strcmp(scenario, "plugin-timerange-omitted") == 0) {
-        scenario_plugin_timerange_omitted();
-    } else if (strcmp(scenario, "utility-forwarding") == 0) {
-        scenario_utility_forwarding();
-    } else {
-        fprintf(stderr, "unknown scenario: %s\n", scenario);
-        return 2;
-    }
-
-    return 0;
+    static const shim_test_scenario scenarios[] = {
+        {"success", scenario_success},
+        {"real-core", scenario_real_core},
+        {"version-drift", scenario_version_drift},
+        {"version-mismatch", scenario_version_mismatch},
+        {"null-version", scenario_null_version},
+        {"missing-library", scenario_missing_library},
+        {"bare-soname", scenario_bare_soname},
+        {"verbatim-forwarding", scenario_verbatim_forwarding},
+        {"plugin-forwarding", scenario_plugin_forwarding},
+        {"plugin-timerange-omitted", scenario_plugin_timerange_omitted},
+        {"utility-forwarding", scenario_utility_forwarding},
+    };
+    return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

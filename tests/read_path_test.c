@@ -658,173 +658,41 @@ static void scenario_core_failure_propagates_unchanged(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,
-                "usage: %s <translates-field-and-timebase-independently|"
-                "forward-direction-translates-and-reports-no-source|identity-rule-returns-data|"
-                "merged-read-falls-through-to-next-candidate|"
-                "merged-read-stops-at-first-candidate-with-data|"
-                "merged-read-returns-not-found-when-all-candidates-are-absent|"
-                "split-plan-reads-and-flips-its-first-stored-destination|"
-                "reverse-split-read-flips-its-single-stored-source|"
-                "no-source-returns-null-without-core-call|"
-                "rank-changing-retype-refuses-without-core-call|"
-                "unit-redefinition-refuses-without-core-call|"
-                "unsupported-sign-flip-types-refuse-without-core-call|"
-                "sign-flip-array-negates-values-and-preserves-empty-double|"
-                "sign-flip-rank-exceeding-maxdim-refuses-without-core-call|"
-                "sign-flip-invalid-shape-refuses-without-modifying-buffer|"
-                "sign-flip-shape-override-respects-read-rank|"
-                "sign-flip-not-found-skips-value-transformation|"
-                "resolves-relative-field-and-absolute-timebase|"
-                "matching-context-bypasses-conversion|unknown-context-bypasses-conversion|"
-                "unstamped-context-bypasses-conversion|conversion-disabled-bypasses-conversion|"
-                "core-failure-propagates-unchanged|"
-                "merged-read-retains-a-lossy-verdict-in-the-loss-log|"
-                "moved-read-retains-a-lossy-verdict-in-the-loss-log|"
-                "ending-context-destroys-its-loss-log|"
-                "loss-count-null-output-is-refused|"
-                "loss-at-null-path-buffer-is-refused|"
-                "loss-at-null-verdict-is-refused|"
-                "loss-at-negative-index-is-refused|"
-                "loss-at-out-of-range-index-is-refused|"
-                "loss-at-insufficient-buffer-is-refused|"
-                "reentrant-read-is-forwarded-unchanged|"
-                "reentrant-read-does-not-reapply-a-sign-flip>\n",
-                argv[0]);
-        return 2;
-    }
-    if (strcmp(argv[1], "translates-field-and-timebase-independently") == 0) {
-        scenario_translates_field_and_timebase_independently();
-        return 0;
-    }
-    if (strcmp(argv[1], "forward-direction-translates-and-reports-no-source") == 0) {
-        scenario_forward_direction_translates_and_reports_no_source();
-        return 0;
-    }
-    if (strcmp(argv[1], "identity-rule-returns-data") == 0) {
-        scenario_identity_rule_returns_data();
-        return 0;
-    }
-    if (strcmp(argv[1], "merged-read-falls-through-to-next-candidate") == 0) {
-        scenario_merged_read_falls_through_to_next_candidate(); return 0;
-    }
-    if (strcmp(argv[1], "merged-read-stops-at-first-candidate-with-data") == 0) {
-        scenario_merged_read_stops_at_first_candidate_with_data(); return 0;
-    }
-    if (strcmp(argv[1], "merged-read-returns-not-found-when-all-candidates-are-absent") == 0) {
-        scenario_merged_read_returns_not_found_when_all_candidates_are_absent(); return 0;
-    }
-    if (strcmp(argv[1], "split-plan-reads-and-flips-its-first-stored-destination") == 0) {
-        scenario_split_plan_reads_and_flips_its_first_stored_destination(); return 0;
-    }
-    if (strcmp(argv[1], "reverse-split-read-flips-its-single-stored-source") == 0) {
-        scenario_reverse_split_read_flips_its_single_stored_source(); return 0;
-    }
-    if (strcmp(argv[1], "no-source-returns-null-without-core-call") == 0) {
-        scenario_no_source_returns_null_without_core_call();
-        return 0;
-    }
-    if (strcmp(argv[1], "rank-changing-retype-refuses-without-core-call") == 0) {
-        scenario_rank_changing_retype_refuses_without_core_call();
-        return 0;
-    }
-    if (strcmp(argv[1], "unit-redefinition-refuses-without-core-call") == 0) {
-        scenario_unit_redefinition_refuses_without_core_call();
-        return 0;
-    }
-    if (strcmp(argv[1], "unsupported-sign-flip-types-refuse-without-core-call") == 0) {
-        scenario_unsupported_sign_flip_types_refuse_without_core_call();
-        return 0;
-    }
-    if (strcmp(argv[1], "sign-flip-array-negates-values-and-preserves-empty-double") == 0) {
-        scenario_sign_flip_array_negates_values_and_preserves_empty_double();
-        return 0;
-    }
-    if (strcmp(argv[1], "sign-flip-rank-exceeding-maxdim-refuses-without-core-call") == 0) {
-        scenario_sign_flip_rank_exceeding_maxdim_refuses_without_core_call();
-        return 0;
-    }
-    if (strcmp(argv[1], "sign-flip-invalid-shape-refuses-without-modifying-buffer") == 0) {
-        scenario_sign_flip_invalid_shape_refuses_without_modifying_buffer();
-        return 0;
-    }
-    if (strcmp(argv[1], "sign-flip-shape-override-respects-read-rank") == 0) {
-        scenario_sign_flip_shape_override_respects_read_rank();
-        return 0;
-    }
-    if (strcmp(argv[1], "sign-flip-not-found-skips-value-transformation") == 0) {
-        scenario_sign_flip_not_found_skips_value_transformation();
-        return 0;
-    }
-    if (strcmp(argv[1], "resolves-relative-field-and-absolute-timebase") == 0) {
-        scenario_resolves_relative_field_and_absolute_timebase();
-        return 0;
-    }
-    if (strcmp(argv[1], "matching-context-bypasses-conversion") == 0) {
-        scenario_matching_context_bypasses_conversion();
-        return 0;
-    }
-    if (strcmp(argv[1], "unknown-context-bypasses-conversion") == 0) {
-        scenario_unknown_context_bypasses_conversion();
-        return 0;
-    }
-    if (strcmp(argv[1], "unstamped-context-bypasses-conversion") == 0) {
-        scenario_unstamped_context_bypasses_conversion();
-        return 0;
-    }
-    if (strcmp(argv[1], "conversion-disabled-bypasses-conversion") == 0) {
-        scenario_conversion_disabled_bypasses_conversion();
-        return 0;
-    }
-    if (strcmp(argv[1], "core-failure-propagates-unchanged") == 0) {
-        scenario_core_failure_propagates_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "merged-read-retains-a-lossy-verdict-in-the-loss-log") == 0) {
-        scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log();
-        return 0;
-    }
-    if (strcmp(argv[1], "moved-read-retains-a-lossy-verdict-in-the-loss-log") == 0) {
-        scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log();
-        return 0;
-    }
-    if (strcmp(argv[1], "ending-context-destroys-its-loss-log") == 0) {
-        scenario_ending_context_destroys_its_loss_log();
-        return 0;
-    }
-    if (strcmp(argv[1], "loss-count-null-output-is-refused") == 0) {
-        scenario_loss_count_null_output_is_refused();
-        return 0;
-    }
-    if (strcmp(argv[1], "loss-at-null-path-buffer-is-refused") == 0) {
-        scenario_loss_at_null_path_buffer_is_refused();
-        return 0;
-    }
-    if (strcmp(argv[1], "loss-at-null-verdict-is-refused") == 0) {
-        scenario_loss_at_null_verdict_is_refused();
-        return 0;
-    }
-    if (strcmp(argv[1], "loss-at-negative-index-is-refused") == 0) {
-        scenario_loss_at_negative_index_is_refused();
-        return 0;
-    }
-    if (strcmp(argv[1], "loss-at-out-of-range-index-is-refused") == 0) {
-        scenario_loss_at_out_of_range_index_is_refused();
-        return 0;
-    }
-    if (strcmp(argv[1], "loss-at-insufficient-buffer-is-refused") == 0) {
-        scenario_loss_at_insufficient_buffer_is_refused();
-        return 0;
-    }
-    if (strcmp(argv[1], "reentrant-read-is-forwarded-unchanged") == 0) {
-        scenario_reentrant_read_is_forwarded_unchanged();
-        return 0;
-    }
-    if (strcmp(argv[1], "reentrant-read-does-not-reapply-a-sign-flip") == 0) {
-        scenario_reentrant_read_does_not_reapply_a_sign_flip();
-        return 0;
-    }
-    fprintf(stderr, "unknown scenario: %s\n", argv[1]);
-    return 2;
+    static const shim_test_scenario scenarios[] = {
+        {"translates-field-and-timebase-independently", scenario_translates_field_and_timebase_independently},
+        {"forward-direction-translates-and-reports-no-source", scenario_forward_direction_translates_and_reports_no_source},
+        {"identity-rule-returns-data", scenario_identity_rule_returns_data},
+        {"merged-read-falls-through-to-next-candidate", scenario_merged_read_falls_through_to_next_candidate},
+        {"merged-read-stops-at-first-candidate-with-data", scenario_merged_read_stops_at_first_candidate_with_data},
+        {"merged-read-returns-not-found-when-all-candidates-are-absent", scenario_merged_read_returns_not_found_when_all_candidates_are_absent},
+        {"split-plan-reads-and-flips-its-first-stored-destination", scenario_split_plan_reads_and_flips_its_first_stored_destination},
+        {"reverse-split-read-flips-its-single-stored-source", scenario_reverse_split_read_flips_its_single_stored_source},
+        {"no-source-returns-null-without-core-call", scenario_no_source_returns_null_without_core_call},
+        {"rank-changing-retype-refuses-without-core-call", scenario_rank_changing_retype_refuses_without_core_call},
+        {"unit-redefinition-refuses-without-core-call", scenario_unit_redefinition_refuses_without_core_call},
+        {"unsupported-sign-flip-types-refuse-without-core-call", scenario_unsupported_sign_flip_types_refuse_without_core_call},
+        {"sign-flip-array-negates-values-and-preserves-empty-double", scenario_sign_flip_array_negates_values_and_preserves_empty_double},
+        {"sign-flip-rank-exceeding-maxdim-refuses-without-core-call", scenario_sign_flip_rank_exceeding_maxdim_refuses_without_core_call},
+        {"reentrant-read-is-forwarded-unchanged", scenario_reentrant_read_is_forwarded_unchanged},
+        {"reentrant-read-does-not-reapply-a-sign-flip", scenario_reentrant_read_does_not_reapply_a_sign_flip},
+        {"sign-flip-invalid-shape-refuses-without-modifying-buffer", scenario_sign_flip_invalid_shape_refuses_without_modifying_buffer},
+        {"sign-flip-shape-override-respects-read-rank", scenario_sign_flip_shape_override_respects_read_rank},
+        {"sign-flip-not-found-skips-value-transformation", scenario_sign_flip_not_found_skips_value_transformation},
+        {"resolves-relative-field-and-absolute-timebase", scenario_resolves_relative_field_and_absolute_timebase},
+        {"matching-context-bypasses-conversion", scenario_matching_context_bypasses_conversion},
+        {"unknown-context-bypasses-conversion", scenario_unknown_context_bypasses_conversion},
+        {"unstamped-context-bypasses-conversion", scenario_unstamped_context_bypasses_conversion},
+        {"conversion-disabled-bypasses-conversion", scenario_conversion_disabled_bypasses_conversion},
+        {"core-failure-propagates-unchanged", scenario_core_failure_propagates_unchanged},
+        {"merged-read-retains-a-lossy-verdict-in-the-loss-log", scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log},
+        {"moved-read-retains-a-lossy-verdict-in-the-loss-log", scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log},
+        {"ending-context-destroys-its-loss-log", scenario_ending_context_destroys_its_loss_log},
+        {"loss-count-null-output-is-refused", scenario_loss_count_null_output_is_refused},
+        {"loss-at-null-path-buffer-is-refused", scenario_loss_at_null_path_buffer_is_refused},
+        {"loss-at-null-verdict-is-refused", scenario_loss_at_null_verdict_is_refused},
+        {"loss-at-negative-index-is-refused", scenario_loss_at_negative_index_is_refused},
+        {"loss-at-out-of-range-index-is-refused", scenario_loss_at_out_of_range_index_is_refused},
+        {"loss-at-insufficient-buffer-is-refused", scenario_loss_at_insufficient_buffer_is_refused},
+    };
+    return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

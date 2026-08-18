@@ -183,45 +183,17 @@ static void scenario_concurrent_identical_setters_all_succeed(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,
-                "usage: %s "
-                "<setter-accepts-valid-version|setter-accepts-identical-repeat|"
-                "setter-rejects-conflicting-repeat|setter-rejects-invalid-version|"
-                "setter-rejects-null-version|setter-precedes-environment|"
-                "valid-environment-latches-on-first-open|"
-                "invalid-environment-fails-first-open|"
-                "unset-first-open-then-setter-refused|"
-                "concurrent-identical-setters-all-succeed>\n",
-                argv[0]);
-        return 2;
-    }
-
-    const char *scenario = argv[1];
-    if (strcmp(scenario, "setter-accepts-valid-version") == 0) {
-        scenario_setter_accepts_valid_version();
-    } else if (strcmp(scenario, "setter-accepts-identical-repeat") == 0) {
-        scenario_setter_accepts_identical_repeat();
-    } else if (strcmp(scenario, "setter-rejects-conflicting-repeat") == 0) {
-        scenario_setter_rejects_conflicting_repeat();
-    } else if (strcmp(scenario, "setter-rejects-invalid-version") == 0) {
-        scenario_setter_rejects_invalid_version();
-    } else if (strcmp(scenario, "setter-rejects-null-version") == 0) {
-        scenario_setter_rejects_null_version();
-    } else if (strcmp(scenario, "setter-precedes-environment") == 0) {
-        scenario_setter_precedes_environment();
-    } else if (strcmp(scenario, "valid-environment-latches-on-first-open") == 0) {
-        scenario_valid_environment_latches_on_first_open();
-    } else if (strcmp(scenario, "invalid-environment-fails-first-open") == 0) {
-        scenario_invalid_environment_fails_first_open();
-    } else if (strcmp(scenario, "unset-first-open-then-setter-refused") == 0) {
-        scenario_unset_first_open_then_setter_refused();
-    } else if (strcmp(scenario, "concurrent-identical-setters-all-succeed") == 0) {
-        scenario_concurrent_identical_setters_all_succeed();
-    } else {
-        fprintf(stderr, "unknown scenario: %s\n", scenario);
-        return 2;
-    }
-
-    return 0;
+    static const shim_test_scenario scenarios[] = {
+        {"setter-accepts-valid-version", scenario_setter_accepts_valid_version},
+        {"setter-accepts-identical-repeat", scenario_setter_accepts_identical_repeat},
+        {"setter-rejects-conflicting-repeat", scenario_setter_rejects_conflicting_repeat},
+        {"setter-rejects-invalid-version", scenario_setter_rejects_invalid_version},
+        {"setter-rejects-null-version", scenario_setter_rejects_null_version},
+        {"setter-precedes-environment", scenario_setter_precedes_environment},
+        {"valid-environment-latches-on-first-open", scenario_valid_environment_latches_on_first_open},
+        {"invalid-environment-fails-first-open", scenario_invalid_environment_fails_first_open},
+        {"unset-first-open-then-setter-refused", scenario_unset_first_open_then_setter_refused},
+        {"concurrent-identical-setters-all-succeed", scenario_concurrent_identical_setters_all_succeed},
+    };
+    return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }
