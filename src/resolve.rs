@@ -2513,6 +2513,18 @@ mod tests {
         // Far from the small IDs every other registry test uses, so this one
         // cannot collide with a concurrently running test in the same process.
         const CTX_ID: c_int = 0x5D01;
+        // A distinct context ID is not enough. `record_root` obtains its map
+        // through the registry's `(ids, stored, hli)` cache, so while any other
+        // record on the real `("equilibrium", 3.39.0, 4.1.1)` pair is live —
+        // `a_data_path_seam_answers_before_the_registry_when_conversion_is_disabled`
+        // registers exactly that — the closure below never runs and this test
+        // resolves through the *approved* map instead. That map carries
+        // `<default rel="identical"/>`, which claims every path, so the
+        // unclaimed branch this test exists to reach vanishes and the test
+        // fails on whichever interleaving wins. The IDS half of the key is
+        // what keeps the fixture map unshareable; it deliberately names no
+        // real IDS.
+        const FIXTURE_IDS: &str = "equilibrium-no-document-default-fixture";
         // No <default>: a path no rule claims is genuinely unclaimed here.
         const NO_DEFAULT_ARTIFACT: &str = r#"
             <ids-map ids="equilibrium" format-version="1">
@@ -2531,7 +2543,7 @@ mod tests {
             CTX_ID,
             String::new(),
             CTX_ID,
-            MapCacheKey::new("equilibrium".to_string(), stored, hli),
+            MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
             crate::conversion_map::Direction::Forward,
             || ConversionMap::load(NO_DEFAULT_ARTIFACT).expect("fixture artifact must load"),
         ));
@@ -2541,14 +2553,26 @@ mod tests {
 
         // The rule the fixture does carry still resolves, so an unclaimed
         // verdict below cannot be the whole map failing to match anything.
+        // Asserting the *stored spelling* rather than just "it translated"
+        // also pins that this record really resolves through the fixture: the
+        // approved map would rename nothing and hand back `claimed` itself
+        // through its identity default.
         let claimed = CString::new("claimed").expect("no interior NUL");
-        assert!(
-            matches!(
-                resolve_read_path(&record, claimed.as_ptr()),
-                ReadPath::Translated(_)
+        match resolve_read_path(&record, claimed.as_ptr()) {
+            ReadPath::Translated(translated) => assert_eq!(
+                translated
+                    .paths
+                    .first()
+                    .expect("a translated path carries at least one candidate")
+                    .path
+                    .to_str()
+                    .expect("the fixture's spellings are ASCII"),
+                "claimed_new",
+                "this record must resolve through the fixture map, not a \
+                 cached map for another version pair"
             ),
-            "the fixture's own rule must still translate"
-        );
+            _ => panic!("the fixture's own rule must still translate"),
+        }
 
         let unclaimed = CString::new("nothing/claims/this").expect("no interior NUL");
         match resolve_read_path(&record, unclaimed.as_ptr()) {
