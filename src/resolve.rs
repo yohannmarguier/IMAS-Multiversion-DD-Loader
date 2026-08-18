@@ -1,13 +1,35 @@
-//! Runtime resolution of IMAS-Core.
+//! Runtime resolution of IMAS-Core, and the conversion policy of every seam
+//! resolved through it.
 //!
-//! Proven end to end on `al_context_info` (issue #3), then extended to the
-//! data-entry, action-lifecycle and data-operation symbols below (issue
-//! #6): the shim carries no link-time dependency on IMAS-Core. On first use
-//! it opens IMAS-Core with local symbol visibility and resolves each
-//! function's address through that specific library handle, so the shim's
-//! own globally visible exports are never in the lookup scope and can't
-//! capture its outbound calls. See
-//! `docs/adr/0001-runtime-binding-not-linking.md`.
+//! **The binding.** Proven end to end on `al_context_info` (issue #3), then
+//! extended to the data-entry, action-lifecycle and data-operation symbols
+//! below (issue #6): the shim carries no link-time dependency on IMAS-Core. On
+//! first use it opens IMAS-Core with local symbol visibility and resolves each
+//! function's address through that specific library handle, so the shim's own
+//! globally visible exports are never in the lookup scope and can't capture its
+//! outbound calls. See `docs/adr/0001-runtime-binding-not-linking.md`.
+//!
+//! **The policy.** Each mirrored symbol's shim-side behaviour also lives here,
+//! beside the binding it forwards through, so a reader of one seam sees both at
+//! once. Five ADRs are enforced in this file, and a change to any of them lands
+//! here:
+//!
+//! - ADR 0001 — the runtime binding above.
+//! - ADR 0002 — which seams translate, which refuse, and which forward
+//!   unchanged; stamp discovery and root registration at the opening seams.
+//! - ADR 0010 — read-path value transformations: one per rule, executed in
+//!   place after the read.
+//! - ADR 0012 — the three-way read outcome and the refusal/loss reporting
+//!   channel, via [`crate::read_outcome`] and the registry's loss log.
+//! - ADR 0014 — a read arriving beneath an in-flight one is forwarded
+//!   untouched, by call depth (see [`SHIM_READ_DEPTH`] and [`ReadDepthGuard`]).
+//!
+//! That breadth is why the file is long, and it is a known tension rather than
+//! an accident: the review's S-J6 finding labels it Divergent Change. Splitting
+//! the binding from the policy is a real option, but the split has to be made
+//! on purpose, with the seam list as it will be — not as a side effect of a
+//! cleanup — so this module states what it owns instead of pretending to own
+//! only the first paragraph.
 
 use std::cell::Cell;
 use std::env;
