@@ -479,6 +479,154 @@ static void scenario_conversion_disabled_read_is_unaffected(void) {
            "version left the read a plain forward\n");
 }
 
+/* --- P4: spec #43 tier-2 cells that were covered only against the stub ----- */
+
+/* Obligation (c)'s missing refusal: "write against mismatch ... returns -1000
+ * with a well-formed message". tests/write_delete_conversion_test.c proves the
+ * policy against the recording stub; this proves it across a real IMAS-Core
+ * boundary, on a real mismatched occurrence.
+ *
+ * The pulse is opened READ_OP, and the refusal happens before IMAS-Core is
+ * called, so nothing here can write to the checked-in fixture. The scenario
+ * then reads through the same context to show the refusal did not come from a
+ * broken or unregistered context: the very same op_ctx still converts. */
+static void scenario_forward_write_and_delete_refuse_against_mismatch(void) {
+    CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
+    int pulse_ctx = open_fixture_pulse("3.39.0");
+
+    int op_ctx = -1;
+    CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
+
+    const char *field = "time_slice/global_quantities/beta_tor_norm";
+    double sentinel = 42.0;
+    void *data = &sentinel;
+    int size[1] = {73};
+    al_status_t write_status = al_write_data(op_ctx, field, "", data, DOUBLE_DATA, 1, size);
+    CHECK(write_status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(write_status,
+                          "al_write_data refuses on a context with a known DD version mismatch",
+                          field, "4.1.1", "3.39.0");
+    /* A refusal must not touch caller storage (issue #58's last criterion). */
+    CHECK(data == &sentinel);
+    CHECK(sentinel == 42.0);
+    CHECK(size[0] == 73);
+
+    al_status_t delete_status = al_delete_data(op_ctx, field);
+    CHECK(delete_status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(delete_status,
+                          "al_delete_data refuses on a context with a known DD version mismatch",
+                          field, "4.1.1", "3.39.0");
+
+    al_status_t plugin_write_status =
+        al_plugin_write_data(op_ctx, field, "", data, DOUBLE_DATA, 1, size);
+    CHECK(plugin_write_status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(
+        plugin_write_status,
+        "al_plugin_write_data refuses on a context with a known DD version mismatch", field,
+        "4.1.1", "3.39.0");
+
+    /* The same context still converts a read, so the three refusals above were
+     * the policy acting, not a context that had been left unusable. */
+    int slice_size = -1;
+    int aos_ctx = -1;
+    CHECK_OK(al_begin_arraystruct_action(op_ctx, "time_slice", "", &slice_size, &aos_ctx));
+    CHECK(slice_size == 2);
+    int shape[MAXDIM] = {0};
+    double value = -1.0;
+    void *buffer = &value;
+    CHECK_OK(al_read_data(aos_ctx, "global_quantities/beta_tor_norm", "", &buffer, DOUBLE_DATA, 0,
+                         shape));
+    CHECK(value == 1.8);
+
+    CHECK_OK(al_end_action(aos_ctx));
+    CHECK_OK(al_end_action(op_ctx));
+    close_fixture_pulse(pulse_ctx);
+    printf("equilibrium_read_test forward-write-and-delete-refuse-against-mismatch: real-Core "
+           "write, delete and plugin-write refused with -1000 and a full message, caller storage "
+           "untouched, and the same context still converted a read\n");
+}
+
+/* Obligation (g): "non-LIFO context closure, recycled context IDs,
+ * al_close_pulse leaving the registry untouched, and AoS iteration requiring no
+ * registry update." tests/context_lifecycle_test.c proves these against the
+ * recording stub. There is no C-level registry introspection, so here as there
+ * the only externally observable consequence is whether a later read through a
+ * still-live context still translates — but here the whole lifecycle is a real
+ * IMAS-Core one.
+ *
+ * Ending the parent operation context before its live child is left to the stub
+ * suite deliberately: real IMAS-Core owns that ordering, and a test asserting
+ * the shim's registry behaviour must not also depend on Core tolerating an
+ * ordering the HLI contract does not promise. What is proven here is every part
+ * of (g) that a legal real-Core lifecycle can reach. */
+static void scenario_forward_context_lifecycle_keeps_conversion_live(void) {
+    CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
+    int pulse_ctx = open_fixture_pulse("3.39.0");
+
+    int op_ctx = -1;
+    CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
+    int slice_size = -1;
+    int aos_ctx = -1;
+    CHECK_OK(al_begin_arraystruct_action(op_ctx, "time_slice", "", &slice_size, &aos_ctx));
+    CHECK(slice_size == 2);
+
+    int shape[MAXDIM] = {0};
+    double value = -1.0;
+    void *buffer = &value;
+
+    /* AoS iteration keeps no registry state: the child still translates after
+     * stepping, and the second slice's own value comes back. */
+    CHECK_OK(al_iterate_over_arraystruct(aos_ctx, 1));
+    value = -1.0;
+    buffer = &value;
+    CHECK_OK(al_read_data(aos_ctx, "global_quantities/beta_tor_norm", "", &buffer, DOUBLE_DATA, 0,
+                         shape));
+    /* Written as the sum the fixture generator computes (1.8 + 0.1*i), not as
+     * the literal 1.9: in IEEE double 1.8 + 0.1 is not the double nearest 1.9,
+     * so the literal would fail against a value that is exactly right. Slice 0
+     * needs no such care, which is why every scenario above compares to 1.8. */
+    CHECK(value == 1.8 + 0.1);
+
+    /* Ending the child leaves the parent's own record live, so a read through
+     * the parent still translates. */
+    CHECK_OK(al_end_action(aos_ctx));
+    int reopened_size = -1;
+    int reopened_ctx = -1;
+    CHECK_OK(al_begin_arraystruct_action(op_ctx, "time_slice", "", &reopened_size, &reopened_ctx));
+    CHECK(reopened_size == 2);
+    value = -1.0;
+    buffer = &value;
+    CHECK_OK(al_read_data(reopened_ctx, "global_quantities/beta_tor_norm", "", &buffer, DOUBLE_DATA,
+                         0, shape));
+    CHECK(value == 1.8);
+    CHECK_OK(al_end_action(reopened_ctx));
+    CHECK_OK(al_end_action(op_ctx));
+
+    /* al_close_pulse releases no context ID and must not clear the pulse's
+     * discovered-version cache: reopening the same occurrence still converts,
+     * which it could not do if closing had lost the stored version. */
+    close_fixture_pulse(pulse_ctx);
+    int reopened_pulse = open_fixture_pulse("3.39.0");
+    int second_op_ctx = -1;
+    CHECK_OK(al_begin_global_action(reopened_pulse, "equilibrium", "", READ_OP, &second_op_ctx));
+    int second_size = -1;
+    int second_aos_ctx = -1;
+    CHECK_OK(
+        al_begin_arraystruct_action(second_op_ctx, "time_slice", "", &second_size, &second_aos_ctx));
+    value = -1.0;
+    buffer = &value;
+    CHECK_OK(al_read_data(second_aos_ctx, "global_quantities/beta_tor_norm", "", &buffer,
+                         DOUBLE_DATA, 0, shape));
+    CHECK(value == 1.8);
+    CHECK_OK(al_end_action(second_aos_ctx));
+    CHECK_OK(al_end_action(second_op_ctx));
+    close_fixture_pulse(reopened_pulse);
+
+    printf("equilibrium_read_test forward-context-lifecycle-keeps-conversion-live: real-Core AoS "
+           "iteration, child close and pulse close each left conversion working through the "
+           "contexts that were still open\n");
+}
+
 int main(int argc, char **argv) {
     static const shim_test_scenario scenarios[] = {
         {"reverse-reads-renamed-value-through-own-spelling", scenario_reverse_reads_renamed_value_through_own_spelling},
@@ -495,6 +643,8 @@ int main(int argc, char **argv) {
         {"forward-sign-flip-applies-through-nested-container", scenario_forward_sign_flip_applies_through_nested_container},
         {"same-version-read-is-unaffected", scenario_same_version_read_is_unaffected},
         {"conversion-disabled-read-is-unaffected", scenario_conversion_disabled_read_is_unaffected},
+        {"forward-write-and-delete-refuse-against-mismatch", scenario_forward_write_and_delete_refuse_against_mismatch},
+        {"forward-context-lifecycle-keeps-conversion-live", scenario_forward_context_lifecycle_keeps_conversion_live},
     };
     return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

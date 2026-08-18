@@ -1367,6 +1367,22 @@ if(IMAS_MVDD_BUILD_TESTS)
         LABELS real-core
         RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
 
+    # Spec #43 tier-2 cells (c) and (g), previously covered only against the
+    # recording stub: a write/delete/plugin-write refusal across a real
+    # IMAS-Core boundary, and a real context lifecycle that must leave
+    # conversion working through whatever is still open.
+    add_test(NAME equilibrium-read-forward-write-and-delete-refuse-against-mismatch
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> forward-write-and-delete-refuse-against-mismatch)
+    set_tests_properties(equilibrium-read-forward-write-and-delete-refuse-against-mismatch PROPERTIES
+        LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+
+    add_test(NAME equilibrium-read-forward-context-lifecycle-keeps-conversion-live
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> forward-context-lifecycle-keeps-conversion-live)
+    set_tests_properties(equilibrium-read-forward-context-lifecycle-keeps-conversion-live PROPERTIES
+        LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+
     add_test(NAME equilibrium-read-forward-merged-read-falls-through-to-stored-alias
         COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
             $<TARGET_FILE:equilibrium_read_test> forward-merged-read-falls-through-to-stored-alias)
