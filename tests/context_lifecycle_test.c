@@ -8,58 +8,13 @@
  * live conversion record would, or forwards it unchanged the way an absent
  * record would. */
 
-#include <dlfcn.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-#include <imas_mvdd_loader.h>
 
 #ifndef RECORDING_STUB_PATH
 #error "RECORDING_STUB_PATH must be defined by CMakeLists.txt"
 #endif
 
-#define CHECK(condition)                                                     \
-    do {                                                                     \
-        if (!(condition)) {                                                  \
-            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
-                    #condition);                                             \
-            exit(EXIT_FAILURE);                                              \
-        }                                                                    \
-    } while (0)
-
-typedef const char *(*string_accessor_fn)(void);
-typedef int (*int_accessor_fn)(void);
-
-static void *dlsym_or_die(void *handle, const char *name) {
-    void *symbol = dlsym(handle, name);
-    if (symbol == NULL) {
-        fprintf(stderr, "recording stub has no symbol '%s': %s\n", name, dlerror());
-        abort();
-    }
-    return symbol;
-}
-
-static void *open_stub_for_introspection(void) {
-    void *handle = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
-    if (handle == NULL) {
-        fprintf(stderr, "failed to dlopen the recording stub for introspection: %s\n", dlerror());
-        abort();
-    }
-    return handle;
-}
-
-static const char *string_from_stub(const char *symbol_name) {
-    string_accessor_fn accessor =
-        (string_accessor_fn)dlsym_or_die(open_stub_for_introspection(), symbol_name);
-    return accessor();
-}
-
-static int int_from_stub(const char *symbol_name) {
-    int_accessor_fn accessor =
-        (int_accessor_fn)dlsym_or_die(open_stub_for_introspection(), symbol_name);
-    return accessor();
-}
+#include "shim_test_support.h"
 
 static al_status_t open_dataentry(int *dectxID) {
     return al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, dectxID);
@@ -296,43 +251,14 @@ static void scenario_ending_dataentry_context_leaves_live_operation_and_child_re
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,
-                "usage: %s "
-                "<ending-child-removes-only-its-own-record|"
-                "ending-root-removes-only-its-own-record|"
-                "failed-end-action-leaves-the-record-intact|"
-                "recycled-id-cannot-observe-the-released-record|"
-                "iterate-over-arraystruct-forwards-unchanged-and-mutates-nothing|"
-                "close-pulse-forwards-unchanged-and-never-mutates-the-registry|"
-                "ending-dataentry-context-leaves-live-operation-and-child-records-intact>\n",
-                argv[0]);
-        return 2;
-    }
-
-    const char *scenario = argv[1];
-    if (strcmp(scenario, "ending-child-removes-only-its-own-record") == 0) {
-        scenario_ending_child_removes_only_its_own_record();
-    } else if (strcmp(scenario, "ending-root-removes-only-its-own-record") == 0) {
-        scenario_ending_root_removes_only_its_own_record();
-    } else if (strcmp(scenario, "failed-end-action-leaves-the-record-intact") == 0) {
-        scenario_failed_end_action_leaves_the_record_intact();
-    } else if (strcmp(scenario, "recycled-id-cannot-observe-the-released-record") == 0) {
-        scenario_recycled_id_cannot_observe_the_released_record();
-    } else if (strcmp(scenario,
-                       "iterate-over-arraystruct-forwards-unchanged-and-mutates-nothing") == 0) {
-        scenario_iterate_over_arraystruct_forwards_unchanged_and_mutates_nothing();
-    } else if (strcmp(scenario,
-                       "close-pulse-forwards-unchanged-and-never-mutates-the-registry") == 0) {
-        scenario_close_pulse_forwards_unchanged_and_never_mutates_the_registry();
-    } else if (strcmp(scenario,
-                       "ending-dataentry-context-leaves-live-operation-and-child-records-intact") ==
-               0) {
-        scenario_ending_dataentry_context_leaves_live_operation_and_child_records_intact();
-    } else {
-        fprintf(stderr, "unknown scenario: %s\n", scenario);
-        return 2;
-    }
-
-    return 0;
+    static const shim_test_scenario scenarios[] = {
+        {"ending-child-removes-only-its-own-record", scenario_ending_child_removes_only_its_own_record},
+        {"ending-root-removes-only-its-own-record", scenario_ending_root_removes_only_its_own_record},
+        {"failed-end-action-leaves-the-record-intact", scenario_failed_end_action_leaves_the_record_intact},
+        {"recycled-id-cannot-observe-the-released-record", scenario_recycled_id_cannot_observe_the_released_record},
+        {"iterate-over-arraystruct-forwards-unchanged-and-mutates-nothing", scenario_iterate_over_arraystruct_forwards_unchanged_and_mutates_nothing},
+        {"close-pulse-forwards-unchanged-and-never-mutates-the-registry", scenario_close_pulse_forwards_unchanged_and_never_mutates_the_registry},
+        {"ending-dataentry-context-leaves-live-operation-and-child-records-intact", scenario_ending_dataentry_context_leaves_live_operation_and_child_records_intact},
+    };
+    return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

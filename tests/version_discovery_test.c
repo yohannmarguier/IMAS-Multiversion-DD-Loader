@@ -25,53 +25,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <imas_mvdd_loader.h>
-
 #ifndef RECORDING_STUB_PATH
 #error "RECORDING_STUB_PATH must be defined by the build (see CMakeLists.txt)"
 #endif
 
-#define CHECK(condition)                                                       \
-    do {                                                                       \
-        if (!(condition)) {                                                    \
-            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, \
-                    #condition);                                               \
-            exit(EXIT_FAILURE);                                                \
-        }                                                                      \
-    } while (0)
-
-typedef int (*int_accessor_fn)(void);
-typedef const char *(*string_accessor_fn)(void);
-
-static void *dlsym_or_die(void *handle, const char *name) {
-    void *symbol = dlsym(handle, name);
-    if (symbol == NULL) {
-        fprintf(stderr, "recording stub has no symbol '%s': %s\n", name, dlerror());
-        abort();
-    }
-    return symbol;
-}
-
-static void *open_stub_for_introspection(void) {
-    void *handle = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
-    if (handle == NULL) {
-        fprintf(stderr, "failed to dlopen the recording stub for introspection: %s\n", dlerror());
-        abort();
-    }
-    return handle;
-}
-
-static int int_from_stub(const char *symbol_name) {
-    void *stub = open_stub_for_introspection();
-    int_accessor_fn accessor = (int_accessor_fn)dlsym_or_die(stub, symbol_name);
-    return accessor();
-}
-
-static const char *string_from_stub(const char *symbol_name) {
-    void *stub = open_stub_for_introspection();
-    string_accessor_fn accessor = (string_accessor_fn)dlsym_or_die(stub, symbol_name);
-    return accessor();
-}
+#include "shim_test_support.h"
 
 static al_status_t open_dataentry(int *dectxID) {
     return al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, dectxID);
@@ -543,84 +501,28 @@ static void scenario_timerange_action_failure_forwards_status_unchanged(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,
-                "usage: %s "
-                "<dataentry-success-forwards-uri-and-mode|"
-                "dataentry-failure-forwards-status-unchanged|"
-                "hli-unset-global-action-is-plain-forward|"
-                "unstamped-occurrence-forwards-datapath-unchanged|"
-                "matching-version-forwards-datapath-unchanged|"
-                "mismatch-translates-datapath-on-second-open|"
-                "unstamped-stamp-clears-an-earlier-mismatch|"
-                "failed-stamp-read-clears-an-earlier-mismatch|"
-                "malformed-stamp-refuses-and-ends-context|"
-                "slice-action-hli-unset-is-plain-forward|"
-                "slice-action-unstamped-forwards-ids-name-unchanged|"
-                "slice-action-matching-version-forwards-ids-name-unchanged|"
-                "slice-action-mismatch-registers-occurrence-for-global-action|"
-                "slice-action-malformed-stamp-refuses-and-ends-context|"
-                "slice-action-failure-forwards-status-unchanged|"
-                "timerange-action-hli-unset-is-plain-forward|"
-                "timerange-action-unstamped-forwards-ids-name-unchanged|"
-                "timerange-action-matching-version-forwards-ids-name-unchanged|"
-                "timerange-action-mismatch-registers-occurrence-for-global-action|"
-                "timerange-action-malformed-stamp-refuses-and-ends-context|"
-                "timerange-action-failure-forwards-status-unchanged>\n",
-                argv[0]);
-        return 2;
-    }
-
-    const char *scenario = argv[1];
-    if (strcmp(scenario, "dataentry-success-forwards-uri-and-mode") == 0) {
-        scenario_dataentry_success_forwards_uri_and_mode();
-    } else if (strcmp(scenario, "dataentry-failure-forwards-status-unchanged") == 0) {
-        scenario_dataentry_failure_forwards_status_unchanged();
-    } else if (strcmp(scenario, "hli-unset-global-action-is-plain-forward") == 0) {
-        scenario_hli_unset_global_action_is_plain_forward();
-    } else if (strcmp(scenario, "unstamped-occurrence-forwards-datapath-unchanged") == 0) {
-        scenario_unstamped_occurrence_forwards_datapath_unchanged();
-    } else if (strcmp(scenario, "matching-version-forwards-datapath-unchanged") == 0) {
-        scenario_matching_version_forwards_datapath_unchanged();
-    } else if (strcmp(scenario, "mismatch-translates-datapath-on-second-open") == 0) {
-        scenario_mismatch_translates_datapath_on_second_open();
-    } else if (strcmp(scenario, "unstamped-stamp-clears-an-earlier-mismatch") == 0) {
-        scenario_unstamped_stamp_clears_an_earlier_mismatch();
-    } else if (strcmp(scenario, "failed-stamp-read-clears-an-earlier-mismatch") == 0) {
-        scenario_failed_stamp_read_clears_an_earlier_mismatch();
-    } else if (strcmp(scenario, "malformed-stamp-refuses-and-ends-context") == 0) {
-        scenario_malformed_stamp_refuses_and_ends_context();
-    } else if (strcmp(scenario, "slice-action-hli-unset-is-plain-forward") == 0) {
-        scenario_slice_action_hli_unset_is_plain_forward();
-    } else if (strcmp(scenario, "slice-action-unstamped-forwards-ids-name-unchanged") == 0) {
-        scenario_slice_action_unstamped_forwards_ids_name_unchanged();
-    } else if (strcmp(scenario, "slice-action-matching-version-forwards-ids-name-unchanged") == 0) {
-        scenario_slice_action_matching_version_forwards_ids_name_unchanged();
-    } else if (strcmp(scenario, "slice-action-mismatch-registers-occurrence-for-global-action") ==
-               0) {
-        scenario_slice_action_mismatch_registers_occurrence_for_global_action();
-    } else if (strcmp(scenario, "slice-action-malformed-stamp-refuses-and-ends-context") == 0) {
-        scenario_slice_action_malformed_stamp_refuses_and_ends_context();
-    } else if (strcmp(scenario, "slice-action-failure-forwards-status-unchanged") == 0) {
-        scenario_slice_action_failure_forwards_status_unchanged();
-    } else if (strcmp(scenario, "timerange-action-hli-unset-is-plain-forward") == 0) {
-        scenario_timerange_action_hli_unset_is_plain_forward();
-    } else if (strcmp(scenario, "timerange-action-unstamped-forwards-ids-name-unchanged") == 0) {
-        scenario_timerange_action_unstamped_forwards_ids_name_unchanged();
-    } else if (strcmp(scenario, "timerange-action-matching-version-forwards-ids-name-unchanged") ==
-               0) {
-        scenario_timerange_action_matching_version_forwards_ids_name_unchanged();
-    } else if (strcmp(scenario,
-                       "timerange-action-mismatch-registers-occurrence-for-global-action") == 0) {
-        scenario_timerange_action_mismatch_registers_occurrence_for_global_action();
-    } else if (strcmp(scenario, "timerange-action-malformed-stamp-refuses-and-ends-context") == 0) {
-        scenario_timerange_action_malformed_stamp_refuses_and_ends_context();
-    } else if (strcmp(scenario, "timerange-action-failure-forwards-status-unchanged") == 0) {
-        scenario_timerange_action_failure_forwards_status_unchanged();
-    } else {
-        fprintf(stderr, "unknown scenario: %s\n", scenario);
-        return 2;
-    }
-
-    return 0;
+    static const shim_test_scenario scenarios[] = {
+        {"dataentry-success-forwards-uri-and-mode", scenario_dataentry_success_forwards_uri_and_mode},
+        {"dataentry-failure-forwards-status-unchanged", scenario_dataentry_failure_forwards_status_unchanged},
+        {"hli-unset-global-action-is-plain-forward", scenario_hli_unset_global_action_is_plain_forward},
+        {"unstamped-occurrence-forwards-datapath-unchanged", scenario_unstamped_occurrence_forwards_datapath_unchanged},
+        {"matching-version-forwards-datapath-unchanged", scenario_matching_version_forwards_datapath_unchanged},
+        {"mismatch-translates-datapath-on-second-open", scenario_mismatch_translates_datapath_on_second_open},
+        {"unstamped-stamp-clears-an-earlier-mismatch", scenario_unstamped_stamp_clears_an_earlier_mismatch},
+        {"failed-stamp-read-clears-an-earlier-mismatch", scenario_failed_stamp_read_clears_an_earlier_mismatch},
+        {"malformed-stamp-refuses-and-ends-context", scenario_malformed_stamp_refuses_and_ends_context},
+        {"slice-action-hli-unset-is-plain-forward", scenario_slice_action_hli_unset_is_plain_forward},
+        {"slice-action-unstamped-forwards-ids-name-unchanged", scenario_slice_action_unstamped_forwards_ids_name_unchanged},
+        {"slice-action-matching-version-forwards-ids-name-unchanged", scenario_slice_action_matching_version_forwards_ids_name_unchanged},
+        {"slice-action-mismatch-registers-occurrence-for-global-action", scenario_slice_action_mismatch_registers_occurrence_for_global_action},
+        {"slice-action-malformed-stamp-refuses-and-ends-context", scenario_slice_action_malformed_stamp_refuses_and_ends_context},
+        {"slice-action-failure-forwards-status-unchanged", scenario_slice_action_failure_forwards_status_unchanged},
+        {"timerange-action-hli-unset-is-plain-forward", scenario_timerange_action_hli_unset_is_plain_forward},
+        {"timerange-action-unstamped-forwards-ids-name-unchanged", scenario_timerange_action_unstamped_forwards_ids_name_unchanged},
+        {"timerange-action-matching-version-forwards-ids-name-unchanged", scenario_timerange_action_matching_version_forwards_ids_name_unchanged},
+        {"timerange-action-mismatch-registers-occurrence-for-global-action", scenario_timerange_action_mismatch_registers_occurrence_for_global_action},
+        {"timerange-action-malformed-stamp-refuses-and-ends-context", scenario_timerange_action_malformed_stamp_refuses_and_ends_context},
+        {"timerange-action-failure-forwards-status-unchanged", scenario_timerange_action_failure_forwards_status_unchanged},
+    };
+    return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }
