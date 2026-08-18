@@ -27,6 +27,12 @@
 //! allocation is forwarded unchanged throughout: the shim neither
 //! substitutes nor frees it.
 //!
+//! A read that re-enters the shim while one of its own reads is still in
+//! flight — IMAS-Core calling back into the public ABI, or a plugin below the
+//! shim — is forwarded untouched: it already carries a stored-version path, so
+//! resolving it again would translate twice, flip a sign twice, and log a loss
+//! the caller never earned (ADR 0014).
+//!
 //! The write path is deliberately not translated. `al_write_data`,
 //! `al_delete_data` and `al_plugin_write_data` refuse before IMAS-Core is
 //! called whenever the context carries a live conversion record, and forward

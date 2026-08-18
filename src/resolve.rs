@@ -33,27 +33,36 @@ const CORE_LIBRARY_ENV_VAR: &str = "IMAS_CORE_LIBRARY";
 const BUILT_AGAINST_VERSION: &str = env!("IMAS_CORE_VERSION");
 
 thread_local! {
-    static READ_POLICY_STATE: Cell<(u32, Option<usize>)> = const { Cell::new((0, None)) };
+    /// How many shim read seams this thread is currently inside (ADR 0014).
+    /// Only ever read through [`ReadDepthGuard`]; a thread-local rather than a
+    /// global because the depth describes one call stack, and ADR 0003 already
+    /// puts concurrent use of a single IMAS-Core context out of scope.
+    static SHIM_READ_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
 
-struct ReadPolicyGuard;
+/// Raises the thread's shim-read depth for as long as one read seam is on the
+/// stack, so a read that arrives *underneath* an in-flight one can recognise
+/// itself as reentrant (ADR 0014). The guard must wrap the forwarded IMAS-Core
+/// call too, not just the resolution around it — the reentrant call happens
+/// inside that call.
+struct ReadDepthGuard;
 
-impl ReadPolicyGuard {
-    fn enter() -> Self {
-        READ_POLICY_STATE.with(|state| {
-            let (depth, pointer) = state.get();
-            state.set((depth + 1, pointer));
+impl ReadDepthGuard {
+    /// Enters a read seam, reporting whether one was already in flight on this
+    /// thread.
+    fn enter() -> (Self, bool) {
+        let already_reading = SHIM_READ_DEPTH.with(|depth| {
+            let entered = depth.get();
+            depth.set(entered + 1);
+            entered > 0
         });
-        Self
+        (Self, already_reading)
     }
 }
 
-impl Drop for ReadPolicyGuard {
+impl Drop for ReadDepthGuard {
     fn drop(&mut self) {
-        READ_POLICY_STATE.with(|state| {
-            let (depth, pointer) = state.get();
-            state.set((depth - 1, (depth > 1).then_some(pointer).flatten()));
-        });
+        SHIM_READ_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
     }
 }
 
@@ -1301,15 +1310,17 @@ unsafe fn read_data_impl(
     size: *mut c_int,
     forward: impl Fn(*const c_char, *const c_char) -> al_status_t,
 ) -> al_status_t {
-    let entry_depth = READ_POLICY_STATE.with(|state| state.get().0);
-    let _policy_guard = ReadPolicyGuard::enter();
-    if entry_depth > 0 {
-        eprintln!(
-            "[MVDD-REENTRY] depth={entry_depth} ctx={ctx_id} field={:?} timebase={:?}\n{}",
-            c_str_or_none(field),
-            c_str_or_none(timebase),
-            std::backtrace::Backtrace::force_capture(),
-        );
+    // A read that arrives while this thread is already inside a read seam was
+    // not issued by the caller this shim converts for: it comes from
+    // underneath the in-flight IMAS-Core call, carrying a path the shim has
+    // already translated into the stored DD version. Converting it again is
+    // wrong in every direction — it would resolve a stored path as if it were
+    // an HLI one, apply a second value transformation, and retain a loss entry
+    // for a read the caller never issued. Forward it exactly as received
+    // (ADR 0014).
+    let (_depth_guard, already_reading) = ReadDepthGuard::enter();
+    if already_reading {
+        return forward(field, timebase);
     }
     let Some(record) = REGISTRY.lookup(ctx_id) else {
         return forward(field, timebase);
@@ -1393,27 +1404,17 @@ unsafe fn read_data_impl(
                     return status;
                 }
                 ReadOutcome::Data => {
-                    let should_transform = field_attempt.value_transformation
-                        != ValueTransformation::None
-                        && READ_POLICY_STATE.with(|state| {
-                            let (depth, transformed_pointer) = state.get();
-                            let pointer = unsafe { *data } as usize;
-                            if transformed_pointer == Some(pointer) {
-                                false
-                            } else {
-                                state.set((depth, Some(pointer)));
-                                true
-                            }
-                        });
-                    if should_transform
-                        && let Err(reason) = apply_value_transformation(
-                            &field_attempt.value_transformation,
-                            unsafe { *data },
-                            datatype,
-                            dim,
-                            size,
-                        )
-                    {
+                    // No "have I already transformed this buffer?" test is
+                    // needed: reentrant reads never reach this branch, so the
+                    // only code that can transform a buffer is the one read
+                    // the caller asked for (ADR 0014).
+                    if let Err(reason) = apply_value_transformation(
+                        &field_attempt.value_transformation,
+                        unsafe { *data },
+                        datatype,
+                        dim,
+                        size,
+                    ) {
                         retain_read_fidelities(
                             &record,
                             field,

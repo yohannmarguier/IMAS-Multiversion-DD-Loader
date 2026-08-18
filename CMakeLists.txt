@@ -782,6 +782,21 @@ if(IMAS_MVDD_BUILD_TESTS)
         ENVIRONMENT
             "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-9e40,3.2,-4.0")
 
+    # ADR 0014: a read re-entering the shim beneath an in-flight read is
+    # forwarded untouched. The stub's reentrant-read knob reproduces on any
+    # platform what real IMAS-Core only does on ELF.
+    add_test(NAME read-path-reentrant-read-is-forwarded-unchanged
+        COMMAND read_path_test reentrant-read-is-forwarded-unchanged)
+    set_tests_properties(read-path-reentrant-read-is-forwarded-unchanged PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=3.39.0;RECORDING_STUB_STAMP_VERSION=4.1.1")
+
+    add_test(NAME read-path-reentrant-read-does-not-reapply-a-sign-flip
+        COMMAND read_path_test reentrant-read-does-not-reapply-a-sign-flip)
+    set_tests_properties(read-path-reentrant-read-does-not-reapply-a-sign-flip PROPERTIES
+        ENVIRONMENT
+            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;IMAS_MVDD_HLI_DD_VERSION=4.1.1;RECORDING_STUB_STAMP_VERSION=3.39.0;RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-9e40,3.2,-4.0")
+
     add_test(NAME read-path-sign-flip-invalid-shape-refuses-without-modifying-buffer
         COMMAND read_path_test sign-flip-invalid-shape-refuses-without-modifying-buffer)
     set_tests_properties(read-path-sign-flip-invalid-shape-refuses-without-modifying-buffer PROPERTIES

@@ -28,6 +28,8 @@
 
 typedef const char *(*string_accessor_fn)(void);
 typedef int (*int_accessor_fn)(void);
+typedef al_status_t (*read_data_fn)(int, const char *, const char *, void **, int, int, int *);
+typedef void (*set_reentrant_read_fn)(read_data_fn, const char *);
 
 static void *dlsym_or_die(void *handle, const char *name) {
     void *symbol = dlsym(handle, name);
@@ -56,6 +58,21 @@ static int int_from_stub(const char *symbol_name) {
     }
     int_accessor_fn accessor = (int_accessor_fn)dlsym_or_die(stub, symbol_name);
     return accessor();
+}
+
+/* Arms the stub to call back into the shim's own `al_read_data` once, while
+ * the shim's read is still on the stack, with `field` as its argument — what
+ * real IMAS-Core does on ELF, where its internal call to its own public
+ * `al_read_data` binds to the shim's exported definition. */
+static void arm_reentrant_read(const char *field) {
+    void *stub = dlopen(RECORDING_STUB_PATH, RTLD_NOW | RTLD_LOCAL);
+    if (stub == NULL) {
+        fprintf(stderr, "failed to open recording stub: %s\n", dlerror());
+        abort();
+    }
+    set_reentrant_read_fn arm =
+        (set_reentrant_read_fn)dlsym_or_die(stub, "recording_stub_set_reentrant_read");
+    arm(al_read_data, field);
 }
 
 static int open_mismatched_equilibrium(void) {
@@ -180,6 +197,70 @@ static void scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log(void) {
 
     printf("read_path_test merged-read-retains-a-lossy-verdict-in-the-loss-log: a merged "
            "rule's lossy verdict reached the queryable loss log\n");
+}
+
+/* ADR 0014: a read arriving while the shim's own read is in flight was issued
+ * from underneath IMAS-Core, not by the HLI, and carries a path the shim has
+ * already translated - so it is forwarded exactly as received, with no
+ * resolution, no transformation and no loss retention.
+ *
+ * Mirrors the real-Core failure this policy was written for: the same field the
+ * caller asked for arrives again, mid-read, and must not be converted a second
+ * time. `move-gap` is the field because in this direction it both renames
+ * (boundary_separatrix -> boundary) and is declared lossy, so a second
+ * conversion shows up twice over - the stub would receive the stored spelling
+ * rather than what it sent, and the root loss log would hold two entries for a
+ * caller that issued one read. */
+static void scenario_reentrant_read_is_forwarded_unchanged(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    arm_reentrant_read("time_slice/boundary_separatrix/gap/r");
+
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/boundary_separatrix/gap/r", "", &data).code == 0);
+    CHECK(data != NULL);
+
+    /* The caller's own read still converts, and still records its loss. */
+    check_stub_paths("time_slice/boundary/gap/r", "");
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r",
+                  IMAS_MVDD_FIDELITY_LOSSY);
+
+    /* The reentrant one reached IMAS-Core exactly as the stub sent it. */
+    CHECK(int_from_stub("recording_stub_reentrant_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_field"),
+                 "time_slice/boundary_separatrix/gap/r")
+          == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_timebase"), "") == 0);
+
+    printf("read_path_test reentrant-read-is-forwarded-unchanged: a read re-entering beneath "
+           "an in-flight read was forwarded without conversion or loss retention\n");
+}
+
+/* The value-transform half of the same policy. The stub hands both legs the
+ * same static buffer, so a reentrant read that still applied the COCOS flip
+ * would negate it a second time and hand the caller its original signs back —
+ * silently wrong data, and the failure mode the earlier address-keyed dedup
+ * was guarding against by a weaker means. */
+static void scenario_reentrant_read_does_not_reapply_a_sign_flip(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    arm_reentrant_read("time_slice/profiles_1d/psi");
+
+    int size[1] = {0};
+    void *data = NULL;
+    CHECK(al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
+                       52 /* DOUBLE_DATA */, 1, size)
+              .code == 0);
+    CHECK(data != NULL);
+    CHECK(size[0] == 4);
+    const double *values = (const double *)data;
+    CHECK(values[0] == -1.5);
+    CHECK(values[1] == -9e40); /* EMPTY_DOUBLE stays untouched */
+    CHECK(values[2] == -3.2);
+    CHECK(values[3] == 4.0);
+    CHECK(int_from_stub("recording_stub_reentrant_call_count") == 1);
+
+    printf("read_path_test reentrant-read-does-not-reapply-a-sign-flip: the COCOS flip was "
+           "applied exactly once despite a read re-entering mid-flight\n");
 }
 
 static void scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log(void) {
@@ -664,7 +745,9 @@ int main(int argc, char **argv) {
                 "loss-at-null-verdict-is-refused|"
                 "loss-at-negative-index-is-refused|"
                 "loss-at-out-of-range-index-is-refused|"
-                "loss-at-insufficient-buffer-is-refused>\n",
+                "loss-at-insufficient-buffer-is-refused|"
+                "reentrant-read-is-forwarded-unchanged|"
+                "reentrant-read-does-not-reapply-a-sign-flip>\n",
                 argv[0]);
         return 2;
     }
@@ -789,6 +872,14 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "loss-at-insufficient-buffer-is-refused") == 0) {
         scenario_loss_at_insufficient_buffer_is_refused();
+        return 0;
+    }
+    if (strcmp(argv[1], "reentrant-read-is-forwarded-unchanged") == 0) {
+        scenario_reentrant_read_is_forwarded_unchanged();
+        return 0;
+    }
+    if (strcmp(argv[1], "reentrant-read-does-not-reapply-a-sign-flip") == 0) {
+        scenario_reentrant_read_does_not_reapply_a_sign_flip();
         return 0;
     }
     fprintf(stderr, "unknown scenario: %s\n", argv[1]);
