@@ -18,6 +18,18 @@
   already independently discovered and hand-refused every one of these as
   "missing from map" before the map itself was fixed to agree.
 
+  Twenty-three paths were removed from the 4.1.1 inventory for the mirror-image
+  reason, all under time_slice/ggd/grid: DD4 removed the per-slice embedded GGD
+  grid entirely (grids_ggd at IDS level is the single grid container, which is
+  what drop-timeslice-ggd-grid below already declares), and the imas-dd MCP
+  server confirms every one of them absent from DD4 while present in DD3 - each
+  one's nearest DD4 suggestion is the grids_ggd/... spelling. The transcribed
+  4.1.1 inventory listing them was wrong the same way the 3.39.0 inventory was.
+  Because they were present on both sides, they fell through <default
+  rel="identical"/> and were counted as *supported* reverse coverage, so the
+  measured reverse figure was overstated by exactly these 23 paths
+  (358/393 before, 335/370 after; the forward direction is unaffected).
+
   Rules below claim every left-only and right-only path. Paths present in both
   and unclaimed fall through to <default rel="identical"/>. That default is
   deliberate, and it is what the completeness proof's scope rests on: with it

@@ -36,13 +36,19 @@ static void scenario_write_refuses_under_known_mismatched_root_before_core_call(
         write_field(operation_ctx, "time_slice/global_quantities/beta_tor_norm", "time", data, size);
 
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    /* The refusal resolves no path through the map by design (issue #64), but
+     * the record that triggered it still names both DD versions, and the field
+     * the caller passed is the spelling AC3 asks to see. */
+    CHECK_REFUSAL_MESSAGE(status, "al_write_data refuses on a context with a known DD version mismatch",
+                          "time_slice/global_quantities/beta_tor_norm", "4.1.1", "3.39.0");
     CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
     CHECK(data == &sentinel);
     CHECK(sentinel == 42.0);
     CHECK(size[0] == 73);
 
     printf("write_delete_conversion_test write-refuses-under-known-mismatched-root-before-core-call: "
-           "IMAS-Core was never called and the caller's buffers were untouched\n");
+           "IMAS-Core was never called, the caller's buffers were untouched, and the refusal named "
+           "the path and both DD versions\n");
 }
 
 static void scenario_delete_refuses_under_known_mismatched_root_before_core_call(void) {
@@ -53,10 +59,12 @@ static void scenario_delete_refuses_under_known_mismatched_root_before_core_call
         al_delete_data(operation_ctx, "time_slice/global_quantities/beta_tor_norm");
 
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "al_delete_data refuses on a context with a known DD version mismatch",
+                          "time_slice/global_quantities/beta_tor_norm", "4.1.1", "3.39.0");
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
 
     printf("write_delete_conversion_test delete-refuses-under-known-mismatched-root-before-core-call: "
-           "IMAS-Core was never called\n");
+           "IMAS-Core was never called and the refusal named the path and both DD versions\n");
 }
 
 static void scenario_plugin_write_refuses_under_known_mismatched_root_before_core_call(void) {

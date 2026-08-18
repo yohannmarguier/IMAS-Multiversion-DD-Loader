@@ -404,7 +404,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     # derive from a checked-in file, so they are pinned here where a reviewer
     # reads them next to the test that enforces them. They are floors, not
     # equalities: coverage rising is the point of every new rule. Measured
-    # 342/428 forward and 358/393 reverse on the approved artifact -- raise a
+    # 342/428 forward and 335/370 reverse on the approved artifact -- raise a
     # floor deliberately when new rules earn it, never to make a red gate green.
     add_test(NAME equilibrium-artifact-coverage-floor
         COMMAND "${CMAKE_COMMAND}"
@@ -416,8 +416,9 @@ if(IMAS_MVDD_BUILD_TESTS)
             "-DRIGHT_INVENTORY=${CMAKE_CURRENT_SOURCE_DIR}/docs/inventory/equilibrium-4.1.1.txt"
             "-DBASELINE_TSV=${CMAKE_CURRENT_SOURCE_DIR}/docs/inventory/equilibrium-3.39.0--4.1.1-imas-python-renames.tsv"
             "-DNEAR_BOUNDARY_RULE_ID=rename-beta-normal"
+            "-DCOMPLETENESS_RULE_ID=drop-b-flux-pol-norm"
             "-DFORWARD_SUPPORTED_FLOOR=342"
-            "-DREVERSE_SUPPORTED_FLOOR=358"
+            "-DREVERSE_SUPPORTED_FLOOR=335"
             "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_artifact_coverage_floor.cmake")
 
@@ -1365,6 +1366,22 @@ if(IMAS_MVDD_BUILD_TESTS)
     set_tests_properties(equilibrium-read-forward-reads-renamed-value PROPERTIES
         LABELS real-core
         RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+
+    # Spec #43 tier-2 cells (c) and (g), previously covered only against the
+    # recording stub: a write/delete/plugin-write refusal across a real
+    # IMAS-Core boundary, and a real context lifecycle that must leave
+    # conversion working through whatever is still open.
+    add_test(NAME equilibrium-read-forward-write-and-delete-refuse-against-mismatch
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> forward-write-and-delete-refuse-against-mismatch)
+    set_tests_properties(equilibrium-read-forward-write-and-delete-refuse-against-mismatch PROPERTIES
+        LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+
+    add_test(NAME equilibrium-read-forward-context-lifecycle-keeps-conversion-live
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:equilibrium_read_test> forward-context-lifecycle-keeps-conversion-live)
+    set_tests_properties(equilibrium-read-forward-context-lifecycle-keeps-conversion-live PROPERTIES
+        LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
 
     add_test(NAME equilibrium-read-forward-merged-read-falls-through-to-stored-alias
         COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --

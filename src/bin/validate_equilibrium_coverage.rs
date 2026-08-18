@@ -1,9 +1,17 @@
-//! Artifact-validation command for issue #51's autoconvert-equivalence gate.
+//! Artifact-validation command for issue #50's completeness proof and issue
+//! #51's autoconvert-equivalence gate.
 //!
 //! This is deliberately a command instead of a unit-test-only helper: CTest
 //! runs the exact executable that maintainers can run while reviewing a
-//! changed artifact.  It measures the complete leaf-path surface and then
-//! checks the independent IMAS-Python rename-only floor in both directions.
+//! changed artifact.  It measures the complete leaf-path surface, checks the
+//! independent IMAS-Python rename-only floor in both directions, and then
+//! runs `ConversionMap::check_completeness` over the same two inventories.
+//!
+//! Both issues declare the same test seam — "artifact-validation command
+//! invoked through the project test runner" — but the completeness half used
+//! to run only as a `#[cfg(test)]` unit test, so this command could report a
+//! healthy coverage summary for an artifact whose claims did not hold. It now
+//! fails on either.
 
 use std::collections::HashSet;
 use std::env;
@@ -83,6 +91,31 @@ fn validate() -> Result<(), String> {
             baseline.len()
         ));
     }
+
+    // Deliberately last. The floor error above is the contract two of this
+    // gate's own fixtures assert on -- the all-rules-removed artifact and the
+    // one-rename-short artifact are both built to fall below the floor, and
+    // both would instead trip a completeness violation if this ran first,
+    // making the gate prove something other than what it says it proves.
+    // Coverage magnitude and claim integrity are separate assertions; this is
+    // the second one, not a replacement for the first.
+    let left_paths = inventory_paths(LEFT_INVENTORY);
+    let right_paths = inventory_paths(RIGHT_INVENTORY);
+    match map.check_completeness(&left_paths, &right_paths) {
+        Ok(()) => println!(
+            "completeness 3.39.0 <-> 4.1.1: {} + {} inventory paths claimed, \
+             every rule selector backed, every side-only absence confirmed",
+            left_paths.len(),
+            right_paths.len()
+        ),
+        Err(violations) => {
+            return Err(format!(
+                "the artifact is not complete against its own inventories: \
+                 {} violation(s): {violations:?}",
+                violations.len()
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -105,6 +138,19 @@ fn inventory(text: &str) -> HashSet<&str> {
     text.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// The same inventory lines as owned `String`s, which is what
+/// `ConversionMap::check_completeness` takes. The measurement wants set
+/// membership and the proof wants a slice it can report a path out of, so the
+/// one file is read into both shapes rather than one being derived from the
+/// other by a collect that would drop the line order the proof reports in.
+fn inventory_paths(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
         .collect()
 }
 

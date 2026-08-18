@@ -321,9 +321,35 @@ pub enum Rel {
     Renamed,
     Merged,
     Moved,
+    /// A path whose DD-side data type or rank changed. It always resolves to
+    /// [`RefusalReason::UnservableRetype`], whatever fidelity it declares,
+    /// because the shim cannot reshape a buffer — see
+    /// `ConversionMap::refusal_before_resolution`.
+    ///
+    /// The artifact may also carry a `shape` attribute describing the change
+    /// (the approved artifact's one retype says
+    /// `shape="int_1d:struct_array"`). The loader deliberately does not read
+    /// it: the refusal is unconditional, so no resolution decision could
+    /// depend on it, and parsing a value nothing consumes would imply the
+    /// engine acts on it. It is there for the physicist reviewing the rule.
     Retyped,
     Split,
+    /// A path present only on the artifact's left side.
+    ///
+    /// Only its *forward* fidelity is ever consulted. `ConversionMap::load`
+    /// indexes a `LeftOnly` rule into `left_sources` alone — it has no right
+    /// path to index — so a reverse resolve can never select it. That is not
+    /// a gap: reverse means the right side supplied the path, and this rule
+    /// exists precisely because the path is absent there. A declared
+    /// `reverse="unmappable"` is therefore documentation for the physicist
+    /// ("this cannot be reconstructed from the other version"), never a
+    /// refusal the resolver raises. `LeftOnly`'s mirror applies to
+    /// [`Self::RightOnly`]. `check_completeness` is what holds the
+    /// declaration honest, by proving the path really is absent from the
+    /// side the rule says it is absent from.
     LeftOnly,
+    /// A path present only on the artifact's right side. The mirror of
+    /// [`Self::LeftOnly`]: only its *reverse* fidelity is ever consulted.
     RightOnly,
 }
 
@@ -450,6 +476,23 @@ pub enum CompletenessViolation {
     /// default, but no path by that same spelling exists in the other
     /// side's raw inventory — the default's identity assumption is false.
     DefaultAssumesMissingCounterpart { side: InventorySide, path: String },
+    /// A `left_only`/`right_only` rule declares its path gone on the other
+    /// side, and that side's raw inventory lists it anyway: the artifact and
+    /// the inventory contradict each other about the same DD path. `side`
+    /// names the inventory that should not have contained it.
+    ///
+    /// [`Self::DefaultAssumesMissingCounterpart`] cannot catch this. That
+    /// assertion compares the two inventories *with each other*, so a path
+    /// wrongly listed on both sides satisfies it and is then claimed by the
+    /// identity default and counted as supported coverage. Only comparing a
+    /// rule's own declaration against the inventory catches a path the
+    /// artifact says is gone while the inventory still lists it.
+    SideOnlyRuleContradictedByInventory {
+        rule_id: String,
+        side: InventorySide,
+        pattern: String,
+        path: String,
+    },
     /// A rule's own primary selector (`left`/`right`, never a `merged`/
     /// `split` rule's `<from>` candidates — see
     /// [`ConversionMap::check_completeness`]'s doc comment) corresponds to
@@ -865,6 +908,16 @@ impl ConversionMap {
     pub fn resolve(&self, path: &str, direction: Direction) -> Option<RuleExplanation> {
         if let Some(found) = self.best_match(path, direction) {
             let rule = &self.rules[found.rule_index];
+            let fidelity = fidelity_for(rule, direction);
+
+            if let Some(reason) = Self::refusal_before_resolution(rule.rel, fidelity) {
+                return Some(Self::explicit_match(
+                    rule,
+                    &found,
+                    fidelity,
+                    Outcome::Refusal(reason),
+                ));
+            }
 
             return match rule.rel {
                 Rel::Renamed | Rel::Moved => {
@@ -872,20 +925,14 @@ impl ConversionMap {
                 }
                 Rel::Merged => Some(self.resolve_merged(rule, path, direction, &found)),
                 Rel::Split => Some(self.resolve_split(rule, path, direction, &found)),
-                Rel::Retyped => Some(Self::explicit_match(
+                Rel::LeftOnly | Rel::RightOnly => Some(Self::explicit_match(
                     rule,
                     &found,
-                    fidelity_for(rule, direction),
-                    Outcome::Refusal(RefusalReason::UnservableRetype),
+                    fidelity,
+                    Outcome::NoSource,
                 )),
-                Rel::LeftOnly | Rel::RightOnly => {
-                    let fidelity = fidelity_for(rule, direction);
-                    let outcome = if fidelity == Fidelity::Unmappable {
-                        Outcome::Refusal(RefusalReason::Unmappable)
-                    } else {
-                        Outcome::NoSource
-                    };
-                    Some(Self::explicit_match(rule, &found, fidelity, outcome))
+                Rel::Retyped => {
+                    unreachable!("a retyped rule is always claimed by refusal_before_resolution")
                 }
             };
         }
@@ -895,6 +942,31 @@ impl ConversionMap {
         }
 
         None
+    }
+
+    /// The refusal a matched rule owes before any path is resolved, or
+    /// `None` when resolution may proceed.
+    ///
+    /// The order of the two arms is load-bearing. A `retyped` rule refuses on
+    /// shape whatever fidelity it declares — the shim cannot reshape an int
+    /// array into an array of identifier structures, so a conversion that is
+    /// lossless in principle is unavailable in practice, and the approved
+    /// artifact's one retype is in fact declared `exact` in both directions.
+    ///
+    /// An `unmappable` fidelity then refuses for every other rule kind alike.
+    /// It is a statement the artifact makes about a *direction*, not about a
+    /// rule shape, so it must not be a per-resolver check that a new or
+    /// edited resolver can forget — which is exactly what happened:
+    /// `resolve_single_path` checked it while `resolve_merged` and
+    /// `resolve_split` did not, so a `merged`/`split` rule declared
+    /// `unmappable` produced a candidate read plan for the read path to
+    /// execute instead of the refusal the artifact asked for.
+    fn refusal_before_resolution(rel: Rel, fidelity: Fidelity) -> Option<RefusalReason> {
+        match (rel, fidelity) {
+            (Rel::Retyped, _) => Some(RefusalReason::UnservableRetype),
+            (_, Fidelity::Unmappable) => Some(RefusalReason::Unmappable),
+            _ => None,
+        }
     }
 
     /// Resolves a `renamed` or `moved` rule's single path on the other side.
@@ -909,14 +981,6 @@ impl ConversionMap {
             Direction::Forward => (&rule.right, rule.fidelity_forward),
             Direction::Reverse => (&rule.left, rule.fidelity_reverse),
         };
-        if fidelity == Fidelity::Unmappable {
-            return Self::explicit_match(
-                rule,
-                found,
-                fidelity,
-                Outcome::Refusal(RefusalReason::Unmappable),
-            );
-        }
         let target = target
             .as_ref()
             .expect("renamed or moved rule always carries both paths");
@@ -1336,6 +1400,25 @@ impl ConversionMap {
                     pattern: selector.pattern().to_string(),
                 });
             }
+
+            // A side-only rule states an absence, and an absence is only
+            // provable against the inventory that should not contain it.
+            let declared_absent_from = match rule.rel {
+                Rel::LeftOnly => Some((&rule.left, right_inventory, InventorySide::Right)),
+                Rel::RightOnly => Some((&rule.right, left_inventory, InventorySide::Left)),
+                _ => None,
+            };
+            if let Some((selector, inventory, side)) = declared_absent_from
+                && let Some(selector) = selector
+                && let Some(path) = Self::selector_first_match(selector, inventory)
+            {
+                violations.push(CompletenessViolation::SideOnlyRuleContradictedByInventory {
+                    rule_id: rule.id.clone(),
+                    side,
+                    pattern: selector.pattern().to_string(),
+                    path: path.clone(),
+                });
+            }
         }
 
         if violations.is_empty() {
@@ -1376,17 +1459,30 @@ impl ConversionMap {
     /// `inventory`: literal membership for `Exact`, self-or-descendant
     /// membership for `Subtree`, and at least one matching entry for `Glob`.
     fn selector_backed_by_inventory(selector: &Selector, inventory: &[String]) -> bool {
+        Self::selector_first_match(selector, inventory).is_some()
+    }
+
+    /// The first `inventory` entry `selector` claims, or `None` when it
+    /// claims none. One matcher serves both completeness assertions that
+    /// need it, from opposite directions: a rule's own selector must match
+    /// its side's inventory, and a side-only rule's selector must match
+    /// nothing in the other side's. The offending entry is returned rather
+    /// than a bool so the second one can name the path in its violation.
+    fn selector_first_match<'a>(
+        selector: &Selector,
+        inventory: &'a [String],
+    ) -> Option<&'a String> {
         match selector {
-            Selector::Exact(pattern) => inventory.iter().any(|entry| entry == pattern),
-            Selector::Subtree(anchor) => inventory.iter().any(|entry| {
-                entry == anchor
+            Selector::Exact(pattern) => inventory.iter().find(|entry| *entry == pattern),
+            Selector::Subtree(anchor) => inventory.iter().find(|entry| {
+                *entry == anchor
                     || entry
                         .strip_prefix(anchor.as_str())
                         .is_some_and(|rest| rest.starts_with('/'))
             }),
             Selector::Glob(pattern) => inventory
                 .iter()
-                .any(|entry| glob_match(pattern, entry).is_some()),
+                .find(|entry| glob_match(pattern, entry).is_some()),
         }
     }
 }
@@ -2252,6 +2348,110 @@ mod tests {
     }
 
     #[test]
+    fn a_merged_rule_declared_unmappable_refuses_instead_of_planning_candidates() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="fold" rel="merged" right="b">
+                  <from left="a1" precedence="1"/>
+                  <from left="a2" precedence="2"/>
+                  <fidelity forward="unmappable" reverse="unmappable"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+
+        // Forward, the declared alias must not resolve to the canonical path.
+        let forward = map
+            .resolve("a1", Direction::Forward)
+            .expect("a declared alias matches its merged rule");
+        assert_eq!(forward.match_kind, MatchKind::Explicit);
+        assert_eq!(forward.rule_id.as_deref(), Some("fold"));
+        assert_eq!(forward.fidelity, Fidelity::Unmappable);
+        assert_eq!(
+            forward.outcome,
+            Outcome::Refusal(RefusalReason::Unmappable),
+            "a merged rule declared unmappable must refuse, not resolve"
+        );
+
+        // Reverse is the direction that would otherwise hand the read path a
+        // candidate plan to execute against IMAS-Core.
+        let reverse = map
+            .resolve("b", Direction::Reverse)
+            .expect("the canonical path matches its merged rule");
+        assert_eq!(reverse.fidelity, Fidelity::Unmappable);
+        assert_eq!(
+            reverse.outcome,
+            Outcome::Refusal(RefusalReason::Unmappable),
+            "a merged rule declared unmappable must not produce a candidate read plan"
+        );
+    }
+
+    #[test]
+    fn a_split_rule_declared_unmappable_refuses_instead_of_planning_candidates() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="fan" rel="split" left="a">
+                  <from right="b1" precedence="1"/>
+                  <from right="b2" precedence="2"/>
+                  <fidelity forward="unmappable" reverse="unmappable"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+
+        // Forward is the candidate-plan direction for a split rule.
+        let forward = map
+            .resolve("a", Direction::Forward)
+            .expect("the single source matches its split rule");
+        assert_eq!(forward.match_kind, MatchKind::Explicit);
+        assert_eq!(forward.rule_id.as_deref(), Some("fan"));
+        assert_eq!(forward.fidelity, Fidelity::Unmappable);
+        assert_eq!(
+            forward.outcome,
+            Outcome::Refusal(RefusalReason::Unmappable),
+            "a split rule declared unmappable must not produce a candidate read plan"
+        );
+
+        let reverse = map
+            .resolve("b1", Direction::Reverse)
+            .expect("a declared destination matches its split rule");
+        assert_eq!(reverse.fidelity, Fidelity::Unmappable);
+        assert_eq!(reverse.outcome, Outcome::Refusal(RefusalReason::Unmappable));
+    }
+
+    #[test]
+    fn a_retype_refuses_on_shape_even_when_it_declares_unmappable() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="reshape" rel="retyped" left="a" right="a">
+                  <fidelity forward="unmappable" reverse="unmappable"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+
+        // Pins the precedence between the two pre-resolution refusals: the
+        // shape reason wins, so a retype never reports the generic one.
+        let explanation = map.resolve("a", Direction::Forward).expect("rule matches");
+        assert_eq!(
+            explanation.outcome,
+            Outcome::Refusal(RefusalReason::UnservableRetype)
+        );
+    }
+
+    #[test]
     fn merged_rule_resolves_forward_to_its_single_canonical_target() {
         let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
 
@@ -2978,6 +3178,116 @@ mod tests {
         );
     }
 
+    /// Pins which refusal reasons and selector stages the approved artifact can
+    /// actually reach, by sweeping both real inventories in both directions.
+    /// `check_completeness`'s doc comment already sets the precedent for
+    /// pinning a reachability fact rather than leaving a reader to derive it.
+    ///
+    /// Two of these facts are counter-intuitive and were both mis-read during
+    /// review, which is why they are asserted rather than commented:
+    ///
+    /// - `RefusalReason::Unmappable` is unreachable. The artifact declares
+    ///   `unmappable` thirty-six times, but every one sits on a `left_only`
+    ///   rule's `reverse` or a `right_only` rule's `forward` — the direction
+    ///   that rule can never be selected in, since it has no path indexed on
+    ///   that side (see [`Rel::LeftOnly`]). So the shipped artifact's refusals
+    ///   are only ever the shape one and the unit one, and this variant's real
+    ///   coverage is the synthetic-artifact tests, not this artifact.
+    /// - The glob selector stage is unreachable too: no rule in the artifact
+    ///   uses a glob selector. The four `<redefine glob="...">` entries do,
+    ///   but they are matched by `redefine_for` against a resolved right-side
+    ///   path, not by `best_match`'s stage ladder.
+    ///
+    /// Neither is a defect, and neither should be "fixed" by editing the
+    /// artifact. They bound what a green suite proves: if a future artifact
+    /// makes either reachable, this test fails and the reader is told to go
+    /// add real coverage for the mechanism rather than trusting the synthetic
+    /// tests alone (ADR 0011's "silence is earned by mechanism coverage").
+    #[test]
+    fn the_approved_artifact_reaches_only_its_shape_and_unit_refusals() {
+        let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
+        let left_inventory = parse_inventory(LEFT_INVENTORY_339);
+        let right_inventory = parse_inventory(RIGHT_INVENTORY_411);
+
+        for (label, inventory, direction, expected_retypes) in [
+            ("forward", &left_inventory, Direction::Forward, 1),
+            // The 4.1.1 inventory lists the retype's container and the
+            // `index` child its shape change introduced, so both refuse.
+            ("reverse", &right_inventory, Direction::Reverse, 2),
+        ] {
+            let mut retypes = 0;
+            let mut unit_redefinitions = 0;
+            let mut unmappables = 0;
+            let mut globs = 0;
+
+            for path in inventory {
+                let Some(explanation) = map.resolve(path, direction) else {
+                    continue;
+                };
+                if explanation.selector_stage == Some(SelectorStage::Glob) {
+                    globs += 1;
+                }
+                match explanation.outcome {
+                    Outcome::Refusal(RefusalReason::UnservableRetype) => retypes += 1,
+                    Outcome::Refusal(RefusalReason::UnitRedefinition) => unit_redefinitions += 1,
+                    Outcome::Refusal(RefusalReason::Unmappable) => unmappables += 1,
+                    _ => {}
+                }
+            }
+
+            assert_eq!(retypes, expected_retypes, "{label} retype refusals");
+            assert_eq!(unit_redefinitions, 4, "{label} unit-redefinition refusals");
+            assert_eq!(
+                unmappables, 0,
+                "{label}: RefusalReason::Unmappable became reachable from the approved \
+                 artifact -- its only coverage was synthetic, so add a real-artifact test"
+            );
+            assert_eq!(
+                globs, 0,
+                "{label}: the glob selector stage became reachable from the approved \
+                 artifact -- it had no real-artifact coverage, so add some"
+            );
+        }
+    }
+
+    /// The structural reason `RefusalReason::Unmappable` is unreachable above,
+    /// shown on one concrete rule rather than argued in prose.
+    ///
+    /// `drop-b-flux-pol-norm` is `left_only` over a DD3-only path and declares
+    /// `forward="lossy" reverse="unmappable"`. Forward, it is selected and
+    /// yields no source. Reverse, it cannot be selected at all — so the
+    /// identity default answers instead, and the `unmappable` it declares is
+    /// never consulted by anything.
+    #[test]
+    fn a_left_only_rules_reverse_fidelity_is_never_consulted() {
+        let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
+        let path = "time_slice/boundary/b_flux_pol_norm";
+
+        let forward = map
+            .resolve(path, Direction::Forward)
+            .expect("the left_only rule claims its own side");
+        assert_eq!(forward.match_kind, MatchKind::Explicit);
+        assert_eq!(forward.rule_id.as_deref(), Some("drop-b-flux-pol-norm"));
+        assert_eq!(forward.rel, Some(Rel::LeftOnly));
+        assert_eq!(forward.fidelity, Fidelity::Lossy);
+        assert_eq!(forward.outcome, Outcome::NoSource);
+
+        let reverse = map
+            .resolve(path, Direction::Reverse)
+            .expect("the identity default still answers");
+        assert_eq!(
+            reverse.match_kind,
+            MatchKind::Default,
+            "a left_only rule must not be selectable in reverse"
+        );
+        assert_eq!(reverse.rule_id, None);
+        assert_ne!(
+            reverse.fidelity,
+            Fidelity::Unmappable,
+            "the rule's declared reverse=unmappable is documentation, not a resolver outcome"
+        );
+    }
+
     #[test]
     fn approved_artifact_completeness_holds_against_real_dd_inventories() {
         let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
@@ -3053,6 +3363,75 @@ mod tests {
     /// The same reachability fact from the other side: the load-bearing
     /// violation fires against the *shipped* map, not only against a
     /// hand-built toy one, when a real inventory path loses its counterpart.
+    #[test]
+    fn a_side_only_rule_contradicted_by_the_other_inventory_fails_completeness_check() {
+        let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
+        let left_inventory = parse_inventory(LEFT_INVENTORY_339);
+        // drop-timeslice-ggd-grid declares the whole time_slice/ggd/grid
+        // subtree gone in DD4, and the imas-dd path sets agree. The shipped
+        // 4.1.1 inventory listed 23 of its paths anyway; because they were
+        // then present on both sides, DefaultAssumesMissingCounterpart stayed
+        // silent, the identity default claimed them, and the reverse coverage
+        // figure counted all 23 as supported. Reintroducing one is enough to
+        // reproduce that, and it must now be rejected.
+        let reintroduced = "time_slice/ggd/grid/path";
+        assert!(left_inventory.iter().any(|path| path == reintroduced));
+        let mut right_inventory = parse_inventory(RIGHT_INVENTORY_411);
+        assert!(!right_inventory.iter().any(|path| path == reintroduced));
+        right_inventory.push(reintroduced.to_string());
+
+        let violations = map
+            .check_completeness(&left_inventory, &right_inventory)
+            .expect_err("a left_only rule's own path must not exist on the right");
+        assert!(
+            violations.contains(
+                &CompletenessViolation::SideOnlyRuleContradictedByInventory {
+                    rule_id: "drop-timeslice-ggd-grid".to_string(),
+                    side: InventorySide::Right,
+                    pattern: "time_slice/ggd/grid".to_string(),
+                    path: reintroduced.to_string(),
+                }
+            ),
+            "{violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_right_only_rule_contradicted_by_the_left_inventory_fails_completeness_check() {
+        let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <default rel="identical"/>
+              <rules>
+                <rule id="new-b" rel="right_only" right="a/b">
+                  <fidelity forward="unmappable" reverse="lossy"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(xml).expect("map loads");
+        // The rule says a/b is new on the right, so the left inventory
+        // listing it is the same contradiction in the mirror direction.
+        let left_inventory = vec!["a/b".to_string()];
+        let right_inventory = vec!["a/b".to_string()];
+
+        let violations = map
+            .check_completeness(&left_inventory, &right_inventory)
+            .expect_err("a right_only rule's own path must not exist on the left");
+        assert!(
+            violations.contains(
+                &CompletenessViolation::SideOnlyRuleContradictedByInventory {
+                    rule_id: "new-b".to_string(),
+                    side: InventorySide::Left,
+                    pattern: "a/b".to_string(),
+                    path: "a/b".to_string(),
+                }
+            ),
+            "{violations:?}"
+        );
+    }
+
     #[test]
     fn the_approved_artifact_rejects_a_real_path_whose_counterpart_disappears() {
         let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");

@@ -124,11 +124,19 @@ pub(crate) fn conversion_refusal(reason: &str) -> al_status_t {
     status
 }
 
-/// Builds a refusal raised while converting an `al_read_data` path. Unlike
-/// the generic conversion refusal used before a context exists, a read has a
-/// DD path and both ends of its version pair available to explain what could
-/// not be served (ADR 0010, ADR 0012).
-pub(crate) fn read_conversion_refusal(
+/// Builds a refusal raised by a seam that has a live conversion record, in
+/// issue #58 AC3's order: `IMAS-MVDD:`, the reason, the DD path in the
+/// caller's own spelling, then the HLI and stored DD versions. Unlike the
+/// generic [`conversion_refusal`] used before a context exists, such a seam
+/// has a DD path and both ends of its version pair available to explain what
+/// could not be served (ADR 0010, ADR 0012).
+///
+/// Every seam keyed on a context record uses this — the read path, the
+/// arraystruct opens, and the write/delete refusals alike. Only refusals
+/// raised before any record exists (a malformed HLI version, a malformed
+/// version stamp) have no path or version pair to name and use
+/// [`conversion_refusal`].
+pub(crate) fn path_conversion_refusal(
     reason: &str,
     dd_path: &str,
     hli_version: &dd_version::DdVersion,
@@ -898,7 +906,7 @@ mod tests {
         let stored_version = "3.39.0".parse().unwrap();
         let path = format!("{}coordinates_type", "grids_ggd/grid/space/".repeat(20));
 
-        let status = read_conversion_refusal(
+        let status = path_conversion_refusal(
             "this path's container changed shape and cannot be served",
             &path,
             &hli_version,
@@ -924,7 +932,7 @@ mod tests {
         let stored_version = "3.39.0".parse().unwrap();
         let path = format!("{}coordinates_type", "grids_ggd/grid/space/".repeat(6));
 
-        let status = read_conversion_refusal(
+        let status = path_conversion_refusal(
             "this path's container changed shape and cannot be served",
             &path,
             &hli_version,

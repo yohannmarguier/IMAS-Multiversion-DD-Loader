@@ -52,6 +52,34 @@ static inline void shim_test_check_ok(al_status_t status, const char *expression
 
 #define CHECK_OK(expression) shim_test_check_ok((expression), #expression, __FILE__, __LINE__)
 
+/* Issue #58 AC3: "Every refusal message begins with IMAS-MVDD: and orders
+ * reason, DD path, HLI DD version, then stored DD version." Asserted here as
+ * one exact string rather than as four independent substring searches, so a
+ * seam that emitted the fields out of order, or dropped one, cannot pass.
+ *
+ * Shared because the contract is one contract: it used to hold at the read
+ * seam only, while the arraystruct opens and the write/delete refusals emitted
+ * the reason alone, and each suite asserting its own seam's half of it is how
+ * that divergence went unnoticed. */
+static inline void shim_test_check_refusal_message(al_status_t status, const char *reason,
+                                                   const char *dd_path, const char *hli_version,
+                                                   const char *stored_version, const char *file,
+                                                   int line) {
+    char expected[MAX_ERR_MSG_LEN];
+    snprintf(expected, sizeof expected,
+             "IMAS-MVDD: %s; DD path: %s; HLI DD version: %s; stored DD version: %s", reason,
+             dd_path, hli_version, stored_version);
+    if (strcmp(status.message, expected) != 0) {
+        fprintf(stderr, "refusal message mismatch at %s:%d:\n  expected: %s\n  actual:   %s\n", file,
+                line, expected, status.message);
+        exit(EXIT_FAILURE);
+    }
+}
+
+#define CHECK_REFUSAL_MESSAGE(status, reason, dd_path, hli_version, stored_version)               \
+    shim_test_check_refusal_message((status), (reason), (dd_path), (hli_version),                 \
+                                    (stored_version), __FILE__, __LINE__)
+
 /* One scenario a suite can be asked to run, under the name ctest registers it
  * as. Every suite here is one process per scenario — both the HLI DD version
  * latch and the context registry are process-wide — so `argv[1]` selects which

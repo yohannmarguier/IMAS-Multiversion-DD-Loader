@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <al_const.h>
@@ -292,6 +293,120 @@ static void check_plugin_read_conversion_against_real_core(void) {
     CHECK_OK(al_close_pulse(pulse_ctx, CLOSE_PULSE));
 }
 
+static void copy_file(const char *from, const char *to) {
+    FILE *in = fopen(from, "rb");
+    CHECK(in != NULL);
+    FILE *out = fopen(to, "wb");
+    CHECK(out != NULL);
+    char buffer[65536];
+    size_t read_bytes;
+    while ((read_bytes = fread(buffer, 1, sizeof buffer, in)) > 0) {
+        CHECK(fwrite(buffer, 1, read_bytes, out) == read_bytes);
+    }
+    CHECK(ferror(in) == 0);
+    CHECK(fclose(out) == 0);
+    CHECK(fclose(in) == 0);
+}
+
+static void remove_dd_version_stamp(const char *ids_file, const char *ids_group) {
+    hid_t file = H5Fopen(ids_file, H5F_ACC_RDWR, H5P_DEFAULT);
+    CHECK(file >= 0);
+    hid_t group = H5Gopen2(file, ids_group, H5P_DEFAULT);
+    CHECK(group >= 0);
+    CHECK(H5Ldelete(group, "ids_properties&version_put&data_dictionary", H5P_DEFAULT) >= 0);
+    CHECK(H5Gclose(group) >= 0);
+    CHECK(H5Fclose(file) >= 0);
+}
+
+/* Spec #43 tier-2 obligation (e): "an unstamped-occurrence read (a path
+ * IMAS-Core reports as present but with no version stamp) forwards unchanged
+ * with zero loss-log entries."
+ *
+ * This was covered only against the recording stub. Proving it against real
+ * IMAS-Core needs a real occurrence with no stamp, and both checked-in
+ * equilibrium fixtures are stamped -- that is how discovery works. So this
+ * copies the 3.39.0 fixture (a pulse is a directory of per-IDS files, here just
+ * equilibrium.h5 and master.h5) into the test's temp dir and deletes the stamp
+ * dataset from the copy. The checked-in fixtures are never modified.
+ *
+ * The HLI has latched 4.1.1 and the store is really 3.39.0, so this is a
+ * genuine version difference that the shim must nevertheless not act on:
+ * ADR 0007 presumes an unstamped occurrence matches. Reading the *stored*
+ * 3.39.0 spelling must therefore reach the data, and reading the HLI's own
+ * 4.1.1 spelling must NOT be translated into it -- if it were, the read would
+ * return the same 1.8, which is exactly the assertion below. That asymmetry is
+ * what distinguishes "forwarded unchanged" from "converted", and no read of a
+ * single spelling could establish it. */
+static void check_unstamped_equilibrium_read_forwards_unchanged(const char *temp_dir) {
+    char pulse_dir[1024];
+    int length = snprintf(pulse_dir, sizeof pulse_dir, "%s/unstamped.h5", temp_dir);
+    CHECK(length > 0 && (size_t)length < sizeof pulse_dir);
+    CHECK(mkdir(pulse_dir, 0700) == 0);
+
+    static const char *const files[] = {"equilibrium.h5", "master.h5"};
+    for (size_t i = 0; i < sizeof files / sizeof files[0]; ++i) {
+        char from[1024];
+        char to[1024];
+        int from_length =
+            snprintf(from, sizeof from, "%s/dd-3.39.0/%s", EQUILIBRIUM_FIXTURE_DIR, files[i]);
+        int to_length = snprintf(to, sizeof to, "%s/%s", pulse_dir, files[i]);
+        CHECK(from_length > 0 && (size_t)from_length < sizeof from);
+        CHECK(to_length > 0 && (size_t)to_length < sizeof to);
+        copy_file(from, to);
+    }
+
+    char equilibrium_file[1024];
+    int equilibrium_length =
+        snprintf(equilibrium_file, sizeof equilibrium_file, "%s/equilibrium.h5", pulse_dir);
+    CHECK(equilibrium_length > 0 && (size_t)equilibrium_length < sizeof equilibrium_file);
+    remove_dd_version_stamp(equilibrium_file, "/equilibrium");
+
+    char uri[1024];
+    int uri_length = snprintf(uri, sizeof uri, "imas:hdf5?path=%s", pulse_dir);
+    CHECK(uri_length > 0 && (size_t)uri_length < sizeof uri);
+
+    int pulse_ctx = -1;
+    CHECK_OK(al_begin_dataentry_action(uri, OPEN_PULSE, &pulse_ctx));
+    int op_ctx = -1;
+    CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
+    int size = -1;
+    int aos_ctx = -1;
+    CHECK_OK(al_begin_arraystruct_action(op_ctx, "time_slice", "", &size, &aos_ctx));
+    CHECK(size == 2);
+
+    int shape[MAXDIM] = {0};
+    double stored_spelling = -1.0;
+    void *buffer = &stored_spelling;
+    CHECK_OK(al_read_data(aos_ctx, "global_quantities/beta_normal", "", &buffer, DOUBLE_DATA, 0,
+                         shape));
+    CHECK(buffer == &stored_spelling);
+    CHECK(stored_spelling == 1.8);
+
+    int hli_shape[MAXDIM] = {0};
+    double hli_spelling = -1.0;
+    void *hli_buffer = &hli_spelling;
+    al_status_t status = al_read_data(aos_ctx, "global_quantities/beta_tor_norm", "", &hli_buffer,
+                                     DOUBLE_DATA, 0, hli_shape);
+    /* Either IMAS-Core reports the 4.1.1 name absent, or it reports not-found
+     * and leaves the buffer alone. What must not happen is the shim quietly
+     * rewriting it to beta_normal and handing back the stored value. */
+    CHECK(!(status.code == 0 && hli_spelling == 1.8));
+
+    int loss_count = -1;
+    CHECK_OK(imas_mvdd_context_loss_count(op_ctx, &loss_count));
+    CHECK(loss_count == 0);
+
+    CHECK_OK(al_end_action(aos_ctx));
+    CHECK_OK(al_end_action(op_ctx));
+    CHECK_OK(al_close_pulse(pulse_ctx, CLOSE_PULSE));
+
+    /* main() ends by rmdir'ing temp_dir, so this copy has to leave nothing. */
+    for (size_t i = 0; i < sizeof files / sizeof files[0]; ++i) {
+        remove_temp_file(pulse_dir, files[i]);
+    }
+    CHECK(rmdir(pulse_dir) == 0);
+}
+
 /* Drive all eleven plugin-management/configuration exports across the shim's
  * real-Core boundary. The loadable fixture makes registration legal and logs
  * the setter arguments so this checks forwarding, not only symbol presence. */
@@ -413,6 +528,7 @@ int main(void) {
      * magnetics still has its valid matching stamp. */
     check_plugin_reentry(pulse_ctx);
     check_plugin_read_conversion_against_real_core();
+    check_unstamped_equilibrium_read_forwards_unchanged(temp_dir);
 
     set_dd_version_stamp(magnetics_file, "not-a-version");
 
