@@ -1301,7 +1301,16 @@ unsafe fn read_data_impl(
     size: *mut c_int,
     forward: impl Fn(*const c_char, *const c_char) -> al_status_t,
 ) -> al_status_t {
+    let entry_depth = READ_POLICY_STATE.with(|state| state.get().0);
     let _policy_guard = ReadPolicyGuard::enter();
+    if entry_depth > 0 {
+        eprintln!(
+            "[MVDD-REENTRY] depth={entry_depth} ctx={ctx_id} field={:?} timebase={:?}\n{}",
+            c_str_or_none(field),
+            c_str_or_none(timebase),
+            std::backtrace::Backtrace::force_capture(),
+        );
+    }
     let Some(record) = REGISTRY.lookup(ctx_id) else {
         return forward(field, timebase);
     };
