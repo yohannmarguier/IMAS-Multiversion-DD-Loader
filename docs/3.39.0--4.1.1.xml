@@ -19,7 +19,20 @@
   "missing from map" before the map itself was fixed to agree.
 
   Rules below claim every left-only and right-only path. Paths present in both
-  and unclaimed fall through to <default rel="identical"/>.
+  and unclaimed fall through to <default rel="identical"/>. That default is
+  deliberate, and it is what the completeness proof's scope rests on: with it
+  present, no inventory path can be *unclaimed*, so the load-bearing assertion
+  is the other one - a default-claimed path must genuinely exist by the same
+  spelling on the other side (ConversionMap::check_completeness).
+
+  Both inventories carry one path the imas-dd MCP path sets do not enumerate:
+  ids_properties/version_put/data_dictionary, confirmed present as STR_0D in
+  both 3.39.0 and 4.1.1. That enumeration excludes the ids_properties/** and
+  code/** metadata subtrees wholesale, so the inventories are the DD *data*
+  surface - except for this one path, which the shim itself reads at every
+  open to discover the stored DD version (ADR 0007), and which therefore has
+  to be inside the proof rather than outside it. The rest of those two
+  subtrees remains outside the proof's scope, stated in README.md.
 
   Rules marked decision="yes" encode a judgement that is NOT derivable from the
   DD and should be reviewed by a physicist. Run validate.py to list them.

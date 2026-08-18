@@ -67,6 +67,17 @@ knowing when reading a green suite.
   other version pair, is forwarded unconverted — as is an occurrence whose
   stamp matches the HLI or is absent
   (`docs/adr/0007-unstamped-ids-occurrences-match-hli.md`).
+- **The completeness proof's oracle is two inventories, not the DD.** The
+  artifact is proven complete against `docs/inventory/equilibrium-{3.39.0,4.1.1}.txt`
+  — the imas-dd path sets for those versions, which exclude the
+  `ids_properties/**` and `code/**` metadata subtrees wholesale, plus
+  `ids_properties/version_put/data_dictionary`, added by hand because the shim
+  reads it at every open. Nothing proves either inventory complete against its
+  own DD version, and the artifact's `<default rel="identical"/>` means the
+  proof's content is *not* "a rule claims every path": it is "every path a rule
+  does not claim exists by the same spelling on the other side". The coverage
+  report prints that split (`by rule=` versus `by identity default=`) so the
+  weight each carries is visible rather than implied.
 - **Three conversion-relevant seams are deliberately not translated.**
   `al_list_filled_paths` still returns paths in the *stored* version's
   spelling, and `al_bind_plugin` / `al_unbind_plugin` still take a `fieldPath`

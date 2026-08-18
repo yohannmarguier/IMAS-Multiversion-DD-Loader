@@ -11,7 +11,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use imas_mvdd_loader::conversion_map::{ConversionMap, Direction, Outcome};
+use imas_mvdd_loader::conversion_map::{ConversionMap, Direction, MatchKind, Outcome};
 
 const APPROVED_ARTIFACT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/docs/3.39.0--4.1.1.xml");
 const LEFT_INVENTORY: &str = include_str!("../../docs/inventory/equilibrium-3.39.0.txt");
@@ -22,6 +22,13 @@ const IMAS_PYTHON_RENAMES: &str =
 #[derive(Clone, Copy, Default)]
 struct Coverage {
     supported: usize,
+    /// How much of `supported` an explicit rule claims, as against the
+    /// document-level identity default. Reported because the two are not the
+    /// same evidence: a rule states the conversion, while the default only
+    /// assumes the spelling did not change — an assumption the completeness
+    /// proof verifies against the other side's inventory rather than trusts
+    /// (`ConversionMap::check_completeness`).
+    supported_by_rule: usize,
     deliberate_refusal: usize,
     absent_stored_source: usize,
 }
@@ -120,7 +127,10 @@ fn measure(
                         .iter()
                         .any(|candidate| stored.contains(*candidate)) =>
                     {
-                        coverage.supported += 1
+                        coverage.supported += 1;
+                        if explanation.match_kind == MatchKind::Explicit {
+                            coverage.supported_by_rule += 1;
+                        }
                     }
                     Outcome::Path { .. } | Outcome::NoSource => coverage.absent_stored_source += 1,
                     Outcome::Refusal(_) => coverage.deliberate_refusal += 1,
@@ -147,8 +157,11 @@ fn candidate_paths<'a>(
 
 fn report(direction: &str, coverage: Coverage) {
     println!(
-        "shim {direction}: supported={}, deliberate refusal={}, absent stored source={}, total={}",
+        "shim {direction}: supported={}, by rule={}, by identity default={}, \
+         deliberate refusal={}, absent stored source={}, total={}",
         coverage.supported,
+        coverage.supported_by_rule,
+        coverage.supported - coverage.supported_by_rule,
         coverage.deliberate_refusal,
         coverage.absent_stored_source,
         coverage.total()

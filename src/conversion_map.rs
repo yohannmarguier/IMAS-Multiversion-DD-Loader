@@ -1245,6 +1245,31 @@ impl ConversionMap {
     ///    (e.g. a typo) that would otherwise never be visited by the
     ///    inventory sweep in point 1.
     ///
+    /// # What point 1 actually asserts, and what it cannot
+    ///
+    /// Issue #50's criterion reads "every DD path from both inventories is
+    /// claimed by a rule", and that is narrower than it sounds. An artifact
+    /// carrying a document-level `<default>` — which the approved one does,
+    /// by design (ADR 0004, and the artifact's own header) — makes
+    /// [`Self::resolve`] match *every* path, so
+    /// [`CompletenessViolation::UnclaimedInventoryPath`] is unreachable for
+    /// it: that violation covers a default-less artifact only. The assertion
+    /// carrying the weight against a shipped-shape artifact is therefore
+    /// [`CompletenessViolation::DefaultAssumesMissingCounterpart`] — a path
+    /// the artifact claims by identity must genuinely exist by that same
+    /// spelling on the other side, which is exactly what fails when a
+    /// version drops, renames or reshapes it and no rule says so. Both
+    /// reachability facts are pinned by test rather than left to a reader.
+    ///
+    /// The proof's scope is the two inventories, not the DD. They are the
+    /// imas-dd path sets for their versions, which exclude the
+    /// `ids_properties/**` and `code/**` metadata subtrees wholesale, plus
+    /// `ids_properties/version_put/data_dictionary`, added by hand because
+    /// the shim reads it at every open (ADR 0007) — leaving it outside the
+    /// proof would leave the shim's own read path unclaimed. Nothing here
+    /// proves an inventory is itself complete against its DD version;
+    /// README.md states that limit where a user reads it.
+    ///
     /// Two distinct tolerances keep point 2 from over-rejecting real rules
     /// — both are "paths introduced on a rule side that do not occur in the
     /// corresponding raw inventory" that the proof must include rather than
@@ -2961,6 +2986,94 @@ mod tests {
 
         let result = map.check_completeness(&left_inventory, &right_inventory);
         assert_eq!(result, Ok(()), "completeness violations: {result:?}");
+    }
+
+    /// The shim reads this one path at every open to discover the stored DD
+    /// version (ADR 0007), so the completeness proof has to claim it. The
+    /// imas-dd path sets the inventories derive from exclude
+    /// `ids_properties/**` wholesale, so it is in both files by hand — and a
+    /// hand-added entry that silently dropped out again would take the shim's
+    /// own read path out of the proof without failing anything else.
+    #[test]
+    fn the_version_stamp_path_the_shim_itself_reads_is_inside_the_proof() {
+        const STAMP: &str = "ids_properties/version_put/data_dictionary";
+        let left_inventory = parse_inventory(LEFT_INVENTORY_339);
+        let right_inventory = parse_inventory(RIGHT_INVENTORY_411);
+        assert!(
+            left_inventory.iter().any(|path| path == STAMP),
+            "the 3.39.0 inventory must list the stamp path the shim reads"
+        );
+        assert!(
+            right_inventory.iter().any(|path| path == STAMP),
+            "the 4.1.1 inventory must list the stamp path the shim reads"
+        );
+
+        let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
+        for direction in [Direction::Forward, Direction::Reverse] {
+            let explanation = map
+                .resolve(STAMP, direction)
+                .expect("the stamp path must be claimed in both directions");
+            assert_eq!(resolved_path(&explanation), STAMP);
+        }
+    }
+
+    /// Issue #50 AC1 reads "every DD path from both … inventories is claimed
+    /// by a rule", and the approved artifact's document-level
+    /// `<default rel="identical"/>` means no path is ever *unclaimed* — so
+    /// this is the violation that can never fire for the shipped artifact,
+    /// pinned here so the next reader does not mistake the gate for more
+    /// than it is. `default_assumes_missing_counterpart_*` below is the
+    /// assertion that actually carries AC1's weight.
+    #[test]
+    fn the_approved_artifact_can_never_report_an_unclaimed_path() {
+        let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
+        let left_inventory = vec!["invented/path/no/rule/mentions".to_string()];
+        let right_inventory: Vec<String> = vec![];
+
+        let violations = map
+            .check_completeness(&left_inventory, &right_inventory)
+            .expect_err("an invented path with no counterpart must still fail");
+        assert!(
+            !violations.iter().any(|violation| matches!(
+                violation,
+                CompletenessViolation::UnclaimedInventoryPath { .. }
+            )),
+            "the identity default claims every path, so this violation is unreachable: \
+             {violations:?}"
+        );
+        assert!(
+            violations.contains(&CompletenessViolation::DefaultAssumesMissingCounterpart {
+                side: InventorySide::Left,
+                path: "invented/path/no/rule/mentions".to_string(),
+            }),
+            "{violations:?}"
+        );
+    }
+
+    /// The same reachability fact from the other side: the load-bearing
+    /// violation fires against the *shipped* map, not only against a
+    /// hand-built toy one, when a real inventory path loses its counterpart.
+    #[test]
+    fn the_approved_artifact_rejects_a_real_path_whose_counterpart_disappears() {
+        let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
+        let left_inventory = parse_inventory(LEFT_INVENTORY_339);
+        let dropped = "time";
+        assert!(left_inventory.iter().any(|path| path == dropped));
+        let right_inventory: Vec<String> = parse_inventory(RIGHT_INVENTORY_411)
+            .into_iter()
+            .filter(|path| path != dropped)
+            .collect();
+
+        let violations = map
+            .check_completeness(&left_inventory, &right_inventory)
+            .expect_err("dropping an identity-claimed path's counterpart must fail the proof");
+        assert!(
+            violations.contains(&CompletenessViolation::DefaultAssumesMissingCounterpart {
+                side: InventorySide::Left,
+                path: dropped.to_string(),
+            }),
+            "{violations:?}"
+        );
     }
 
     #[test]
