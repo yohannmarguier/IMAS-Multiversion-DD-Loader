@@ -10,6 +10,8 @@ module load Rust/1.88.0-GCCcore-14.3.0
 module load cargo-c/0.10.15-GCCcore-14.3.0
 module load CMake/3.31.8-GCCcore-14.3.0
 
+export CARGO_HTTP_MULTIPLEXING=false
+
 # Satisfies the default installed-package acquisition mode (CMakeLists.txt)
 # and, via LD_LIBRARY_PATH, the shim's runtime bare-soname resolution (see
 # docs/adr/0001-runtime-binding-not-linking.md). Either toolchain flavour
