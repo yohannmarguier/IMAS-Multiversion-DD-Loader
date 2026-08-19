@@ -144,8 +144,8 @@ IMAS_CORE_VERSION       supported IMAS-Core release used by the runtime compatib
 cbindgen.toml           generated-header settings
 cmake/imas-mvdd-loaderConfig.cmake.in  find_package template, hand-authored
 src/lib.rs              the mirrored C ABI
-src/core_binding.rs     the runtime binding: dlopen/dlsym, version check, one forwarder per IMAS-Core symbol
-src/resolve.rs          the seam policy of the mirrored symbols: what translates, refuses or forwards
+src/core_binding.rs     the runtime binding: dlopen/dlsym, version check, one fn-pointer per IMAS-Core symbol
+src/resolve.rs          the mirrored symbols: their seam policy and the interposition that carries it out
 src/dl.rs               minimal dlopen/dlsym/dlerror bindings
 tests/abi_smoke.c       links C against the generated header
 tests/real_core_abi_*_check.c  compares generated declarations with IMAS-Core's real header

@@ -2,7 +2,8 @@
 //! calls into it.
 //!
 //! Proven end to end on `al_context_info` (issue #3), then extended to the
-//! data-entry, action-lifecycle and data-operation symbols below (issue #6):
+//! data-entry, action-lifecycle and data-operation symbols named in the
+//! manifest below (issue #6), whose forwarders live in [`crate::resolve`]:
 //! the shim carries no link-time dependency on IMAS-Core. On first use it
 //! opens IMAS-Core with local symbol visibility and resolves each function's
 //! address through that specific library handle, so the shim's own globally
@@ -18,10 +19,15 @@
 //! 0012) and read reentrancy (ADR 0014) all live in [`crate::resolve`], on
 //! the far side of the [`forward_status!`] macro this module exports.
 //!
-//! That macro is the whole seam between the two: a caller names an IMAS-Core
-//! symbol and its arguments and gets an `al_status_t` back — including the
-//! one synthesised here when IMAS-Core cannot be resolved at all, which is
-//! the only status this module invents.
+//! That macro carries the calls: a caller names an IMAS-Core symbol and its
+//! arguments and gets an `al_status_t` back — including the one synthesised
+//! here when IMAS-Core cannot be resolved at all, which is the only status
+//! this module invents. Everything else this module exposes is data rather
+//! than control: the two IMAS-Core type ids its consumers compare against
+//! (`CHAR_DATA_ID`, `DOUBLE_DATA_ID`) and the six accessors [`crate`] mirrors
+//! straight out to the ABI. ("Seam" is deliberately not the word for this
+//! boundary — CONTEXT.md reserves it for an ABI entry point carrying a DD
+//! path or IDS name, and this module has none.)
 //!
 //! ADR 0015 names this file as where the runtime binding lives, under the
 //! interposition layer it splits the seams into. Enforcing *that* ADR is the
