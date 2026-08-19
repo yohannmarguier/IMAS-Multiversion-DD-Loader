@@ -3,7 +3,7 @@
 //!
 //! Proven end to end on `al_context_info` (issue #3), then extended to the
 //! data-entry, action-lifecycle and data-operation symbols named in the
-//! manifest below (issue #6), whose forwarders live in [`crate::resolve`]:
+//! manifest below (issue #6), whose forwarders live in [`crate::interpose`]:
 //! the shim carries no link-time dependency on IMAS-Core. On first use it
 //! opens IMAS-Core with local symbol visibility and resolves each function's
 //! address through that specific library handle, so the shim's own globally
@@ -16,7 +16,7 @@
 //! are IMAS-Core's own release and the one the shim was built against. Which
 //! seams translate, which refuse and which forward unchanged (ADR 0002),
 //! value transformations (ADR 0010), the read outcome and loss channel (ADR
-//! 0012) and read reentrancy (ADR 0014) all live in [`crate::resolve`], on
+//! 0012) and read reentrancy (ADR 0014) all live in [`crate::interpose`], on
 //! the far side of the [`forward_status!`] macro this module exports.
 //!
 //! That macro carries the calls: a caller names an IMAS-Core symbol and its
@@ -281,7 +281,7 @@ fn resolution() -> &'static Result<CoreBinding, ResolutionError> {
 }
 
 /// The resolved binding, or the status to report in its place. Crate-visible
-/// only because [`forward_status!`] expands in [`crate::resolve`]; call it
+/// only because [`forward_status!`] expands in [`crate::interpose`]; call it
 /// through that macro rather than directly, so the unresolvable case is
 /// handled the one way.
 pub(crate) fn core() -> Result<&'static CoreBinding, &'static al_status_t> {
@@ -292,7 +292,7 @@ pub(crate) fn core() -> Result<&'static CoreBinding, &'static al_status_t> {
 // same way, so that plumbing lives here rather than in all 37 exports.
 //
 // The named forwarders that use it — the handful below, and the seams in
-// `crate::resolve` — exist for that reason alone. They are *not* all
+// `crate::interpose` — exist for that reason alone. They are *not* all
 // prospective conversion seams: CONTEXT.md reserves "seam" for an ABI entry
 // point carrying a DD path or IDS name, which is 16 of the 37 (CLAUDE.md
 // tabulates them). The rest are plain forwards with nothing to interpose on,

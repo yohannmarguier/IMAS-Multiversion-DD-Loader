@@ -31,6 +31,15 @@
 
 #include "shim_test_support.h"
 
+typedef al_status_t (*read_data_fn)(int, const char *, const char *, void **, int, int, int *);
+typedef void (*set_reentrant_read_fn)(read_data_fn, const char *);
+
+static void arm_reentrant_read(const char *field) {
+    set_reentrant_read_fn arm =
+        (set_reentrant_read_fn)stub_symbol_or_die("recording_stub_set_reentrant_read");
+    arm(al_read_data, field);
+}
+
 static al_status_t open_dataentry(int *dectxID) {
     return al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, dectxID);
 }
@@ -256,6 +265,32 @@ static void scenario_malformed_stamp_refuses_and_ends_context(void) {
 
     printf("version_discovery_test malformed-stamp-refuses-and-ends-context: refused with "
            "IMAS_MVDD_CONVERSION_ERROR and cleaned up the leaked-open context\n");
+}
+
+/* Issue #108 AC4: the stamp reader itself runs under ADR 0014's depth guard.
+ * The first open leaves a live mismatch record at the stub's recycled context
+ * ID. The second open's stamp read then makes the stub re-enter the shim with
+ * an HLI-spelled renamed path: without the guard, that live record would
+ * translate it before Core sees it. */
+static void scenario_reentrant_read_beneath_stamp_discovery_forwards_unchanged(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int first_octxID = -1;
+    CHECK(open_global("equilibrium", "", &first_octxID).code == 0);
+
+    const char *reentrant_field = "time_slice/global_quantities/beta_tor_norm";
+    arm_reentrant_read(reentrant_field);
+
+    int second_octxID = -1;
+    CHECK(open_global("equilibrium", "", &second_octxID).code == 0);
+
+    CHECK(int_from_stub("recording_stub_reentrant_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_field"), reentrant_field) == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_timebase"), "") == 0);
+
+    printf("version_discovery_test reentrant-read-beneath-stamp-discovery-forwards-unchanged: "
+           "the callback beneath a stamp read reached Core without conversion\n");
 }
 
 /* --- al_begin_slice_action applies the same rule as global action (issue #55) --- */
@@ -511,6 +546,7 @@ int main(int argc, char **argv) {
         {"unstamped-stamp-clears-an-earlier-mismatch", scenario_unstamped_stamp_clears_an_earlier_mismatch},
         {"failed-stamp-read-clears-an-earlier-mismatch", scenario_failed_stamp_read_clears_an_earlier_mismatch},
         {"malformed-stamp-refuses-and-ends-context", scenario_malformed_stamp_refuses_and_ends_context},
+        {"reentrant-read-beneath-stamp-discovery-forwards-unchanged", scenario_reentrant_read_beneath_stamp_discovery_forwards_unchanged},
         {"slice-action-hli-unset-is-plain-forward", scenario_slice_action_hli_unset_is_plain_forward},
         {"slice-action-unstamped-forwards-ids-name-unchanged", scenario_slice_action_unstamped_forwards_ids_name_unchanged},
         {"slice-action-matching-version-forwards-ids-name-unchanged", scenario_slice_action_matching_version_forwards_ids_name_unchanged},

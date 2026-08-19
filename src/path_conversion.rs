@@ -1,7 +1,7 @@
 //! What stored path an HLI argument means, and at what fidelity.
 //!
 //! Before this module existed, [`crate::conversion_map::Outcome`] was
-//! interpreted at three independent sites in `src/resolve.rs`, each deriving
+//! interpreted at three independent sites in `src/interpose.rs`, each deriving
 //! a different subset of its meaning: `translate_down` derived a `CString`
 //! or nothing, the read seam derived a [`ReadPath`] with fidelity and
 //! candidates, and the context-opening seams derived one concrete spelling,
@@ -442,7 +442,7 @@ mod tests {
         // through the registry's `(ids, stored, hli)` cache, so while any other
         // record on the real `("equilibrium", 3.39.0, 4.1.1)` pair is live —
         // `a_data_path_seam_answers_before_the_registry_when_conversion_is_disabled`
-        // (`src/resolve.rs`) registers exactly that — the closure below never
+        // (`src/interpose.rs`) registers exactly that — the closure below never
         // runs and this test resolves through the *approved* map instead. That
         // map carries `<default rel="identical"/>`, which claims every path,
         // so the unclaimed branch this test exists to reach vanishes and the

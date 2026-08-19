@@ -1,7 +1,7 @@
 //! The `al_read_data`/`al_plugin_read_data` read loop (issue #107, part C of
 //! the #101 series; see ADR 0015).
 //!
-//! Before this module existed, `read_data_impl` (`src/resolve.rs`) mixed
+//! Before this module existed, `read_data_impl` (`src/interpose.rs`) mixed
 //! raw-pointer marshalling with the read-loop decisions ADR 0010, ADR 0012
 //! and ADR 0014 make: which candidate to try next, whether a value
 //! transformation applies, and what fidelity a caller's field/timebase
@@ -15,10 +15,10 @@
 //! [`path_conversion::ReadPath`] per argument, a buffer's shape, and a reader
 //! closure the adapter injects, and returns a [`ReadVerdict`] the adapter
 //! turns into an `al_status_t` and a pair of loss-log writes. It contains no
-//! `unsafe`, never touches [`crate::context_registry::REGISTRY`] or
-//! [`crate::hli_version`], and never calls into [`crate::dl`] — every raw
-//! pointer, every registry lookup, and the two ADR-0014/hli-version gates
-//! ahead of it stay in `src/resolve.rs`, the interposition layer ADR 0015
+//! `unsafe`, never touches [`crate::context_registry::REGISTRY`] or the HLI
+//! version latch, and never calls into [`crate::dl`] — every raw pointer,
+//! every registry lookup, and the two ADR-0014/HLI-version gates
+//! ahead of it stay in `src/interpose.rs`, the interposition layer ADR 0015
 //! names.
 //!
 //! [`ReadVerdict`]'s `field`/`timebase` fidelities are mandatory struct
@@ -34,7 +34,80 @@ use std::ffi::{CStr, c_int};
 
 use crate::al_status_t;
 use crate::conversion_map::{Fidelity, ValueTransformation};
+use crate::dd_version::DdVersion;
+use crate::known_artifacts::{self, ArtifactMatch};
 use crate::path_conversion::{self, ReadPath, TranslatedReadPath};
+use crate::version_stamp::StampOutcome;
+
+/// The occurrence-cache write discovery asks its interposition adapter to
+/// perform. This preserves the cached mismatch necessary for a later global
+/// action's `datapath` without letting the adapter reconstruct a policy choice.
+pub(crate) enum OccurrenceCacheEffect {
+    Forget,
+    RememberMismatch(DdVersion),
+}
+
+/// The effect discovery asks its interposition adapter to perform after an
+/// occurrence-opening seam has succeeded. Policy drives the stamp read and
+/// decides which ADR-0007/0009/0011 branch applies; it never touches the
+/// registry or chooses an ABI end-action symbol itself.
+pub(crate) enum DiscoveryDecision {
+    /// The stored DD version differs from the HLI's and an embedded artifact
+    /// can serve the IDS/version pair. The adapter records both the known
+    /// mismatch and the root conversion context.
+    RegisterRoot {
+        stored: DdVersion,
+        artifact: ArtifactMatch,
+        occurrence_cache: OccurrenceCacheEffect,
+    },
+    /// No root conversion context is warranted. A mismatching `stored` value
+    /// without an artifact is still returned so the adapter can preserve the
+    /// occurrence cache it uses for a later global-action `datapath`.
+    RegisterNothing {
+        occurrence_cache: OccurrenceCacheEffect,
+    },
+    /// A present but malformed stamp refuses the successful open; the adapter
+    /// clears any stale occurrence cache and ends that context through the
+    /// same ABI family that opened it.
+    RefuseAndEnd {
+        reason: Box<al_status_t>,
+        occurrence_cache: OccurrenceCacheEffect,
+    },
+}
+
+/// Drives stored-DD-version discovery for one successfully opened IDS
+/// occurrence. The reader is injected by the interposition adapter, just as
+/// the read loop receives its Core reader: policy chooses when it runs and
+/// returns the effect, while the adapter owns raw pointers, Core calls and
+/// process-global state.
+pub(crate) fn decide_occurrence_registration(
+    ids_name: &str,
+    hli: &DdVersion,
+    read_stamp: impl FnOnce() -> StampOutcome,
+) -> DiscoveryDecision {
+    match read_stamp() {
+        StampOutcome::Malformed(reason) => DiscoveryDecision::RefuseAndEnd {
+            reason,
+            occurrence_cache: OccurrenceCacheEffect::Forget,
+        },
+        StampOutcome::Unstamped => DiscoveryDecision::RegisterNothing {
+            occurrence_cache: OccurrenceCacheEffect::Forget,
+        },
+        StampOutcome::Stored(stored) if stored == *hli => DiscoveryDecision::RegisterNothing {
+            occurrence_cache: OccurrenceCacheEffect::Forget,
+        },
+        StampOutcome::Stored(stored) => match known_artifacts::lookup(ids_name, &stored, hli) {
+            Some(artifact) => DiscoveryDecision::RegisterRoot {
+                occurrence_cache: OccurrenceCacheEffect::RememberMismatch(stored.clone()),
+                stored,
+                artifact,
+            },
+            None => DiscoveryDecision::RegisterNothing {
+                occurrence_cache: OccurrenceCacheEffect::RememberMismatch(stored),
+            },
+        },
+    }
+}
 
 /// `EMPTY_DOUBLE`, IMAS-Core's sentinel for an absent value in an otherwise
 /// populated `DOUBLE_DATA` array: never sign-flipped, so a caller can tell a
@@ -414,6 +487,8 @@ fn verdict(
 mod tests {
     use super::*;
     use crate::conversion_map::{ConversionMap, Direction, Outcome};
+    use crate::dd_version::DdVersion;
+    use crate::version_stamp::StampOutcome;
     use path_conversion::ResolvedReadPath;
     use std::cell::RefCell;
     use std::ffi::CString;
@@ -458,6 +533,60 @@ mod tests {
             fidelity,
             value_transformation,
         }
+    }
+
+    fn version(input: &str) -> DdVersion {
+        input
+            .parse()
+            .expect("fixture DD version must be recognised")
+    }
+
+    fn discover(stamp: StampOutcome) -> DiscoveryDecision {
+        decide_occurrence_registration("equilibrium", &version("4.1.1"), || stamp)
+    }
+
+    /// Issue #108 AC5: discovery is a seam-policy decision, so every
+    /// ADR-0007/0009/0011 outcome is selectable in-process, without the
+    /// process-wide HLI latch, the registry, or a loaded IMAS-Core library.
+    #[test]
+    fn discovery_returns_the_registration_effect_for_each_stamp_outcome() {
+        assert!(matches!(
+            discover(StampOutcome::Stored(version("4.1.1"))),
+            DiscoveryDecision::RegisterNothing {
+                occurrence_cache: OccurrenceCacheEffect::Forget
+            }
+        ));
+        assert!(matches!(
+            discover(StampOutcome::Unstamped),
+            DiscoveryDecision::RegisterNothing {
+                occurrence_cache: OccurrenceCacheEffect::Forget
+            }
+        ));
+        assert!(matches!(
+            discover(StampOutcome::Malformed(Box::new(
+                crate::conversion_refusal("bad stamp")
+            ))),
+            DiscoveryDecision::RefuseAndEnd {
+                occurrence_cache: OccurrenceCacheEffect::Forget,
+                ..
+            }
+        ));
+        assert!(matches!(
+            decide_occurrence_registration("core_profiles", &version("4.1.1"), || {
+                StampOutcome::Stored(version("3.39.0"))
+            }),
+            DiscoveryDecision::RegisterNothing {
+                occurrence_cache: OccurrenceCacheEffect::RememberMismatch(stored)
+            } if stored == version("3.39.0")
+        ));
+        assert!(matches!(
+            discover(StampOutcome::Stored(version("3.39.0"))),
+            DiscoveryDecision::RegisterRoot {
+                stored,
+                occurrence_cache: OccurrenceCacheEffect::RememberMismatch(cache_stored),
+                ..
+            } if stored == version("3.39.0") && cache_stored == version("3.39.0")
+        ));
     }
 
     /// The deliverable test (issue #107 AC3): a `merged` field's second
@@ -591,7 +720,7 @@ mod tests {
     /// Issue #107 AC5, the issue-#66 shape: a relative field resolved
     /// beneath a child record's anchor must retain the complete anchor-joined
     /// DD path, not the bare relative argument the caller actually passed.
-    /// The adapter (`src/resolve.rs`) is the one that performs that join —
+    /// The adapter (`src/interpose.rs`) is the one that performs that join —
     /// this proves `run_read` never re-derives or truncates it once given,
     /// which is what makes issue #66's defect (nine independent join call
     /// sites, one of which used the unjoined argument) impossible to
@@ -609,7 +738,7 @@ mod tests {
             forward: None,
             // The anchor ("time_slice") already joined onto the caller's own
             // relative argument ("boundary_separatrix/gap/r") by the adapter,
-            // exactly as `read_argument_path` does in `src/resolve.rs`.
+            // exactly as `read_argument_path` does in `src/interpose.rs`.
             dd_path: "time_slice/boundary_separatrix/gap/r".to_string(),
         };
         let timebase = ReadArgument {

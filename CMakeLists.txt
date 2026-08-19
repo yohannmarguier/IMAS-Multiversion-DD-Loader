@@ -641,6 +641,11 @@ if(IMAS_MVDD_BUILD_TESTS)
         HLI_DD_VERSION 4.1.1
         STAMP_VERSION not-a-version)
 
+    add_stub_test(version-discovery-reentrant-read-beneath-stamp-discovery-forwards-unchanged
+        version_discovery_test reentrant-read-beneath-stamp-discovery-forwards-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+
     # --- al_begin_slice_action / al_begin_timerange_action apply the same
     # rule as global action (issue #55) ---
 

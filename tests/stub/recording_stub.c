@@ -625,9 +625,7 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
     g_read_datatype = datatype;
     g_read_dim = dim;
 
-    /* Excluding the version stamp keeps the reentry attributable to the one
-     * read a test issues, rather than to stamp discovery at open time. */
-    if (g_reentrant_read != NULL && field != NULL && strcmp(field, VERSION_STAMP_FIELD) != 0) {
+    if (g_reentrant_read != NULL && field != NULL) {
         g_reentrant_active = 1;
         void *reentrant_data = NULL;
         int reentrant_size[RECORDING_STUB_MAXDIM] = {0};
