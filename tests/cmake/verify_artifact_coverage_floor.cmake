@@ -44,7 +44,7 @@ endfunction()
 function(read_direction output direction supported_variable total_variable)
     # The version dots are literal, not regex wildcards; a gate must not match a
     # direction it was not asked about.
-    string(REPLACE "." "\\." direction_pattern "${direction}")
+    string(REPLACE "../../src" "\\." direction_pattern "${direction}")
     if(NOT output MATCHES
             "shim ${direction_pattern}: supported=([0-9]+), by rule=([0-9]+), by identity default=([0-9]+), deliberate refusal=([0-9]+), absent stored source=([0-9]+), total=([0-9]+)")
         message(FATAL_ERROR
