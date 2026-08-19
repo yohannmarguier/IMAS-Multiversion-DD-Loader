@@ -73,6 +73,204 @@ impl Drop for ReadDepthGuard {
     }
 }
 
+/// Which real ABI symbol family a shared seam call forwards through: an
+/// ordinary HLI call (`al_begin_global_action`, `al_read_data`, ...) or its
+/// plugin-reentry twin (`al_plugin_begin_global_action`,
+/// `al_plugin_read_data`, ...). One `CallFamily` value now replaces the
+/// forward/end-on-refusal closure pair that used to be rebuilt at each of the
+/// nine call sites below, differing only in which symbol it named (issue
+/// #109).
+///
+/// Bound over exactly the six symbols the two families share —
+/// `al_begin_timerange_action` and `al_delete_data` have no plugin twin at
+/// all (`lib.rs`'s manifest never resolves one), so those two seams take no
+/// `CallFamily` parameter at all rather than carry an always-unused half.
+///
+/// This does **not** make "a context opened through one family must be closed
+/// through that same family" unrepresentable. The calling binary — not this
+/// type — chooses the family, by which ABI symbol it calls first; no Rust
+/// type constrains that choice, and nothing here stops someone writing
+/// `CallFamily::ORDINARY` where `family` was meant. What this *does*
+/// guarantee: a family mismatch requires bypassing the `family` parameter
+/// threaded through this module's shared policy functions, and a reviewer
+/// sees that bypass, because [`call_begin_global`], [`call_begin_slice`],
+/// [`call_begin_arraystruct`], [`call_read`], [`call_write`] and
+/// [`call_end`] are the only six places the choice between symbols is ever
+/// made — not nine independently-miswirable closures rebuilding it.
+///
+/// `ORDINARY` and `PLUGIN` are not independently resolved values: each of the
+/// six dispatch functions above matches on `CallFamily` to pick one of a pair
+/// [`crate::core_binding`]'s manifest already resolves together (e.g.
+/// `begin_global_action`/`plugin_begin_global_action`, both
+/// `BeginGlobalActionFn`). A `CallFamily` value never holds a raw symbol
+/// pointer itself — it only *names* which half of that manifest applies —
+/// because `CoreBinding` sits behind a lazily-resolved `OnceLock`
+/// ([`crate::core_binding::core`]) and several of the nine call sites refuse
+/// before ever forwarding at all (`begin_arraystruct_action_impl`'s argument
+/// resolution, `write_data_impl`'s mismatch check): eagerly extracting a
+/// resolved fn pointer at `CallFamily` construction time would attempt
+/// IMAS-Core resolution on a path that used to skip it entirely. Naming the
+/// family and resolving `core()` at the point of the actual forward — the
+/// same lazy timing `forward_status!` already used — keeps both properties.
+#[derive(Clone, Copy)]
+enum CallFamily {
+    Ordinary,
+    Plugin,
+}
+
+impl CallFamily {
+    /// The ordinary HLI call family: `al_begin_global_action`, `al_read_data`
+    /// and their four siblings.
+    const ORDINARY: Self = Self::Ordinary;
+    /// The plugin-reentry call family: `al_plugin_begin_global_action`,
+    /// `al_plugin_read_data` and their four siblings.
+    const PLUGIN: Self = Self::Plugin;
+}
+
+/// Forwards to `al_begin_global_action` or `al_plugin_begin_global_action`,
+/// chosen by `family`.
+fn call_begin_global(
+    family: CallFamily,
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    datapath: *const c_char,
+    rwmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    match family {
+        CallFamily::Ordinary => forward_status!(begin_global_action(
+            pctx_id,
+            dataobjectname,
+            datapath,
+            rwmode,
+            octx_id,
+        )),
+        CallFamily::Plugin => forward_status!(plugin_begin_global_action(
+            pctx_id,
+            dataobjectname,
+            datapath,
+            rwmode,
+            octx_id,
+        )),
+    }
+}
+
+/// Forwards to `al_begin_slice_action` or `al_plugin_begin_slice_action`,
+/// chosen by `family`.
+fn call_begin_slice(
+    family: CallFamily,
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    rwmode: c_int,
+    time: c_double,
+    interpmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    match family {
+        CallFamily::Ordinary => forward_status!(begin_slice_action(
+            pctx_id,
+            dataobjectname,
+            rwmode,
+            time,
+            interpmode,
+            octx_id,
+        )),
+        CallFamily::Plugin => forward_status!(plugin_begin_slice_action(
+            pctx_id,
+            dataobjectname,
+            rwmode,
+            time,
+            interpmode,
+            octx_id,
+        )),
+    }
+}
+
+/// Forwards to `al_begin_arraystruct_action` or
+/// `al_plugin_begin_arraystruct_action`, chosen by `family`.
+fn call_begin_arraystruct(
+    family: CallFamily,
+    ctx_id: c_int,
+    path: *const c_char,
+    timebase: *const c_char,
+    size: *mut c_int,
+    actx_id: *mut c_int,
+) -> al_status_t {
+    match family {
+        CallFamily::Ordinary => {
+            forward_status!(begin_arraystruct_action(
+                ctx_id, path, timebase, size, actx_id
+            ))
+        }
+        CallFamily::Plugin => {
+            forward_status!(plugin_begin_arraystruct_action(
+                ctx_id, path, timebase, size, actx_id
+            ))
+        }
+    }
+}
+
+/// Forwards to `al_read_data` or `al_plugin_read_data`, chosen by `family`.
+#[allow(clippy::too_many_arguments)]
+fn call_read(
+    family: CallFamily,
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    match family {
+        CallFamily::Ordinary => forward_status!(read_data(
+            ctx_id, field, timebase, data, datatype, dim, size
+        )),
+        CallFamily::Plugin => forward_status!(plugin_read_data(
+            ctx_id, field, timebase, data, datatype, dim, size
+        )),
+    }
+}
+
+/// Forwards to `al_write_data` or `al_plugin_write_data`, chosen by `family`.
+#[allow(clippy::too_many_arguments)]
+fn call_write(
+    family: CallFamily,
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    match family {
+        CallFamily::Ordinary => forward_status!(write_data(
+            ctx_id, field, timebase, data, datatype, dim, size,
+        )),
+        CallFamily::Plugin => forward_status!(plugin_write_data(
+            ctx_id, field, timebase, data, datatype, dim, size,
+        )),
+    }
+}
+
+/// Forwards to `al_end_action` or `al_plugin_end_action`, chosen by `family`.
+fn call_end(family: CallFamily, ctx_id: c_int) -> al_status_t {
+    match family {
+        CallFamily::Ordinary => forward_status!(end_action(ctx_id)),
+        CallFamily::Plugin => forward_status!(plugin_end_action(ctx_id)),
+    }
+}
+
+/// The short ABI name for a live-conversion-record write refusal message
+/// (issue #58 AC3), chosen by `family`.
+fn write_seam_name(family: CallFamily) -> &'static str {
+    match family {
+        CallFamily::Ordinary => "al_write_data",
+        CallFamily::Plugin => "al_plugin_write_data",
+    }
+}
+
 /// The result of one occurrence-opening adapter call. A malformed stamp is
 /// deliberately returned rather than ended inside policy: only the ABI
 /// wrapper knows which action family opened the context and therefore which
@@ -140,7 +338,68 @@ pub(crate) fn close_pulse(pulse_ctx: c_int, mode: c_int) -> al_status_t {
 
 /// Forwards to IMAS-Core's real `al_begin_global_action`, resolving
 /// IMAS-Core lazily on first use, and applies ADR 0002's global-action seam
-/// policy (issue #53) when the HLI DD version is latched:
+/// policy (issue #53) when the HLI DD version is latched. See
+/// [`begin_global_action_seam`] for the shared policy this and
+/// [`plugin_begin_global_action`] both carry out.
+///
+/// # Safety
+/// `dataobjectname` and `datapath` must be valid, NUL-terminated C strings,
+/// or null where IMAS-Core's own contract allows it. `octxID` must be a
+/// valid, writable `*mut c_int`.
+pub(crate) unsafe fn begin_global_action(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    datapath: *const c_char,
+    rwmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    // SAFETY: same contract as `begin_global_action_seam`, already upheld by
+    // this function's own `unsafe fn` contract.
+    unsafe {
+        begin_global_action_seam(
+            CallFamily::ORDINARY,
+            pctx_id,
+            dataobjectname,
+            datapath,
+            rwmode,
+            octx_id,
+        )
+    }
+}
+
+/// Mirrors [`begin_global_action`]'s policy exactly (issue #67): the same
+/// occurrence-cache `datapath` translation on the way in, forwarded through
+/// `al_plugin_begin_global_action` rather than `al_begin_global_action`, and
+/// the same stored-version discovery and root-registration rule on success —
+/// cleaned up through `al_plugin_end_action` rather than `al_end_action` on a
+/// malformed-stamp refusal, since a context this seam opened must be closed
+/// through its own reentry family.
+///
+/// # Safety
+/// Same contract as [`begin_global_action`].
+pub(crate) unsafe fn plugin_begin_global_action(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    datapath: *const c_char,
+    rwmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    // SAFETY: same contract as `begin_global_action_seam`, already upheld by
+    // this function's own `unsafe fn` contract.
+    unsafe {
+        begin_global_action_seam(
+            CallFamily::PLUGIN,
+            pctx_id,
+            dataobjectname,
+            datapath,
+            rwmode,
+            octx_id,
+        )
+    }
+}
+
+/// The policy shared by `begin_global_action` and `plugin_begin_global_action`
+/// (issue #67, consolidated onto [`CallFamily`] by issue #109):
 ///
 /// `dataobjectname` (the IDS name, plus occurrence) is always forwarded
 /// unchanged — IDS names are stable across DD versions. `datapath` is
@@ -155,53 +414,47 @@ pub(crate) fn close_pulse(pulse_ctx: c_int, mode: c_int) -> al_status_t {
 /// immediately (before this returns to the HLI) and classified through the
 /// one read-outcome classifier ([`crate::read_outcome`]). A present,
 /// malformed stamp is a hard refusal — the just-opened IMAS-Core context is
-/// also ended first, so a refusal here never leaks it. An absent stamp, or
-/// one that matches the HLI DD version, registers nothing (ADR 0007): the
-/// occurrence is presumed to match. A present, valid, *mismatched* stamp
-/// registers the root context, but only when an artifact actually covers
-/// this IDS and version pair (ADR 0011 decision 1) — otherwise this is
-/// treated exactly like an unknown context, passthrough with no record.
+/// also ended first, through `family`'s own end-action symbol, so a refusal
+/// here never leaks it. An absent stamp, or one that matches the HLI DD
+/// version, registers nothing (ADR 0007): the occurrence is presumed to
+/// match. A present, valid, *mismatched* stamp registers the root context,
+/// but only when an artifact actually covers this IDS and version pair (ADR
+/// 0011 decision 1) — otherwise this is treated exactly like an unknown
+/// context, passthrough with no record.
 ///
 /// When the HLI DD version is unset, this is a plain forward with none of
 /// the above: no stamp read, no registry lookup, no rule resolution.
 ///
 /// # Safety
-/// `dataobjectname` and `datapath` must be valid, NUL-terminated C strings,
-/// or null where IMAS-Core's own contract allows it. `octxID` must be a
-/// valid, writable `*mut c_int`.
-pub(crate) unsafe fn begin_global_action(
+/// Same contract as [`begin_global_action`], plus `octx_id` must be a valid,
+/// writable `*mut c_int`.
+unsafe fn begin_global_action_seam(
+    family: CallFamily,
     pctx_id: c_int,
     dataobjectname: *const c_char,
     datapath: *const c_char,
     rwmode: c_int,
     octx_id: *mut c_int,
 ) -> al_status_t {
-    let forward = |effective_datapath| {
-        forward_status!(begin_global_action(
+    let forward = |effective_datapath: Option<*const c_char>| {
+        call_begin_global(
+            family,
             pctx_id,
             dataobjectname,
-            effective_datapath,
+            effective_datapath.expect("global action has datapath"),
             rwmode,
             octx_id,
-        ))
+        )
     };
     // SAFETY: same contract as `open_occurrence`, already upheld by
     // this function's own `unsafe fn` contract.
-    match unsafe {
-        open_occurrence(
-            pctx_id,
-            dataobjectname,
-            Some(datapath),
-            octx_id,
-            |effective_datapath| forward(effective_datapath.expect("global action has datapath")),
-        )
-    } {
+    match unsafe { open_occurrence(pctx_id, dataobjectname, Some(datapath), octx_id, forward) } {
         OpenOccurrenceResult::Status(status) => status,
         OpenOccurrenceResult::RefuseAndEnd {
             opened_ctx_id,
             status,
         } => {
-            let _ = forward_status!(end_action(opened_ctx_id));
+            let _ = call_end(family, opened_ctx_id);
             status
         }
     }
@@ -412,15 +665,8 @@ fn load_artifact(artifact: &known_artifacts::ArtifactMatch) -> ConversionMap {
 }
 
 /// Forwards to IMAS-Core's real `al_begin_slice_action`, resolving
-/// IMAS-Core lazily on first use, and applies the same stored-version
-/// discovery and occurrence-registration rule as `begin_global_action`
-/// (ADR 0002, issue #55) when the HLI DD version is latched. `dataobjectname`
-/// (the IDS name, plus occurrence) is always forwarded unchanged — a slice
-/// action carries no `datapath` argument, so there is nothing to translate
-/// on the way in.
-///
-/// When the HLI DD version is unset, this is a plain forward with no stamp
-/// read, no registry lookup, no rule resolution.
+/// IMAS-Core lazily on first use. See [`begin_slice_action_seam`] for the
+/// shared policy this and [`plugin_begin_slice_action`] both carry out.
 ///
 /// # Safety
 /// `dataobjectname` must be a valid, NUL-terminated C string, or null where
@@ -434,25 +680,93 @@ pub(crate) unsafe fn begin_slice_action(
     interpmode: c_int,
     octx_id: *mut c_int,
 ) -> al_status_t {
-    let forward = || {
-        forward_status!(begin_slice_action(
+    // SAFETY: same contract as `begin_slice_action_seam`, already upheld by
+    // this function's own `unsafe fn` contract.
+    unsafe {
+        begin_slice_action_seam(
+            CallFamily::ORDINARY,
             pctx_id,
             dataobjectname,
             rwmode,
             time,
             interpmode,
             octx_id,
-        ))
+        )
+    }
+}
+
+/// Mirrors [`begin_slice_action`]'s policy exactly (issue #67): the same
+/// stored-version discovery and root-registration rule, forwarded through
+/// `al_plugin_begin_slice_action` rather than `al_begin_slice_action` and
+/// cleaned up through `al_plugin_end_action` on a malformed-stamp refusal.
+///
+/// # Safety
+/// Same contract as [`begin_slice_action`].
+pub(crate) unsafe fn plugin_begin_slice_action(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    rwmode: c_int,
+    time: c_double,
+    interpmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    // SAFETY: same contract as `begin_slice_action_seam`, already upheld by
+    // this function's own `unsafe fn` contract.
+    unsafe {
+        begin_slice_action_seam(
+            CallFamily::PLUGIN,
+            pctx_id,
+            dataobjectname,
+            rwmode,
+            time,
+            interpmode,
+            octx_id,
+        )
+    }
+}
+
+/// The policy shared by `begin_slice_action` and `plugin_begin_slice_action`
+/// (issue #67, consolidated onto [`CallFamily`] by issue #109): the same
+/// stored-version discovery and occurrence-registration rule as
+/// [`begin_global_action_seam`] (ADR 0002, issue #55) when the HLI DD version
+/// is latched. `dataobjectname` (the IDS name, plus occurrence) is always
+/// forwarded unchanged — a slice action carries no `datapath` argument, so
+/// there is nothing to translate on the way in.
+///
+/// When the HLI DD version is unset, this is a plain forward with no stamp
+/// read, no registry lookup, no rule resolution.
+///
+/// # Safety
+/// Same contract as [`begin_slice_action`].
+unsafe fn begin_slice_action_seam(
+    family: CallFamily,
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+    rwmode: c_int,
+    time: c_double,
+    interpmode: c_int,
+    octx_id: *mut c_int,
+) -> al_status_t {
+    let forward = |_: Option<*const c_char>| {
+        call_begin_slice(
+            family,
+            pctx_id,
+            dataobjectname,
+            rwmode,
+            time,
+            interpmode,
+            octx_id,
+        )
     };
     // SAFETY: same contract as `open_occurrence`, already upheld by
     // this function's own `unsafe fn` contract.
-    match unsafe { open_occurrence(pctx_id, dataobjectname, None, octx_id, |_| forward()) } {
+    match unsafe { open_occurrence(pctx_id, dataobjectname, None, octx_id, forward) } {
         OpenOccurrenceResult::Status(status) => status,
         OpenOccurrenceResult::RefuseAndEnd {
             opened_ctx_id,
             status,
         } => {
-            let _ = forward_status!(end_action(opened_ctx_id));
+            let _ = call_end(family, opened_ctx_id);
             status
         }
     }
@@ -465,6 +779,11 @@ pub(crate) unsafe fn begin_slice_action(
 /// (the IDS name, plus occurrence) is always forwarded unchanged — a
 /// time-range action carries no `datapath` argument, so there is nothing to
 /// translate on the way in.
+///
+/// Unlike its five siblings, this seam takes no [`CallFamily`] parameter:
+/// `al_plugin_begin_timerange_action` has a header/impl signature mismatch
+/// upstream and is unlinkable (CLAUDE.md), so there is no plugin twin to
+/// choose between and no family for this seam to carry (issue #109 AC2).
 ///
 /// When the HLI DD version is unset, this is a plain forward with no stamp
 /// read, no registry lookup, no rule resolution.
@@ -515,13 +834,9 @@ pub(crate) unsafe fn begin_timerange_action(
 
 /// Forwards to IMAS-Core's real `al_begin_arraystruct_action`, resolving
 /// `path` and `timebase` from a mismatched parent's HLI-DD spelling to its
-/// stored-DD spelling before IMAS-Core is called. Relative arguments resolve
-/// below the parent context; absolute arguments resolve from the IDS root.
-///
-/// A refusal or a path with no stored source stops before IMAS-Core is called.
-/// When the real open succeeds, the resulting `actxID` is registered as a
-/// child of `ctx_id` using the HLI-DD spelling, so later reads can resolve
-/// their own relative fields through the same conversion map.
+/// stored-DD spelling before IMAS-Core is called. See
+/// [`begin_arraystruct_action_impl`] for the shared policy this and
+/// [`plugin_begin_arraystruct_action`] both carry out.
 ///
 /// # Safety
 /// `path` and `timebase` must be valid, NUL-terminated C strings, or null
@@ -534,34 +849,57 @@ pub(crate) unsafe fn begin_arraystruct_action(
     size: *mut c_int,
     actx_id: *mut c_int,
 ) -> al_status_t {
-    let forward = |p, t| forward_status!(begin_arraystruct_action(ctx_id, p, t, size, actx_id));
     // SAFETY: same contract as `begin_arraystruct_action_impl`, already
     // upheld by this function's own `unsafe fn` contract.
-    unsafe { begin_arraystruct_action_impl(ctx_id, path, timebase, actx_id, forward) }
+    unsafe {
+        begin_arraystruct_action_impl(CallFamily::ORDINARY, ctx_id, path, timebase, size, actx_id)
+    }
+}
+
+/// Mirrors [`begin_arraystruct_action`]'s policy exactly (issue #67): the
+/// same `path`/`timebase` resolution against the parent's conversion record
+/// and the same child-record registration on success, forwarded through
+/// `al_plugin_begin_arraystruct_action` rather than
+/// `al_begin_arraystruct_action`.
+///
+/// # Safety
+/// Same contract as [`begin_arraystruct_action`].
+pub(crate) unsafe fn plugin_begin_arraystruct_action(
+    ctx_id: c_int,
+    path: *const c_char,
+    timebase: *const c_char,
+    size: *mut c_int,
+    actx_id: *mut c_int,
+) -> al_status_t {
+    // SAFETY: same contract as `begin_arraystruct_action_impl`, already
+    // upheld by this function's own `unsafe fn` contract.
+    unsafe {
+        begin_arraystruct_action_impl(CallFamily::PLUGIN, ctx_id, path, timebase, size, actx_id)
+    }
 }
 
 /// The policy shared by `begin_arraystruct_action` and
-/// `plugin_begin_arraystruct_action` (issue #67): the `path`/`timebase`
-/// resolution against the parent's conversion record and the child-record
-/// registration on success, factored out of both so only the forwarded ABI
-/// symbol differs between the ordinary and plugin reentry seams. `forward`
-/// is called with the effective (possibly translated) `path`/`timebase`
-/// exactly once.
+/// `plugin_begin_arraystruct_action` (issue #67, consolidated onto
+/// [`CallFamily`] by issue #109): the `path`/`timebase` resolution against
+/// the parent's conversion record and the child-record registration on
+/// success, factored out of both so only `family` differs between the
+/// ordinary and plugin reentry seams.
 ///
 /// # Safety
 /// Same contract as [`begin_arraystruct_action`]: `path` and `timebase` must
 /// be valid, NUL-terminated C strings, or null where IMAS-Core's own
 /// contract allows it, and `actx_id` must be a valid, writable `*mut c_int`
-/// once `forward` reports success.
+/// once IMAS-Core reports success.
 unsafe fn begin_arraystruct_action_impl(
+    family: CallFamily,
     ctx_id: c_int,
     path: *const c_char,
     timebase: *const c_char,
+    size: *mut c_int,
     actx_id: *mut c_int,
-    forward: impl FnOnce(*const c_char, *const c_char) -> al_status_t,
 ) -> al_status_t {
     let Some(parent) = live_conversion_record(ctx_id) else {
-        return forward(path, timebase);
+        return call_begin_arraystruct(family, ctx_id, path, timebase, size, actx_id);
     };
 
     let translated_path = match resolve_arraystruct_argument(&parent, path, "path") {
@@ -573,12 +911,16 @@ unsafe fn begin_arraystruct_action_impl(
         Err(message) => return contextual_refusal(&parent, &message, timebase),
     };
 
-    let status = forward(
+    let status = call_begin_arraystruct(
+        family,
+        ctx_id,
         translated_path.as_deref().map(CStr::as_ptr).unwrap_or(path),
         translated_timebase
             .as_deref()
             .map(CStr::as_ptr)
             .unwrap_or(timebase),
+        size,
+        actx_id,
     );
     if status.code == 0 {
         let resolved_path = path_conversion::join_hli_path(
@@ -595,12 +937,27 @@ unsafe fn begin_arraystruct_action_impl(
 }
 
 /// Forwards to IMAS-Core's real `al_end_action`, resolving IMAS-Core
-/// lazily on first use. On success, removes only `ctx_id`'s own registry
-/// record, if any (ADR 0002, ADR 0003) — a parent context never owns a
-/// child context's lifetime, and an unrecorded or already-plain `ctx_id`
-/// removal is a harmless no-op.
+/// lazily on first use. See [`end_action_impl`] for the shared policy this
+/// and [`plugin_end_action`] both carry out.
 pub(crate) fn end_action(ctx_id: c_int) -> al_status_t {
-    let status = forward_status!(end_action(ctx_id));
+    end_action_impl(CallFamily::ORDINARY, ctx_id)
+}
+
+/// Mirrors [`end_action`]'s policy exactly (issue #67): removes only
+/// `ctx_id`'s own registry record, if any, and only once IMAS-Core's own
+/// `al_plugin_end_action` reports success — a refused close leaves the
+/// record intact, matching `end_action`'s rule for `al_end_action`.
+pub(crate) fn plugin_end_action(ctx_id: c_int) -> al_status_t {
+    end_action_impl(CallFamily::PLUGIN, ctx_id)
+}
+
+/// The policy shared by `end_action` and `plugin_end_action` (issue #67,
+/// consolidated onto [`CallFamily`] by issue #109). On success, removes only
+/// `ctx_id`'s own registry record, if any (ADR 0002, ADR 0003) — a parent
+/// context never owns a child context's lifetime, and an unrecorded or
+/// already-plain `ctx_id` removal is a harmless no-op.
+fn end_action_impl(family: CallFamily, ctx_id: c_int) -> al_status_t {
+    let status = call_end(family, ctx_id);
     if status.code == 0 {
         REGISTRY.remove(ctx_id);
     }
@@ -608,7 +965,8 @@ pub(crate) fn end_action(ctx_id: c_int) -> al_status_t {
 }
 
 /// Forwards to IMAS-Core's real `al_read_data`, resolving IMAS-Core lazily
-/// on first use. See [`read_data_impl`] for the shared policy.
+/// on first use. See [`read_data_impl`] for the shared policy this and
+/// [`plugin_read_data`] both carry out.
 ///
 /// # Safety
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null
@@ -624,14 +982,20 @@ pub(crate) unsafe fn read_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
-    let forward = |field: *const c_char, timebase: *const c_char| {
-        forward_status!(read_data(
-            ctx_id, field, timebase, data, datatype, dim, size
-        ))
-    };
     // SAFETY: same contract as `read_data_impl`, already upheld by this
     // function's own `unsafe fn` contract.
-    unsafe { read_data_impl(ctx_id, field, timebase, data, datatype, dim, size, forward) }
+    unsafe {
+        read_data_impl(
+            CallFamily::ORDINARY,
+            ctx_id,
+            field,
+            timebase,
+            data,
+            datatype,
+            dim,
+            size,
+        )
+    }
 }
 
 /// Mirrors `read_data`'s policy exactly (issue #68): the same registry
@@ -652,17 +1016,24 @@ pub(crate) unsafe fn plugin_read_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
-    let forward = |field: *const c_char, timebase: *const c_char| {
-        forward_status!(plugin_read_data(
-            ctx_id, field, timebase, data, datatype, dim, size
-        ))
-    };
     // SAFETY: same contract as `read_data_impl`, already upheld by this
     // function's own `unsafe fn` contract.
-    unsafe { read_data_impl(ctx_id, field, timebase, data, datatype, dim, size, forward) }
+    unsafe {
+        read_data_impl(
+            CallFamily::PLUGIN,
+            ctx_id,
+            field,
+            timebase,
+            data,
+            datatype,
+            dim,
+            size,
+        )
+    }
 }
 
-/// The policy shared by `read_data` and `plugin_read_data` (issue #68).
+/// The policy shared by `read_data` and `plugin_read_data` (issue #68,
+/// consolidated onto [`CallFamily`] by issue #109).
 ///
 /// When `ctx_id` names no live conversion record — no mismatch was ever
 /// discovered, the occurrence matched or was unstamped, or the HLI DD
@@ -686,11 +1057,10 @@ pub(crate) unsafe fn plugin_read_data(
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null
 /// where IMAS-Core's own contract allows it. `data` and `size` must be
 /// valid, writable pointers, matching IMAS-Core's own contract for this
-/// function. `forward` must call through to the matching real IMAS-Core
-/// read symbol with the given (possibly translated) field/timebase and
-/// this function's own `data`/`datatype`/`dim`/`size`.
+/// function.
 #[allow(clippy::too_many_arguments)]
 unsafe fn read_data_impl(
+    family: CallFamily,
     ctx_id: c_int,
     field: *const c_char,
     timebase: *const c_char,
@@ -698,7 +1068,6 @@ unsafe fn read_data_impl(
     datatype: c_int,
     dim: c_int,
     size: *mut c_int,
-    forward: impl Fn(*const c_char, *const c_char) -> al_status_t,
 ) -> al_status_t {
     // A read that arrives while this thread is already inside a read seam was
     // not issued by the caller this shim converts for: it comes from
@@ -710,10 +1079,10 @@ unsafe fn read_data_impl(
     // (ADR 0014).
     let (_depth_guard, already_reading) = ReadDepthGuard::enter();
     if already_reading {
-        return forward(field, timebase);
+        return call_read(family, ctx_id, field, timebase, data, datatype, dim, size);
     }
     let Some(record) = live_conversion_record(ctx_id) else {
-        return forward(field, timebase);
+        return call_read(family, ctx_id, field, timebase, data, datatype, dim, size);
     };
 
     let field_argument = seam_policy::ReadArgument {
@@ -742,7 +1111,16 @@ unsafe fn read_data_impl(
     let reader = |field_attempt: Option<&CStr>, timebase_attempt: Option<&CStr>| {
         let field_ptr = field_attempt.map_or(std::ptr::null(), CStr::as_ptr);
         let timebase_ptr = timebase_attempt.map_or(std::ptr::null(), CStr::as_ptr);
-        let status = forward(field_ptr, timebase_ptr);
+        let status = call_read(
+            family,
+            ctx_id,
+            field_ptr,
+            timebase_ptr,
+            data,
+            datatype,
+            dim,
+            size,
+        );
         // SAFETY: `data` is valid and writable by `read_data_impl`'s own
         // safety contract, and the just-finished IMAS-Core call has
         // initialized it.
@@ -1076,13 +1454,8 @@ fn mismatched_context_write_refusal(function_name: &str) -> String {
 }
 
 /// Forwards to IMAS-Core's real `al_write_data`, resolving IMAS-Core
-/// lazily on first use.
-///
-/// When `ctx_id` names a live conversion record — a known mismatched root,
-/// or a child context that inherited one — this refuses before IMAS-Core is
-/// called, leaving `data` and `size` untouched. Matching, unknown,
-/// unstamped, and conversion-disabled contexts carry no record and forward
-/// unchanged.
+/// lazily on first use. See [`write_data_impl`] for the shared policy this
+/// and [`plugin_write_data`] both carry out.
 ///
 /// # Safety
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null
@@ -1097,16 +1470,74 @@ pub(crate) unsafe fn write_data(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
+    write_data_impl(
+        CallFamily::ORDINARY,
+        ctx_id,
+        field,
+        timebase,
+        data,
+        datatype,
+        dim,
+        size,
+    )
+}
+
+/// Follows the same rule as [`write_data`] (issue #64), forwarded through
+/// IMAS-Core's plugin reentry write symbol rather than its ordinary twin: a
+/// live conversion record on `ctx_id` refuses before IMAS-Core is called;
+/// otherwise this forwards unchanged. No path translation is introduced for
+/// writes, ordinary or plugin.
+///
+/// # Safety
+/// Same contract as [`write_data`].
+pub(crate) unsafe fn plugin_write_data(
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    write_data_impl(
+        CallFamily::PLUGIN,
+        ctx_id,
+        field,
+        timebase,
+        data,
+        datatype,
+        dim,
+        size,
+    )
+}
+
+/// The policy shared by `write_data` and `plugin_write_data` (issue #64,
+/// consolidated onto [`CallFamily`] by issue #109).
+///
+/// When `ctx_id` names a live conversion record — a known mismatched root,
+/// or a child context that inherited one — this refuses before IMAS-Core is
+/// called, leaving `data` and `size` untouched. Matching, unknown,
+/// unstamped, and conversion-disabled contexts carry no record and forward
+/// unchanged.
+#[allow(clippy::too_many_arguments)]
+fn write_data_impl(
+    family: CallFamily,
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
     if let Some(record) = live_conversion_record(ctx_id) {
         return contextual_refusal(
             &record,
-            &mismatched_context_write_refusal("al_write_data"),
+            &mismatched_context_write_refusal(write_seam_name(family)),
             field,
         );
     }
-    forward_status!(write_data(
-        ctx_id, field, timebase, data, datatype, dim, size,
-    ))
+    call_write(family, ctx_id, field, timebase, data, datatype, dim, size)
 }
 
 /// Forwards to IMAS-Core's real `al_delete_data`, resolving IMAS-Core
@@ -1114,7 +1545,8 @@ pub(crate) unsafe fn write_data(
 ///
 /// Follows the same rule as [`write_data`]: a live conversion record on
 /// `ctx_id` refuses before IMAS-Core is called; otherwise this forwards
-/// unchanged.
+/// unchanged. Unlike `write_data`, this seam takes no [`CallFamily`]
+/// parameter: `al_delete_data` has no plugin twin at all (issue #109 AC2).
 ///
 /// # Safety
 /// `path` must be a valid, NUL-terminated C string, or null where
@@ -1248,156 +1680,6 @@ pub(crate) unsafe fn setvalue_double_scalar_parameter_plugin(
         parameter_name,
         parameter_value,
         plugin_name,
-    ))
-}
-
-/// Mirrors `begin_global_action`'s policy exactly (issue #67): the same
-/// occurrence-cache `datapath` translation on the way in, forwarded through
-/// `al_plugin_begin_global_action` rather than `al_begin_global_action`, and
-/// the same stored-version discovery and root-registration rule on success —
-/// cleaned up through `al_plugin_end_action` rather than `al_end_action` on a
-/// malformed-stamp refusal, since a context this seam opened must be closed
-/// through its own reentry family.
-///
-/// # Safety
-/// Same contract as [`begin_global_action`].
-pub(crate) unsafe fn plugin_begin_global_action(
-    pctx_id: c_int,
-    dataobjectname: *const c_char,
-    datapath: *const c_char,
-    rwmode: c_int,
-    octx_id: *mut c_int,
-) -> al_status_t {
-    let forward = |effective_datapath| {
-        forward_status!(plugin_begin_global_action(
-            pctx_id,
-            dataobjectname,
-            effective_datapath,
-            rwmode,
-            octx_id,
-        ))
-    };
-    // SAFETY: same contract as `open_occurrence`, already upheld by
-    // this function's own `unsafe fn` contract.
-    match unsafe {
-        open_occurrence(
-            pctx_id,
-            dataobjectname,
-            Some(datapath),
-            octx_id,
-            |effective_datapath| forward(effective_datapath.expect("global action has datapath")),
-        )
-    } {
-        OpenOccurrenceResult::Status(status) => status,
-        OpenOccurrenceResult::RefuseAndEnd {
-            opened_ctx_id,
-            status,
-        } => {
-            let _ = forward_status!(plugin_end_action(opened_ctx_id));
-            status
-        }
-    }
-}
-
-/// Mirrors `begin_slice_action`'s policy exactly (issue #67): the same
-/// stored-version discovery and root-registration rule, forwarded through
-/// `al_plugin_begin_slice_action` rather than `al_begin_slice_action` and
-/// cleaned up through `al_plugin_end_action` on a malformed-stamp refusal.
-///
-/// # Safety
-/// Same contract as [`begin_slice_action`].
-pub(crate) unsafe fn plugin_begin_slice_action(
-    pctx_id: c_int,
-    dataobjectname: *const c_char,
-    rwmode: c_int,
-    time: c_double,
-    interpmode: c_int,
-    octx_id: *mut c_int,
-) -> al_status_t {
-    let forward = || {
-        forward_status!(plugin_begin_slice_action(
-            pctx_id,
-            dataobjectname,
-            rwmode,
-            time,
-            interpmode,
-            octx_id,
-        ))
-    };
-    // SAFETY: same contract as `open_occurrence`, already upheld by
-    // this function's own `unsafe fn` contract.
-    match unsafe { open_occurrence(pctx_id, dataobjectname, None, octx_id, |_| forward()) } {
-        OpenOccurrenceResult::Status(status) => status,
-        OpenOccurrenceResult::RefuseAndEnd {
-            opened_ctx_id,
-            status,
-        } => {
-            let _ = forward_status!(plugin_end_action(opened_ctx_id));
-            status
-        }
-    }
-}
-
-/// Mirrors `begin_arraystruct_action`'s policy exactly (issue #67): the same
-/// `path`/`timebase` resolution against the parent's conversion record and
-/// the same child-record registration on success, forwarded through
-/// `al_plugin_begin_arraystruct_action` rather than
-/// `al_begin_arraystruct_action`.
-///
-/// # Safety
-/// Same contract as [`begin_arraystruct_action`].
-pub(crate) unsafe fn plugin_begin_arraystruct_action(
-    ctx_id: c_int,
-    path: *const c_char,
-    timebase: *const c_char,
-    size: *mut c_int,
-    actx_id: *mut c_int,
-) -> al_status_t {
-    let forward =
-        |p, t| forward_status!(plugin_begin_arraystruct_action(ctx_id, p, t, size, actx_id));
-    // SAFETY: same contract as `begin_arraystruct_action_impl`, already
-    // upheld by this function's own `unsafe fn` contract.
-    unsafe { begin_arraystruct_action_impl(ctx_id, path, timebase, actx_id, forward) }
-}
-
-/// Mirrors `end_action`'s policy exactly (issue #67): removes only `ctx_id`'s
-/// own registry record, if any, and only once IMAS-Core's own
-/// `al_plugin_end_action` reports success — a refused close leaves the
-/// record intact, matching `end_action`'s rule for `al_end_action`.
-pub(crate) fn plugin_end_action(ctx_id: c_int) -> al_status_t {
-    let status = forward_status!(plugin_end_action(ctx_id));
-    if status.code == 0 {
-        REGISTRY.remove(ctx_id);
-    }
-    status
-}
-
-/// Follows the same rule as [`write_data`] (issue #64), forwarded through
-/// IMAS-Core's plugin reentry write symbol rather than its ordinary twin: a
-/// live conversion record on `ctx_id` refuses before IMAS-Core is called;
-/// otherwise this forwards unchanged. No path translation is introduced for
-/// writes, ordinary or plugin.
-///
-/// # Safety
-/// Same contract as [`write_data`].
-pub(crate) unsafe fn plugin_write_data(
-    ctx_id: c_int,
-    field: *const c_char,
-    timebase: *const c_char,
-    data: *mut c_void,
-    datatype: c_int,
-    dim: c_int,
-    size: *mut c_int,
-) -> al_status_t {
-    if let Some(record) = live_conversion_record(ctx_id) {
-        return contextual_refusal(
-            &record,
-            &mismatched_context_write_refusal("al_plugin_write_data"),
-            field,
-        );
-    }
-    forward_status!(plugin_write_data(
-        ctx_id, field, timebase, data, datatype, dim, size,
     ))
 }
 
