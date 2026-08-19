@@ -121,3 +121,7 @@ The context from which an arraystruct context was opened. The shim uses the rela
 
 **conversion-map cache**:
 The registry-owned set of conversion maps shared by mismatched context records. A map exists only while at least one record uses it.
+
+**seam policy**:
+The shim-side rule a seam applies, separate from the binding that carries it out: which arguments translate, which contexts refuse, what fidelity a read earned, and what the shim records afterwards. A seam policy decides; it never calls IMAS-Core, reads the latch, or writes the context registry — it receives what it needs as values and returns the effects for the C-facing layer to perform (ADR 0015).
+_Avoid_: policy on its own, conversion policy, business logic, rules engine, translator — and do not use it for the C-facing layer, which is the interposition, not the policy.
