@@ -14,7 +14,7 @@
 CHECK_ABI_STATUS_LAYOUT();
 #define IMAS_ABI_SYMBOL(name, function_type)                                  \
     CHECK_ABI_FUNCTION(name, function_type);
-#include "../../abi_symbols.def"
+#include "../../include/abi_symbols.def"
 #undef IMAS_ABI_SYMBOL
 
 /* src/resolve.rs hand-transcribes a subset of al_const.h's id-to-string
@@ -32,7 +32,7 @@ CHECK_ABI_STATUS_LAYOUT();
                     "ABI fallback constant mismatch: " #macro_name);
 #define IMAS_ABI_FALLBACK_ERR(macro_name, expected_value, expected_string)   \
     IMAS_ABI_FALLBACK_CONST(macro_name, expected_value, expected_string)
-#include "../../abi_fallback_constants.def"
+#include "../../include/abi_fallback_constants.def"
 #undef IMAS_ABI_FALLBACK_CONST
 #undef IMAS_ABI_FALLBACK_ERR
 
@@ -53,7 +53,7 @@ int check_fallback_strings(void) {
                 #macro_name, err2str(macro_name));                          \
         failures++;                                                        \
     }
-#include "../../abi_fallback_constants.def"
+#include "../../include/abi_fallback_constants.def"
 
 #undef IMAS_ABI_FALLBACK_CONST
 #undef IMAS_ABI_FALLBACK_ERR
