@@ -446,7 +446,7 @@ if(IMAS_MVDD_BUILD_TESTS)
             "-DCORE_LIBRARY=$<TARGET_FILE:${IMAS_CORE_AL_TARGET}>"
             "-DSHIM_LIBRARY=$<TARGET_FILE:imas_mvdd_loader>"
             "-DNM_EXECUTABLE=${CMAKE_NM}"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_exports.cmake")
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_exports.cmake")
 
     # Runtime dlsym cannot type-check the hand-written signatures. Compile each
     # public header in its own C translation unit against one shared contract;
