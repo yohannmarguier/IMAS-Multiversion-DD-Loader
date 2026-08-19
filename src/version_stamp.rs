@@ -69,7 +69,7 @@ pub(crate) fn discover(octx_id: c_int) -> StampOutcome {
             field,
             c"".as_ptr(),
             &mut data,
-            crate::resolve::CHAR_DATA_ID,
+            crate::core_binding::CHAR_DATA_ID,
             1,
             &mut size,
         )

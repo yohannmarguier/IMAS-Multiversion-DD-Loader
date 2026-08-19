@@ -336,7 +336,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     # part of the full profile so the two complementary seam suites stay honest.
     add_library(recording_stub SHARED
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/stub/recording_stub.c")
-    # Matches the shim's bare-soname fallback (src/resolve.rs) so the
+    # Matches the shim's bare-soname fallback (src/core_binding.rs) so the
     # bare-soname scenario below can exercise the loader's normal search
     # path instead of the explicit override.
     # Keep the bare-soname fixture out of the test working directory. On
