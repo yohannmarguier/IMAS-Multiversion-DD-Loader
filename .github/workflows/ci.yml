@@ -63,13 +63,13 @@ jobs:
           set -euo pipefail
           core=$(find "$PWD/build" -maxdepth 2 -type f -name 'libal.so*' | head -1)
           test -n "$core"
-          bash tests/check-installed-package.sh build dist "$core"
+          bash tests/scripts/check-installed-package.sh build dist "$core"
 
       - name: Check a staged (DESTDIR) install
-        run: bash tests/check-staged-install.sh build
+        run: bash tests/scripts/check-staged-install.sh build
 
       - name: Check an install under a relative prefix
-        run: bash tests/check-relative-prefix-install.sh build
+        run: bash tests/scripts/check-relative-prefix-install.sh build
 
   full:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
@@ -123,10 +123,10 @@ jobs:
           set -euo pipefail
           core=$(find "$PWD/build/_deps/al-core-build" -type f -name 'libal.so*' | head -1)
           test -n "$core"
-          bash tests/check-installed-package.sh build dist "$core"
+          bash tests/scripts/check-installed-package.sh build dist "$core"
 
       - name: Check a staged (DESTDIR) install
-        run: bash tests/check-staged-install.sh build
+        run: bash tests/scripts/check-staged-install.sh build
 
       - name: Check an install under a relative prefix
-        run: bash tests/check-relative-prefix-install.sh build
+        run: bash tests/scripts/check-relative-prefix-install.sh build

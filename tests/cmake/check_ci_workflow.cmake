@@ -135,14 +135,14 @@ foreach(job IN ITEMS fast_job full_job)
         "fail when its selected test profile registers no tests")
     require_line(${job} "run: cmake --install build --prefix \"$PWD/dist\""
         "install the shim")
-    require_line(${job} "bash tests/check-installed-package.sh build dist \"$core\""
+    require_line(${job} "bash tests/scripts/check-installed-package.sh build dist \"$core\""
         "exercise both installed-package consumption interfaces")
-    require_line(${job} "run: bash tests/check-staged-install.sh build"
+    require_line(${job} "run: bash tests/scripts/check-staged-install.sh build"
         "verify a staged (DESTDIR) install as well as a plain prefix")
     # The install step above deliberately passes an absolute prefix, which is
     # the one form that hides the relative-prefix defect entirely, so this
     # cannot be left to the steps that already exist.
-    require_line(${job} "run: bash tests/check-relative-prefix-install.sh build"
+    require_line(${job} "run: bash tests/scripts/check-relative-prefix-install.sh build"
         "verify an install under a relative prefix as well as an absolute one")
 endforeach()
 
