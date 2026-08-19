@@ -78,7 +78,7 @@ pub(crate) enum ReadPath {
 }
 
 pub(crate) struct TranslatedReadPath {
-    /// `pub(crate)` so the read loop (`src/resolve.rs`) can turn each
+    /// `pub(crate)` so the read loop (`src/seam_policy.rs`) can turn each
     /// candidate into a forwarding attempt; this module never inspects them
     /// past constructing and ordering them.
     pub(crate) paths: Vec<ResolvedReadPath>,

@@ -40,14 +40,15 @@
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 
+use crate::al_status_t;
 use crate::context_registry::{ConversionRecord, MapCacheKey, REGISTRY};
-use crate::conversion_map::{ConversionMap, Fidelity, ValueTransformation};
+use crate::conversion_map::{ConversionMap, Fidelity};
 use crate::core_binding::{DOUBLE_DATA_ID, forward_status};
 use crate::known_artifacts;
-use crate::path_conversion::{self, ContextPathResolution, ReadPath, TranslatedReadPath};
+use crate::path_conversion::{self, ContextPathResolution};
 use crate::read_outcome::{self, ReadOutcome};
+use crate::seam_policy;
 use crate::version_stamp::{self, StampOutcome};
-use crate::{MAXDIM, al_status_t};
 
 thread_local! {
     /// How many shim read seams this thread is currently inside (ADR 0014).
@@ -734,26 +735,18 @@ pub(crate) unsafe fn plugin_read_data(
 /// version is unset — this is a plain forward, unchanged from before issue
 /// #54. The unset case is answered by [`live_conversion_record`] from the
 /// version latch, without taking the registry's lock at all.
-/// Otherwise `field` is resolved through the record's conversion map,
-/// in the direction that reaches the stored DD spelling, before IMAS-Core is
-/// called:
 ///
-/// - An explicit refusal is a shim-owned [`al_status_t`] refusal — IMAS-Core
-///   is never called.
-/// - A `merged`/`split` plan is tried in declared precedence order until one
-///   candidate returns data. A winning field transformation runs in place
-///   before the buffer reaches the HLI.
-/// - No claimed source on the stored side returns success with a null data
-///   pointer, matching IMAS-Core's own not-found convention, without calling
-///   IMAS-Core at all.
-/// - Otherwise the translated field reaches IMAS-Core through `forward` and
-///   its returned allocation is forwarded to the HLI exactly as received:
-///   the shim neither substitutes nor frees it.
-///
-/// `field` and `timebase` are resolved independently through the same
-/// version pair. A no-source result for either means this read cannot find
-/// data in the stored representation, so the seam returns the normal
-/// success-with-null result without calling IMAS-Core.
+/// Otherwise this is marshalling and effect performance around
+/// [`seam_policy::run_read`], which owns every decision — path resolution,
+/// the merged/split candidate loop, the value transformation, and each
+/// argument's retained fidelity (issue #107). This function resolves `field`
+/// and `timebase` through the conversion map, builds the reader closure
+/// `run_read` drives (classifying each attempt through
+/// [`read_outcome::classify`] and handing back a safe [`seam_policy::DataView`]
+/// only once IMAS-Core has actually written one), and turns the returned
+/// [`seam_policy::ReadVerdict`] into an `al_status_t` plus the two loss-log
+/// writes ADR 0012 asks for — the one place either ever happens now (issue
+/// #66).
 ///
 /// # Safety
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null
@@ -789,186 +782,142 @@ unsafe fn read_data_impl(
         return forward(field, timebase);
     };
 
-    let translated_field = match path_conversion::resolve_read_path(&record, field) {
-        ReadPath::Forward => None,
-        ReadPath::Translated(path) | ReadPath::Candidates(path) => Some(path),
-        ReadPath::Refusal {
-            reason,
-            dd_path,
-            fidelity,
-        } => {
-            retain_read_fidelity(&record, field, fidelity);
-            return read_refusal(&record, &reason, &dd_path);
-        }
-        ReadPath::NoSource(fidelity) => {
-            retain_read_fidelity(&record, field, fidelity);
-            return no_source_read(data);
-        }
+    let field_argument = seam_policy::ReadArgument {
+        resolution: path_conversion::resolve_read_path(&record, field),
+        // SAFETY: this function's own contract requires `field` to be a
+        // valid, NUL-terminated C string, or null.
+        forward: unsafe { c_str_ref(field) },
+        dd_path: read_argument_path(&record, field),
     };
-    let translated_timebase = match path_conversion::resolve_read_path(&record, timebase) {
-        ReadPath::Forward => None,
-        ReadPath::Translated(path) | ReadPath::Candidates(path) => Some(path),
-        ReadPath::Refusal {
-            reason,
-            dd_path,
-            fidelity,
-        } => {
-            retain_read_fidelity(&record, timebase, fidelity);
-            return read_refusal(&record, &reason, &dd_path);
-        }
-        ReadPath::NoSource(fidelity) => {
-            retain_read_fidelity(&record, timebase, fidelity);
-            return no_source_read(data);
-        }
+    let timebase_argument = seam_policy::ReadArgument {
+        resolution: path_conversion::resolve_read_path(&record, timebase),
+        // SAFETY: this function's own contract requires `timebase` to be a
+        // valid, NUL-terminated C string, or null.
+        forward: unsafe { c_str_ref(timebase) },
+        dd_path: read_argument_path(&record, timebase),
+    };
+    let shape = seam_policy::BufferShape {
+        datatype: if datatype == DOUBLE_DATA_ID {
+            seam_policy::BufferDataType::Double
+        } else {
+            seam_policy::BufferDataType::Other
+        },
+        rank: dim,
     };
 
-    // Every translated field/timebase — a single translated path or a
-    // merged/split candidate plan — is tried through this one loop rather
-    // than short-circuiting a "simple" single-path case through a bare
-    // forward: a short-circuit here previously skipped `retain_read_fidelity`
-    // for a plain non-exact `renamed`/`moved` rule, so a single-candidate
-    // Lossy read never reached the loss log (ADR 0012, issue #65).
-    let field_attempts = translated_field.as_ref().map_or_else(
-        || vec![ReadAttempt::forward(field)],
-        TranslatedReadPath::attempts,
-    );
-    let timebase_attempts = translated_timebase.as_ref().map_or_else(
-        || vec![ReadAttempt::forward(timebase)],
-        TranslatedReadPath::attempts,
-    );
-    let field_dd_path = read_argument_path(&record, field);
-    for field_attempt in &field_attempts {
-        for timebase_attempt in &timebase_attempts {
-            if let Err(reason) =
-                validate_value_transformation(&field_attempt.value_transformation, datatype, dim)
-            {
-                retain_read_fidelities(
-                    &record,
-                    field,
-                    Fidelity::Unmappable,
-                    timebase,
-                    timebase_attempt.fidelity,
-                );
-                return read_refusal(&record, reason, &field_dd_path);
-            }
-            let status = forward(field_attempt.path, timebase_attempt.path);
-            // SAFETY: `data` is valid and writable by `read_data_impl`'s own
-            // safety contract, and the just-finished IMAS-Core call has
-            // initialized it.
-            match read_outcome::classify(&status, unsafe { *data }) {
-                ReadOutcome::Failure => {
-                    retain_read_fidelities(
-                        &record,
-                        field,
-                        field_attempt.fidelity,
-                        timebase,
-                        timebase_attempt.fidelity,
-                    );
-                    return status;
-                }
-                ReadOutcome::Data => {
-                    // No "have I already transformed this buffer?" test is
-                    // needed: reentrant reads never reach this branch, so the
-                    // only code that can transform a buffer is the one read
-                    // the caller asked for (ADR 0014).
-                    if let Err(reason) = apply_value_transformation(
-                        &field_attempt.value_transformation,
-                        unsafe { *data },
-                        datatype,
-                        dim,
-                        size,
-                    ) {
-                        retain_read_fidelities(
-                            &record,
-                            field,
-                            Fidelity::Unmappable,
-                            timebase,
-                            timebase_attempt.fidelity,
-                        );
-                        return read_refusal(&record, reason, &field_dd_path);
-                    }
-                    retain_read_fidelities(
-                        &record,
-                        field,
-                        field_attempt.fidelity,
-                        timebase,
-                        timebase_attempt.fidelity,
-                    );
-                    return status;
-                }
-                ReadOutcome::NotFound => {}
-            }
+    let reader = |field_attempt: Option<&CStr>, timebase_attempt: Option<&CStr>| {
+        let field_ptr = field_attempt.map_or(std::ptr::null(), CStr::as_ptr);
+        let timebase_ptr = timebase_attempt.map_or(std::ptr::null(), CStr::as_ptr);
+        let status = forward(field_ptr, timebase_ptr);
+        // SAFETY: `data` is valid and writable by `read_data_impl`'s own
+        // safety contract, and the just-finished IMAS-Core call has
+        // initialized it.
+        let data_ptr = unsafe { *data };
+        match read_outcome::classify(&status, data_ptr) {
+            ReadOutcome::Failure => seam_policy::Attempt::Failure(status),
+            ReadOutcome::NotFound => seam_policy::Attempt::NotFound,
+            // SAFETY: `data`/`size` are valid per this function's own safety
+            // contract, and `ReadOutcome::Data` establishes `data_ptr`
+            // non-null and initialized by the just-finished IMAS-Core call.
+            ReadOutcome::Data => seam_policy::Attempt::Data(status, unsafe {
+                build_data_view(data_ptr, datatype, dim, size)
+            }),
         }
-    }
-    retain_read_fidelities(
-        &record,
-        field,
-        path_conversion::translated_read_fidelity(translated_field.as_ref()),
-        timebase,
-        path_conversion::translated_read_fidelity(translated_timebase.as_ref()),
-    );
-    no_source_read(data)
+    };
+
+    let verdict = seam_policy::run_read(field_argument, timebase_argument, shape, reader);
+    finish_read(&record, verdict, data)
 }
 
-const EMPTY_DOUBLE: f64 = -9e40;
-
-fn validate_value_transformation(
-    transformation: &ValueTransformation,
-    datatype: c_int,
-    dim: c_int,
-) -> Result<(), &'static str> {
-    match transformation {
-        ValueTransformation::None => Ok(()),
-        ValueTransformation::SignFlip { .. }
-            if datatype == DOUBLE_DATA_ID && (0..=MAXDIM as c_int).contains(&dim) =>
-        {
-            Ok(())
-        }
-        ValueTransformation::SignFlip { .. } => {
-            Err("value-transform execution requires DOUBLE_DATA and a rank no greater than MAXDIM")
-        }
+/// `ptr` as a borrowed `&CStr`, or `None` if it is null.
+///
+/// # Safety
+/// `ptr` must be a valid, NUL-terminated C string, or null.
+unsafe fn c_str_ref<'a>(ptr: *const c_char) -> Option<&'a CStr> {
+    if ptr.is_null() {
+        return None;
     }
+    // SAFETY: the caller's own contract requires `ptr`, when non-null, to be
+    // a valid NUL-terminated C string.
+    Some(unsafe { CStr::from_ptr(ptr) })
 }
 
-fn apply_value_transformation(
-    transformation: &ValueTransformation,
-    data: *mut c_void,
+/// Builds the safe, typed view [`seam_policy::run_read`] applies a value
+/// transformation through, from a data buffer IMAS-Core has just written.
+/// Only ever called on a [`ReadOutcome::Data`] outcome, per `read_data_impl`'s
+/// own reader closure.
+///
+/// # Safety
+/// `data_ptr` must be non-null and, when `datatype == DOUBLE_DATA_ID`, must
+/// point to an initialized array of `DOUBLE_DATA` elements whose extents
+/// `size` describes for a rank-`dim` read (or a single `f64` when `dim ==
+/// 0`), matching IMAS-Core's own contract for a successful `al_read_data`.
+unsafe fn build_data_view<'a>(
+    data_ptr: *mut c_void,
     datatype: c_int,
     dim: c_int,
     size: *mut c_int,
-) -> Result<(), &'static str> {
-    match transformation {
-        ValueTransformation::None => Ok(()),
-        ValueTransformation::SignFlip { .. } => {
-            validate_value_transformation(transformation, datatype, dim)?;
-            let element_count = if dim == 0 {
-                1
-            } else {
-                if size.is_null() {
-                    return Err("value-transform execution needs array dimensions");
-                }
-                // SAFETY: the ABI requires one initialized extent per rank
-                // after a successful IMAS-Core array read.
-                unsafe { std::slice::from_raw_parts(size, dim as usize) }
-                    .iter()
-                    .try_fold(1usize, |count, &extent| {
-                        usize::try_from(extent)
-                            .ok()
-                            .and_then(|extent| count.checked_mul(extent))
-                    })
-                    .ok_or("value-transform execution received an invalid array shape")?
-            };
-            // SAFETY: ReadOutcome::Data establishes non-null data, and the
-            // validated datatype and returned shape describe this buffer.
-            let values =
-                unsafe { std::slice::from_raw_parts_mut(data.cast::<f64>(), element_count) };
-            for value in values {
-                if *value != EMPTY_DOUBLE {
-                    *value = -*value;
-                }
-            }
-            Ok(())
+) -> seam_policy::DataView<'a> {
+    if datatype != DOUBLE_DATA_ID {
+        return seam_policy::DataView::NotDouble;
+    }
+    let element_count = if dim == 0 {
+        Ok(1usize)
+    } else if size.is_null() {
+        Err("value-transform execution needs array dimensions")
+    } else {
+        // SAFETY: the ABI requires one initialized extent per rank after a
+        // successful IMAS-Core array read.
+        unsafe { std::slice::from_raw_parts(size, dim as usize) }
+            .iter()
+            .try_fold(1usize, |count, &extent| {
+                usize::try_from(extent)
+                    .ok()
+                    .and_then(|extent| count.checked_mul(extent))
+            })
+            .ok_or("value-transform execution received an invalid array shape")
+    };
+    match element_count {
+        Ok(count) => {
+            // SAFETY: the caller's own contract requires `data_ptr` to point
+            // to an initialized `DOUBLE_DATA` buffer of exactly this shape.
+            let values = unsafe { std::slice::from_raw_parts_mut(data_ptr.cast::<f64>(), count) };
+            seam_policy::DataView::Double(values)
         }
+        Err(reason) => seam_policy::DataView::InvalidShape(reason),
+    }
+}
+
+/// Turns a [`seam_policy::ReadVerdict`] into the `al_status_t` `read_data_impl`
+/// returns, writing both arguments' retained fidelities to `record`'s root
+/// loss log first. This is the one call site that ever writes to the loss
+/// log for a read (issue #66): `seam_policy::ReadVerdict::field`/`timebase`
+/// are mandatory, so there is no return path left that could reach this
+/// point without both to write.
+fn finish_read(
+    record: &crate::context_registry::ConversionRecord,
+    verdict: seam_policy::ReadVerdict,
+    data: *mut *mut c_void,
+) -> al_status_t {
+    record_argument_loss(record.root_id, &verdict.field);
+    record_argument_loss(record.root_id, &verdict.timebase);
+    match verdict.outcome {
+        seam_policy::SeamOutcome::Data(status) => status,
+        seam_policy::SeamOutcome::NotFound => no_source_read(data),
+        seam_policy::SeamOutcome::Refusal { reason, dd_path } => {
+            read_refusal(record, &reason, &dd_path)
+        }
+    }
+}
+
+/// Retains one argument's fidelity on `root_id`'s loss log — skipping
+/// [`Fidelity::Exact`], which is never logged (ADR 0012).
+fn record_argument_loss(
+    root_id: crate::context_registry::ContextId,
+    argument: &seam_policy::ArgumentFidelity,
+) {
+    if argument.fidelity != Fidelity::Exact {
+        REGISTRY.record_read_loss_at_root(root_id, argument.path.clone(), argument.fidelity);
     }
 }
 
@@ -983,36 +932,6 @@ fn joined_argument_path(
     c_str_or_none(raw_path)
         .filter(|path| !path.is_empty())
         .map(|path| path_conversion::join_hli_path(&record.resolved_path, path))
-}
-
-/// Retains one non-exact outcome on `ctx_id`'s root loss log, keyed by the
-/// complete DD path as the HLI requested it — `record.resolved_path` joined
-/// with `raw_path` — never the raw argument alone. Under a root context
-/// `resolved_path` is empty and the join is a no-op, but under an arraystruct
-/// child it restores the anchor a relative argument was implicitly addressed
-/// against (issue #66), matching the path already used for refusal messages
-/// (`read_argument_path`).
-fn retain_read_fidelity(
-    record: &crate::context_registry::ConversionRecord,
-    raw_path: *const c_char,
-    fidelity: Fidelity,
-) {
-    if fidelity != Fidelity::Exact
-        && let Some(path) = joined_argument_path(record, raw_path)
-    {
-        REGISTRY.record_read_loss_at_root(record.root_id, path, fidelity);
-    }
-}
-
-fn retain_read_fidelities(
-    record: &crate::context_registry::ConversionRecord,
-    field: *const c_char,
-    field_fidelity: Fidelity,
-    timebase: *const c_char,
-    timebase_fidelity: Fidelity,
-) {
-    retain_read_fidelity(record, field, field_fidelity);
-    retain_read_fidelity(record, timebase, timebase_fidelity);
 }
 
 /// Implements `imas_mvdd_context_loss_count` (ADR 0012): reports the number
@@ -1164,35 +1083,6 @@ fn no_source_read(data: *mut *mut c_void) -> al_status_t {
         *data = std::ptr::null_mut();
     }
     al_status_t::default()
-}
-
-struct ReadAttempt {
-    path: *const c_char,
-    fidelity: Fidelity,
-    value_transformation: ValueTransformation,
-}
-
-impl ReadAttempt {
-    fn forward(path: *const c_char) -> Self {
-        Self {
-            path,
-            fidelity: Fidelity::Exact,
-            value_transformation: ValueTransformation::None,
-        }
-    }
-}
-
-impl TranslatedReadPath {
-    fn attempts(&self) -> Vec<ReadAttempt> {
-        self.paths
-            .iter()
-            .map(|path| ReadAttempt {
-                path: path.path.as_ptr(),
-                fidelity: path.fidelity,
-                value_transformation: path.value_transformation.clone(),
-            })
-            .collect()
-    }
 }
 
 /// Resolves one arraystruct argument. Unlike a data read, a nonempty path

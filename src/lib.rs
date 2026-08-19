@@ -60,6 +60,7 @@ mod known_artifacts;
 mod path_conversion;
 mod read_outcome;
 mod resolve;
+mod seam_policy;
 mod version_stamp;
 
 /// Length of `al_status_t::message`, mirroring IMAS-Core's `MAX_ERR_MSG_LEN`.
