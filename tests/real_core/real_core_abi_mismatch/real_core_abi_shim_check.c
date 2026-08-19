@@ -2,7 +2,7 @@
 
 #include <imas_mvdd_loader.h>
 
-#include "real_core_abi_contract.h"
+#include "include/real_core_abi_contract.h"
 
 CHECK_ABI_STATUS_LAYOUT();
 #define IMAS_ABI_SYMBOL(name, function_type)                                  \
