@@ -1302,7 +1302,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     # data, plugin, utility, and version seams through a legal HDF5 lifecycle
     # unconditionally rather than making this coverage opt-in.
     add_library(real_core_test_plugin MODULE
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_test_plugin.cpp")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/real_core_test_plugin.cpp")
     target_include_directories(real_core_test_plugin PRIVATE ${_imas_core_include_dirs})
     target_compile_features(real_core_test_plugin PRIVATE cxx_std_17)
     set_target_properties(real_core_test_plugin PROPERTIES
@@ -1312,7 +1312,7 @@ if(IMAS_MVDD_BUILD_TESTS)
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
 
     add_executable(real_core_forwarding_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_forwarding_test.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/real_core_forwarding_test.c")
     find_package(HDF5 COMPONENTS C REQUIRED)
     target_include_directories(real_core_forwarding_test PRIVATE
         ${_imas_core_include_dirs}
