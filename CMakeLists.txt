@@ -453,8 +453,8 @@ if(IMAS_MVDD_BUILD_TESTS)
     # keeping the anonymous status structs separate lets C compare their
     # layouts and every mirrored function type without declaration collisions.
     add_executable(real_core_abi_check
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_abi_core_check.c"
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_abi_shim_check.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_abi_mismatch/real_core_abi_core_check.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_abi_mismatch/real_core_abi_shim_check.c")
     target_include_directories(real_core_abi_check PRIVATE
         "${IMAS_MVDD_STAGE_DIR}/include")
     target_link_libraries(real_core_abi_check PRIVATE ${IMAS_CORE_AL_TARGET})
