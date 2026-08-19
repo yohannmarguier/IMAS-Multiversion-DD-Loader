@@ -24,7 +24,7 @@ use std::env::{self, VarError};
 use std::ffi::{CStr, c_char};
 use std::sync::OnceLock;
 
-use crate::dd_version::DdVersion;
+use crate::version::dd_version::DdVersion;
 
 /// Environment-variable fallback, read only if the setter was never called
 /// (ADR 0005): the setter always takes precedence and the environment can

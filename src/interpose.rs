@@ -30,14 +30,14 @@ use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 
 use crate::al_status_t;
-use crate::context_registry::{ConversionRecord, MapCacheKey, REGISTRY};
-use crate::conversion_map::{ConversionMap, Fidelity};
-use crate::core_binding::{DOUBLE_DATA_ID, forward_status};
-use crate::known_artifacts;
-use crate::path_conversion::{self, ContextPathResolution};
-use crate::read_outcome::{self, ReadOutcome};
-use crate::seam_policy;
-use crate::version_stamp;
+use crate::registry::context_registry::{ConversionRecord, MapCacheKey, REGISTRY};
+use crate::conversion::conversion_map::{ConversionMap, Fidelity};
+use crate::core::core_binding::{DOUBLE_DATA_ID, forward_status};
+use crate::version::known_artifacts;
+use crate::conversion::path_conversion::{self, ContextPathResolution};
+use crate::conversion::read_outcome::{self, ReadOutcome};
+use crate::conversion::seam_policy;
+use crate::version::version_stamp;
 
 thread_local! {
     /// How many shim read seams this thread is currently inside (ADR 0014).

@@ -33,11 +33,11 @@
 use std::ffi::{CStr, c_int};
 
 use crate::al_status_t;
-use crate::conversion_map::{Fidelity, ValueTransformation};
-use crate::dd_version::DdVersion;
-use crate::known_artifacts::{self, ArtifactMatch};
-use crate::path_conversion::{self, ReadPath, TranslatedReadPath};
-use crate::version_stamp::StampOutcome;
+use crate::conversion::conversion_map::{Fidelity, ValueTransformation};
+use crate::version::dd_version::DdVersion;
+use crate::version::known_artifacts::{self, ArtifactMatch};
+use crate::conversion::path_conversion::{self, ReadPath, TranslatedReadPath};
+use crate::version::version_stamp::StampOutcome;
 
 /// The occurrence-cache write discovery asks its interposition adapter to
 /// perform. This preserves the cached mismatch necessary for a later global
@@ -486,9 +486,9 @@ fn verdict(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversion_map::{ConversionMap, Direction, Outcome};
-    use crate::dd_version::DdVersion;
-    use crate::version_stamp::StampOutcome;
+    use crate::conversion::conversion_map::{ConversionMap, Direction, Outcome};
+    use crate::version::dd_version::DdVersion;
+    use crate::version::version_stamp::StampOutcome;
     use path_conversion::ResolvedReadPath;
     use std::cell::RefCell;
     use std::ffi::CString;

@@ -8,10 +8,10 @@
 //! no loss (ADR 0011 decision 1 — silence is earned by mechanism coverage,
 //! not by which DD-version pair is involved).
 
-use crate::conversion_map::Direction;
-use crate::dd_version::DdVersion;
+use crate::conversion::conversion_map::Direction;
+use crate::version::dd_version::DdVersion;
 
-const EQUILIBRIUM_ARTIFACT: &str = include_str!("../docs/3.39.0--4.1.1.xml");
+const EQUILIBRIUM_ARTIFACT: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
 
 /// The artifact serving one `(IDS, stored, HLI)` triple, plus the direction
 /// that resolves a path expressed in the HLI's own spelling to the stored

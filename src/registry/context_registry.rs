@@ -52,8 +52,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
-use crate::conversion_map::{ConversionMap, Direction, Fidelity};
-use crate::dd_version::DdVersion;
+use crate::conversion::conversion_map::{ConversionMap, Direction, Fidelity};
+use crate::version::dd_version::DdVersion;
 
 /// An IMAS-Core context ID, as passed across the C ABI.
 pub(crate) type ContextId = std::ffi::c_int;

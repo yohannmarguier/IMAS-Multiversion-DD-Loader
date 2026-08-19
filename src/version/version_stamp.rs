@@ -23,8 +23,8 @@
 use std::ffi::{c_char, c_int, c_void};
 
 use crate::al_status_t;
-use crate::dd_version::DdVersion;
-use crate::read_outcome::{self, ReadOutcome};
+use crate::version::dd_version::DdVersion;
+use crate::conversion::read_outcome::{self, ReadOutcome};
 
 /// `ids_properties/version_put/data_dictionary`, NUL-terminated for the FFI
 /// call (the trailing byte here has nothing to do with how the *returned*
@@ -79,7 +79,7 @@ pub(crate) fn discover(
         field,
         c"".as_ptr(),
         &mut data,
-        crate::core_binding::CHAR_DATA_ID,
+        crate::core::core_binding::CHAR_DATA_ID,
         1,
         &mut size,
     );

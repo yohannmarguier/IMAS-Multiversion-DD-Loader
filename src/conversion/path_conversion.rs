@@ -19,8 +19,8 @@
 
 use std::ffi::{CStr, CString, c_char};
 
-use crate::context_registry::ConversionRecord;
-use crate::conversion_map::{Fidelity, Outcome, RefusalReason, Rel, ValueTransformation};
+use crate::registry::context_registry::ConversionRecord;
+use crate::conversion::conversion_map::{Fidelity, Outcome, RefusalReason, Rel, ValueTransformation};
 
 /// `ptr` as a borrowed `&str`, or `None` if it is null or not valid UTF-8.
 fn c_str_or_none<'a>(ptr: *const c_char) -> Option<&'a str> {
@@ -113,7 +113,7 @@ enum ConcreteStoredPath {
 struct ClaimedArgument {
     is_absolute: bool,
     hli_absolute: String,
-    explanation: crate::conversion_map::RuleExplanation,
+    explanation: crate::conversion::conversion_map::RuleExplanation,
 }
 
 /// What one path-bearing ABI argument amounts to, before
@@ -418,8 +418,8 @@ fn refusal_reason_message(reason: RefusalReason) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context_registry::{MapCacheKey, REGISTRY};
-    use crate::conversion_map::ConversionMap;
+    use crate::registry::context_registry::{MapCacheKey, REGISTRY};
+    use crate::conversion::conversion_map::ConversionMap;
     use std::ffi::c_int;
 
     /// User story 47: "As an HLI reading through a known version mismatch, I
@@ -462,14 +462,14 @@ mod tests {
               </rules>
             </ids-map>
         "#;
-        let stored: crate::dd_version::DdVersion = "3.39.0".parse().expect("known release");
-        let hli: crate::dd_version::DdVersion = "4.1.1".parse().expect("known release");
+        let stored: crate::version::dd_version::DdVersion = "3.39.0".parse().expect("known release");
+        let hli: crate::version::dd_version::DdVersion = "4.1.1".parse().expect("known release");
         assert!(REGISTRY.record_root(
             CTX_ID,
             String::new(),
             CTX_ID,
             MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
-            crate::conversion_map::Direction::Forward,
+            crate::conversion::conversion_map::Direction::Forward,
             || ConversionMap::load(NO_DEFAULT_ARTIFACT).expect("fixture artifact must load"),
         ));
         let record = REGISTRY

@@ -1813,9 +1813,9 @@ fn parse_transforms(
 mod tests {
     use super::*;
 
-    const APPROVED_ARTIFACT: &str = include_str!("../docs/3.39.0--4.1.1.xml");
-    const LEFT_INVENTORY_339: &str = include_str!("../docs/inventory/equilibrium-3.39.0.txt");
-    const RIGHT_INVENTORY_411: &str = include_str!("../docs/inventory/equilibrium-4.1.1.txt");
+    const APPROVED_ARTIFACT: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
+    const LEFT_INVENTORY_339: &str = include_str!("../../docs/inventory/equilibrium-3.39.0.txt");
+    const RIGHT_INVENTORY_411: &str = include_str!("../../docs/inventory/equilibrium-4.1.1.txt");
 
     fn parse_inventory(text: &str) -> Vec<String> {
         text.lines()
