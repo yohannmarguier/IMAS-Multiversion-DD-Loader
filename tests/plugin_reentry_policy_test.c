@@ -18,7 +18,7 @@
 #error "RECORDING_STUB_PATH must be defined by CMakeLists.txt"
 #endif
 
-#include "shim_test_support.h"
+#include "include/shim_test_support.h"
 
 static al_status_t open_dataentry(int *dectxID) {
     return al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, dectxID);

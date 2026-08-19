@@ -17,10 +17,10 @@
 #error "RECORDING_STUB_PATH must be defined by CMakeLists.txt"
 #endif
 
-#include "shim_test_support.h"
+#include "include/shim_test_support.h"
 
 static al_status_t write_field(int ctx_id, const char *field, const char *timebase, void *data,
-                                int *size) {
+                               int *size) {
     return al_write_data(ctx_id, field, timebase, data, 52 /* DOUBLE_DATA */, 1, size);
 }
 
