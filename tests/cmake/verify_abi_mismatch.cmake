@@ -9,7 +9,7 @@ if(NOT DEFINED CMAKE_COMMAND OR NOT DEFINED TEST_SOURCE_DIR OR
     message(FATAL_ERROR "ABI mismatch test arguments are incomplete")
 endif()
 
-set(mismatch_binary_dir "${TEST_BINARY_DIR}/real_core/real_core_abi_mismatch")
+set(mismatch_binary_dir "${TEST_BINARY_DIR}/real_core_tests/real_core_abi_mismatch")
 set(mismatch_include_dir "${mismatch_binary_dir}/include")
 set(shim_header "${SHIM_INCLUDE_DIR}/imas_mvdd_loader.h")
 set(mismatched_header "${mismatch_include_dir}/imas_mvdd_loader.h")

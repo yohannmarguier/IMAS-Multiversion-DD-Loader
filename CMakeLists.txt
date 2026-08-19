@@ -453,8 +453,8 @@ if(IMAS_MVDD_BUILD_TESTS)
     # keeping the anonymous status structs separate lets C compare their
     # layouts and every mirrored function type without declaration collisions.
     add_executable(real_core_abi_check
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/real_core_abi_mismatch/real_core_abi_core_check.c"
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/real_core_abi_mismatch/real_core_abi_shim_check.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_tests/real_core_abi_mismatch/real_core_abi_core_check.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_tests/real_core_abi_mismatch/real_core_abi_shim_check.c")
     target_include_directories(real_core_abi_check PRIVATE
         "${IMAS_MVDD_STAGE_DIR}/include")
     target_link_libraries(real_core_abi_check PRIVATE ${IMAS_CORE_AL_TARGET})
@@ -468,7 +468,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     # demonstrates that the ordinary ABI comparison catches drift loudly.
     add_test(NAME real-core-abi-rejects-mismatch
         COMMAND "${CMAKE_COMMAND}"
-            "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/real_core_abi_mismatch"
+            "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_tests/real_core_abi_mismatch"
             "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
             "-DSHIM_INCLUDE_DIR=${IMAS_MVDD_STAGED_INCLUDE_DIR}"
             "-DCORE_INCLUDE_DIRS=${_imas_core_include_dirs}"
@@ -1302,7 +1302,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     # data, plugin, utility, and version seams through a legal HDF5 lifecycle
     # unconditionally rather than making this coverage opt-in.
     add_library(real_core_test_plugin MODULE
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/real_core_test_plugin.cpp")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_tests/real_core_test_plugin.cpp")
     target_include_directories(real_core_test_plugin PRIVATE ${_imas_core_include_dirs})
     target_compile_features(real_core_test_plugin PRIVATE cxx_std_17)
     set_target_properties(real_core_test_plugin PROPERTIES
@@ -1312,7 +1312,7 @@ if(IMAS_MVDD_BUILD_TESTS)
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
 
     add_executable(real_core_forwarding_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/real_core_forwarding_test.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_tests/real_core_forwarding_test.c")
     find_package(HDF5 COMPONENTS C REQUIRED)
     target_include_directories(real_core_forwarding_test PRIVATE
         ${_imas_core_include_dirs}
