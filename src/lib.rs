@@ -2,7 +2,7 @@
 //!
 //! This crate re-exports IMAS-Core's public C ABI verbatim and interposes on
 //! the path-bearing entry points. The shared constants and `al_status_t` are
-//! here, and the runtime-binding architecture (see `src/resolve.rs` and
+//! here, and the runtime-binding architecture (see `src/core_binding.rs` and
 //! `docs/adr/0001-runtime-binding-not-linking.md`) is proven end to end on
 //! all 37 linkable exported IMAS-Core C symbols.
 //!
@@ -39,7 +39,7 @@
 //! unchanged otherwise (ADR 0002).
 //!
 //! Each entry point below documents its own seam behaviour, but the policy
-//! itself lives beside its implementation in `src/resolve.rs` — go there for
+//! itself lives beside its implementation in `src/interpose.rs` — go there for
 //! the per-seam detail rather than restating it here.
 
 // The mirrored ABI dictates the names; matching IMAS-Core exactly is the point.
@@ -52,12 +52,16 @@ use std::ffi::c_void;
 
 mod context_registry;
 pub mod conversion_map;
+mod core_binding;
 mod dd_version;
 mod dl;
 mod hli_version;
+mod interpose;
 mod known_artifacts;
+mod path_conversion;
 mod read_outcome;
-mod resolve;
+use interpose as resolve;
+mod seam_policy;
 mod version_stamp;
 
 /// Length of `al_status_t::message`, mirroring IMAS-Core's `MAX_ERR_MSG_LEN`.
@@ -216,7 +220,7 @@ pub unsafe extern "C" fn al_context_info(ctx: c_int, info: *mut *mut c_char) -> 
 /// own contract.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn al_get_backendID(ctx: c_int, backend_id: *mut c_int) -> al_status_t {
-    unsafe { resolve::get_backend_id(ctx, backend_id) }
+    unsafe { core_binding::get_backend_id(ctx, backend_id) }
 }
 
 /// Mirrors IMAS-Core's legacy URI builder exactly and forwards unchanged.
@@ -237,7 +241,7 @@ pub unsafe extern "C" fn al_build_uri_from_legacy_parameters(
     uri: *mut *mut c_char,
 ) -> al_status_t {
     unsafe {
-        resolve::build_uri_from_legacy_parameters(
+        core_binding::build_uri_from_legacy_parameters(
             backend_id, pulse, run, user, tokamak, version, options, uri,
         )
     }
@@ -249,7 +253,7 @@ pub unsafe extern "C" fn al_build_uri_from_legacy_parameters(
 /// It returns null only if IMAS-Core could not be opened or bootstrapped.
 #[unsafe(no_mangle)]
 pub extern "C" fn const2str(id: c_int) -> *const c_char {
-    resolve::const2str(id)
+    core_binding::const2str(id)
 }
 
 /// Mirrors IMAS-Core's error-code-to-string helper exactly and forwards
@@ -258,7 +262,7 @@ pub extern "C" fn const2str(id: c_int) -> *const c_char {
 /// It returns null only if IMAS-Core could not be opened or bootstrapped.
 #[unsafe(no_mangle)]
 pub extern "C" fn err2str(id: c_int) -> *const c_char {
-    resolve::err2str(id)
+    core_binding::err2str(id)
 }
 
 /// Mirrors IMAS-Core's access-layer version accessor exactly and forwards
@@ -266,7 +270,7 @@ pub extern "C" fn err2str(id: c_int) -> *const c_char {
 /// it returns null only if IMAS-Core could not be opened or bootstrapped.
 #[unsafe(no_mangle)]
 pub extern "C" fn getALVersion() -> *const c_char {
-    resolve::get_al_version()
+    core_binding::get_al_version()
 }
 
 /// Mirrors IMAS-Core's deliberately deprecated DD-version accessor exactly.
@@ -277,7 +281,7 @@ pub extern "C" fn getALVersion() -> *const c_char {
 /// bootstrapped.
 #[unsafe(no_mangle)]
 pub extern "C" fn getDDVersion() -> *const c_char {
-    resolve::get_dd_version()
+    core_binding::get_dd_version()
 }
 
 /// Shim-owned export (ADR 0005) — the `imas_mvdd_` prefix marks it as a
@@ -506,7 +510,7 @@ pub extern "C" fn al_end_action(ctx_id: c_int) -> al_status_t {
 /// the record's conversion map and translated to the stored spelling before
 /// IMAS-Core is called. A no-source outcome returns normal success with a
 /// null data pointer; refusals still stop before IMAS-Core (see
-/// `src/resolve.rs`). IMAS-Core's returned allocation is forwarded exactly
+/// `src/interpose.rs`). IMAS-Core's returned allocation is forwarded exactly
 /// as received: the shim neither substitutes nor frees it.
 ///
 /// # Safety

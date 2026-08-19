@@ -12,7 +12,7 @@ read-path DD conversion implemented for one IDS and one version pair.**
 `al_context_info`, six utility/version accessors, thirteen
 data-entry/action-lifecycle/data-operation functions, and seventeen
 plugin-management/reentry functions use the runtime-binding architecture
-(`src/resolve.rs`, `src/dl.rs`): the shim resolves IMAS-Core lazily via
+(`src/core_binding.rs`, `src/dl.rs`): the shim resolves IMAS-Core lazily via
 `dlopen`/`dlsym`, version-checks it, and forwards each call unchanged.
 `al_plugin_begin_timerange_action` is deliberately absent because IMAS-Core's
 public declaration is unlinkable upstream; `al_begin_array_struct_action` is
@@ -144,7 +144,8 @@ IMAS_CORE_VERSION       supported IMAS-Core release used by the runtime compatib
 cbindgen.toml           generated-header settings
 cmake/imas-mvdd-loaderConfig.cmake.in  find_package template, hand-authored
 src/lib.rs              the mirrored C ABI
-src/resolve.rs          runtime resolution of IMAS-Core: path/version checks and mirrored symbols
+src/core_binding.rs     the runtime binding: dlopen/dlsym, version check, one fn-pointer per IMAS-Core symbol
+src/resolve.rs          the mirrored symbols: their seam policy and the interposition that carries it out
 src/dl.rs               minimal dlopen/dlsym/dlerror bindings
 tests/abi_smoke.c       links C against the generated header
 tests/real_core_abi_*_check.c  compares generated declarations with IMAS-Core's real header

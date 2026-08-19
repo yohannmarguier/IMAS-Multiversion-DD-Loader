@@ -336,7 +336,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     # part of the full profile so the two complementary seam suites stay honest.
     add_library(recording_stub SHARED
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/stub/recording_stub.c")
-    # Matches the shim's bare-soname fallback (src/resolve.rs) so the
+    # Matches the shim's bare-soname fallback (src/core_binding.rs) so the
     # bare-soname scenario below can exercise the loader's normal search
     # path instead of the explicit override.
     # Keep the bare-soname fixture out of the test working directory. On
@@ -640,6 +640,11 @@ if(IMAS_MVDD_BUILD_TESTS)
         version_discovery_test malformed-stamp-refuses-and-ends-context
         HLI_DD_VERSION 4.1.1
         STAMP_VERSION not-a-version)
+
+    add_stub_test(version-discovery-reentrant-read-beneath-stamp-discovery-forwards-unchanged
+        version_discovery_test reentrant-read-beneath-stamp-discovery-forwards-unchanged
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
     # --- al_begin_slice_action / al_begin_timerange_action apply the same
     # rule as global action (issue #55) ---
