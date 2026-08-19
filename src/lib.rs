@@ -57,6 +57,7 @@ mod dd_version;
 mod dl;
 mod hli_version;
 mod known_artifacts;
+mod path_conversion;
 mod read_outcome;
 mod resolve;
 mod version_stamp;
