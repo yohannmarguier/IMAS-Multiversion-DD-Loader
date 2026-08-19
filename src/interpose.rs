@@ -1,5 +1,4 @@
-//! The seam policy of every IMAS-Core seam the shim mirrors, and the
-//! interposition that carries it out.
+//! The interposition that carries out each IMAS-Core seam policy.
 //!
 //! **The binding is elsewhere.** How IMAS-Core is found, version-checked and
 //! called lives in [`crate::core_binding`], which enforces ADR 0001 and makes
@@ -9,11 +8,9 @@
 //! also elsewhere.** [`crate::path_conversion`] is the one place that
 //! interprets [`crate::conversion_map::Outcome`] into a concrete stored path
 //! or a read plan; this file supplies it a live [`ConversionRecord`] and a
-//! raw argument, and acts on the [`path_conversion::ReadPath`] or
-//! [`path_conversion::ContextPathResolution`] it gets back — the read loop,
-//! the value-transformation execution, discovery and registration, and the
-//! refusal/loss-reporting channel stay here. Four ADRs are enforced in this
-//! file, and a change to any of them lands here:
+//! raw argument, and performs the ABI-facing effects its decisions require:
+//! Core calls, registry access, raw-pointer marshalling and depth gating.
+//! Four ADRs are enforced at this boundary:
 //!
 //! - ADR 0002 — which seams translate, which refuse, and which forward
 //!   unchanged; stamp discovery and root registration at the opening seams.
@@ -24,18 +21,10 @@
 //! - ADR 0014 — a read arriving beneath an in-flight one is forwarded
 //!   untouched, by call depth (see [`SHIM_READ_DEPTH`] and [`ReadDepthGuard`]).
 //!
-//! That breadth is still why the file is long, and it remains a known tension
-//! rather than an accident: the review's S-J6 finding labels it Divergent
-//! Change. Issue #101 settled how to act on it — ADR 0015 splits these seams
-//! into an interposition layer and a seam-policy layer — and decided to land
-//! it in series rather than in one diff. Carving the binding out (issue #105)
-//! was the first part, and it took ADR 0001 out of this file; carving path
-//! interpretation out (issue #106) was the second, and it took the three
-//! independent `Outcome` readers out of this file into
-//! [`crate::path_conversion`]. The parts that follow lift the rest of the
-//! seam policy out of the interposition around it, after which what remains
-//! here is renamed. Until they land, this module states what it owns instead
-//! of pretending to own less.
+//! Issue #101 split this layer from `core_binding` and `seam_policy` in a
+//! series rather than one unreviewable change. The layer used to be called
+//! `resolve`, a name that conflated resolving IMAS-Core symbols with resolving
+//! DD paths; it is now named for its role at the C boundary.
 
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
@@ -48,7 +37,7 @@ use crate::known_artifacts;
 use crate::path_conversion::{self, ContextPathResolution};
 use crate::read_outcome::{self, ReadOutcome};
 use crate::seam_policy;
-use crate::version_stamp::{self, StampOutcome};
+use crate::version_stamp;
 
 thread_local! {
     /// How many shim read seams this thread is currently inside (ADR 0014).
@@ -82,6 +71,18 @@ impl Drop for ReadDepthGuard {
     fn drop(&mut self) {
         SHIM_READ_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
     }
+}
+
+/// The result of one occurrence-opening adapter call. A malformed stamp is
+/// deliberately returned rather than ended inside policy: only the ABI
+/// wrapper knows which action family opened the context and therefore which
+/// end-action symbol must close it.
+enum OpenOccurrenceResult {
+    Status(al_status_t),
+    RefuseAndEnd {
+        opened_ctx_id: c_int,
+        status: al_status_t,
+    },
 }
 
 /// Forwards to IMAS-Core's real `al_context_info`, resolving IMAS-Core
@@ -184,44 +185,48 @@ pub(crate) unsafe fn begin_global_action(
             octx_id,
         ))
     };
-    let end_on_refusal = |ctx| forward_status!(end_action(ctx));
-    // SAFETY: same contract as `begin_global_action_impl`, already upheld by
+    // SAFETY: same contract as `open_occurrence`, already upheld by
     // this function's own `unsafe fn` contract.
-    unsafe {
-        begin_global_action_impl(
+    match unsafe {
+        open_occurrence(
             pctx_id,
             dataobjectname,
-            datapath,
+            Some(datapath),
             octx_id,
-            forward,
-            end_on_refusal,
+            |effective_datapath| forward(effective_datapath.expect("global action has datapath")),
         )
+    } {
+        OpenOccurrenceResult::Status(status) => status,
+        OpenOccurrenceResult::RefuseAndEnd {
+            opened_ctx_id,
+            status,
+        } => {
+            let _ = forward_status!(end_action(opened_ctx_id));
+            status
+        }
     }
 }
 
-/// The policy shared by `begin_global_action` and `plugin_begin_global_action`
-/// (issue #67): the occurrence-cache `datapath` translation on the way in and
-/// the stored-version discovery/root-registration rule on the way out,
-/// factored out of both so only the forwarded ABI symbol and the matching
-/// end-action twin differ between the ordinary and plugin reentry seams.
-/// `forward` is called with the effective (possibly translated) `datapath`
-/// exactly once, whether or not the HLI DD version is latched.
+/// The one interposition adapter shared by all occurrence-opening seams. It
+/// optionally translates a global-action `datapath`, injects the raw stamp
+/// reader the policy drives, and applies the registry effects the policy
+/// returns. `forward` receives the effective `datapath`, or `None` for slice
+/// and time-range actions, exactly once.
 ///
 /// # Safety
 /// Same contract as [`begin_global_action`]: `dataobjectname` and `datapath`
 /// must be valid, NUL-terminated C strings, or null where IMAS-Core's own
 /// contract allows it, and `octx_id` must be a valid, writable `*mut c_int`
 /// once `forward` reports success.
-unsafe fn begin_global_action_impl(
+unsafe fn open_occurrence(
     pctx_id: c_int,
     dataobjectname: *const c_char,
-    datapath: *const c_char,
+    datapath: Option<*const c_char>,
     octx_id: *mut c_int,
-    forward: impl FnOnce(*const c_char) -> al_status_t,
-    end_on_refusal: impl FnOnce(c_int) -> al_status_t,
-) -> al_status_t {
-    let Some(hli) = crate::hli_version::current() else {
-        return forward(datapath);
+    forward: impl FnOnce(Option<*const c_char>) -> al_status_t,
+) -> OpenOccurrenceResult {
+    let Some(hli) = crate::hli_version::latched() else {
+        return OpenOccurrenceResult::Status(forward(datapath));
     };
 
     let dataobjectname_str = c_str_or_none(dataobjectname);
@@ -232,123 +237,119 @@ unsafe fn begin_global_action_impl(
         && let Some(stored) = REGISTRY.known_stored_version(pctx_id, dataobjectname_str)
         && stored != hli
     {
-        translated_datapath = translate_down(ids_name, &stored, &hli, c_str_or_none(datapath));
+        translated_datapath =
+            translate_down(ids_name, &stored, &hli, datapath.and_then(c_str_or_none));
     }
-    let effective_datapath = translated_datapath
-        .as_deref()
-        .map(CStr::as_ptr)
-        .unwrap_or(datapath);
+    let effective_datapath = datapath.map(|original| {
+        translated_datapath
+            .as_deref()
+            .map(CStr::as_ptr)
+            .unwrap_or(original)
+    });
 
     let status = forward(effective_datapath);
     if status.code != 0 {
-        return status;
+        return OpenOccurrenceResult::Status(status);
     }
 
     // SAFETY: IMAS-Core's own contract requires `octx_id` to be a valid,
     // writable pointer, already relied on by the forwarded call above.
     let opened_octx_id = unsafe { *octx_id };
-    discover_and_register_occurrence(
+    let (Some(dataobjectname_str), Some(ids_name)) = (dataobjectname_str, ids_name) else {
+        return OpenOccurrenceResult::Status(status);
+    };
+    let decision = seam_policy::decide_occurrence_registration(ids_name, &hli, || {
+        version_stamp::discover(
+            opened_octx_id,
+            |ctx_id, field, timebase, data, datatype, dim, size| {
+                let (_depth_guard, _already_reading) = ReadDepthGuard::enter();
+                forward_status!(read_data(
+                    ctx_id, field, timebase, data, datatype, dim, size
+                ))
+            },
+        )
+    });
+    apply_discovery_decision(
         pctx_id,
         dataobjectname_str,
-        ids_name,
         opened_octx_id,
         &hli,
         status,
-        end_on_refusal,
+        decision,
     )
 }
 
-/// The stored-version discovery, classification and root-registration rule
-/// shared by `al_begin_global_action`, `al_begin_slice_action`,
-/// `al_begin_timerange_action` (ADR 0002, issue #53, issue #55) and their
-/// `al_plugin_*` reentry twins (issue #67) — every operation-context seam
-/// that opens a whole IDS occurrence, once the real open has already
-/// succeeded and the HLI DD version is latched.
-///
-/// `dataobjectname_str`/`ids_name` are `None` when the occurrence identity
-/// isn't usable (null or non-UTF-8 `dataobjectname`): the open itself
-/// already succeeded against real IMAS-Core, but discovery and registration
-/// need a valid `dataobjectname` to key on, so this is a no-op passthrough
-/// in that case.
-///
-/// Otherwise the occurrence's DD-version stamp is read immediately (before
-/// the caller returns to the HLI) and classified through the one
-/// read-outcome classifier ([`crate::read_outcome`]). A present, malformed
-/// stamp is a hard refusal — the just-opened IMAS-Core context is also
-/// ended first via `end_on_refusal`, so a refusal here never leaks it; the
-/// caller supplies its own matching end-action symbol (`al_end_action` for
-/// an ordinary open, `al_plugin_end_action` for a plugin reentry open) since
-/// a context opened through one family is closed through that same family.
-/// An absent stamp, or one that matches the HLI DD version, registers
-/// nothing (ADR 0007): the occurrence is presumed to match. A present,
-/// valid, *mismatched* stamp registers the root context, but only when an
-/// artifact actually covers this IDS and version pair (ADR 0011 decision 1)
-/// — otherwise this is treated exactly like an unknown context, passthrough
-/// with no record.
-fn discover_and_register_occurrence(
+/// Performs the process-global effects a discovery decision returned after a
+/// successful occurrence open. A malformed stamp clears the occurrence cache
+/// and asks the wrapper to end its just-opened context through its matching
+/// ABI family; an absent or matching stamp clears the cache; a mismatch
+/// records its stored version and, when covered by an artifact, the root.
+fn apply_discovery_decision(
     pctx_id: c_int,
-    dataobjectname_str: Option<&str>,
-    ids_name: Option<&str>,
+    dataobjectname: &str,
     opened_ctx_id: c_int,
     hli: &crate::dd_version::DdVersion,
     status: al_status_t,
-    end_on_refusal: impl FnOnce(c_int) -> al_status_t,
-) -> al_status_t {
-    let (Some(dataobjectname_str), Some(ids_name)) = (dataobjectname_str, ids_name) else {
-        return status;
-    };
-
-    match version_stamp::discover(opened_ctx_id) {
-        StampOutcome::Malformed(refusal) => {
+    decision: seam_policy::DiscoveryDecision,
+) -> OpenOccurrenceResult {
+    match decision {
+        seam_policy::DiscoveryDecision::RefuseAndEnd {
+            reason,
+            occurrence_cache,
+        } => {
             // A prior open may have cached a mismatch for this occurrence,
             // but this read gives no usable version to justify retaining it.
             // Never translate a later `datapath` from stale discovery state.
-            REGISTRY.forget_occurrence_version(pctx_id, dataobjectname_str);
-            // The open already succeeded against real IMAS-Core; a refusal
-            // from here on must not leak that context, since the HLI — told
-            // this open failed — will never call the matching end-action
-            // itself.
-            let _ = end_on_refusal(opened_ctx_id);
-            *refusal
-        }
-        StampOutcome::Unstamped => {
-            // An absent or failed discovery read means this occurrence is no
-            // longer known to differ from the HLI DD version. Clear any
-            // earlier mismatch before a future open chooses its `datapath`.
-            REGISTRY.forget_occurrence_version(pctx_id, dataobjectname_str);
-            status
-        }
-        StampOutcome::Stored(stored) => {
-            if stored == *hli {
-                REGISTRY.forget_occurrence_version(pctx_id, dataobjectname_str);
-            } else {
-                REGISTRY.remember_mismatched_occurrence(
-                    pctx_id,
-                    dataobjectname_str.to_string(),
-                    stored.clone(),
-                );
-                if let Some(artifact) = known_artifacts::lookup(ids_name, &stored, hli) {
-                    let key = map_cache_key(ids_name, &stored, hli);
-                    let direction = artifact.direction_to_stored;
-                    // A global/slice/time-range action opens the whole IDS
-                    // occurrence, not one field: the record's resolved path
-                    // is the occurrence's own root, empty because a relative
-                    // `al_read_data` `field` under this context is resolved
-                    // against it directly, with no IDS-name segment to skip
-                    // (ADR 0002, ADR 0003). This is unrelated to `datapath`,
-                    // which stays near-inert (CLAUDE.md) and never feeds
-                    // this field.
-                    REGISTRY.record_root(
-                        opened_ctx_id,
-                        String::new(),
-                        pctx_id,
-                        key,
-                        direction,
-                        || load_artifact(&artifact),
-                    );
-                }
+            apply_occurrence_cache_effect(pctx_id, dataobjectname, occurrence_cache);
+            OpenOccurrenceResult::RefuseAndEnd {
+                opened_ctx_id,
+                status: *reason,
             }
-            status
+        }
+        seam_policy::DiscoveryDecision::RegisterNothing { occurrence_cache } => {
+            apply_occurrence_cache_effect(pctx_id, dataobjectname, occurrence_cache);
+            OpenOccurrenceResult::Status(status)
+        }
+        seam_policy::DiscoveryDecision::RegisterRoot {
+            stored,
+            artifact,
+            occurrence_cache,
+        } => {
+            apply_occurrence_cache_effect(pctx_id, dataobjectname, occurrence_cache);
+            let ids_name = ids_name_from(dataobjectname);
+            let key = map_cache_key(ids_name, &stored, hli);
+            let direction = artifact.direction_to_stored;
+            // A global/slice/time-range action opens the whole IDS
+            // occurrence, not one field: the record's resolved path is the
+            // occurrence's own root, empty because a relative read resolves
+            // against it directly (ADR 0002, ADR 0003).
+            REGISTRY.record_root(
+                opened_ctx_id,
+                String::new(),
+                pctx_id,
+                key,
+                direction,
+                || load_artifact(&artifact),
+            );
+            OpenOccurrenceResult::Status(status)
+        }
+    }
+}
+
+/// Mechanically performs the occurrence-cache effect a seam-policy decision
+/// returned. The policy chooses the write; this adapter only supplies the
+/// pulse and occurrence identities the registry API requires.
+fn apply_occurrence_cache_effect(
+    pctx_id: c_int,
+    dataobjectname: &str,
+    effect: seam_policy::OccurrenceCacheEffect,
+) {
+    match effect {
+        seam_policy::OccurrenceCacheEffect::Forget => {
+            REGISTRY.forget_occurrence_version(pctx_id, dataobjectname);
+        }
+        seam_policy::OccurrenceCacheEffect::RememberMismatch(stored) => {
+            REGISTRY.remember_mismatched_occurrence(pctx_id, dataobjectname.to_string(), stored);
         }
     }
 }
@@ -443,59 +444,18 @@ pub(crate) unsafe fn begin_slice_action(
             octx_id,
         ))
     };
-    let end_on_refusal = |ctx| forward_status!(end_action(ctx));
-    // SAFETY: same contract as `begin_occurrence_action_impl`, already upheld by
+    // SAFETY: same contract as `open_occurrence`, already upheld by
     // this function's own `unsafe fn` contract.
-    unsafe {
-        begin_occurrence_action_impl(pctx_id, dataobjectname, octx_id, forward, end_on_refusal)
+    match unsafe { open_occurrence(pctx_id, dataobjectname, None, octx_id, |_| forward()) } {
+        OpenOccurrenceResult::Status(status) => status,
+        OpenOccurrenceResult::RefuseAndEnd {
+            opened_ctx_id,
+            status,
+        } => {
+            let _ = forward_status!(end_action(opened_ctx_id));
+            status
+        }
     }
-}
-
-/// The policy shared by every occurrence-opening seam whose only path-bearing
-/// argument is the IDS name: `begin_slice_action` and
-/// `plugin_begin_slice_action` (issue #67), and `begin_timerange_action`. The
-/// stored-version discovery and root-registration rule is factored out of all
-/// three so only the forwarded ABI symbol and the matching end-action twin
-/// differ between them. Because none of them carries a `datapath` argument to
-/// translate, `forward` takes no arguments, unlike
-/// [`begin_global_action_impl`]'s.
-///
-/// # Safety
-/// Same contract as [`begin_slice_action`]: `dataobjectname` must be a valid,
-/// NUL-terminated C string, or null where IMAS-Core's own contract allows
-/// it, and `octx_id` must be a valid, writable `*mut c_int` once `forward`
-/// reports success.
-unsafe fn begin_occurrence_action_impl(
-    pctx_id: c_int,
-    dataobjectname: *const c_char,
-    octx_id: *mut c_int,
-    forward: impl FnOnce() -> al_status_t,
-    end_on_refusal: impl FnOnce(c_int) -> al_status_t,
-) -> al_status_t {
-    let Some(hli) = crate::hli_version::current() else {
-        return forward();
-    };
-
-    let dataobjectname_str = c_str_or_none(dataobjectname);
-    let ids_name = dataobjectname_str.map(ids_name_from);
-
-    let status = forward();
-    if status.code != 0 {
-        return status;
-    }
-
-    // SAFETY: IMAS-Core's own contract requires `octx_id` to be a valid,
-    // writable pointer, already relied on by the forwarded call above.
-    let opened_octx_id = unsafe { *octx_id };
-    discover_and_register_occurrence(
-        pctx_id,
-        dataobjectname_str,
-        ids_name,
-        opened_octx_id,
-        &hli,
-        status,
-        end_on_refusal,
-    )
 }
 
 /// Forwards to IMAS-Core's real `al_begin_timerange_action`, resolving
@@ -539,12 +499,17 @@ pub(crate) unsafe fn begin_timerange_action(
             octx_id,
         ))
     };
-    let end_on_refusal = |ctx| forward_status!(end_action(ctx));
-
-    // SAFETY: same contract as `begin_occurrence_action_impl`, already upheld by
+    // SAFETY: same contract as `open_occurrence`, already upheld by
     // this function's own safety contract.
-    unsafe {
-        begin_occurrence_action_impl(pctx_id, dataobjectname, octx_id, forward, end_on_refusal)
+    match unsafe { open_occurrence(pctx_id, dataobjectname, None, octx_id, |_| forward()) } {
+        OpenOccurrenceResult::Status(status) => status,
+        OpenOccurrenceResult::RefuseAndEnd {
+            opened_ctx_id,
+            status,
+        } => {
+            let _ = forward_status!(end_action(opened_ctx_id));
+            status
+        }
     }
 }
 
@@ -667,37 +632,6 @@ pub(crate) unsafe fn read_data(
     // SAFETY: same contract as `read_data_impl`, already upheld by this
     // function's own `unsafe fn` contract.
     unsafe { read_data_impl(ctx_id, field, timebase, data, datatype, dim, size, forward) }
-}
-
-/// Forwards one read straight to IMAS-Core's real `al_read_data` with none of
-/// [`read_data_impl`]'s conversion policy: no registry lookup, no rule
-/// resolution, no value transformation, no loss retention. It does enter the
-/// thread's read depth (ADR 0014), so a read arriving from underneath the
-/// IMAS-Core call still recognises itself as reentrant.
-///
-/// This exists for version-stamp discovery (ADR 0007, ADR 0009), which is the
-/// shim's own read rather than a caller's: the path is fixed, spelled the same
-/// in every DD version this project serves, and read precisely to decide
-/// whether conversion applies to this occurrence at all. Sending it through the
-/// converting wrapper would re-enter the conversion layer from inside the code
-/// that produces its input, and would only forward unchanged because no record
-/// for that context exists yet — an ordering accident, not an invariant.
-///
-/// # Safety
-/// Same contract as [`read_data`].
-pub(crate) unsafe fn read_data_unconverted(
-    ctx_id: c_int,
-    field: *const c_char,
-    timebase: *const c_char,
-    data: *mut *mut c_void,
-    datatype: c_int,
-    dim: c_int,
-    size: *mut c_int,
-) -> al_status_t {
-    let (_depth_guard, _already_reading) = ReadDepthGuard::enter();
-    forward_status!(read_data(
-        ctx_id, field, timebase, data, datatype, dim, size
-    ))
 }
 
 /// Mirrors `read_data`'s policy exactly (issue #68): the same registry
@@ -1110,7 +1044,7 @@ fn resolve_arraystruct_argument(
 ///
 /// Every seam keyed on a context ID goes through this rather than
 /// [`ContextRegistry::lookup`] directly. A record exists only where
-/// `discover_and_register_occurrence` made one, which requires a latched HLI DD
+/// `open_occurrence` made one, which requires a latched HLI DD
 /// version, and the latch is an `OnceLock` that can never fall back to unset —
 /// so with no conversion basis the answer is `None` by construction, and
 /// acquiring the registry's mutex to rediscover that is cost with no result. It
@@ -1118,7 +1052,7 @@ fn resolve_arraystruct_argument(
 /// every field it reads: issue #56 AC5 asks for exactly this
 /// ("Matching, unknown, unstamped, and conversion-disabled contexts bypass
 /// registry lookup and rule resolution"), and the `begin_*` seams have always
-/// short-circuited the same way — they call `hli_version::current` because they
+/// short-circuited the same way — they call `hli_version::latched` because they
 /// go on to use the version, while these seams only need to know whether one
 /// exists.
 ///
@@ -1343,18 +1277,25 @@ pub(crate) unsafe fn plugin_begin_global_action(
             octx_id,
         ))
     };
-    let end_on_refusal = |ctx| forward_status!(plugin_end_action(ctx));
-    // SAFETY: same contract as `begin_global_action_impl`, already upheld by
+    // SAFETY: same contract as `open_occurrence`, already upheld by
     // this function's own `unsafe fn` contract.
-    unsafe {
-        begin_global_action_impl(
+    match unsafe {
+        open_occurrence(
             pctx_id,
             dataobjectname,
-            datapath,
+            Some(datapath),
             octx_id,
-            forward,
-            end_on_refusal,
+            |effective_datapath| forward(effective_datapath.expect("global action has datapath")),
         )
+    } {
+        OpenOccurrenceResult::Status(status) => status,
+        OpenOccurrenceResult::RefuseAndEnd {
+            opened_ctx_id,
+            status,
+        } => {
+            let _ = forward_status!(plugin_end_action(opened_ctx_id));
+            status
+        }
     }
 }
 
@@ -1383,11 +1324,17 @@ pub(crate) unsafe fn plugin_begin_slice_action(
             octx_id,
         ))
     };
-    let end_on_refusal = |ctx| forward_status!(plugin_end_action(ctx));
-    // SAFETY: same contract as `begin_occurrence_action_impl`, already upheld by
+    // SAFETY: same contract as `open_occurrence`, already upheld by
     // this function's own `unsafe fn` contract.
-    unsafe {
-        begin_occurrence_action_impl(pctx_id, dataobjectname, octx_id, forward, end_on_refusal)
+    match unsafe { open_occurrence(pctx_id, dataobjectname, None, octx_id, |_| forward()) } {
+        OpenOccurrenceResult::Status(status) => status,
+        OpenOccurrenceResult::RefuseAndEnd {
+            opened_ctx_id,
+            status,
+        } => {
+            let _ = forward_status!(plugin_end_action(opened_ctx_id));
+            status
+        }
     }
 }
 

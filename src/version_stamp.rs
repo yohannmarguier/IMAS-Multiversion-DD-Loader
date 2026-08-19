@@ -2,10 +2,10 @@
 //!
 //! Immediately after `al_begin_global_action` opens successfully, the shim
 //! reads `ids_properties/version_put/data_dictionary` — `CHAR_DATA` at
-//! `dim == 1` — through the same `al_read_data` binding every ordinary read
-//! reaches, but deliberately *not* through the converting wrapper around it:
-//! this read decides whether conversion applies to the occurrence at all, so
-//! it cannot be subject to it ([`crate::resolve::read_data_unconverted`]).
+//! `dim == 1` — through a reader the interposition adapter injects, but
+//! deliberately *not* through the converting wrapper around it: this read
+//! decides whether conversion applies to the occurrence at all, so it cannot
+//! be subject to it.
 //! The outcome is classified with the one read-outcome classifier
 //! ([`crate::read_outcome`]). IMAS-Core allocates this buffer and,
 //! because this read is entirely shim-internal (the HLI never sees it), the
@@ -54,26 +54,35 @@ pub(crate) fn decode(bytes: &[u8]) -> Option<DdVersion> {
 }
 
 /// Reads and classifies the DD-version stamp for the occurrence just opened
-/// at `octx_id`, via the real IMAS-Core `al_read_data` binding — reached
-/// through [`crate::resolve::read_data_unconverted`], which forwards without
-/// any of the conversion policy an ordinary read carries.
-pub(crate) fn discover(octx_id: c_int) -> StampOutcome {
+/// at `octx_id`. The interposition adapter supplies `read`, which has the
+/// ordinary IMAS-Core `al_read_data` shape and forwards without any conversion
+/// policy an HLI-issued read carries.
+pub(crate) fn discover(
+    octx_id: c_int,
+    read: impl FnOnce(
+        c_int,
+        *const c_char,
+        *const c_char,
+        *mut *mut c_void,
+        c_int,
+        c_int,
+        *mut c_int,
+    ) -> al_status_t,
+) -> StampOutcome {
     let field = VERSION_STAMP_FIELD.as_ptr().cast::<c_char>();
     let mut data: *mut c_void = std::ptr::null_mut();
     let mut size: c_int = 0;
-    // SAFETY: `field` is a valid NUL-terminated C string for the lifetime of
-    // this call; `data` and `size` are valid, writable local out-params.
-    let status = unsafe {
-        crate::resolve::read_data_unconverted(
-            octx_id,
-            field,
-            c"".as_ptr(),
-            &mut data,
-            crate::core_binding::CHAR_DATA_ID,
-            1,
-            &mut size,
-        )
-    };
+    // `field` is a valid NUL-terminated C string for the duration of the
+    // call, while `data` and `size` are writable local out-parameters.
+    let status = read(
+        octx_id,
+        field,
+        c"".as_ptr(),
+        &mut data,
+        crate::core_binding::CHAR_DATA_ID,
+        1,
+        &mut size,
+    );
 
     match read_outcome::classify(&status, data.cast_const()) {
         ReadOutcome::Failure | ReadOutcome::NotFound => StampOutcome::Unstamped,
