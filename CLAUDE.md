@@ -7,9 +7,13 @@ If it has to been modified, apply the same changes to AGENTS.md.
 
 Current source ownership is `src/core/`, `src/conversion/`, `src/registry/`,
 and `src/version/`; C ABI adaptation remains in `src/interpose.rs`. C tests are
-grouped under `tests/abi/`, `tests/shim/`, `tests/real_core/`, `tests/package/`,
-and `tests/support/`. Historical repository-state entries below retain the
-paths used when their changes landed; use this map for current navigation.
+grouped under `tests/abi/`, `tests/shim/`, `tests/real_core/`, and
+`tests/package/`, with shared test infrastructure in `tests/support/` (the
+C harness), `tests/stub/` (the recording stub), `tests/fixtures/` (the
+reduced conversion-map fixture), `tests/cmake/` (`cmake -P` script checks),
+and `tests/scripts/` (install/package shell checks). Historical
+repository-state entries below retain the paths used when their changes
+landed; use this map for current navigation.
 
 ## Repository state
 
