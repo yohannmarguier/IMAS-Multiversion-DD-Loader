@@ -30,13 +30,13 @@ use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 
 use crate::al_status_t;
-use crate::registry::context_registry::{ConversionRecord, MapCacheKey, REGISTRY};
 use crate::conversion::conversion_map::{ConversionMap, Fidelity};
-use crate::core::core_binding::{DOUBLE_DATA_ID, forward_status};
 use crate::conversion::known_artifacts;
 use crate::conversion::path_conversion::{self, ContextPathResolution};
 use crate::conversion::read_outcome::{self, ReadOutcome};
 use crate::conversion::seam_policy;
+use crate::core::core_binding::{DOUBLE_DATA_ID, forward_status};
+use crate::registry::context_registry::{ConversionRecord, MapCacheKey, REGISTRY};
 use crate::version::version_stamp;
 
 thread_local! {
@@ -1703,7 +1703,8 @@ mod tests {
         // Far from the small IDs every other registry test uses, so this one
         // cannot collide with a concurrently running test in the same process.
         const CTX_ID: c_int = 0x5D00;
-        let stored: crate::version::dd_version::DdVersion = "3.39.0".parse().expect("known release");
+        let stored: crate::version::dd_version::DdVersion =
+            "3.39.0".parse().expect("known release");
         let hli: crate::version::dd_version::DdVersion = "4.1.1".parse().expect("known release");
         let artifact = known_artifacts::lookup("equilibrium", &stored, &hli)
             .expect("the embedded equilibrium artifact serves this pair");

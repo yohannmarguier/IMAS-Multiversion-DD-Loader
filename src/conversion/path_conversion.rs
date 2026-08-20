@@ -19,8 +19,10 @@
 
 use std::ffi::{CStr, CString, c_char};
 
+use crate::conversion::conversion_map::{
+    Fidelity, Outcome, RefusalReason, Rel, ValueTransformation,
+};
 use crate::registry::context_registry::ConversionRecord;
-use crate::conversion::conversion_map::{Fidelity, Outcome, RefusalReason, Rel, ValueTransformation};
 
 /// `ptr` as a borrowed `&str`, or `None` if it is null or not valid UTF-8.
 fn c_str_or_none<'a>(ptr: *const c_char) -> Option<&'a str> {
@@ -418,8 +420,8 @@ fn refusal_reason_message(reason: RefusalReason) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::context_registry::{MapCacheKey, REGISTRY};
     use crate::conversion::conversion_map::ConversionMap;
+    use crate::registry::context_registry::{MapCacheKey, REGISTRY};
     use std::ffi::c_int;
 
     /// User story 47: "As an HLI reading through a known version mismatch, I
@@ -462,7 +464,8 @@ mod tests {
               </rules>
             </ids-map>
         "#;
-        let stored: crate::version::dd_version::DdVersion = "3.39.0".parse().expect("known release");
+        let stored: crate::version::dd_version::DdVersion =
+            "3.39.0".parse().expect("known release");
         let hli: crate::version::dd_version::DdVersion = "4.1.1".parse().expect("known release");
         assert!(REGISTRY.record_root(
             CTX_ID,

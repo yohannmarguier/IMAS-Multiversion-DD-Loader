@@ -23,8 +23,8 @@
 use std::ffi::{c_char, c_int, c_void};
 
 use crate::al_status_t;
-use crate::version::dd_version::DdVersion;
 use crate::conversion::read_outcome::{self, ReadOutcome};
+use crate::version::dd_version::DdVersion;
 
 /// `ids_properties/version_put/data_dictionary`, NUL-terminated for the FFI
 /// call (the trailing byte here has nothing to do with how the *returned*

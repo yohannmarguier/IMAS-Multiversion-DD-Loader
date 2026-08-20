@@ -34,9 +34,9 @@ use std::ffi::{CStr, c_int};
 
 use crate::al_status_t;
 use crate::conversion::conversion_map::{Fidelity, ValueTransformation};
-use crate::version::dd_version::DdVersion;
 use crate::conversion::known_artifacts::{self, ArtifactMatch};
 use crate::conversion::path_conversion::{self, ReadPath, TranslatedReadPath};
+use crate::version::dd_version::DdVersion;
 use crate::version::version_stamp::StampOutcome;
 
 /// The occurrence-cache write discovery asks its interposition adapter to
