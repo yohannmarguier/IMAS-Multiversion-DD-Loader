@@ -12,7 +12,7 @@ read-path DD conversion implemented for one IDS and one version pair.**
 `al_context_info`, six utility/version accessors, thirteen
 data-entry/action-lifecycle/data-operation functions, and seventeen
 plugin-management/reentry functions use the runtime-binding architecture
-(`src/core_binding.rs`, `src/dl.rs`): the shim resolves IMAS-Core lazily via
+(`src/core/core_binding.rs`, `src/core/dl.rs`): the shim resolves IMAS-Core lazily via
 `dlopen`/`dlsym`, version-checks it, and forwards each call unchanged.
 `al_plugin_begin_timerange_action` is deliberately absent because IMAS-Core's
 public declaration is unlinkable upstream; `al_begin_array_struct_action` is
@@ -63,7 +63,7 @@ knowing when reading a green suite.
   question, and no amount of green here answers it.
 - **Conversion coverage is one IDS and one version pair.** equilibrium
   3.39.0 ⇄ 4.1.1, served from the single conversion-map artifact embedded in
-  `src/known_artifacts.rs` (`docs/3.39.0--4.1.1.xml`). Any other IDS, or any
+  `src/conversion/known_artifacts.rs` (`docs/3.39.0--4.1.1.xml`). Any other IDS, or any
   other version pair, is forwarded unconverted — as is an occurrence whose
   stamp matches the HLI or is absent
   (`docs/adr/0007-unstamped-ids-occurrences-match-hli.md`).
@@ -144,19 +144,19 @@ IMAS_CORE_VERSION       supported IMAS-Core release used by the runtime compatib
 cbindgen.toml           generated-header settings
 cmake/imas-mvdd-loaderConfig.cmake.in  find_package template, hand-authored
 src/lib.rs              the mirrored C ABI
-src/core_binding.rs     the runtime binding: dlopen/dlsym, version check, one fn-pointer per IMAS-Core symbol
-src/resolve.rs          the mirrored symbols: their seam policy and the interposition that carries it out
-src/dl.rs               minimal dlopen/dlsym/dlerror bindings
-tests/abi_smoke.c       links C against the generated header
-tests/real_core_abi_*_check.c  compares generated declarations with IMAS-Core's real header
-tests/runtime_binding_test.c  drives forwarding against the recording stub and the basic ABI seam against real IMAS-Core
-tests/check_exports.cmake     mechanically compares the shim's exported C ABI with IMAS-Core's
-tests/check_ci_workflow.cmake guards the fast/full CI responsibilities and pinned toolchains
-tests/check-installed-package.sh  consumes an installed tree through pkg-config and find_package
-tests/real_core_forwarding_test.c  required legal HDF5 forwarding coverage against real IMAS-Core
-tests/real_core_test_plugin.cpp  loadable fixture for real-Core plugin seam tests
-tests/stub/             recording stub standing in for IMAS-Core in the runtime-binding test
-tests/consumer/         throwaway downstream project proving find_package on the installed tree
+src/core/               runtime binding and dlopen/dlsym adapter
+src/conversion/         map resolution, path policy, outcomes, and embedded artifacts
+src/registry/           live conversion-context registry
+src/version/            DD versions, HLI latch, and occurrence stamp discovery
+src/interpose.rs        C-facing seam adapter over those modules
+tests/abi/              generated-header smoke test and ABI manifests
+tests/shim/             recording-stub seam tests
+tests/real_core/        HDF5 and real-IMAS-Core checks and plugin fixture
+tests/package/          installed-package consumer fixture
+tests/support/          shared C test harness
+tests/cmake/            CMake-script checks
+tests/scripts/          install and package checks
+tests/stub/             recording stub standing in for IMAS-Core
 scripts/iter-env.sh     ITER cluster module loads
 docs/                   reference material — read the inventory before designing anything
 ```
@@ -181,7 +181,7 @@ that the C smoke test and in-tree consumers link against.
 platform-specific multiarch directory. A relative `--prefix` produces the same
 layout as an absolute one, resolved — as CMake resolves it — against the
 working directory of the `cmake --install` run, not the source tree
-(`tests/check-relative-prefix-install.sh`).
+(`tests/scripts/check-relative-prefix-install.sh`).
 
 cargo-c produces the library, header and `.pc` file directly; the CMake
 package config (`cmake/imas-mvdd-loaderConfig.cmake.in`) is authored by hand
@@ -202,7 +202,7 @@ Non-CMake consumers use the installed `.pc` file instead:
 $ pkg-config --cflags --libs imas-mvdd-loader
 ```
 
-`tests/consumer/` is a throwaway project exercising the `find_package` path
+`tests/package/find_package/` is a throwaway project exercising the `find_package` path
 against only the installed tree; CI builds and runs it after every install,
 next to the equivalent `pkg-config` check.
 
@@ -213,7 +213,7 @@ next to the equivalent `pkg-config` check.
   shared pinned-toolchain setup, explicit test profiles, install checks, and
   `--no-tests=error` coverage gate; its rejection test proves comments or later
   jobs cannot satisfy another job's responsibilities.
-- `abi-smoke` — compiles and runs `tests/abi_smoke.c` against the generated
+- `abi-smoke` — compiles and runs `tests/abi/abi_smoke.c` against the generated
   header and built shared library. It forwards to the recording stub in the
   fast profile and CMake-acquired IMAS-Core in the full profile.
 - `real-core-export-list` — mechanically compares the filtered public C
@@ -255,7 +255,7 @@ next to the equivalent `pkg-config` check.
 - `equilibrium-artifact-coverage-floor` — runs the artifact's
   autoconvert-equivalence floor check, including its deliberately reduced
   fixture, so an apparent identity-only map is rejected.
-- `tests/consumer/` isn't registered with ctest — it needs an installed tree
+- `tests/package/find_package/` isn't registered with ctest — it needs an installed tree
   to configure against, so CI drives it directly after the install step.
 
 The recording-stub and real-Core cases complement each other: the stub exposes
