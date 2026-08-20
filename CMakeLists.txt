@@ -304,246 +304,7 @@ set_target_properties(imas_mvdd_loader PROPERTIES
 
 if(IMAS_MVDD_BUILD_TESTS)
     enable_testing()
-
-    add_test(NAME ci-workflow
-        COMMAND "${CMAKE_COMMAND}"
-            "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
-            "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_ci_workflow.cmake")
-    add_test(NAME ci-workflow-guard-rejects-misplaced-commands
-        COMMAND "${CMAKE_COMMAND}"
-            "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
-            "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
-            "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/check_ci_workflow.cmake"
-            "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_ci_workflow_guard.cmake")
-
-    # Scripts run with `cmake -P` inherit no policies, so each one must pin its
-    # own version. CMake 4.x defaults those policies to NEW and CMake 3.x does
-    # not, which once let an unpinned `IN_LIST` pass locally and fail only on
-    # CI. Checking the pin here turns that skew into a local test failure.
-    add_test(NAME script-policy-versions
-        COMMAND "${CMAKE_COMMAND}"
-            "-DSCRIPT_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_script_policies.cmake")
-    add_test(NAME script-policy-guard-rejects-unpinned-scripts
-        COMMAND "${CMAKE_COMMAND}"
-            "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/check_script_policies.cmake"
-            "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_script_policy_guard.cmake")
-
-    # The recording stub is the fast profile's runtime dependency and remains
-    # part of the full profile so the two complementary seam suites stay honest.
-    add_library(recording_stub SHARED
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/stub/recording_stub.c")
-    # Matches the shim's bare-soname fallback (src/resolve.rs) so the
-    # bare-soname scenario below can exercise the loader's normal search
-    # path instead of the explicit override.
-    # Keep the bare-soname fixture out of the test working directory. On
-    # macOS, dlopen checks that directory before LC_RPATH; leaving libal there
-    # would make the real-Core tests silently bind the stub.
-    set_target_properties(recording_stub PROPERTIES
-        OUTPUT_NAME al
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/stub")
-    target_compile_definitions(recording_stub PRIVATE
-        "RECORDING_STUB_DEFAULT_VERSION=\"${IMAS_CORE_VERSION}\"")
-
-    if(IMAS_MVDD_REAL_CORE_TESTS)
-        get_target_property(_imas_core_include_dirs ${IMAS_CORE_AL_TARGET}
-            INTERFACE_INCLUDE_DIRECTORIES)
-        if(NOT _imas_core_include_dirs)
-            message(FATAL_ERROR "${IMAS_CORE_AL_TARGET} does not publish IMAS-Core headers")
-        endif()
-    endif()
-
-    add_test(NAME rust-unit
-        COMMAND "${CARGO_EXECUTABLE}" test ${CARGO_COMMON_ARGS})
-
-    add_executable(abi_smoke "${CMAKE_CURRENT_SOURCE_DIR}/tests/abi_smoke.c")
-    target_link_libraries(abi_smoke PRIVATE imas_mvdd_loader)
-    add_dependencies(abi_smoke imas_mvdd_capi)
-    set_target_properties(abi_smoke PROPERTIES
-        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
-
-    if(IMAS_MVDD_REAL_CORE_TESTS)
-        add_test(NAME abi-smoke
-            COMMAND "${CMAKE_COMMAND}" -E env
-                --unset=IMAS_CORE_LIBRARY -- $<TARGET_FILE:abi_smoke>)
-    else()
-        add_test(NAME abi-smoke COMMAND abi_smoke)
-        set_tests_properties(abi-smoke PROPERTIES ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
-    endif()
-
-    if(IMAS_MVDD_REAL_CORE_TESTS)
-    # Keep the runtime-bound surface honest mechanically: after filtering to
-    # IMAS-Core's public C ABI, the shim and Core must export the same names.
-    # This deliberately catches a missing new symbol or any leftover shim-only
-    # scaffolding without maintaining a second handwritten symbol list.
-    add_test(NAME real-core-export-list
-        COMMAND "${CMAKE_COMMAND}"
-            "-DCORE_LIBRARY=$<TARGET_FILE:${IMAS_CORE_AL_TARGET}>"
-            "-DSHIM_LIBRARY=$<TARGET_FILE:imas_mvdd_loader>"
-            "-DNM_EXECUTABLE=${CMAKE_NM}"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_exports.cmake")
-
-    # Runtime dlsym cannot type-check the hand-written signatures. Compile each
-    # public header in its own C translation unit against one shared contract;
-    # keeping the anonymous status structs separate lets C compare their
-    # layouts and every mirrored function type without declaration collisions.
-    add_executable(real_core_abi_check
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_abi_core_check.c"
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_abi_shim_check.c")
-    target_include_directories(real_core_abi_check PRIVATE
-        "${IMAS_MVDD_STAGE_DIR}/include")
-    target_link_libraries(real_core_abi_check PRIVATE ${IMAS_CORE_AL_TARGET})
-    target_compile_features(real_core_abi_check PRIVATE c_std_11)
-    add_dependencies(real_core_abi_check imas_mvdd_capi)
-    add_test(NAME real-core-abi COMMAND real_core_abi_check)
-
-    # Compile the checker against a copy of the generated header with a
-    # deliberately wrong shared constant. This guards the guard: a successful
-    # nested build is a test failure, while the expected compiler rejection
-    # demonstrates that the ordinary ABI comparison catches drift loudly.
-    add_test(NAME real-core-abi-rejects-mismatch
-        COMMAND "${CMAKE_COMMAND}"
-            "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests"
-            "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-            "-DSHIM_INCLUDE_DIR=${IMAS_MVDD_STAGED_INCLUDE_DIR}"
-            "-DCORE_INCLUDE_DIRS=${_imas_core_include_dirs}"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_abi_mismatch.cmake")
-    endif()
-
-    # --- Runtime-binding test: proves the architecture (issue #3) ---------
-    #
-    # A recording stub stands in for IMAS-Core: it exports the complete
-    # runtime-bound utility, data, and plugin surface and records what it
-    # received, so assertions can be made directly on what crossed the
-    # boundary instead of inferring it from a data round trip.
-    #
-    # The stub is deliberately never linked into runtime_binding_test: doing so would
-    # give the linker two candidate definitions of al_context_info (the
-    # shim's and the stub's) to choose between — exactly the ambiguity
-    # runtime binding exists to avoid. runtime_binding_test only dlopen's the stub
-    # itself, purely to read back its recorded state.
-    add_executable(runtime_binding_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_binding_test.c")
-    target_link_libraries(runtime_binding_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
-    target_compile_definitions(runtime_binding_test PRIVATE
-        "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\""
-        "SHIM_LIBRARY_PATH=\"$<TARGET_FILE:imas_mvdd_loader>\""
-        "SUPPORTED_CORE_VERSION=\"${IMAS_CORE_VERSION}\""
-        "INCOMPATIBLE_CORE_VERSION=\"${IMAS_CORE_INCOMPATIBLE_VERSION}\"")
-    add_dependencies(runtime_binding_test imas_mvdd_capi recording_stub)
-    set_target_properties(runtime_binding_test PROPERTIES
-        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
-
-    add_test(NAME runtime-binding-success COMMAND runtime_binding_test success)
-    set_tests_properties(runtime-binding-success PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
-
-    add_test(NAME runtime-binding-version-drift-tolerated
-        COMMAND runtime_binding_test version-drift)
-    set_tests_properties(runtime-binding-version-drift-tolerated PROPERTIES
-        ENVIRONMENT
-            "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_VERSION=${IMAS_CORE_DRIFT_VERSION}"
-        PASS_REGULAR_EXPRESSION
-            "tolerating IMAS-Core version drift.*built against ${IMAS_CORE_VERSION}, found ${IMAS_CORE_DRIFT_VERSION}")
-
-    add_test(NAME runtime-binding-version-mismatch COMMAND runtime_binding_test version-mismatch)
-    set_tests_properties(runtime-binding-version-mismatch PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_VERSION=${IMAS_CORE_INCOMPATIBLE_VERSION}")
-
-    add_test(NAME runtime-binding-null-version COMMAND runtime_binding_test null-version)
-    set_tests_properties(runtime-binding-null-version PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_NULL_VERSION=1")
-
-    add_test(NAME runtime-binding-missing-library COMMAND runtime_binding_test missing-library)
-    set_tests_properties(runtime-binding-missing-library PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=${CMAKE_CURRENT_BINARY_DIR}/does-not-exist.so")
-
-    add_test(NAME runtime-binding-verbatim-forwarding COMMAND runtime_binding_test verbatim-forwarding)
-    set_tests_properties(runtime-binding-verbatim-forwarding PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
-
-    add_test(NAME runtime-binding-plugin-forwarding COMMAND runtime_binding_test plugin-forwarding)
-    set_tests_properties(runtime-binding-plugin-forwarding PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
-
-    add_test(NAME runtime-binding-plugin-timerange-omitted
-        COMMAND runtime_binding_test plugin-timerange-omitted)
-
-    add_test(NAME runtime-binding-utility-forwarding
-        COMMAND runtime_binding_test utility-forwarding)
-    set_tests_properties(runtime-binding-utility-forwarding PROPERTIES ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
-
-    add_test(NAME runtime-binding-bare-soname COMMAND runtime_binding_test bare-soname)
-    if(APPLE)
-        set(_runtime_binding_search_path_var DYLD_LIBRARY_PATH)
-    else()
-        set(_runtime_binding_search_path_var LD_LIBRARY_PATH)
-    endif()
-    set_tests_properties(runtime-binding-bare-soname PROPERTIES ENVIRONMENT
-        "${_runtime_binding_search_path_var}=$<TARGET_FILE_DIR:recording_stub>")
-
-    if(IMAS_MVDD_REAL_CORE_TESTS)
-        # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
-    #
-    # The same shim call as scenario_success, but against the IMAS-Core
-    # acquired above instead of the recording stub: al_context_info must
-    # reach a real implementation, not only a substitute for one. ctxID 0
-    # is the one value real IMAS-Core answers deterministically without any
-    # context ever having been opened (al_lowlevel.cpp's "NULL context"
-    # branch), which is what makes this runnable with no fixture beyond the
-    # acquired library itself. Explicitly remove the override so this test
-    # proves the shim's build-only RPATH finds Core by bare soname.
-    add_test(NAME runtime-binding-real-core
-        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-            $<TARGET_FILE:runtime_binding_test> real-core)
-    if(IMAS_CORE_BUILT_FROM_SOURCE)
-        # Built from source, EXCLUDE_FROM_ALL: nothing else pulls it into the
-        # default build target, so the test binary that needs it must.
-        add_dependencies(runtime_binding_test ${IMAS_CORE_AL_TARGET})
-    endif()
-
-    # A real-Core run cannot use the recording stub's private accessors or
-    # fabricated context IDs. The acquired Core target already provides the
-    # matching headers and library in every acquisition mode, so drive all
-    # data, plugin, utility, and version seams through a legal HDF5 lifecycle
-    # unconditionally rather than making this coverage opt-in.
-    add_library(real_core_test_plugin MODULE
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_test_plugin.cpp")
-    target_include_directories(real_core_test_plugin PRIVATE ${_imas_core_include_dirs})
-    target_compile_features(real_core_test_plugin PRIVATE cxx_std_17)
-    set_target_properties(real_core_test_plugin PROPERTIES
-        PREFIX ""
-        OUTPUT_NAME "mvddtest_plugin"
-        SUFFIX ".so"
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
-
-    add_executable(real_core_forwarding_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_forwarding_test.c")
-    target_include_directories(real_core_forwarding_test PRIVATE ${_imas_core_include_dirs})
-    target_compile_definitions(real_core_forwarding_test PRIVATE
-        "REAL_CORE_TEST_PLUGIN_DIR=\"$<TARGET_FILE_DIR:real_core_test_plugin>\""
-        "REAL_CORE_TEST_PLUGIN_NAME=\"mvddtest\"")
-    target_link_libraries(real_core_forwarding_test PRIVATE imas_mvdd_loader)
-    add_dependencies(real_core_forwarding_test
-        imas_mvdd_capi
-        real_core_test_plugin)
-    if(IMAS_CORE_BUILT_FROM_SOURCE)
-        add_dependencies(real_core_test_plugin ${IMAS_CORE_AL_TARGET})
-    endif()
-    set_target_properties(real_core_forwarding_test PROPERTIES
-        BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
-
-    add_test(NAME runtime-binding-real-core-forwarding
-        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-            $<TARGET_FILE:real_core_forwarding_test>)
-    set_tests_properties(runtime-binding-real-core-forwarding PROPERTIES
-        LABELS real-core)
-    endif()
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Tests.cmake")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -555,25 +316,40 @@ endif()
 
 # The prefix must be resolved when `cmake --install` runs, not now, so that
 # `--install --prefix` and DESTDIR are both honoured. These two hold the
-# literal text `${CMAKE_INSTALL_PREFIX}/...` for the install script to expand.
+# literal text `${_prefix}/...` for the install script to expand against the
+# absolute prefix it computes below.
 foreach(dir LIBDIR INCLUDEDIR)
     if(IS_ABSOLUTE "${CMAKE_INSTALL_${dir}}")
         set(IMAS_MVDD_INSTALL_${dir} "${CMAKE_INSTALL_${dir}}")
     else()
-        set(IMAS_MVDD_INSTALL_${dir} "\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_${dir}}")
+        set(IMAS_MVDD_INSTALL_${dir} "\${_prefix}/${CMAKE_INSTALL_${dir}}")
     endif()
 endforeach()
 
 install(CODE "
+# `cmake --install --prefix` accepts a relative path; CMake resolves it against
+# the working directory of the install run. cargo-c has two rules of its own
+# that a relative prefix collides with: it joins a *relative* --libdir onto
+# --prefix, and it runs with WORKING_DIRECTORY set to the source tree below,
+# not to wherever the user invoked `cmake --install`. Passing the prefix through
+# unresolved therefore split one install in two -- CMake's own files landing in
+# <prefix>/lib/cmake relative to the caller's directory, cargo-c's header and
+# libraries in <prefix>/<prefix>/{include,lib} relative to the source tree. So
+# resolve it here, in the install script, where get_filename_component and
+# CMake's own relative-prefix rule share the same base directory.
+set(_prefix \"\${CMAKE_INSTALL_PREFIX}\")
+if(NOT IS_ABSOLUTE \"\${_prefix}\")
+    get_filename_component(_prefix \"\${_prefix}\" ABSOLUTE)
+endif()
 set(_cargo_cmd [==[${CMAKE_COMMAND};-E;env;--unset=MAKEFLAGS;--unset=MFLAGS;--unset=IMAS_CORE_BUILD_RPATH;--;${CARGO_EXECUTABLE};cinstall;${CARGO_COMMON_ARGS}]==])
 list(APPEND _cargo_cmd
-    --prefix \"\${CMAKE_INSTALL_PREFIX}\"
+    --prefix \"\${_prefix}\"
     --libdir \"${IMAS_MVDD_INSTALL_LIBDIR}\"
     --includedir \"${IMAS_MVDD_INSTALL_INCLUDEDIR}\")
 if(NOT \"\$ENV{DESTDIR}\" STREQUAL \"\")
     list(APPEND _cargo_cmd --destdir \"\$ENV{DESTDIR}\")
 endif()
-message(STATUS \"Installing ${IMAS_MVDD_LIB_NAME} via cargo-c into \${CMAKE_INSTALL_PREFIX}\")
+message(STATUS \"Installing ${IMAS_MVDD_LIB_NAME} via cargo-c into \${_prefix}\")
 execute_process(
     COMMAND \${_cargo_cmd}
     WORKING_DIRECTORY \"${CMAKE_CURRENT_SOURCE_DIR}\"

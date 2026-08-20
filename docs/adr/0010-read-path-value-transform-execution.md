@@ -1,0 +1,17 @@
+# Read-path value transformations execute once after the IMAS-Core read
+
+For a converted `al_read_data` call, the shim follows one fixed sequence:
+
+1. Resolve the requested DD path through one path-level rule in the conversion-map artifact.
+2. If that rule is a refusal, return it without calling IMAS-Core. Otherwise, read the one resolved stored DD path from IMAS-Core.
+3. If the read succeeds and returns data, apply the rule's one value transformation in place before returning to the HLI.
+
+The conversion-map artifact is the only runtime authority for value transformations. Its path-level rule has exactly one outcome: no transformation, `sign_flip`, or a refusal. DD migration information may report a COCOS change and a definition change for the same path while the artifact is generated or validated, but those reports never become independent runtime transformations. The shim therefore cannot apply a sign change twice.
+
+For the initial equilibrium artifact, `sign_flip` supports `DOUBLE_DATA` only. It negates every actual value in the IMAS-Core buffer, but leaves `EMPTY_DOUBLE` (`-9e40`) unchanged. `INTEGER_DATA` and `COMPLEX_DATA` transforms are explicitly out of scope for this effort; a rule that needs either is refused until a later implementation specifies and tests its type semantics. `CHAR_DATA` has no sign transformation.
+
+The shim obtains the value type, rank, and shape from `al_read_data`. A scalar (`dim == 0`) has one value. For arrays, it validates the rank (at most `MAXDIM`), every returned dimension, and checked multiplication of the dimensions before it changes data. Invalid shape information is a refusal. A successful read that returns no data, and a returned `EMPTY_DOUBLE` element, are absence rather than failure and pass through unchanged.
+
+The shim changes IMAS-Core's returned buffer in place. IMAS-Core allocates this buffer and the HLI frees it; the shim must neither substitute a shim allocation nor free the returned allocation. That rule has exactly one exception, and it is an exception because no HLI is party to it: the DD-version stamp read the shim issues for itself while opening a context (`src/version/version_stamp.rs`) returns a buffer that never crosses the ABI boundary, so leaving it to "the HLI" would leak it on every open. The shim frees that one buffer itself, exactly once, on every path out of the read. No mirrored ABI seam frees memory, so ADR 0006's finding and ADR 0012's reliance on it are untouched: nothing here creates a free contract for a caller to honour. A conversion chain, when the future generator introduces one, folds to the same one outcome before the buffer is touched. Path and timebase translation never applies a value transformation, and write-path conversion remains out of scope.
+
+Every shim-originated conversion refusal returns the shim-owned public code `IMAS_MVDD_CONVERSION_ERROR` (`-1000`). Its `al_status_t.message` starts with `IMAS-MVDD:` and states the reason, DD path, HLI DD version, and stored DD version within `MAX_ERR_MSG_LEN`. ADR 0012 completes this specification: it makes `-1000` the allocated member of a reserved `-1000` to `-1099` block, and fixes what is dropped when the text does not fit — the two versions first, then the DD path cut from the left and marked with `...`. Unit redefinitions, unsupported data types, and invalid shapes use this code. A refusal leaves caller-provided `data` and `size` storage and any IMAS-Core buffer unchanged.

@@ -7,18 +7,83 @@ pkg-config file — are produced by [cargo-c]; CMake drives cargo-c rather than
 compiling anything itself, so consumers depend on this project the way they
 depend on IMAS-Core.
 
-**Status: runtime binding proven on all 37 linkable IMAS-Core C exports; no conversion
-logic yet.** `al_context_info`, six utility/version accessors, thirteen
+**Status: runtime binding proven on all 37 linkable IMAS-Core C exports;
+read-path DD conversion implemented for one IDS and one version pair.**
+`al_context_info`, six utility/version accessors, thirteen
 data-entry/action-lifecycle/data-operation functions, and seventeen
 plugin-management/reentry functions use the runtime-binding architecture
-(`src/resolve.rs`, `src/dl.rs`): the shim resolves IMAS-Core lazily via
+(`src/core/core_binding.rs`, `src/core/dl.rs`): the shim resolves IMAS-Core lazily via
 `dlopen`/`dlsym`, version-checks it, and forwards each call unchanged.
 `al_plugin_begin_timerange_action` is deliberately absent because IMAS-Core's
 public declaration is unlinkable upstream; `al_begin_array_struct_action` is
 not an IMAS-Core export. The signatures and exported symbol list are checked
 mechanically against IMAS-Core, and the forwarding seams are exercised against
-both a recording stub and a real Core. DD path/version conversion remains
-unimplemented.
+both a recording stub and a real Core.
+
+On top of that, reads of a stored equilibrium occurrence are converted between
+DD 3.39.0 and DD 4.1.1 in both directions: the shim discovers the stored DD
+version from the occurrence's own `ids_properties/version_put/data_dictionary`
+stamp, translates `al_read_data`'s `field` and `timebase` (including beneath
+nested arraystruct contexts), applies COCOS sign flips, refuses paths the
+conversion map declares unservable, and reports non-exact reads through a loss
+log the caller drains from the root context. Writes and deletes against a
+mismatched occurrence refuse rather than convert. Read the limitations below
+before drawing conclusions from that list.
+
+## Scope and limitations
+
+These are deliberate boundaries, not gaps awaiting a patch. The first, fifth and
+sixth are pinned by a named test, so they cannot quietly stop being true. The
+other three are scoping decisions no test can express — which is itself worth
+knowing when reading a green suite.
+
+- **One DD version per process.** The calling HLI's DD version latches once, on
+  the first `imas_mvdd_set_hli_dd_version()` call or from
+  `IMAS_MVDD_HLI_DD_VERSION` at the first open, and never changes afterwards
+  (`docs/adr/0005-hli-dd-version-entry-point.md`). It cannot vary per pulse,
+  per `DBEntry`-equivalent, or per thread. Reading two different HLI DD
+  versions therefore takes two processes, and because the fallback is an
+  environment variable, the version is a property of how the process was
+  launched. Every conversion test in the suite is registered as its own CTest
+  process for exactly this reason.
+- **Self-converting clients are excluded.** imas-python is not a client: it
+  converts DD versions itself and holds one DD version per `DBEntry` rather
+  than one per process, so stacking this shim beneath it would convert twice.
+  The criterion is the client's shape — one DD version for the life of the
+  process, no conversion of its own — not the language it is written in.
+- **Validation is IMAS-Fortran-first.** The conversion behaviour is proven at
+  this project's own C ABI, which is the ABI imas-Fortran consumes. imas-CPP is
+  expected to fit the same client shape but has not been validated here;
+  imas-Matlab and imas-Java have not been judged at all.
+- **A green suite is not a deployment mechanism.** The tests call this library
+  directly. They do not place it in front of a real HLI, do not substitute it
+  for IMAS-Core in any HLI's link line or runtime search path, and so do not
+  demonstrate that any HLI can be made to load it. How an HLI comes to resolve
+  `libal`'s symbols to this shim in a real deployment is a separate, unsolved
+  question, and no amount of green here answers it.
+- **Conversion coverage is one IDS and one version pair.** equilibrium
+  3.39.0 ⇄ 4.1.1, served from the single conversion-map artifact embedded in
+  `src/conversion/known_artifacts.rs` (`docs/3.39.0--4.1.1.xml`). Any other IDS, or any
+  other version pair, is forwarded unconverted — as is an occurrence whose
+  stamp matches the HLI or is absent
+  (`docs/adr/0007-unstamped-ids-occurrences-match-hli.md`).
+- **The completeness proof's oracle is two inventories, not the DD.** The
+  artifact is proven complete against `docs/inventory/equilibrium-{3.39.0,4.1.1}.txt`
+  — the imas-dd path sets for those versions, which exclude the
+  `ids_properties/**` and `code/**` metadata subtrees wholesale, plus
+  `ids_properties/version_put/data_dictionary`, added by hand because the shim
+  reads it at every open. Nothing proves either inventory complete against its
+  own DD version, and the artifact's `<default rel="identical"/>` means the
+  proof's content is *not* "a rule claims every path": it is "every path a rule
+  does not claim exists by the same spelling on the other side". The coverage
+  report prints that split (`by rule=` versus `by identity default=`) so the
+  weight each carries is visible rather than implied.
+- **Three conversion-relevant seams are deliberately not translated.**
+  `al_list_filled_paths` still returns paths in the *stored* version's
+  spelling, and `al_bind_plugin` / `al_unbind_plugin` still take a `fieldPath`
+  in it. CLAUDE.md lists all three as seams that will eventually need
+  translation; until they get it, `scoped-passthrough-*` pins the current
+  behaviour so it cannot change by accident in either direction.
 
 ## Toolchain
 
@@ -79,18 +144,20 @@ IMAS_CORE_VERSION       supported IMAS-Core release used by the runtime compatib
 cbindgen.toml           generated-header settings
 cmake/imas-mvdd-loaderConfig.cmake.in  find_package template, hand-authored
 src/lib.rs              the mirrored C ABI
-src/resolve.rs          runtime resolution of IMAS-Core: path/version checks and mirrored symbols
-src/dl.rs               minimal dlopen/dlsym/dlerror bindings
-tests/abi_smoke.c       links C against the generated header
-tests/real_core_abi_*_check.c  compares generated declarations with IMAS-Core's real header
-tests/runtime_binding_test.c  drives forwarding against the recording stub and the basic ABI seam against real IMAS-Core
-tests/check_exports.cmake     mechanically compares the shim's exported C ABI with IMAS-Core's
-tests/check_ci_workflow.cmake guards the fast/full CI responsibilities and pinned toolchains
-tests/check-installed-package.sh  consumes an installed tree through pkg-config and find_package
-tests/real_core_forwarding_test.c  required legal HDF5 forwarding coverage against real IMAS-Core
-tests/real_core_test_plugin.cpp  loadable fixture for real-Core plugin seam tests
-tests/stub/             recording stub standing in for IMAS-Core in the runtime-binding test
-tests/consumer/         throwaway downstream project proving find_package on the installed tree
+src/core/               runtime binding and dlopen/dlsym adapter
+src/conversion/         map resolution, path policy, outcomes, and embedded artifacts
+src/registry/           live conversion-context registry
+src/version/            DD versions, HLI latch, and occurrence stamp discovery
+src/interpose.rs        C-facing seam adapter over those modules
+tests/abi/              generated-header smoke test and ABI manifests
+tests/shim/             recording-stub seam tests
+tests/real_core/        HDF5 and real-IMAS-Core checks and plugin fixture
+tests/package/          installed-package consumer fixture
+tests/support/          shared C test harness
+tests/cmake/            CMake-script checks
+tests/scripts/          install and package checks
+tests/stub/             recording stub standing in for IMAS-Core
+tests/fixtures/         reduced conversion-map fixture for the coverage-floor test
 scripts/iter-env.sh     ITER cluster module loads
 docs/                   reference material — read the inventory before designing anything
 ```
@@ -112,7 +179,10 @@ that the C smoke test and in-tree consumers link against.
 ```
 
 `<libdir>` is selected by `GNUInstallDirs` and may be `lib`, `lib64` or a
-platform-specific multiarch directory.
+platform-specific multiarch directory. A relative `--prefix` produces the same
+layout as an absolute one, resolved — as CMake resolves it — against the
+working directory of the `cmake --install` run, not the source tree
+(`tests/scripts/check-relative-prefix-install.sh`).
 
 cargo-c produces the library, header and `.pc` file directly; the CMake
 package config (`cmake/imas-mvdd-loaderConfig.cmake.in`) is authored by hand
@@ -133,7 +203,7 @@ Non-CMake consumers use the installed `.pc` file instead:
 $ pkg-config --cflags --libs imas-mvdd-loader
 ```
 
-`tests/consumer/` is a throwaway project exercising the `find_package` path
+`tests/package/find_package/` is a throwaway project exercising the `find_package` path
 against only the installed tree; CI builds and runs it after every install,
 next to the equivalent `pkg-config` check.
 
@@ -144,7 +214,7 @@ next to the equivalent `pkg-config` check.
   shared pinned-toolchain setup, explicit test profiles, install checks, and
   `--no-tests=error` coverage gate; its rejection test proves comments or later
   jobs cannot satisfy another job's responsibilities.
-- `abi-smoke` — compiles and runs `tests/abi_smoke.c` against the generated
+- `abi-smoke` — compiles and runs `tests/abi/abi_smoke.c` against the generated
   header and built shared library. It forwards to the recording stub in the
   fast profile and CMake-acquired IMAS-Core in the full profile.
 - `real-core-export-list` — mechanically compares the filtered public C
@@ -166,7 +236,27 @@ next to the equivalent `pkg-config` check.
   thirteen data, and all seventeen callable plugin seams through a legal
   temporary HDF5 lifecycle against a real IMAS-Core. Its loadable fixture
   verifies plugin registration, binding and parameter values end to end.
-- `tests/consumer/` isn't registered with ctest — it needs an installed tree
+- `hli-dd-version-*`, `version-discovery-*`, `read-path-*`,
+  `write-delete-*`, `arraystruct-path-*`, `nested-context-read-*`,
+  `context-lifecycle-*` and `plugin-reentry-policy-*` — the conversion seams
+  against the recording stub, one CTest process per scenario because both the
+  HLI DD version latch and the context registry are process-wide.
+- `scoped-passthrough-*` — the other half of that claim: with a mismatched
+  equilibrium occurrence open and converting, `al_get_occurrences`,
+  `al_list_filled_paths`, `al_bind_plugin`/`al_unbind_plugin` and every
+  remaining non-seam export must still forward unchanged. The path arguments
+  are ones the loaded artifact has rules for, so a shim that started rewriting
+  them would fail rather than pass by coincidence.
+- `equilibrium-read-*` — the same conversion behaviour end to end against the
+  checked-in equilibrium HDF5 fixture pair and a real IMAS-Core, in both
+  directions: renames, merged and split paths, COCOS sign flips, refusals, and
+  the matching-version and conversion-disabled cases that must stay untouched.
+  "forward" names an HLI declaring 4.1.1 reading the 3.39.0 fixture, "reverse"
+  the other way round.
+- `equilibrium-artifact-coverage-floor` — runs the artifact's
+  autoconvert-equivalence floor check, including its deliberately reduced
+  fixture, so an apparent identity-only map is rejected.
+- `tests/package/find_package/` isn't registered with ctest — it needs an installed tree
   to configure against, so CI drives it directly after the install step.
 
 The recording-stub and real-Core cases complement each other: the stub exposes

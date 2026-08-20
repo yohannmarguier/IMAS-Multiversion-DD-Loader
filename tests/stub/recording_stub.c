@@ -150,6 +150,23 @@ al_status_t al_begin_dataentry_action(const char *uri, int mode, int *dectxID) {
     free(g_dataentry_uri);
     g_dataentry_uri = record_str(uri);
     g_dataentry_mode = mode;
+
+    /* RECORDING_STUB_DATAENTRY_FAIL lets a test simulate a failed open: the
+     * shim must still forward uri/mode unchanged (verified above via the
+     * recording, which runs before this check) and must register no
+     * data-entry context for the caller-visible failure. */
+    if (getenv("RECORDING_STUB_DATAENTRY_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -7;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: dataentry open refused",
+                sizeof status.message - 1);
+        if (dectxID != NULL) {
+            *dectxID = 0;
+        }
+        return status;
+    }
+
     if (dectxID != NULL) {
         *dectxID = 1001;
     }
@@ -210,6 +227,23 @@ al_status_t al_begin_slice_action(int pctxID, const char *dataobjectname, int rw
     g_slice_rwmode = rwmode;
     g_slice_time = time;
     g_slice_interpmode = interpmode;
+
+    /* RECORDING_STUB_SLICE_FAIL lets a test simulate a failed open: the
+     * shim must still forward dataobjectname unchanged (verified above via
+     * the recording, which runs before this check) and must attempt no
+     * stamp discovery and register no context for the caller-visible
+     * failure. */
+    if (getenv("RECORDING_STUB_SLICE_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -9;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: slice open refused", sizeof status.message - 1);
+        if (octxID != NULL) {
+            *octxID = 0;
+        }
+        return status;
+    }
+
     if (octxID != NULL) {
         *octxID = 2002;
     }
@@ -241,6 +275,24 @@ al_status_t al_begin_timerange_action(int pctxID, const char *dataobjectname, in
     g_timerange_dtime_buffer = dtime_buffer;
     g_timerange_dtime_shape = dtime_shape;
     g_timerange_interpmode = interpmode;
+
+    /* RECORDING_STUB_TIMERANGE_FAIL lets a test simulate a failed open: the
+     * shim must still forward dataobjectname unchanged (verified above via
+     * the recording, which runs before this check) and must attempt no
+     * stamp discovery and register no context for the caller-visible
+     * failure. */
+    if (getenv("RECORDING_STUB_TIMERANGE_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -10;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: timerange open refused",
+                sizeof status.message - 1);
+        if (octxID != NULL) {
+            *octxID = 0;
+        }
+        return status;
+    }
+
     if (octxID != NULL) {
         *octxID = 2003;
     }
@@ -251,6 +303,7 @@ al_status_t al_begin_timerange_action(int pctxID, const char *dataobjectname, in
 
 static int g_arraystruct_call_count = 0;
 static int g_arraystruct_ctx_id = 0;
+static int g_next_arraystruct_ctx_id = 3004;
 static char *g_arraystruct_path = NULL;
 static char *g_arraystruct_timebase = NULL;
 static int g_arraystruct_size_in = 0;
@@ -263,12 +316,22 @@ al_status_t al_begin_arraystruct_action(int ctxID, const char *path, const char 
     g_arraystruct_path = record_str(path);
     free(g_arraystruct_timebase);
     g_arraystruct_timebase = record_str(timebase);
+
+    if (getenv("RECORDING_STUB_ARRAYSTRUCT_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -12;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: arraystruct open refused",
+                sizeof status.message - 1);
+        return status;
+    }
+
     if (size != NULL) {
         g_arraystruct_size_in = *size;
         *size = 3003;
     }
     if (actxID != NULL) {
-        *actxID = 3004;
+        *actxID = g_next_arraystruct_ctx_id++;
     }
     return ok_status();
 }
@@ -281,6 +344,19 @@ static int g_end_action_ctx_id = 0;
 al_status_t al_end_action(int ctxID) {
     g_end_action_call_count++;
     g_end_action_ctx_id = ctxID;
+
+    /* RECORDING_STUB_END_ACTION_FAIL lets a test simulate a failed close: the
+     * shim must still forward ctxID unchanged (verified above via the
+     * recording, which runs before this check) and must leave its own
+     * registry record for ctxID intact on a failure. */
+    if (getenv("RECORDING_STUB_END_ACTION_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -13;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: end action refused", sizeof status.message - 1);
+        return status;
+    }
+
     return ok_status();
 }
 
@@ -293,23 +369,173 @@ static char *g_read_timebase = NULL;
 static int g_read_datatype = 0;
 static int g_read_dim = 0;
 static char g_read_buffer[] = "recording-stub: read data payload";
+static double g_read_double_buffer = 1.5;
 
-al_status_t al_read_data(int ctxID, const char *field, const char *timebase, void **data,
-                          int datatype, int dim, int *size) {
-    g_read_call_count++;
-    g_read_ctx_id = ctxID;
-    free(g_read_field);
-    g_read_field = record_str(field);
-    free(g_read_timebase);
-    g_read_timebase = record_str(timebase);
-    g_read_datatype = datatype;
-    g_read_dim = dim;
+#define RECORDING_STUB_CSV_CAPACITY 16
+/* IMAS-Core's MAXDIM is part of the duplicated ABI contract above. */
+enum { RECORDING_STUB_MAXDIM = 7 };
+static double g_read_double_values[RECORDING_STUB_CSV_CAPACITY];
+static int g_read_size_override[RECORDING_STUB_CSV_CAPACITY];
 
+/* RECORDING_STUB_READ_DOUBLE_VALUES and RECORDING_STUB_READ_SIZE_CSV give a
+ * test the array shapes value-transform execution (issue #59) actually needs
+ * to validate: an element count and per-element content that a single fixed
+ * scalar cannot express. Both parse a comma-separated list into one of these
+ * static buffers so returned storage outlives the call without malloc/free
+ * bookkeeping, mirroring `g_read_double_buffer`'s ownership. */
+static int parse_csv_doubles(const char *csv, double *out, int capacity) {
+    if (csv == NULL) {
+        return 0;
+    }
+    char buffer[256];
+    strncpy(buffer, csv, sizeof buffer - 1);
+    buffer[sizeof buffer - 1] = '\0';
+
+    int count = 0;
+    char *cursor = buffer;
+    char *token = strtok(cursor, ",");
+    while (token != NULL && count < capacity) {
+        out[count++] = strtod(token, NULL);
+        token = strtok(NULL, ",");
+    }
+    return count;
+}
+
+static int parse_csv_ints(const char *csv, int *out, int capacity) {
+    if (csv == NULL) {
+        return 0;
+    }
+    char buffer[256];
+    strncpy(buffer, csv, sizeof buffer - 1);
+    buffer[sizeof buffer - 1] = '\0';
+
+    int count = 0;
+    char *cursor = buffer;
+    char *token = strtok(cursor, ",");
+    while (token != NULL && count < capacity) {
+        out[count++] = (int)strtol(token, NULL, 10);
+        token = strtok(NULL, ",");
+    }
+    return count;
+}
+
+#define VERSION_STAMP_FIELD "ids_properties/version_put/data_dictionary"
+
+/* RECORDING_STUB_STAMP_VERSION lets a test control the DD-version stamp
+ * discovery read (issue #53) independently of every other al_read_data call:
+ * unset means the stamp is absent (the shim's "unstamped" case), set to a
+ * value means the stamp is present and holds exactly that value — a known
+ * DD release/development spelling for the "stored version discovered" case,
+ * or garbage for the "malformed stamp" case. The returned buffer is
+ * malloc'd, sized to exactly the stamp's byte length, and deliberately never
+ * NUL-terminated: the shim owns freeing it (this read never reaches an HLI)
+ * and must decode it by the reported size, never by scanning for a NUL. */
+static al_status_t stamp_read_response(void **data, int *size) {
+    const char *stamp = getenv("RECORDING_STUB_STAMP_VERSION");
+    al_status_t status = ok_status();
+    if (getenv("RECORDING_STUB_STAMP_READ_FAIL") != NULL) {
+        /* A failed discovery is distinct from successful not-found. The
+         * shim's read-outcome classifier treats both as an unstamped
+         * occurrence, but this switch keeps that classifier branch covered
+         * through the public global-action ABI (issue #53, ADR 0012). */
+        status.code = -8;
+        strncpy(status.message, "recording-stub: stamp read refused", sizeof status.message - 1);
+        if (data != NULL) {
+            *data = NULL;
+        }
+        if (size != NULL) {
+            *size = 0;
+        }
+        return status;
+    }
+    if (stamp == NULL) {
+        if (data != NULL) {
+            *data = NULL;
+        }
+        if (size != NULL) {
+            *size = 0;
+        }
+        return status;
+    }
+
+    size_t len = strlen(stamp);
+    char *buffer = malloc(len > 0 ? len : 1);
+    if (buffer == NULL) {
+        status.code = -1;
+        strncpy(status.message, "recording-stub: allocation failed", sizeof status.message - 1);
+        return status;
+    }
+    if (len > 0) {
+        memcpy(buffer, stamp, len);
+    }
     if (data != NULL) {
-        *data = g_read_buffer;
+        *data = buffer;
     }
     if (size != NULL) {
-        size[0] = 4004;
+        *size = (int)len;
+    }
+    return status;
+}
+
+/* Shared by al_read_data and al_plugin_read_data (issue #68): both seams must
+ * present identical not-found, failure, and value-shape behavior to the shim
+ * so the same test fixtures can prove policy parity between them. Each
+ * caller keeps its own call-recording state (g_read_* vs the plugin
+ * introspection globals); only the response computation is shared. */
+static al_status_t compute_read_response(const char *field, void **data, int dim, int *size) {
+    if (field != NULL && strcmp(field, VERSION_STAMP_FIELD) == 0) {
+        return stamp_read_response(data, size);
+    }
+
+    if (getenv("RECORDING_STUB_READ_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -23;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: read refused", sizeof status.message - 1);
+        return status;
+    }
+
+    const char *double_values_csv = getenv("RECORDING_STUB_READ_DOUBLE_VALUES");
+    int double_values_count =
+        parse_csv_doubles(double_values_csv, g_read_double_values, RECORDING_STUB_CSV_CAPACITY);
+
+    if (data != NULL) {
+        if (double_values_csv != NULL) {
+            *data = (void *)g_read_double_values;
+        } else {
+            *data = getenv("RECORDING_STUB_READ_DOUBLE") != NULL ? (void *)&g_read_double_buffer
+                                                                  : (void *)g_read_buffer;
+        }
+    }
+    if (size != NULL) {
+        if (double_values_csv != NULL) {
+            size[0] = double_values_count;
+        } else {
+            size[0] = getenv("RECORDING_STUB_READ_DOUBLE") != NULL ? 1 : 4004;
+        }
+    }
+
+    /* RECORDING_STUB_READ_SIZE_CSV overrides every extent IMAS-Core reports
+     * back, independently of which data buffer above was selected. It exists
+     * so a test can present a shape whose dimension product is invalid or
+     * overflows without needing a buffer that large — the guard under test
+     * must refuse before it would ever read that many elements. */
+    const char *size_csv = getenv("RECORDING_STUB_READ_SIZE_CSV");
+    if (size != NULL && size_csv != NULL) {
+        int size_count = parse_csv_ints(size_csv, g_read_size_override, RECORDING_STUB_CSV_CAPACITY);
+        int reported_rank = dim;
+        if (reported_rank < 0) {
+            reported_rank = 0;
+        }
+        if (reported_rank > RECORDING_STUB_MAXDIM) {
+            reported_rank = RECORDING_STUB_MAXDIM;
+        }
+        if (size_count > reported_rank) {
+            size_count = reported_rank;
+        }
+        for (int i = 0; i < size_count; ++i) {
+            size[i] = g_read_size_override[i];
+        }
     }
 
     al_status_t status;
@@ -318,7 +544,9 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
      * reports success (also 0, but a distinct meaning) — see CLAUDE.md's
      * "two conflicting meanings of zero." The shim must forward this
      * status.code exactly as received, not reinterpret it. */
-    if (getenv("RECORDING_STUB_READ_NOT_FOUND") != NULL) {
+    const char *not_found_field = getenv("RECORDING_STUB_READ_NOT_FOUND_FIELD");
+    if (getenv("RECORDING_STUB_READ_NOT_FOUND") != NULL ||
+        (not_found_field != NULL && field != NULL && strcmp(field, not_found_field) == 0)) {
         status.code = 0;
         memset(status.message, 0, sizeof status.message);
         strncpy(status.message, "recording-stub: not found", sizeof status.message - 1);
@@ -333,6 +561,80 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
         strncpy(status.message, "recording-stub: read ok", sizeof status.message - 1);
     }
     return status;
+}
+
+/* --- reentrant-read knob ---------------------------------------------------
+ *
+ * Reproduces, deterministically and on any platform, what real IMAS-Core does
+ * on ELF: its internal call to its own public al_read_data binds to the shim's
+ * exported definition, so a read arrives at the shim while the shim's own read
+ * is still on the stack, carrying a path the shim has already translated. The
+ * test arms this with the shim's al_read_data and the field to re-enter with;
+ * `recording_stub_reentrant_seen_field` then reports what the shim passed back
+ * down, which is what ADR 0014's policy is asserted on.
+ *
+ * A function pointer supplied by the caller, rather than dlsym here: this stub
+ * exports `al_read_data` itself, so any RTLD_DEFAULT lookup would find the
+ * stub's own definition and recurse instead of reaching the shim. */
+typedef al_status_t (*recording_stub_read_fn)(int, const char *, const char *, void **, int, int,
+                                             int *);
+static recording_stub_read_fn g_reentrant_read = NULL;
+static char *g_reentrant_field = NULL;
+static int g_reentrant_active = 0;
+static int g_reentrant_call_count = 0;
+static char *g_reentrant_seen_field = NULL;
+static char *g_reentrant_seen_timebase = NULL;
+
+void recording_stub_set_reentrant_read(recording_stub_read_fn reentrant_read, const char *field) {
+    g_reentrant_read = reentrant_read;
+    free(g_reentrant_field);
+    g_reentrant_field = record_str(field);
+}
+
+int recording_stub_reentrant_call_count(void) {
+    return g_reentrant_call_count;
+}
+
+const char *recording_stub_reentrant_seen_field(void) {
+    return g_reentrant_seen_field;
+}
+
+const char *recording_stub_reentrant_seen_timebase(void) {
+    return g_reentrant_seen_timebase;
+}
+
+al_status_t al_read_data(int ctxID, const char *field, const char *timebase, void **data,
+                          int datatype, int dim, int *size) {
+    /* The reentrant leg records separately: the outer call's recorded
+     * arguments must survive it, since that is what the test asserts on. */
+    if (g_reentrant_active) {
+        g_reentrant_call_count++;
+        free(g_reentrant_seen_field);
+        g_reentrant_seen_field = record_str(field);
+        free(g_reentrant_seen_timebase);
+        g_reentrant_seen_timebase = record_str(timebase);
+        return compute_read_response(field, data, dim, size);
+    }
+
+    g_read_call_count++;
+    g_read_ctx_id = ctxID;
+    free(g_read_field);
+    g_read_field = record_str(field);
+    free(g_read_timebase);
+    g_read_timebase = record_str(timebase);
+    g_read_datatype = datatype;
+    g_read_dim = dim;
+
+    if (g_reentrant_read != NULL && field != NULL) {
+        g_reentrant_active = 1;
+        void *reentrant_data = NULL;
+        int reentrant_size[RECORDING_STUB_MAXDIM] = {0};
+        g_reentrant_read(ctxID, g_reentrant_field, "", &reentrant_data, datatype, dim,
+                         reentrant_size);
+        g_reentrant_active = 0;
+    }
+
+    return compute_read_response(field, data, dim, size);
 }
 
 /* --- al_write_data ------------------------------------------------------------ */
@@ -418,6 +720,31 @@ static int g_filled_paths_call_count = 0;
 static int g_filled_paths_pctx_id = 0;
 static char *g_filled_paths_dataobjectname = NULL;
 
+/* RECORDING_STUB_FILLED_PATHS_CSV replaces the two default placeholders with
+ * a caller-chosen list. It exists so a test can have IMAS-Core report DD
+ * paths the loaded conversion map actually has rules for: asserting that
+ * al_list_filled_paths hands those back unchanged (issue #69) is only
+ * meaningful when a rewriting shim would have produced a different string.
+ * Ownership follows IMAS-Core's documented contract either way — the caller
+ * frees the list and every string in it. */
+static const char *g_filled_paths_defaults[] = {"ids/path/one", "ids/path/two"};
+
+/* Unlike parse_csv_doubles/parse_csv_ints, which copy each token's *value* out
+ * and can therefore tokenize into a buffer of their own, this returns pointers
+ * *into* `buffer` — so the caller has to own it and keep it alive until the
+ * entries have been copied. Entries beyond `capacity` are dropped; the caller
+ * is CMakeLists.txt, not a user, so an in-repo overlong list is a test bug to
+ * fix rather than a condition to report. */
+static int split_csv_into(char *buffer, const char **out, int capacity) {
+    int count = 0;
+    char *token = strtok(buffer, ",");
+    while (token != NULL && count < capacity) {
+        out[count++] = token;
+        token = strtok(NULL, ",");
+    }
+    return count;
+}
+
 al_status_t al_list_filled_paths(int pctxID, const char *dataobjectname, char ***path_list,
                                   int *size) {
     g_filled_paths_call_count++;
@@ -425,31 +752,53 @@ al_status_t al_list_filled_paths(int pctxID, const char *dataobjectname, char **
     free(g_filled_paths_dataobjectname);
     g_filled_paths_dataobjectname = record_str(dataobjectname);
 
+    const char *entries[RECORDING_STUB_CSV_CAPACITY];
+    int count = (int)(sizeof g_filled_paths_defaults / sizeof g_filled_paths_defaults[0]);
+    for (int i = 0; i < count; ++i) {
+        entries[i] = g_filled_paths_defaults[i];
+    }
+
+    /* strtok writes into its argument, so the override is tokenized in a
+     * local copy that outlives only this call — every entry is copied into
+     * caller-owned storage below before `csv_buffer` goes out of scope. */
+    char csv_buffer[512];
+    const char *paths_csv = getenv("RECORDING_STUB_FILLED_PATHS_CSV");
+    if (paths_csv != NULL) {
+        strncpy(csv_buffer, paths_csv, sizeof csv_buffer - 1);
+        csv_buffer[sizeof csv_buffer - 1] = '\0';
+        count = split_csv_into(csv_buffer, entries, RECORDING_STUB_CSV_CAPACITY);
+    }
+
     if (path_list != NULL) {
-        char **list = malloc(2 * sizeof *list);
-        if (list == NULL) {
+        /* An empty override is a legitimate "nothing is filled" fixture, and
+         * malloc(0) may return NULL — which would otherwise be misreported
+         * below as an allocation failure. Hand back an empty list instead. */
+        char **list = count == 0 ? NULL : malloc((size_t)count * sizeof *list);
+        if (count > 0 && list == NULL) {
             al_status_t status = ok_status();
             status.code = -1;
             strncpy(status.message, "recording-stub: allocation failed",
                     sizeof status.message - 1);
             return status;
         }
-        list[0] = record_str("ids/path/one");
-        list[1] = record_str("ids/path/two");
-        if (list[0] == NULL || list[1] == NULL) {
-            free(list[0]);
-            free(list[1]);
-            free(list);
-            al_status_t status = ok_status();
-            status.code = -1;
-            strncpy(status.message, "recording-stub: allocation failed",
-                    sizeof status.message - 1);
-            return status;
+        for (int i = 0; i < count; ++i) {
+            list[i] = record_str(entries[i]);
+            if (list[i] == NULL) {
+                for (int freed = 0; freed < i; ++freed) {
+                    free(list[freed]);
+                }
+                free(list);
+                al_status_t status = ok_status();
+                status.code = -1;
+                strncpy(status.message, "recording-stub: allocation failed",
+                        sizeof status.message - 1);
+                return status;
+            }
         }
         *path_list = list;
     }
     if (size != NULL) {
-        *size = 2;
+        *size = count;
     }
     return ok_status();
 }
@@ -458,8 +807,8 @@ al_status_t al_list_filled_paths(int pctxID, const char *dataobjectname, char **
 
 static int g_plugin_call_count = 0;
 static const char *g_plugin_last_symbol = NULL;
-static const char *g_plugin_first_string = NULL;
-static const char *g_plugin_second_string = NULL;
+static char *g_plugin_first_string = NULL;
+static char *g_plugin_second_string = NULL;
 static int g_plugin_last_ctx = 0;
 static int g_plugin_first_int = 0;
 static int g_plugin_second_int = 0;
@@ -467,12 +816,19 @@ static double g_plugin_double = 0.0;
 static const void *g_plugin_pointer = NULL;
 static const void *g_plugin_size_pointer = NULL;
 
+/* `first`/`second` are copied rather than retained as raw pointers: a
+ * translated argument the shim forwards (issue #67) is a temporary buffer
+ * freed once the call returns, unlike a caller-owned literal that outlives
+ * the check. Copying here matches every other recorder in this stub
+ * (`record_str`, used by the global/slice/timerange/arraystruct globals). */
 static void record_plugin_call(const char *symbol, int ctx, const char *first, const char *second) {
     g_plugin_call_count++;
     g_plugin_last_symbol = symbol;
     g_plugin_last_ctx = ctx;
-    g_plugin_first_string = first;
-    g_plugin_second_string = second;
+    free(g_plugin_first_string);
+    g_plugin_first_string = record_str(first);
+    free(g_plugin_second_string);
+    g_plugin_second_string = record_str(second);
     g_plugin_first_int = 0;
     g_plugin_second_int = 0;
     g_plugin_double = 0.0;
@@ -579,6 +935,24 @@ al_status_t al_plugin_begin_global_action(int pctx_id, const char *dataobjectnam
     (void)dataobjectname;
     (void)datapath;
     (void)rwmode;
+
+    /* RECORDING_STUB_PLUGIN_GLOBAL_FAIL lets a test simulate a failed open:
+     * the shim must still forward dataobjectname/datapath unchanged (verified
+     * above via the recording, which runs before this check) and must
+     * attempt no stamp discovery and register no context for the
+     * caller-visible failure. */
+    if (getenv("RECORDING_STUB_PLUGIN_GLOBAL_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -14;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: plugin global open refused",
+                sizeof status.message - 1);
+        if (octx_id != NULL) {
+            *octx_id = 0;
+        }
+        return status;
+    }
+
     if (octx_id != NULL) {
         *octx_id = 5001;
     }
@@ -596,6 +970,21 @@ al_status_t al_plugin_begin_slice_action(int pctx_id, const char *dataobjectname
     (void)rwmode;
     (void)time;
     (void)interpmode;
+
+    /* RECORDING_STUB_PLUGIN_SLICE_FAIL mirrors RECORDING_STUB_PLUGIN_GLOBAL_FAIL
+     * for the slice-action reentry twin. */
+    if (getenv("RECORDING_STUB_PLUGIN_SLICE_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -15;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: plugin slice open refused",
+                sizeof status.message - 1);
+        if (octx_id != NULL) {
+            *octx_id = 0;
+        }
+        return status;
+    }
+
     if (octx_id != NULL) {
         *octx_id = 5002;
     }
@@ -610,6 +999,16 @@ al_status_t al_plugin_begin_arraystruct_action(int ctx_id, const char *path,
     (void)ctx_id;
     (void)path;
     (void)timebase;
+
+    if (getenv("RECORDING_STUB_PLUGIN_ARRAYSTRUCT_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -16;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: plugin arraystruct open refused",
+                sizeof status.message - 1);
+        return status;
+    }
+
     if (size != NULL) {
         *size = 5003;
     }
@@ -622,6 +1021,19 @@ al_status_t al_plugin_begin_arraystruct_action(int ctx_id, const char *path,
 al_status_t al_plugin_end_action(int ctx_id) {
     record_plugin_call("al_plugin_end_action", ctx_id, NULL, NULL);
     (void)ctx_id;
+
+    /* RECORDING_STUB_PLUGIN_END_ACTION_FAIL mirrors RECORDING_STUB_END_ACTION_FAIL
+     * for the plugin reentry twin: the shim must leave its own registry
+     * record for ctx_id intact on a failure. */
+    if (getenv("RECORDING_STUB_PLUGIN_END_ACTION_FAIL") != NULL) {
+        al_status_t status;
+        status.code = -17;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: plugin end action refused",
+                sizeof status.message - 1);
+        return status;
+    }
+
     return ok_status();
 }
 
@@ -631,19 +1043,10 @@ al_status_t al_plugin_read_data(int ctx_id, const char *field, const char *timeb
     g_plugin_first_int = datatype;
     g_plugin_second_int = dim;
     g_plugin_size_pointer = size;
-    static char plugin_read_buffer[] = "recording-stub: plugin read data payload";
     (void)ctx_id;
-    (void)field;
     (void)timebase;
-    (void)datatype;
-    (void)dim;
-    if (data != NULL) {
-        *data = plugin_read_buffer;
-    }
-    if (size != NULL) {
-        size[0] = 5005;
-    }
-    return ok_status();
+
+    return compute_read_response(field, data, dim, size);
 }
 
 al_status_t al_plugin_write_data(int ctx_id, const char *field, const char *timebase, void *data,
