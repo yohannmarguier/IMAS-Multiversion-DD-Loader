@@ -53,7 +53,7 @@ use std::ffi::c_void;
 mod interpose;
 
 use interpose as resolve;
-mod conversion;
+pub mod conversion;
 mod core;
 mod registry;
 mod version;

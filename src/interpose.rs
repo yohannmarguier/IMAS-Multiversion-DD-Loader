@@ -317,7 +317,7 @@ pub(crate) unsafe fn begin_dataentry_action(
     mode: c_int,
     dectx_id: *mut c_int,
 ) -> al_status_t {
-    if let Err(reason) = crate::hli_version::resolve_for_open() {
+    if let Err(reason) = crate::version::hli_version::resolve_for_open() {
         return crate::conversion_refusal(&reason);
     }
     let status = forward_status!(begin_dataentry_action(uri, mode, dectx_id));
@@ -478,7 +478,7 @@ unsafe fn open_occurrence(
     octx_id: *mut c_int,
     forward: impl FnOnce(Option<*const c_char>) -> al_status_t,
 ) -> OpenOccurrenceResult {
-    let Some(hli) = crate::hli_version::latched() else {
+    let Some(hli) = crate::version::hli_version::latched() else {
         return OpenOccurrenceResult::Status(forward(datapath));
     };
 
@@ -541,7 +541,7 @@ fn apply_discovery_decision(
     pctx_id: c_int,
     dataobjectname: &str,
     opened_ctx_id: c_int,
-    hli: &crate::dd_version::DdVersion,
+    hli: &crate::version::dd_version::DdVersion,
     status: al_status_t,
     decision: seam_policy::DiscoveryDecision,
 ) -> OpenOccurrenceResult {
@@ -632,8 +632,8 @@ fn c_str_or_none<'a>(ptr: *const c_char) -> Option<&'a str> {
 /// translation (ADR 0011).
 fn translate_down(
     ids: &str,
-    stored: &crate::dd_version::DdVersion,
-    hli: &crate::dd_version::DdVersion,
+    stored: &crate::version::dd_version::DdVersion,
+    hli: &crate::version::dd_version::DdVersion,
     path: Option<&str>,
 ) -> Option<CString> {
     let path = path.filter(|p| !p.is_empty())?;
@@ -650,8 +650,8 @@ fn translate_down(
 /// conversion map up under.
 fn map_cache_key(
     ids: &str,
-    stored: &crate::dd_version::DdVersion,
-    hli: &crate::dd_version::DdVersion,
+    stored: &crate::version::dd_version::DdVersion,
+    hli: &crate::version::dd_version::DdVersion,
 ) -> MapCacheKey {
     MapCacheKey::new(ids.to_string(), stored.clone(), hli.clone())
 }
@@ -1207,7 +1207,7 @@ unsafe fn build_data_view<'a>(
 /// are mandatory, so there is no return path left that could reach this
 /// point without both to write.
 fn finish_read(
-    record: &crate::context_registry::ConversionRecord,
+    record: &crate::registry::context_registry::ConversionRecord,
     verdict: seam_policy::ReadVerdict,
     data: *mut *mut c_void,
 ) -> al_status_t {
@@ -1225,7 +1225,7 @@ fn finish_read(
 /// Retains one argument's fidelity on `root_id`'s loss log — skipping
 /// [`Fidelity::Exact`], which is never logged (ADR 0012).
 fn record_argument_loss(
-    root_id: crate::context_registry::ContextId,
+    root_id: crate::registry::context_registry::ContextId,
     argument: &seam_policy::ArgumentFidelity,
 ) {
     if argument.fidelity != Fidelity::Exact {
@@ -1238,7 +1238,7 @@ fn record_argument_loss(
 /// back to the bare anchor for a display path, and `retain_read_fidelity`,
 /// which skips logging outright when there was no argument to join.
 fn joined_argument_path(
-    record: &crate::context_registry::ConversionRecord,
+    record: &crate::registry::context_registry::ConversionRecord,
     raw_path: *const c_char,
 ) -> Option<String> {
     c_str_or_none(raw_path)
@@ -1341,7 +1341,7 @@ fn fidelity_verdict_code(fidelity: Fidelity) -> c_int {
 }
 
 fn read_argument_path(
-    record: &crate::context_registry::ConversionRecord,
+    record: &crate::registry::context_registry::ConversionRecord,
     raw_path: *const c_char,
 ) -> String {
     joined_argument_path(record, raw_path).unwrap_or_else(|| record.resolved_path.clone())
@@ -1351,7 +1351,7 @@ fn read_argument_path(
 /// live context record. Both `field` and `timebase` resolve through this one
 /// status boundary, so their caller-visible diagnostics cannot drift.
 fn read_refusal(
-    record: &crate::context_registry::ConversionRecord,
+    record: &crate::registry::context_registry::ConversionRecord,
     reason: &str,
     dd_path: &str,
 ) -> al_status_t {
@@ -1375,7 +1375,7 @@ fn read_refusal(
 /// path, and says so plainly when there is no path at either place rather
 /// than inventing one.
 fn contextual_refusal(
-    record: &crate::context_registry::ConversionRecord,
+    record: &crate::registry::context_registry::ConversionRecord,
     reason: &str,
     raw_path: *const c_char,
 ) -> al_status_t {
@@ -1402,7 +1402,7 @@ fn no_source_read(data: *mut *mut c_void) -> al_status_t {
 /// stored anchor would be unknown, so the seam refuses before IMAS-Core opens
 /// it.
 fn resolve_arraystruct_argument(
-    record: &crate::context_registry::ConversionRecord,
+    record: &crate::registry::context_registry::ConversionRecord,
     raw: *const c_char,
     label: &str,
 ) -> Result<Option<CString>, String> {
@@ -1438,7 +1438,7 @@ fn resolve_arraystruct_argument(
 /// they are not knowable without asking the registry, and ADR 0003 budgets one
 /// lookup for them by design.
 fn live_conversion_record(ctx_id: c_int) -> Option<ConversionRecord> {
-    if !crate::hli_version::conversion_is_possible() {
+    if !crate::version::hli_version::conversion_is_possible() {
         return None;
     }
     REGISTRY.lookup(ctx_id)
@@ -1703,8 +1703,8 @@ mod tests {
         // Far from the small IDs every other registry test uses, so this one
         // cannot collide with a concurrently running test in the same process.
         const CTX_ID: c_int = 0x5D00;
-        let stored: crate::dd_version::DdVersion = "3.39.0".parse().expect("known release");
-        let hli: crate::dd_version::DdVersion = "4.1.1".parse().expect("known release");
+        let stored: crate::version::dd_version::DdVersion = "3.39.0".parse().expect("known release");
+        let hli: crate::version::dd_version::DdVersion = "4.1.1".parse().expect("known release");
         let artifact = known_artifacts::lookup("equilibrium", &stored, &hli)
             .expect("the embedded equilibrium artifact serves this pair");
         let direction = artifact.direction_to_stored;
@@ -1718,7 +1718,7 @@ mod tests {
         ));
 
         assert!(
-            !crate::hli_version::conversion_is_possible(),
+            !crate::version::hli_version::conversion_is_possible(),
             "no unit test can latch an HLI DD version, so conversion is off here"
         );
         assert!(
