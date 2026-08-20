@@ -304,13 +304,10 @@ pub(crate) fn core() -> Result<&'static CoreBinding, &'static al_status_t> {
 // wherever it lands.
 macro_rules! forward_status {
     ($function:ident($($argument:expr),* $(,)?)) => {
-        unsafe {
-            match crate::core::core_binding::core() {
-            Ok(binding) => (binding.$function)($($argument),*),
+        match crate::core::core_binding::core() {
+            Ok(binding) => unsafe {(binding.$function)($($argument),*)},
             Err(status) => *status,
         }
-        }
-
     };
 }
 // `macro_rules!` is textual and scoped to the rest of *this* file otherwise;
