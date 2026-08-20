@@ -8,7 +8,7 @@ if [[ $# -ne 3 ]]; then
 fi
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-source_dir=$(cd -- "$script_dir/.." && pwd)
+source_dir=$(cd -- "$script_dir/../.." && pwd)
 build_dir=$(cd -- "$1" && pwd)
 install_prefix=$(cd -- "$2" && pwd)
 core_library=$(cd -- "$(dirname -- "$3")" && pwd)/$(basename -- "$3")
@@ -115,7 +115,7 @@ test -n "$pc" || {
 pc_dir=$(dirname -- "$pc")
 read -r -a pkg_flags <<< "$(PKG_CONFIG_PATH="$pc_dir" \
     pkg-config --print-errors --cflags --libs imas-mvdd-loader)"
-cc "$source_dir/tests/consumer/main.c" -o "$build_dir/pkg-config-consumer" \
+cc "$source_dir/tests/cmake_find_package/main.c" -o "$build_dir/pkg-config-consumer" \
     "${pkg_flags[@]}"
 
 libdir=$(PKG_CONFIG_PATH="$pc_dir" \
@@ -154,7 +154,7 @@ run_consumer_with_override "$build_dir/pkg-config-consumer"
 run_consumer_via_search_path "$build_dir/pkg-config-consumer"
 
 consumer_build="$build_dir/installed-consumer"
-cmake -S "$source_dir/tests/consumer" -B "$consumer_build" \
+cmake -S "$source_dir/tests/cmake_find_package" -B "$consumer_build" \
     -DCMAKE_PREFIX_PATH="$install_prefix"
 cmake --build "$consumer_build"
 run_consumer_with_override "$consumer_build/consumer_smoke"

@@ -7,7 +7,7 @@
 //! decides whether conversion applies to the occurrence at all, so it cannot
 //! be subject to it.
 //! The outcome is classified with the one read-outcome classifier
-//! ([`crate::read_outcome`]). IMAS-Core allocates this buffer and,
+//! ([`crate::conversion::read_outcome`]). IMAS-Core allocates this buffer and,
 //! because this read is entirely shim-internal (the HLI never sees it), the
 //! shim frees it itself exactly once — the ordinary "HLI frees it" ownership
 //! contract (ADR 0006) does not apply here, since there is no HLI-visible

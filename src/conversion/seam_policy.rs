@@ -15,8 +15,8 @@
 //! [`path_conversion::ReadPath`] per argument, a buffer's shape, and a reader
 //! closure the adapter injects, and returns a [`ReadVerdict`] the adapter
 //! turns into an `al_status_t` and a pair of loss-log writes. It contains no
-//! `unsafe`, never touches [`crate::context_registry::REGISTRY`] or the HLI
-//! version latch, and never calls into [`crate::dl`] — every raw pointer,
+//! `unsafe`, never touches [`crate::registry::context_registry::REGISTRY`] or the HLI
+//! version latch, and never calls into [`crate::core::dl`] — every raw pointer,
 //! every registry lookup, and the two ADR-0014/HLI-version gates
 //! ahead of it stay in `src/interpose.rs`, the interposition layer ADR 0015
 //! names.

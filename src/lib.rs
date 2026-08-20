@@ -2,14 +2,14 @@
 //!
 //! This crate re-exports IMAS-Core's public C ABI verbatim and interposes on
 //! the path-bearing entry points. The shared constants and `al_status_t` are
-//! here, and the runtime-binding architecture (see `src/core_binding.rs` and
+//! here, and the runtime-binding architecture (see `src/core/core_binding.rs` and
 //! `docs/adr/0001-runtime-binding-not-linking.md`) is proven end to end on
 //! all 37 linkable exported IMAS-Core C symbols.
 //!
 //! Read-path DD conversion is wired end to end. The process-wide HLI DD
-//! version latch (`src/hli_version.rs`, ADR 0005), the context registry
-//! (`src/context_registry.rs`, ADR 0003) and DD-version stamp discovery
-//! (`src/version_stamp.rs`, ADR 0007) together decide, at every
+//! version latch (`src/version/hli_version.rs`, ADR 0005), the context registry
+//! (`src/registry/context_registry.rs`, ADR 0003) and DD-version stamp discovery
+//! (`src/version/version_stamp.rs`, ADR 0007) together decide, at every
 //! occurrence-opening seam — `al_begin_global_action`,
 //! `al_begin_slice_action`, `al_begin_timerange_action` and their
 //! `al_plugin_` reentry twins — whether an occurrence's stored DD version
@@ -54,6 +54,12 @@ mod interpose;
 
 use interpose as resolve;
 pub mod conversion;
+/// Backward-compatible path for the conversion-map public interface.
+///
+/// New callers should import [`conversion::conversion_map`] so the module's
+/// domain ownership is visible at the use site.
+#[deprecated(note = "use imas_mvdd_loader::conversion::conversion_map instead")]
+pub use conversion::conversion_map;
 mod core;
 mod registry;
 mod version;

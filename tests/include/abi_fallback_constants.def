@@ -1,4 +1,4 @@
-/* Fallback id/name pairs src/resolve.rs hand-transcribes from IMAS-Core's
+/* Fallback id/name pairs src/core/core_binding.rs hand-transcribes from IMAS-Core's
  * al_defs.h (the numeric ids) and al_const.h's constmap/errmap (the
  * strings), answered on the version-mismatch path where the shim cannot
  * safely resolve further symbols from the mismatched library.

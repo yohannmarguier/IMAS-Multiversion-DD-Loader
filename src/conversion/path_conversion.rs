@@ -1,6 +1,6 @@
 //! What stored path an HLI argument means, and at what fidelity.
 //!
-//! Before this module existed, [`crate::conversion_map::Outcome`] was
+//! Before this module existed, [`crate::conversion::conversion_map::Outcome`] was
 //! interpreted at three independent sites in `src/interpose.rs`, each deriving
 //! a different subset of its meaning: `translate_down` derived a `CString`
 //! or nothing, the read seam derived a [`ReadPath`] with fidelity and

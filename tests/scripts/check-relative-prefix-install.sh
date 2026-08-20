@@ -68,7 +68,7 @@ fi
 
 # The other half of the same mistake: cargo-c resolving the relative prefix
 # against its own working directory, the source tree, instead of the caller's.
-source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 for stray in "$source_dir/$relative_prefix" "$build_dir/$relative_prefix"; do
     if [[ -e $stray ]]; then
         echo "a relative install prefix was resolved against the wrong" >&2

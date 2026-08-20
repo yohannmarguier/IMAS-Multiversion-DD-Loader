@@ -17,7 +17,7 @@ CHECK_ABI_STATUS_LAYOUT();
 #include "../../include/abi_symbols.def"
 #undef IMAS_ABI_SYMBOL
 
-/* src/resolve.rs hand-transcribes a subset of al_const.h's id-to-string
+/* src/core/core_binding.rs hand-transcribes a subset of al_const.h's id-to-string
  * tables to answer const2str/err2str/getALVersion/getDDVersion when the
  * loaded IMAS-Core's major version cannot be trusted (see the ADR's
  * consequences section). That transcription is a second hand-written
@@ -64,7 +64,7 @@ int check_fallback_strings(void) {
     }
 
     /* The other half of the fallback contract: what happens to an id the map
-     * has no entry for. src/resolve.rs's fallback tables answer "" there, and
+     * has no entry for. src/core/core_binding.rs's fallback tables answer "" there, and
      * that is only faithful because al_const.cpp looks the id up and returns
      * "" on a miss rather than NULL, a placeholder, or a thrown exception. The
      * entries above pin every id that *is* mapped; nothing pinned the miss,

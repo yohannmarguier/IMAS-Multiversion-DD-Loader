@@ -1,12 +1,12 @@
 //! The interposition that carries out each IMAS-Core seam policy.
 //!
 //! **The binding is elsewhere.** How IMAS-Core is found, version-checked and
-//! called lives in [`crate::core_binding`], which enforces ADR 0001 and makes
+//! called lives in [`crate::core::core_binding`], which enforces ADR 0001 and makes
 //! no conversion decision; every forward below reaches IMAS-Core through that
-//! module's [`forward_status!`](crate::core_binding::forward_status) macro.
+//! module's [`forward_status!`](crate::core::core_binding::forward_status) macro.
 //! **What an HLI argument means once it is claimed by the conversion map is
-//! also elsewhere.** [`crate::path_conversion`] is the one place that
-//! interprets [`crate::conversion_map::Outcome`] into a concrete stored path
+//! also elsewhere.** [`crate::conversion::path_conversion`] is the one place that
+//! interprets [`crate::conversion::conversion_map::Outcome`] into a concrete stored path
 //! or a read plan; this file supplies it a live [`ConversionRecord`] and a
 //! raw argument, and performs the ABI-facing effects its decisions require:
 //! Core calls, registry access, raw-pointer marshalling and depth gating.
@@ -17,7 +17,7 @@
 //! - ADR 0010 — read-path value transformations: one per rule, executed in
 //!   place after the read.
 //! - ADR 0012 — the three-way read outcome and the refusal/loss reporting
-//!   channel, via [`crate::read_outcome`] and the registry's loss log.
+//!   channel, via [`crate::conversion::read_outcome`] and the registry's loss log.
 //! - ADR 0014 — a read arriving beneath an in-flight one is forwarded
 //!   untouched, by call depth (see [`SHIM_READ_DEPTH`] and [`ReadDepthGuard`]).
 //!
@@ -100,12 +100,12 @@ impl Drop for ReadDepthGuard {
 ///
 /// `ORDINARY` and `PLUGIN` are not independently resolved values: each of the
 /// six dispatch functions above matches on `CallFamily` to pick one of a pair
-/// [`crate::core_binding`]'s manifest already resolves together (e.g.
+/// [`crate::core::core_binding`]'s manifest already resolves together (e.g.
 /// `begin_global_action`/`plugin_begin_global_action`, both
 /// `BeginGlobalActionFn`). A `CallFamily` value never holds a raw symbol
 /// pointer itself — it only *names* which half of that manifest applies —
 /// because `CoreBinding` sits behind a lazily-resolved `OnceLock`
-/// ([`crate::core_binding::core`]) and several of the nine call sites refuse
+/// ([`crate::core::core_binding::core`]) and several of the nine call sites refuse
 /// before ever forwarding at all (`begin_arraystruct_action_impl`'s argument
 /// resolution, `write_data_impl`'s mismatch check): eagerly extracting a
 /// resolved fn pointer at `CallFamily` construction time would attempt
