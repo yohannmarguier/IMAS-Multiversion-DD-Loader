@@ -157,6 +157,7 @@ tests/support/          shared C test harness
 tests/cmake/            CMake-script checks
 tests/scripts/          install and package checks
 tests/stub/             recording stub standing in for IMAS-Core
+tests/fixtures/         reduced conversion-map fixture for the coverage-floor test
 scripts/iter-env.sh     ITER cluster module loads
 docs/                   reference material — read the inventory before designing anything
 ```
