@@ -33,7 +33,7 @@ use crate::al_status_t;
 use crate::registry::context_registry::{ConversionRecord, MapCacheKey, REGISTRY};
 use crate::conversion::conversion_map::{ConversionMap, Fidelity};
 use crate::core::core_binding::{DOUBLE_DATA_ID, forward_status};
-use crate::version::known_artifacts;
+use crate::conversion::known_artifacts;
 use crate::conversion::path_conversion::{self, ContextPathResolution};
 use crate::conversion::read_outcome::{self, ReadOutcome};
 use crate::conversion::seam_policy;
