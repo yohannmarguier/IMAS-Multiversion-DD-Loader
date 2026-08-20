@@ -2,14 +2,14 @@
 //!
 //! This crate re-exports IMAS-Core's public C ABI verbatim and interposes on
 //! the path-bearing entry points. The shared constants and `al_status_t` are
-//! here, and the runtime-binding architecture (see `src/core_binding.rs` and
+//! here, and the runtime-binding architecture (see `src/core/core_binding.rs` and
 //! `docs/adr/0001-runtime-binding-not-linking.md`) is proven end to end on
 //! all 37 linkable exported IMAS-Core C symbols.
 //!
 //! Read-path DD conversion is wired end to end. The process-wide HLI DD
-//! version latch (`src/hli_version.rs`, ADR 0005), the context registry
-//! (`src/context_registry.rs`, ADR 0003) and DD-version stamp discovery
-//! (`src/version_stamp.rs`, ADR 0007) together decide, at every
+//! version latch (`src/version/hli_version.rs`, ADR 0005), the context registry
+//! (`src/registry/context_registry.rs`, ADR 0003) and DD-version stamp discovery
+//! (`src/version/version_stamp.rs`, ADR 0007) together decide, at every
 //! occurrence-opening seam — `al_begin_global_action`,
 //! `al_begin_slice_action`, `al_begin_timerange_action` and their
 //! `al_plugin_` reentry twins — whether an occurrence's stored DD version
@@ -50,19 +50,19 @@ use std::ffi::c_double;
 use std::ffi::c_int;
 use std::ffi::c_void;
 
-mod context_registry;
-pub mod conversion_map;
-mod core_binding;
-mod dd_version;
-mod dl;
-mod hli_version;
 mod interpose;
-mod known_artifacts;
-mod path_conversion;
-mod read_outcome;
+
 use interpose as resolve;
-mod seam_policy;
-mod version_stamp;
+pub mod conversion;
+/// Backward-compatible path for the conversion-map public interface.
+///
+/// New callers should import [`conversion::conversion_map`] so the module's
+/// domain ownership is visible at the use site.
+#[deprecated(note = "use imas_mvdd_loader::conversion::conversion_map instead")]
+pub use conversion::conversion_map;
+mod core;
+mod registry;
+mod version;
 
 /// Length of `al_status_t::message`, mirroring IMAS-Core's `MAX_ERR_MSG_LEN`.
 pub const MAX_ERR_MSG_LEN: usize = 256;
@@ -143,8 +143,8 @@ pub(crate) fn conversion_refusal(reason: &str) -> al_status_t {
 pub(crate) fn path_conversion_refusal(
     reason: &str,
     dd_path: &str,
-    hli_version: &dd_version::DdVersion,
-    stored_version: &dd_version::DdVersion,
+    hli_version: &version::dd_version::DdVersion,
+    stored_version: &version::dd_version::DdVersion,
 ) -> al_status_t {
     let mut status = al_status_t {
         code: IMAS_MVDD_CONVERSION_ERROR,
@@ -160,8 +160,8 @@ pub(crate) fn path_conversion_refusal(
 fn format_read_refusal_message(
     reason: &str,
     dd_path: &str,
-    hli_version: &dd_version::DdVersion,
-    stored_version: &dd_version::DdVersion,
+    hli_version: &version::dd_version::DdVersion,
+    stored_version: &version::dd_version::DdVersion,
 ) -> String {
     let prefix = format!("IMAS-MVDD: {reason}; DD path: ");
     let versions = format!("; HLI DD version: {hli_version}; stored DD version: {stored_version}");
@@ -220,7 +220,7 @@ pub unsafe extern "C" fn al_context_info(ctx: c_int, info: *mut *mut c_char) -> 
 /// own contract.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn al_get_backendID(ctx: c_int, backend_id: *mut c_int) -> al_status_t {
-    unsafe { core_binding::get_backend_id(ctx, backend_id) }
+    unsafe { core::core_binding::get_backend_id(ctx, backend_id) }
 }
 
 /// Mirrors IMAS-Core's legacy URI builder exactly and forwards unchanged.
@@ -241,7 +241,7 @@ pub unsafe extern "C" fn al_build_uri_from_legacy_parameters(
     uri: *mut *mut c_char,
 ) -> al_status_t {
     unsafe {
-        core_binding::build_uri_from_legacy_parameters(
+        core::core_binding::build_uri_from_legacy_parameters(
             backend_id, pulse, run, user, tokamak, version, options, uri,
         )
     }
@@ -253,7 +253,7 @@ pub unsafe extern "C" fn al_build_uri_from_legacy_parameters(
 /// It returns null only if IMAS-Core could not be opened or bootstrapped.
 #[unsafe(no_mangle)]
 pub extern "C" fn const2str(id: c_int) -> *const c_char {
-    core_binding::const2str(id)
+    core::core_binding::const2str(id)
 }
 
 /// Mirrors IMAS-Core's error-code-to-string helper exactly and forwards
@@ -262,7 +262,7 @@ pub extern "C" fn const2str(id: c_int) -> *const c_char {
 /// It returns null only if IMAS-Core could not be opened or bootstrapped.
 #[unsafe(no_mangle)]
 pub extern "C" fn err2str(id: c_int) -> *const c_char {
-    core_binding::err2str(id)
+    core::core_binding::err2str(id)
 }
 
 /// Mirrors IMAS-Core's access-layer version accessor exactly and forwards
@@ -270,7 +270,7 @@ pub extern "C" fn err2str(id: c_int) -> *const c_char {
 /// it returns null only if IMAS-Core could not be opened or bootstrapped.
 #[unsafe(no_mangle)]
 pub extern "C" fn getALVersion() -> *const c_char {
-    core_binding::get_al_version()
+    core::core_binding::get_al_version()
 }
 
 /// Mirrors IMAS-Core's deliberately deprecated DD-version accessor exactly.
@@ -281,7 +281,7 @@ pub extern "C" fn getALVersion() -> *const c_char {
 /// bootstrapped.
 #[unsafe(no_mangle)]
 pub extern "C" fn getDDVersion() -> *const c_char {
-    core_binding::get_dd_version()
+    core::core_binding::get_dd_version()
 }
 
 /// Shim-owned export (ADR 0005) — the `imas_mvdd_` prefix marks it as a
@@ -300,7 +300,7 @@ pub extern "C" fn getDDVersion() -> *const c_char {
 /// `version` must be a valid, NUL-terminated C string, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn imas_mvdd_set_hli_dd_version(version: *const c_char) -> al_status_t {
-    unsafe { hli_version::set_from_c(version) }
+    unsafe { version::hli_version::set_from_c(version) }
 }
 
 /// Shim-owned export (ADR 0012) — listed on `tests/owned_exports.def`

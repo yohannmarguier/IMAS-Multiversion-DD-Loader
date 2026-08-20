@@ -1,6 +1,6 @@
 # A seam policy never reaches process-global state
 
-The shim's C ABI seams are split into two layers. The **interposition** layer (`src/interpose.rs`, with the runtime binding in `src/core_binding.rs`) owns everything that touches C or the process: `dlopen`/`dlsym`, raw pointers, `CString`, `al_status_t`, the HLI DD version latch, the read-depth counter, and the context registry. The **seam policy** layer (`src/seam_policy.rs`, over `src/path_conversion.rs`) owns the decisions: which arguments translate, which contexts refuse, what fidelity a read earned, what the shim registers afterwards.
+The shim's C ABI seams are split into two layers. The **interposition** layer (`src/interpose.rs`, with the runtime binding in `src/core/core_binding.rs`) owns everything that touches C or the process: `dlopen`/`dlsym`, raw pointers, `CString`, `al_status_t`, the HLI DD version latch, the read-depth counter, and the context registry. The **seam policy** layer (`src/conversion/seam_policy.rs`, over `src/conversion/path_conversion.rs`) owns the decisions: which arguments translate, which contexts refuse, what fidelity a read earned, what the shim registers afterwards.
 
 The rule this ADR fixes is the direction of the dependency between them. A seam policy receives what it needs as values and returns the effects it wants performed. It never reads a global, never writes one, and never calls IMAS-Core directly.
 
@@ -13,7 +13,7 @@ Concretely, a seam policy function:
 
 ## Why the latch in particular
 
-`src/hli_version.rs` states that its latch cannot be set from a unit test by design: `LATCH` is a process-wide `OnceLock`, `cargo test` runs every test in one process, and two tests exercising it would race for who latches it first. That is the correct design for a process-wide property (ADR 0005), and this ADR does not reopen it.
+`src/version/hli_version.rs` states that its latch cannot be set from a unit test by design: `LATCH` is a process-wide `OnceLock`, `cargo test` runs every test in one process, and two tests exercising it would race for who latches it first. That is the correct design for a process-wide property (ADR 0005), and this ADR does not reopen it.
 
 But it has a consequence that decides this one. If a seam policy reads the latch, **no `cargo test` test can ever choose a version**, so every policy behaviour must be proven through an isolated ctest process against the C ABI. That is how the code arrived at roughly ninety top-level functions reachable only from the C suite, and a 2790-line module with seventeen unit tests. Passing the version in is what makes the decisions reachable from `cargo test` at all.
 

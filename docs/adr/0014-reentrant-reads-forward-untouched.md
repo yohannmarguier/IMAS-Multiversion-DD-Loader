@@ -18,7 +18,7 @@ Call depth is the property that actually distinguishes the two cases, it needs n
 
 A plugin that reads through `al_plugin_read_data` at top level — not underneath an in-flight read — is a first-level caller and still gets the full conversion policy that ADR 0002 and the plugin reentry seam specify. Every existing plugin-seam scenario drives the seam that way, and its behaviour is unchanged.
 
-Version-stamp discovery (`src/version_stamp.rs`) does not go through the converting wrapper at all. `interpose::open_occurrence` injects the same raw `al_read_data` binding into its stamp reader, with none of the ordinary read policy, because that read is the shim's own and is what *decides* whether conversion applies to the occurrence: subjecting it to conversion would re-enter the layer from inside the code that supplies its input. The injected call enters the depth counter for its entire Core call, so a read arriving from underneath it is reentrant by this rule rather than by an ordering accident.
+Version-stamp discovery (`src/version/version_stamp.rs`) does not go through the converting wrapper at all. `interpose::open_occurrence` injects the same raw `al_read_data` binding into its stamp reader, with none of the ordinary read policy, because that read is the shim's own and is what *decides* whether conversion applies to the occurrence: subjecting it to conversion would re-enter the layer from inside the code that supplies its input. The injected call enters the depth counter for its entire Core call, so a read arriving from underneath it is reentrant by this rule rather than by an ordering accident.
 
 ## Consequences
 

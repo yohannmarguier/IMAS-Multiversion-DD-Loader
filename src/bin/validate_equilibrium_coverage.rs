@@ -19,7 +19,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use imas_mvdd_loader::conversion_map::{ConversionMap, Direction, MatchKind, Outcome};
+use imas_mvdd_loader::conversion::conversion_map::{ConversionMap, Direction, MatchKind, Outcome};
 
 const APPROVED_ARTIFACT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/docs/3.39.0--4.1.1.xml");
 const LEFT_INVENTORY: &str = include_str!("../../docs/inventory/equilibrium-3.39.0.txt");
@@ -189,7 +189,7 @@ fn measure(
 
 fn candidate_paths<'a>(
     resolved_path: &'a str,
-    candidates: &'a [imas_mvdd_loader::conversion_map::CandidatePath],
+    candidates: &'a [imas_mvdd_loader::conversion::conversion_map::CandidatePath],
 ) -> Vec<&'a str> {
     if candidates.is_empty() {
         vec![resolved_path]
