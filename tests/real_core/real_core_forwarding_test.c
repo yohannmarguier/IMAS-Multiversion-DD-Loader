@@ -18,7 +18,7 @@
 
 #include <al_const.h>
 #include <hdf5.h>
-#include "../include/shim_test_support.h"
+#include "../support/shim_test_support.h"
 
 #ifndef REAL_CORE_TEST_PLUGIN_DIR
 #error "REAL_CORE_TEST_PLUGIN_DIR must name the directory containing the fixture plugin"

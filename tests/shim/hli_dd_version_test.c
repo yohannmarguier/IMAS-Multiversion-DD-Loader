@@ -23,7 +23,7 @@
 #error "RECORDING_STUB_PATH must be defined by the build (see CMakeLists.txt)"
 #endif
 
-#include "include/shim_test_support.h"
+#include "../support/shim_test_support.h"
 
 static int dataentry_call_count(void) {
     return int_from_stub("recording_stub_dataentry_call_count");

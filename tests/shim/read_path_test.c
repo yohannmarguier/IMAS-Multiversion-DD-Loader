@@ -12,7 +12,7 @@
 #error "RECORDING_STUB_PATH must be defined by CMakeLists.txt"
 #endif
 
-#include "include/shim_test_support.h"
+#include "../support/shim_test_support.h"
 
 typedef al_status_t (*read_data_fn)(int, const char *, const char *, void **, int, int, int *);
 typedef void (*set_reentrant_read_fn)(read_data_fn, const char *);

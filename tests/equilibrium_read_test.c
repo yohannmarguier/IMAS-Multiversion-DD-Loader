@@ -69,7 +69,7 @@
 #include <string.h>
 
 #include <al_const.h>
-#include "include/shim_test_support.h"
+#include "support/shim_test_support.h"
 
 #ifndef EQUILIBRIUM_FIXTURE_DIR
 #error "EQUILIBRIUM_FIXTURE_DIR must name the imas-python-fixtures/fixtures directory"

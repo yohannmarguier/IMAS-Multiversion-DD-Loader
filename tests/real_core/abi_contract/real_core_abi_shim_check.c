@@ -7,7 +7,7 @@
 CHECK_ABI_STATUS_LAYOUT();
 #define IMAS_ABI_SYMBOL(name, function_type)                                  \
     CHECK_ABI_FUNCTION(name, function_type);
-#include "../../include/abi_symbols.def"
+#include "../../abi/abi_symbols.def"
 #undef IMAS_ABI_SYMBOL
 
 /* Defined in real_core_abi_core_check.c, which alone includes IMAS-Core's

@@ -38,7 +38,7 @@
 #error "SHIM_LIBRARY_PATH must be defined by the build"
 #endif
 
-#include "include/shim_test_support.h"
+#include "../support/shim_test_support.h"
 
 typedef int (*int_accessor_fn)(void);
 typedef const char *(*indexed_str_accessor_fn)(int index);

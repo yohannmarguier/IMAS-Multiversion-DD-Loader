@@ -422,7 +422,7 @@ if(IMAS_MVDD_BUILD_TESTS)
             "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify_artifact_coverage_floor.cmake")
 
-    add_executable(abi_smoke "${CMAKE_CURRENT_SOURCE_DIR}/tests/abi_smoke.c")
+    add_executable(abi_smoke "${CMAKE_CURRENT_SOURCE_DIR}/tests/abi/abi_smoke.c")
     target_link_libraries(abi_smoke PRIVATE imas_mvdd_loader)
     add_dependencies(abi_smoke imas_mvdd_capi)
     set_target_properties(abi_smoke PROPERTIES
@@ -453,8 +453,8 @@ if(IMAS_MVDD_BUILD_TESTS)
     # keeping the anonymous status structs separate lets C compare their
     # layouts and every mirrored function type without declaration collisions.
     add_executable(real_core_abi_check
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_tests/real_core_abi_mismatch/real_core_abi_core_check.c"
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_tests/real_core_abi_mismatch/real_core_abi_shim_check.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/abi_contract/real_core_abi_core_check.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/abi_contract/real_core_abi_shim_check.c")
     target_include_directories(real_core_abi_check PRIVATE
         "${IMAS_MVDD_STAGE_DIR}/include")
     target_link_libraries(real_core_abi_check PRIVATE ${IMAS_CORE_AL_TARGET})
@@ -468,7 +468,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     # demonstrates that the ordinary ABI comparison catches drift loudly.
     add_test(NAME real-core-abi-rejects-mismatch
         COMMAND "${CMAKE_COMMAND}"
-            "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_tests/real_core_abi_mismatch"
+            "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/abi_contract"
             "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
             "-DSHIM_INCLUDE_DIR=${IMAS_MVDD_STAGED_INCLUDE_DIR}"
             "-DCORE_INCLUDE_DIRS=${_imas_core_include_dirs}"
@@ -488,7 +488,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     # runtime binding exists to avoid. runtime_binding_test only dlopen's the stub
     # itself, purely to read back its recorded state.
     add_executable(runtime_binding_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_binding_test.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/runtime_binding_test.c")
     target_link_libraries(runtime_binding_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
     target_compile_definitions(runtime_binding_test PRIVATE
         "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\""
@@ -545,7 +545,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     # gives each add_test its own process already.
     find_package(Threads REQUIRED)
     add_executable(hli_dd_version_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/hli_dd_version_test.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/hli_dd_version_test.c")
     target_link_libraries(hli_dd_version_test PRIVATE
         imas_mvdd_loader ${CMAKE_DL_LIBS} Threads::Threads)
     target_compile_definitions(hli_dd_version_test PRIVATE
@@ -593,7 +593,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     # wide, so each scenario needs its own fresh process, same as
     # hli_dd_version_test's scenarios.
     add_executable(version_discovery_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/version_discovery_test.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/version_discovery_test.c")
     target_link_libraries(version_discovery_test PRIVATE
         imas_mvdd_loader ${CMAKE_DL_LIBS})
     target_compile_definitions(version_discovery_test PRIVATE
@@ -711,7 +711,7 @@ if(IMAS_MVDD_BUILD_TESTS)
 
     # --- Issue #56: ordinary read-path outcomes through the public C ABI ---
     add_executable(read_path_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/read_path_test.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/read_path_test.c")
     target_link_libraries(read_path_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
     target_compile_definitions(read_path_test PRIVATE
         "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
@@ -894,7 +894,7 @@ if(IMAS_MVDD_BUILD_TESTS)
 
     # --- Issue #64: al_write_data / al_delete_data refusal through the public C ABI ---
     add_executable(write_delete_conversion_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/write_delete_conversion_test.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/write_delete_conversion_test.c")
     target_link_libraries(write_delete_conversion_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
     target_compile_definitions(write_delete_conversion_test PRIVATE
         "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
@@ -968,7 +968,7 @@ if(IMAS_MVDD_BUILD_TESTS)
 
     # --- Issue #61: arraystruct path conversion through the public C ABI ---
     add_executable(arraystruct_path_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/arraystruct_path_test.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/arraystruct_path_test.c")
     target_link_libraries(arraystruct_path_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
     target_compile_definitions(arraystruct_path_test PRIVATE
         "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
@@ -1019,7 +1019,7 @@ if(IMAS_MVDD_BUILD_TESTS)
 
     # --- Issue #62: al_read_data through a live arraystruct context -------
     add_executable(nested_context_read_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/nested_context_read_test.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/nested_context_read_test.c")
     target_link_libraries(nested_context_read_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
     target_compile_definitions(nested_context_read_test PRIVATE
         "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
@@ -1072,7 +1072,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     # al_iterate_over_arraystruct, al_close_pulse) against the recording
     # stub --------------------------------------------------------------
     add_executable(context_lifecycle_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/context_lifecycle_test.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/context_lifecycle_test.c")
     target_link_libraries(context_lifecycle_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
     target_compile_definitions(context_lifecycle_test PRIVATE
         "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
@@ -1117,7 +1117,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     # creation, path translation, and lifecycle behavior as their ordinary
     # counterparts --------------------------------------------------------
     add_executable(plugin_reentry_policy_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/plugin_reentry_policy_test.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/plugin_reentry_policy_test.c")
     target_link_libraries(plugin_reentry_policy_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
     target_compile_definitions(plugin_reentry_policy_test PRIVATE
         "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
@@ -1249,7 +1249,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     # "returned unchanged" is a claim about the shim rather than about a
     # placeholder string no rule could have touched either way.
     add_executable(scoped_passthrough_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/scoped_passthrough_test.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/scoped_passthrough_test.c")
     target_link_libraries(scoped_passthrough_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
     target_compile_definitions(scoped_passthrough_test PRIVATE
         "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\""
@@ -1302,7 +1302,7 @@ if(IMAS_MVDD_BUILD_TESTS)
     # data, plugin, utility, and version seams through a legal HDF5 lifecycle
     # unconditionally rather than making this coverage opt-in.
     add_library(real_core_test_plugin MODULE
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_tests/real_core_test_plugin.cpp")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/real_core_test_plugin.cpp")
     target_include_directories(real_core_test_plugin PRIVATE ${_imas_core_include_dirs})
     target_compile_features(real_core_test_plugin PRIVATE cxx_std_17)
     set_target_properties(real_core_test_plugin PROPERTIES
@@ -1312,7 +1312,7 @@ if(IMAS_MVDD_BUILD_TESTS)
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
 
     add_executable(real_core_forwarding_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core_tests/real_core_forwarding_test.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/real_core_forwarding_test.c")
     find_package(HDF5 COMPONENTS C REQUIRED)
     target_include_directories(real_core_forwarding_test PRIVATE
         ${_imas_core_include_dirs}

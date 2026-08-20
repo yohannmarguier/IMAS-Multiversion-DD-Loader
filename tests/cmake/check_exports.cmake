@@ -96,7 +96,7 @@ owned_abi_exports("${SHIM_LIBRARY}" shim_owned_exports)
 # Keep the signature checker's X-macro manifest tied to the real exported
 # surface. The strict entry shape makes a malformed or multiline symbol entry
 # fail here instead of silently disappearing from signature coverage.
-file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../include/abi_symbols.def" manifest_lines
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../abi/abi_symbols.def" manifest_lines
     REGEX "^IMAS_ABI_SYMBOL\\(")
 set(manifest_exports)
 foreach(line IN LISTS manifest_lines)
@@ -110,7 +110,7 @@ list(REMOVE_DUPLICATES manifest_exports)
 list(SORT manifest_exports)
 
 # Read the declared owned-exports manifest the same mechanical way.
-file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../include/owned_exports.def" owned_manifest_lines
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../abi/owned_exports.def" owned_manifest_lines
     REGEX "^IMAS_MVDD_OWNED_EXPORT\\(")
 set(owned_manifest_exports)
 foreach(line IN LISTS owned_manifest_lines)

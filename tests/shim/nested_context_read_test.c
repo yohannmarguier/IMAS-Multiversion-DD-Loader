@@ -28,7 +28,7 @@
 #error "RECORDING_STUB_PATH must be defined by CMakeLists.txt"
 #endif
 
-#include "include/shim_test_support.h"
+#include "../support/shim_test_support.h"
 
 static int open_time_slice(int operation_ctx) {
     int size = -1;

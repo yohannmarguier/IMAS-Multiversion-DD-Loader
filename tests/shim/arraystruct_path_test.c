@@ -7,7 +7,7 @@
 #error "RECORDING_STUB_PATH must be defined by CMakeLists.txt"
 #endif
 
-#include "include/shim_test_support.h"
+#include "../support/shim_test_support.h"
 
 static void scenario_translates_renamed_container_and_timebase(void) {
     int operation_ctx = open_mismatched_equilibrium();

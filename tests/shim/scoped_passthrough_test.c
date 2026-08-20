@@ -38,7 +38,7 @@
 #error "EXPECTED_AL_VERSION must be defined by CMakeLists.txt"
 #endif
 
-#include "include/shim_test_support.h"
+#include "../support/shim_test_support.h"
 
 /* The two spellings of the one path `rename-beta-normal` relates. Reaching
  * IMAS-Core, or coming back from it, as the *other* one of this pair is
