@@ -70,7 +70,7 @@ set_tests_properties(runtime-binding-real-core-forwarding PROPERTIES
 # --- Issue #54: the first bidirectional translated read, against the
 # checked-in equilibrium HDF5 fixture pair rather than a throwaway pulse.
 add_executable(equilibrium_read_test
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/equilibrium_read_test.c")
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/equilibrium_read_test.c")
 target_include_directories(equilibrium_read_test PRIVATE ${_imas_core_include_dirs})
 target_compile_definitions(equilibrium_read_test PRIVATE
     "EQUILIBRIUM_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/imas-python-fixtures/fixtures\"")
