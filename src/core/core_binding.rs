@@ -39,7 +39,6 @@ use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::OnceLock;
 
 use crate::core::dl::Library;
-use crate::core::core_binding;
 use crate::{MAX_ERR_MSG_LEN, al_status_t};
 
 /// Explicit override, honoured before the bare soname — see the ADR's
@@ -305,10 +304,13 @@ pub(crate) fn core() -> Result<&'static CoreBinding, &'static al_status_t> {
 // wherever it lands.
 macro_rules! forward_status {
     ($function:ident($($argument:expr),* $(,)?)) => {
-        match crate::core_binding::core() {
+        unsafe {
+            match crate::core::core_binding::core() {
             Ok(binding) => (binding.$function)($($argument),*),
             Err(status) => *status,
         }
+        }
+
     };
 }
 // `macro_rules!` is textual and scoped to the rest of *this* file otherwise;
