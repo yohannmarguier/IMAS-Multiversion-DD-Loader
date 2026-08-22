@@ -1,0 +1,189 @@
+PATH                                                         4.1.1         3.39 no conv    STATUS    3.39 conv       STATUS    CONVERSION EFFECT
+===================================================================================================================================================
+
+-- IDS level ---------------------------------------------------------------------------------------------------------------------------------------
+ids_properties/homogeneous_time                                     1                1      SAME              1      SAME      unchanged
+vacuum_toroidal_field/r0                                 6.200000E+00     6.200000E+00      SAME   6.200000E+00      SAME      unchanged
+vacuum_toroidal_field/b0[2]                              5.300000E+00     5.300000E+00      SAME   5.300000E+00      SAME      unchanged
+time[2]                                                  1.000000E+00     1.000000E+00      SAME   1.000000E+00      SAME      unchanged
+time_slice/time                                          1.000000E+00     1.000000E+00      SAME   1.000000E+00      SAME      unchanged
+
+-- global_quantities -------------------------------------------------------------------------------------------------------------------------------
+global_quantities/ip                                    -1.500000E+07     1.500000E+07      FLIP  -1.500000E+07      SAME      sign corrected
+global_quantities/beta_pol                               6.500000E-01     6.500000E-01      SAME   6.500000E-01      SAME      unchanged
+global_quantities/beta_tor                               2.500000E-02     2.500000E-02      SAME   2.500000E-02      SAME      unchanged
+global_quantities/beta_tor_norm                          1.800000E+00                -     ONLY4   1.800000E+00      SAME      recovered
+global_quantities/li_3                                   8.500000E-01     8.500000E-01      SAME   8.500000E-01      SAME      unchanged
+global_quantities/volume                                 8.310000E+02     8.310000E+02      SAME   8.310000E+02      SAME      unchanged
+global_quantities/area                                   2.190000E+01     2.190000E+01      SAME   2.190000E+01      SAME      unchanged
+global_quantities/surface                                6.830000E+02     6.830000E+02      SAME   6.830000E+02      SAME      unchanged
+global_quantities/length_pol                             2.430000E+01     2.430000E+01      SAME   2.430000E+01      SAME      unchanged
+global_quantities/psi_axis                               7.500000E-01    -7.500000E-01      FLIP   7.500000E-01      SAME      sign corrected
+global_quantities/psi_magnetic_axis                      7.500000E-01                -     ONLY4   7.500000E-01      SAME      recovered
+global_quantities/psi_boundary                          -3.250000E+00     3.250000E+00      FLIP  -3.250000E+00      SAME      sign corrected
+global_quantities/rho_tor_boundary                       1.850000E+00                -     ONLY4   0.000000E+00      DIFF      created, wrong/default
+global_quantities/magnetic_axis/r                        6.350000E+00     6.350000E+00      SAME   6.350000E+00      SAME      unchanged
+global_quantities/magnetic_axis/z                        5.500000E-01     5.500000E-01      SAME   5.500000E-01      SAME      unchanged
+global_quantities/magnetic_axis/b_field_phi              5.200000E+00                -     ONLY4              -     ONLY4      unchanged/unavailable
+global_quantities/current_centre/r                       6.300000E+00     6.300000E+00      SAME   6.300000E+00      SAME      unchanged
+global_quantities/current_centre/z                       5.000000E-01     5.000000E-01      SAME   5.000000E-01      SAME      unchanged
+global_quantities/current_centre/velocity_z              1.500000E-01     1.500000E-01      SAME   1.500000E-01      SAME      unchanged
+global_quantities/q_axis                                 9.500000E-01     9.500000E-01      SAME   9.500000E-01      SAME      unchanged
+global_quantities/q_95                                   3.150000E+00     3.150000E+00      SAME   3.150000E+00      SAME      unchanged
+global_quantities/q_min/value                            9.200000E-01     9.200000E-01      SAME   9.200000E-01      SAME      unchanged
+global_quantities/q_min/rho_tor_norm                     1.500000E-01     1.500000E-01      SAME   1.500000E-01      SAME      unchanged
+global_quantities/q_min/psi_norm                         2.250000E-02                -     ONLY4   0.000000E+00      DIFF      created, wrong/default
+global_quantities/q_min/psi                              6.500000E-01                -     ONLY4   0.000000E+00      DIFF      created, wrong/default
+global_quantities/energy_mhd                             3.500000E+08     3.500000E+08      SAME   3.500000E+08      SAME      unchanged
+global_quantities/psi_external_average                  -5.500000E-01     5.500000E-01      FLIP  -5.500000E-01      SAME      sign corrected
+global_quantities/v_external                            -3.500000E-01     3.500000E-01      FLIP  -3.500000E-01      SAME      sign corrected
+global_quantities/plasma_inductance                      1.350000E-05     1.350000E-05      SAME   1.350000E-05      SAME      unchanged
+global_quantities/plasma_resistance                      4.500000E-09     4.500000E-09      SAME   4.500000E-09      SAME      unchanged
+
+-- boundary ----------------------------------------------------------------------------------------------------------------------------------------
+boundary/type                                                       1                1      SAME              1      SAME      unchanged
+boundary/outline/r[5]                                    8.300000E+00     8.300000E+00      SAME   8.300000E+00      SAME      unchanged
+boundary/outline/z[5]                                    5.500000E-01     5.500000E-01      SAME   5.500000E-01      SAME      unchanged
+boundary/psi_norm                                        9.950000E-01     9.950000E-01      SAME   9.950000E-01      SAME      unchanged
+boundary/psi                                            -3.250000E+00     3.250000E+00      FLIP  -3.250000E+00      SAME      sign corrected
+boundary/geometric_axis/r                                6.300000E+00     6.300000E+00      SAME   6.300000E+00      SAME      unchanged
+boundary/geometric_axis/z                                5.000000E-01     5.000000E-01      SAME   5.000000E-01      SAME      unchanged
+boundary/minor_radius                                    1.950000E+00     1.950000E+00      SAME   1.950000E+00      SAME      unchanged
+boundary/elongation                                      1.700000E+00     1.700000E+00      SAME   1.700000E+00      SAME      unchanged
+boundary/triangularity                                   4.500000E-01     4.500000E-01      SAME   4.500000E-01      SAME      unchanged
+boundary/triangularity_upper                             3.800000E-01     3.800000E-01      SAME   3.800000E-01      SAME      unchanged
+boundary/triangularity_lower                             5.200000E-01     5.200000E-01      SAME   5.200000E-01      SAME      unchanged
+boundary/squareness_upper_inner                          1.100000E-01     1.100000E-01      SAME   1.100000E-01      SAME      unchanged
+boundary/squareness_upper_outer                          1.200000E-01     1.200000E-01      SAME   1.200000E-01      SAME      unchanged
+boundary/squareness_lower_inner                          1.300000E-01     1.300000E-01      SAME   1.300000E-01      SAME      unchanged
+boundary/squareness_lower_outer                          1.400000E-01     1.400000E-01      SAME   1.400000E-01      SAME      unchanged
+boundary/closest_wall_point/r                            8.050000E+00                -     ONLY4   8.050000E+00      SAME      recovered
+boundary/closest_wall_point/z                            7.500000E-01                -     ONLY4   7.500000E-01      SAME      recovered
+boundary/closest_wall_point/distance                     3.500000E-01                -     ONLY4   3.500000E-01      SAME      recovered
+boundary/dr_dz_zero_point/r                              8.200000E+00                -     ONLY4   8.200000E+00      SAME      recovered
+boundary/dr_dz_zero_point/z                              4.500000E-01                -     ONLY4   4.500000E-01      SAME      recovered
+boundary/rho_tor                                         1.850000E+00                -     ONLY4  9.881313E-324      DIFF      created, invalid/default
+boundary/phi                                             1.220000E+02                -     ONLY4   0.000000E+00      DIFF      created, wrong/default
+boundary/phi_poloidal_current                            3.500000E+00                -     ONLY4   0.000000E+00      DIFF      created, wrong/default
+boundary/gap(*)                                                    AOS absent       —       AOS present        SAME      recovered AOS
+
+-- contour_tree ------------------------------------------------------------------------------------------------------------------------------------
+contour_tree/node(1)/critical_type                                  0                -     ONLY4              -     ONLY4      unavailable
+contour_tree/node(1)/r                                   6.350000E+00                -     ONLY4              -     ONLY4      unavailable
+contour_tree/node(1)/z                                   5.500000E-01                -     ONLY4              -     ONLY4      unavailable
+contour_tree/node(1)/psi                                 7.500000E-01                -     ONLY4              -     ONLY4      unavailable
+
+-- profiles_1d -------------------------------------------------------------------------------------------------------------------------------------
+profiles_1d/psi[4]                                      -2.500000E-01     2.500000E-01      FLIP  -2.500000E-01      SAME      sign corrected
+profiles_1d/psi_norm[4]                                  2.500000E-01                -     ONLY4              -     ONLY4      unavailable
+profiles_1d/phi[4]                                       5.000000E-01     5.000000E-01      SAME   5.000000E-01      SAME      unchanged
+profiles_1d/pressure[4]                                  9.000000E+04     9.000000E+04      SAME   9.000000E+04      SAME      unchanged
+profiles_1d/f[4]                                         3.290000E+01     3.290000E+01      SAME   3.290000E+01      SAME      unchanged
+profiles_1d/dpressure_dpsi[4]                            2.100000E+04    -2.100000E+04      FLIP   2.100000E+04      SAME      sign corrected
+profiles_1d/f_df_dpsi[4]                                 1.500000E+00    -1.500000E+00      FLIP   1.500000E+00      SAME      sign corrected
+profiles_1d/j_phi[4]                                    -1.000000E+06                -     ONLY4  -1.000000E+06      SAME      recovered
+profiles_1d/j_parallel[4]                               -1.100000E+06     1.100000E+06      FLIP  -1.100000E+06      SAME      sign corrected
+profiles_1d/q[4]                                         9.500000E-01     9.500000E-01      SAME   9.500000E-01      SAME      unchanged
+profiles_1d/magnetic_shear[4]                            5.000000E-02     5.000000E-02      SAME   5.000000E-02      SAME      unchanged
+profiles_1d/r_inboard[4]                                 6.300000E+00     6.300000E+00      SAME   6.300000E+00      SAME      unchanged
+profiles_1d/r_outboard[4]                                6.400000E+00     6.400000E+00      SAME   6.400000E+00      SAME      unchanged
+profiles_1d/rho_tor[4]                                   4.625000E-01     4.625000E-01      SAME   4.625000E-01      SAME      unchanged
+profiles_1d/rho_tor_norm[4]                              2.500000E-01     2.500000E-01      SAME   2.500000E-01      SAME      unchanged
+profiles_1d/dpsi_drho_tor[4]                            -3.500000E-01     3.500000E-01      FLIP  -3.500000E-01      SAME      sign corrected
+profiles_1d/geometric_axis/r[4]                          6.350000E+00     6.350000E+00      SAME   6.350000E+00      SAME      unchanged
+profiles_1d/geometric_axis/z[4]                          5.500000E-01     5.500000E-01      SAME   5.500000E-01      SAME      unchanged
+profiles_1d/elongation[4]                                1.200000E+00     1.200000E+00      SAME   1.200000E+00      SAME      unchanged
+profiles_1d/triangularity_upper[4]                       2.000000E-02     2.000000E-02      SAME   2.000000E-02      SAME      unchanged
+profiles_1d/triangularity_lower[4]                       3.000000E-02     3.000000E-02      SAME   3.000000E-02      SAME      unchanged
+profiles_1d/squareness_upper_inner[4]                    1.000000E-02     1.000000E-02      SAME   1.000000E-02      SAME      unchanged
+profiles_1d/squareness_upper_outer[4]                    2.000000E-02     2.000000E-02      SAME   2.000000E-02      SAME      unchanged
+profiles_1d/squareness_lower_inner[4]                    3.000000E-02     3.000000E-02      SAME   3.000000E-02      SAME      unchanged
+profiles_1d/squareness_lower_outer[4]                    4.000000E-02     4.000000E-02      SAME   4.000000E-02      SAME      unchanged
+profiles_1d/volume[4]                                    0.000000E+00     0.000000E+00      SAME   0.000000E+00      SAME      unchanged
+profiles_1d/rho_volume_norm[4]                           0.000000E+00     0.000000E+00      SAME   0.000000E+00      SAME      unchanged
+profiles_1d/dvolume_dpsi[4]                             -1.900000E+02     1.900000E+02      FLIP  -1.900000E+02      SAME      sign corrected
+profiles_1d/dvolume_drho_tor[4]                          1.200000E+02     1.200000E+02      SAME   1.200000E+02      SAME      unchanged
+profiles_1d/area[4]                                      0.000000E+00     0.000000E+00      SAME   0.000000E+00      SAME      unchanged
+profiles_1d/darea_dpsi[4]                               -4.900000E+00     4.900000E+00      FLIP  -4.900000E+00      SAME      sign corrected
+profiles_1d/darea_drho_tor[4]                            3.200000E+00     3.200000E+00      SAME   3.200000E+00      SAME      unchanged
+profiles_1d/surface[4]                                   0.000000E+00     0.000000E+00      SAME   0.000000E+00      SAME      unchanged
+profiles_1d/trapped_fraction[4]                          0.000000E+00     0.000000E+00      SAME   0.000000E+00      SAME      unchanged
+profiles_1d/gm1[4]                                       2.480000E-02     2.480000E-02      SAME   2.480000E-02      SAME      unchanged
+profiles_1d/gm2[4]                                       2.600000E-02     2.600000E-02      SAME   2.600000E-02      SAME      unchanged
+profiles_1d/gm3[4]                                       1.000000E+00     1.000000E+00      SAME   1.000000E+00      SAME      unchanged
+profiles_1d/gm4[4]                                       3.600000E-02     3.600000E-02      SAME   3.600000E-02      SAME      unchanged
+profiles_1d/gm5[4]                                       2.750000E+01     2.750000E+01      SAME   2.750000E+01      SAME      unchanged
+profiles_1d/gm6[4]                                       3.800000E-02     3.800000E-02      SAME   3.800000E-02      SAME      unchanged
+profiles_1d/gm7[4]                                       1.000000E+00     1.000000E+00      SAME   1.000000E+00      SAME      unchanged
+profiles_1d/gm8[4]                                       6.350000E+00     6.350000E+00      SAME   6.350000E+00      SAME      unchanged
+profiles_1d/gm9[4]                                       1.580000E-01     1.580000E-01      SAME   1.580000E-01      SAME      unchanged
+profiles_1d/b_field_average[4]                           5.250000E+00     5.250000E+00      SAME   5.250000E+00      SAME      unchanged
+profiles_1d/b_field_min[4]                               4.150000E+00     4.150000E+00      SAME   4.150000E+00      SAME      unchanged
+profiles_1d/b_field_max[4]                               6.350000E+00     6.350000E+00      SAME   6.350000E+00      SAME      unchanged
+profiles_1d/beta_pol[4]                                  5.000000E-02     5.000000E-02      SAME   5.000000E-02      SAME      unchanged
+profiles_1d/mass_density[4]                              3.400000E-07     3.400000E-07      SAME   3.400000E-07      SAME      unchanged
+
+-- profiles_2d(1) ----------------------------------------------------------------------------------------------------------------------------------
+profiles_2d(1)/grid/dim1[2]                              4.000000E+00     4.000000E+00      SAME   4.000000E+00      SAME      unchanged
+profiles_2d(1)/grid/dim2[3]                             -1.000000E+00    -1.000000E+00      SAME  -1.000000E+00      SAME      unchanged
+profiles_2d(1)/grid/volume_element[2x3]                  5.500000E-01     5.500000E-01      SAME   5.500000E-01      SAME      unchanged
+profiles_2d(1)/r[2x3]                                    4.000000E+00     4.000000E+00      SAME   4.000000E+00      SAME      unchanged
+profiles_2d(1)/z[2x3]                                   -1.000000E+00    -1.000000E+00      SAME  -1.000000E+00      SAME      unchanged
+profiles_2d(1)/psi[2x3]                                 -3.000000E-01     3.000000E-01      FLIP  -3.000000E-01      SAME      sign corrected
+profiles_2d(1)/theta[2x3]                                1.000000E-01     1.000000E-01      SAME   1.000000E-01      SAME      unchanged
+profiles_2d(1)/phi[2x3]                                  1.500000E+00     1.500000E+00      SAME   1.500000E+00      SAME      unchanged
+profiles_2d(1)/j_phi[2x3]                               -9.500000E+05                -     ONLY4  -9.500000E+05      SAME      recovered
+profiles_2d(1)/j_parallel[2x3]                          -1.050000E+06     1.050000E+06      FLIP  -1.050000E+06      SAME      sign corrected
+profiles_2d(1)/b_field_r[2x3]                            3.100000E-01     3.100000E-01      SAME   3.100000E-01      SAME      unchanged
+profiles_2d(1)/b_field_phi[2x3]                          3.100000E+00                -     ONLY4   3.100000E+00      SAME      recovered
+profiles_2d(1)/b_field_z[2x3]                            5.100000E-01     5.100000E-01      SAME   5.100000E-01      SAME      unchanged
+
+-- coordinate_system -------------------------------------------------------------------------------------------------------------------------------
+coordinate_system/grid/dim1[3]                           0.000000E+00     0.000000E+00      SAME   0.000000E+00      SAME      unchanged
+coordinate_system/grid/dim2[4]                           0.000000E+00     0.000000E+00      SAME   0.000000E+00      SAME      unchanged
+coordinate_system/r[3x4]                                 6.350000E+00     6.350000E+00      SAME   6.350000E+00      SAME      unchanged
+coordinate_system/z[3x4]                                 5.500000E-01     5.500000E-01      SAME   5.500000E-01      SAME      unchanged
+coordinate_system/jacobian[3x4]                          1.150000E+00     1.150000E+00      SAME   1.150000E+00      SAME      unchanged
+coordinate_system/tensor_covariant[108 tot]              1.050000E+00     1.050000E+00      SAME   1.050000E+00      SAME      unchanged
+coordinate_system/tensor_contravariant[108 tot]          2.050000E+00     2.050000E+00      SAME   2.050000E+00      SAME      unchanged
+
+-- ggd(1) ------------------------------------------------------------------------------------------------------------------------------------------
+ggd(1)/psi(1)/values[4]                                 -3.500000E-01     3.500000E-01      FLIP  -3.500000E-01      SAME      sign corrected
+ggd(1)/phi(1)/values[4]                                  1.350000E+00     1.350000E+00      SAME   1.350000E+00      SAME      unchanged
+ggd(1)/theta(1)/values[4]                                1.500000E-01     1.500000E-01      SAME   1.500000E-01      SAME      unchanged
+ggd(1)/j_phi(1)/values[4]                                9.600000E+05                -     ONLY4              -     ONLY4      not recovered
+ggd(1)/j_parallel(1)/values[4]                           1.060000E+06     1.060000E+06      SAME   1.060000E+06      SAME      unchanged
+ggd(1)/b_field_r(1)/values[4]                            3.200000E-01     3.200000E-01      SAME   3.200000E-01      SAME      unchanged
+ggd(1)/b_field_phi(1)/values[4]                          5.150000E+00                -     ONLY4              -     ONLY4      not recovered
+ggd(1)/b_field_z(1)/values[4]                            5.200000E-01     5.200000E-01      SAME   5.200000E-01      SAME      unchanged
+
+-- constraints -------------------------------------------------------------------------------------------------------------------------------------
+constraints/b_field_tor_vacuum_r/measured                3.286000E+01     3.286000E+01      SAME   3.286000E+01      SAME      unchanged
+constraints/b_field_tor_vacuum_r/reconstructed           3.280000E+01     3.280000E+01      SAME   3.280000E+01      SAME      unchanged
+constraints/diamagnetic_flux/measured                    3.100000E-02     3.100000E-02      SAME   3.100000E-02      SAME      unchanged
+constraints/ip/measured                                 -1.510000E+07     1.510000E+07      FLIP  -1.510000E+07      SAME      sign corrected
+constraints/ip/reconstructed                            -1.505000E+07     1.505000E+07      FLIP  -1.505000E+07      SAME      sign corrected
+constraints/chi_squared_reduced                          8.500000E-01                -     ONLY4  9.881313E-324      DIFF      created, invalid/default
+constraints/freedom_degrees_n                                     120                -     ONLY4              0      DIFF      created, wrong/default
+constraints/constraints_n                                         145                -     ONLY4              0      DIFF      created, wrong/default
+constraints/b_field_pol_probe(*)                                  AOS absent        —       AOS present        SAME      recovered AOS
+constraints/mse_polarization_angle(*)                            AOS absent        —       AOS present        SAME      recovered AOS
+constraints/iron_core_segment(1)/magnetization_r/mea     1.310000E+00                -     ONLY4   1.310000E+00      SAME      recovered
+constraints/iron_core_segment(1)/magnetization_z/mea     1.410000E+00                -     ONLY4   1.410000E+00      SAME      recovered
+constraints/j_phi(*)                                             AOS absent        —       AOS absent         —         unchanged/unavailable
+constraints/flux_loop(1)/measured                       -1.150000E+00     1.150000E+00      FLIP  -1.150000E+00      SAME      sign corrected
+constraints/n_e(1)/measured                              8.100000E+19     8.100000E+19      SAME   8.100000E+19      SAME      unchanged
+constraints/pressure(1)/measured                         8.100000E+04     8.100000E+04      SAME   8.100000E+04      SAME      unchanged
+constraints/q(1)/measured                                1.210000E+00     1.210000E+00      SAME   1.210000E+00      SAME      unchanged
+
+-- constraints chi_squared_r/z ----------------------------------------------------------------------------------------------------------------------
+constraints/x_point(1)/position_measured/r               5.350000E+00     5.350000E+00      SAME   5.350000E+00      SAME      unchanged
+constraints/x_point(1)/position_measured/z              -3.350000E+00    -3.350000E+00      SAME  -3.350000E+00      SAME      unchanged
+constraints/x_point(1)/chi_squared_r                     5.000000E-02     5.000000E-02      SAME              -     ONLY4      dropped/unmappable
+constraints/x_point(1)/chi_squared_z                     6.000000E-02     6.000000E-02      SAME              -     ONLY4      dropped/unmappable
+constraints/strike_point(1)/chi_squared_r                5.000000E-02     5.000000E-02      SAME              -     ONLY4      dropped/unmappable
+constraints/strike_point(1)/chi_squared_z                6.000000E-02     6.000000E-02      SAME              -     ONLY4      dropped/unmappable
+
+-- convergence --------------------------------------------------------------------------------------------------------------------------------------
+convergence/iterations_n                                           42               42      SAME             42      SAME      unchanged
+convergence/grad_shafranov_deviation_value               1.500000E-07     1.500000E-07      SAME   1.500000E-07      SAME      unchanged
