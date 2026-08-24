@@ -216,8 +216,8 @@ forbid it," not as a supported deployment recipe.
 
 ### Draining the loss log
 
-A non-exact but served read is logged, not silently accepted. Two
-shim-owned exports let a caller inspect it without allocating:
+A non-exact read is logged, not silently accepted. Three shim-owned exports
+let a caller inspect it without allocating:
 
 ```c
 int count = 0;
@@ -226,8 +226,11 @@ imas_mvdd_context_loss_count(ctx_id, &count);   /* entries on ctx_id's root cont
 for (int i = 0; i < count; ++i) {
     char path[256];
     int verdict = 0;
+    int operation = 0;
     imas_mvdd_context_loss_at(ctx_id, i, path, sizeof(path), &verdict);
+    imas_mvdd_context_loss_operation_at(ctx_id, i, &operation);
     /* verdict is IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, _LOSSY, or _UNMAPPABLE */
+    /* operation is IMAS_MVDD_LOSS_OPERATION_READ or _WRITE */
 }
 ```
 

@@ -57,6 +57,13 @@ static void check_loss_at(int ctx_id, int index, const char *expected_path, int 
     CHECK(verdict == expected_verdict);
 }
 
+static void check_loss_operation_at(int ctx_id, int index, int expected_operation) {
+    int operation = -1;
+    al_status_t status = imas_mvdd_context_loss_operation_at(ctx_id, index, &operation);
+    CHECK(status.code == 0);
+    CHECK(operation == expected_operation);
+}
+
 static void check_read_refusal(int operation_ctx, const char *field, int datatype,
                                const char *expected_message) {
     int reads_before = int_from_stub("recording_stub_read_call_count");
@@ -137,9 +144,10 @@ static void scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log(void) {
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/ggd/b_field_phi",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY);
+    check_loss_operation_at(operation_ctx, 0, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("read_path_test merged-read-retains-a-lossy-verdict-in-the-loss-log: a merged "
-           "rule's lossy verdict reached the queryable loss log\n");
+           "rule's lossy verdict and read operation reached the queryable loss log\n");
 }
 
 /* ADR 0014: a read arriving while the shim's own read is in flight was issued
@@ -356,6 +364,65 @@ static void scenario_loss_at_insufficient_buffer_is_refused(void) {
 
     printf("read_path_test loss-at-insufficient-buffer-is-refused: a too-small buffer was "
            "rejected without a partial write\n");
+}
+
+static void scenario_loss_operation_at_null_output_is_refused(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+
+    al_status_t status = imas_mvdd_context_loss_operation_at(operation_ctx, 0, NULL);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+
+    printf("read_path_test loss-operation-at-null-output-is-refused: a null operation output "
+           "was rejected without dereferencing it\n");
+}
+
+static void scenario_loss_operation_at_negative_index_is_refused(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    int operation = -1;
+
+    al_status_t status = imas_mvdd_context_loss_operation_at(operation_ctx, -1, &operation);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(operation == -1);
+
+    printf("read_path_test loss-operation-at-negative-index-is-refused: a negative index was "
+           "rejected without writing to operation\n");
+}
+
+static void scenario_loss_operation_at_out_of_range_index_is_refused(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    CHECK(loss_count(operation_ctx) == 1);
+    int operation = -1;
+
+    al_status_t status = imas_mvdd_context_loss_operation_at(operation_ctx, 1, &operation);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(operation == -1);
+
+    printf("read_path_test loss-operation-at-out-of-range-index-is-refused: an index at the "
+           "reported count was rejected without writing to operation\n");
+}
+
+static void scenario_loss_operation_at_untracked_context_is_refused_after_zero_count(void) {
+    int count = -1;
+    CHECK(imas_mvdd_context_loss_count(999, &count).code == 0);
+    CHECK(count == 0);
+    int operation = -1;
+
+    al_status_t status = imas_mvdd_context_loss_operation_at(999, 0, &operation);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(operation == -1);
+
+    printf("read_path_test loss-operation-at-untracked-context-is-refused-after-zero-count: an "
+           "untracked context reported zero entries and refused its out-of-range query safely\n");
 }
 
 static void scenario_merged_read_falls_through_to_next_candidate(void) {
@@ -719,6 +786,10 @@ int main(int argc, char **argv) {
         {"loss-at-negative-index-is-refused", scenario_loss_at_negative_index_is_refused},
         {"loss-at-out-of-range-index-is-refused", scenario_loss_at_out_of_range_index_is_refused},
         {"loss-at-insufficient-buffer-is-refused", scenario_loss_at_insufficient_buffer_is_refused},
+        {"loss-operation-at-null-output-is-refused", scenario_loss_operation_at_null_output_is_refused},
+        {"loss-operation-at-negative-index-is-refused", scenario_loss_operation_at_negative_index_is_refused},
+        {"loss-operation-at-out-of-range-index-is-refused", scenario_loss_operation_at_out_of_range_index_is_refused},
+        {"loss-operation-at-untracked-context-is-refused-after-zero-count", scenario_loss_operation_at_untracked_context_is_refused_after_zero_count},
     };
     return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

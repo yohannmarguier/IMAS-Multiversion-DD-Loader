@@ -63,6 +63,13 @@ static void check_loss_at(int ctx_id, int index, const char *expected_path, int 
     CHECK(verdict == expected_verdict);
 }
 
+static void check_loss_operation_at(int ctx_id, int index, int expected_operation) {
+    int operation = -1;
+    al_status_t status = imas_mvdd_context_loss_operation_at(ctx_id, index, &operation);
+    CHECK(status.code == 0);
+    CHECK(operation == expected_operation);
+}
+
 /* --- the core gap: a relative read beneath a *renamed* AOS anchor -------- */
 
 static void scenario_relative_field_and_timebase_resolve_through_renamed_child(void) {
@@ -231,12 +238,14 @@ static void scenario_moved_read_through_nested_child_retains_lossy_verdict_on_ro
     CHECK(loss_count(time_slice_ctx) == 1);
     check_loss_at(time_slice_ctx, 0, "time_slice/boundary_separatrix/gap/r",
                   IMAS_MVDD_FIDELITY_LOSSY);
+    check_loss_operation_at(time_slice_ctx, 0, IMAS_MVDD_LOSS_OPERATION_READ);
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r",
                   IMAS_MVDD_FIDELITY_LOSSY);
+    check_loss_operation_at(operation_ctx, 0, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("nested_context_read_test moved-read-through-nested-child-retains-lossy-verdict-on-root: "
-           "a certainly-lossy nested read appended the complete DD path to its root's loss log\n");
+           "a certainly-lossy nested read and its operation reached its root's loss log\n");
 }
 
 static void scenario_merged_read_through_nested_child_retains_potentially_lossy_verdict(void) {
