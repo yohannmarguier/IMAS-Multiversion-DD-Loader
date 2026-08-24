@@ -37,7 +37,7 @@ Fixing a value on its first use for the life of the process: an identical later 
 _Avoid_: lock, freeze, pin, cache, memoise.
 
 **shim-owned export**:
-A public symbol this project defines rather than mirrors from IMAS-Core, carrying the `imas_mvdd_` prefix and listed explicitly in the export-drift check. There are three: `imas_mvdd_set_hli_dd_version`, `imas_mvdd_context_loss_count` and `imas_mvdd_context_loss_at`. None of them allocates memory that crosses the boundary.
+A public symbol this project defines rather than mirrors from IMAS-Core, carrying the `imas_mvdd_` prefix and listed explicitly in the export-drift check. There are three — `imas_mvdd_set_hli_dd_version`, `imas_mvdd_context_loss_count` and `imas_mvdd_context_loss_at` — and a fourth, `imas_mvdd_context_loss_operation_at`, is decided but not yet built. None of them allocates memory that crosses the boundary.
 _Avoid_: extra symbol, extension, custom API, private API — they are public and supported.
 **IDS name**:
 The stable logical key of an IDS, such as `equilibrium`. It selects the same IDS across DD versions and is not a DD path that the shim translates.
@@ -75,15 +75,35 @@ A DD-path selector with wildcard characters. It is a fallback and applies only w
 A conversion rule for one requested DD path, or for a defined set of related DD paths. It can state a path change and a value transformation. A whole-IDS converter may apply these same rules while it walks an IDS.
 
 **value transformation**:
-A required change to data values during conversion, such as a COCOS sign change or a unit conversion. It is distinct from DD-path translation and is explicit and machine-readable in a path-level rule.
+A required change to data values during conversion, such as a COCOS sign change or a unit conversion. It is distinct from DD-path translation, is explicit and machine-readable in a path-level rule, and carries the direction it applies in — towards the stored DD version or towards the HLI's. Not every value transformation can be inverted.
 
 **fidelity verdict**:
 The conversion outcome classification retained by the shim: **exact**, **potentially lossy, unverified**, **certainly lossy**, or **unmappable**. A potentially lossy verdict describes a rule whose loss condition was not checked during the read; it does not assert that data was discarded.
 _Avoid_: using "lossy" without saying whether loss is potential or certain.
 
+**declared fidelity**:
+The fidelity a conversion rule states for each direction in the conversion-map artifact. It describes what a *read* through that rule costs, so a write derives its own verdict rather than adopting it.
+_Avoid_: treating it as operation-neutral, or as the fidelity verdict an operation actually earned.
+
+**best-effort write**:
+The shim's write policy: store the value where it can be placed faithfully, and refuse where it cannot, rather than store an approximation.
+_Avoid_: lossy write, partial write — those name an outcome or a workflow, not the policy.
+
+**migration write**:
+A write that changes an IDS occurrence's stored DD version and rewrites its DD-version stamp. Out of scope for the shim, whose writes leave both as they are.
+_Avoid_: conversion write, upgrade, in-place conversion.
+
+**escaping rule**:
+A conversion rule whose HLI-side selector falls at or under a requested DD path, but at least one of whose stored-side targets falls outside the stored subtree that path resolves to.
+_Avoid_: crossing rule, leaking rule, straddling rule.
+
 **loss log**:
-The list of non-exact reads recorded on a root context record: for each, the DD path as the HLI asked for it and its fidelity verdict. It is the only channel by which loss reaches the caller, because a successful read is forced to `al_status_t.code == 0`. The HLI drains it before `al_end_action` ends the context; it does not outlive the context. See `docs/adr/0012-loss-reaches-the-caller-by-a-context-log.md`.
-_Avoid_: report, journal, accumulator, diagnostics — and never call it an error channel; the reads it records succeeded.
+The list of non-exact reads and writes recorded on a root context record: for each, the DD path as the HLI asked for it, its fidelity verdict, and which operation produced it. It is the only channel by which loss reaches the caller when the operation *succeeded*, because a success is forced to `al_status_t.code == 0`. The HLI drains it before `al_end_action` ends the context; it does not outlive the context. See `docs/adr/0012-loss-reaches-the-caller-by-a-context-log.md`.
+_Avoid_: report, journal, accumulator, diagnostics — and never call it an error channel; the reads and writes it records succeeded.
+
+**operation** (of a loss log entry):
+Which kind of call produced an entry: a read or a write. Deliberately not called a direction, because that word already names which side of a DD-version pair supplies a path.
+_Avoid_: direction, mode, kind.
 
 **read outcome**:
 Which of three things one `al_read_data` call did: **failure** (`code != 0`), **not-found** (`code == 0` with a null data pointer), or **data**. One shim classifier function decides it, and nothing else in the shim compares the data pointer to null.

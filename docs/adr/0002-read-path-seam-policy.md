@@ -2,9 +2,17 @@
 
 The shim must apply one explicit policy at each ABI seam. This policy keeps the
 IDS name as a stable logical key, discovers the stored DD version for each IDS
-occurrence, translates DD paths only where a context supplies that version, and
-refuses writes across known DD-version differences. It prevents path conversion
-from being scattered across individual forwarding functions.
+occurrence, and translates DD paths only where a context supplies that version.
+It prevents path conversion from being scattered across individual forwarding
+functions.
+
+This ADR originally also refused every write across a known DD-version
+difference. That is no longer the policy: ADR 0016 replaces it with a
+best-effort write path, and ADR 0017 gives delete its own rules. The table row
+below records where those decisions now live. The title stays as it is —
+"read-path" undersells the content, but every cross-reference in `CLAUDE.md`,
+the other ADRs and the source comments names this file, and the churn of a
+rename outweighs the inaccuracy.
 
 | ABI function | Shim action |
 |---|---|
@@ -15,7 +23,8 @@ from being scattered across individual forwarding functions.
 | `al_begin_arraystruct_action` | Translate `path` and `timebase` before calling IMAS-Core. On success, register the AoS context. |
 | `al_iterate_over_arraystruct` | Forward unchanged. The registry stores no AoS current-element state. |
 | `al_read_data` | Resolve and translate `field` and `timebase` when versions differ. Convert returned values before the HLI receives them. If no stored version is available, forward unchanged and do not convert. |
-| `al_write_data`, `al_delete_data` | If known versions differ, return failure without calling IMAS-Core. Otherwise forward unchanged. |
+| `al_write_data` | **Superseded by ADR 0016.** Best effort: translate and write where it is safe, refuse before calling IMAS-Core where it is not, and never return success for data that was not stored. Where versions match, or no stored version is available, forward unchanged as before. |
+| `al_delete_data` | **Superseded by ADR 0017.** Fan out over every resolved candidate, probing each one first; refuse a subtree delete with an escaping rule; forward the empty path unchanged. Where versions match, or no stored version is available, forward unchanged as before. |
 | `al_end_action` | On success, remove only that context's record. Parent contexts do not own child-context lifetimes. |
 | `al_close_pulse` | Forward unchanged. It releases no context ID and therefore does not mutate the registry. |
 | `al_get_occurrences` | Forward unchanged. IDS names are stable. |
