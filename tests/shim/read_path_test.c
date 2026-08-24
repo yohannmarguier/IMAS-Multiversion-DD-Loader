@@ -21,10 +21,10 @@ typedef void (*set_reentrant_read_fn)(read_data_fn, const char *);
  * the shim's read is still on the stack, with `field` as its argument — what
  * real IMAS-Core does on ELF, where its internal call to its own public
  * `al_read_data` binds to the shim's exported definition. */
-static void arm_reentrant_read(const char *field) {
+static void arm_reentrant_read(read_data_fn callback, const char *field) {
     set_reentrant_read_fn arm =
         (set_reentrant_read_fn)stub_symbol_or_die("recording_stub_set_reentrant_read");
-    arm(al_read_data, field);
+    arm(callback, field);
 }
 
 static al_status_t read_data(int ctx_id, const char *field, const char *timebase, void **data) {
@@ -156,7 +156,7 @@ static void scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log(void) {
  * caller that issued one read. */
 static void scenario_reentrant_read_is_forwarded_unchanged(void) {
     int operation_ctx = open_mismatched_equilibrium();
-    arm_reentrant_read("time_slice/boundary_separatrix/gap/r");
+    arm_reentrant_read(al_read_data, "time_slice/boundary_separatrix/gap/r");
 
     void *data = NULL;
     CHECK(read_data(operation_ctx, "time_slice/boundary_separatrix/gap/r", "", &data).code == 0);
@@ -186,7 +186,7 @@ static void scenario_reentrant_read_is_forwarded_unchanged(void) {
  * was guarding against by a weaker means. */
 static void scenario_reentrant_read_does_not_reapply_a_sign_flip(void) {
     int operation_ctx = open_mismatched_equilibrium();
-    arm_reentrant_read("time_slice/profiles_1d/psi");
+    arm_reentrant_read(al_read_data, "time_slice/profiles_1d/psi");
 
     int size[1] = {0};
     void *data = NULL;
@@ -204,6 +204,30 @@ static void scenario_reentrant_read_does_not_reapply_a_sign_flip(void) {
 
     printf("read_path_test reentrant-read-does-not-reapply-a-sign-flip: the COCOS flip was "
            "applied exactly once despite a read re-entering mid-flight\n");
+}
+
+/* The plugin-read ABI shares the read policy with its ordinary twin, but it
+ * still needs a public-seam proof of the one counter. The callback crosses
+ * back into ordinary `al_read_data`; without a shared guard it would resolve
+ * the HLI spelling again and retain a second loss entry. */
+static void scenario_plugin_reentrant_read_is_forwarded_across_the_ordinary_family(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    const char *field = "time_slice/boundary_separatrix/gap/r";
+    arm_reentrant_read(al_read_data, field);
+
+    void *data = NULL;
+    int size[1] = {0};
+    CHECK(al_plugin_read_data(operation_ctx, field, "", &data, 52 /* DOUBLE_DATA */, 1, size)
+              .code == 0);
+    CHECK(data != NULL);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, field, IMAS_MVDD_FIDELITY_LOSSY);
+    CHECK(int_from_stub("recording_stub_reentrant_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_field"), field) == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_timebase"), "") == 0);
+
+    printf("read_path_test plugin-reentrant-read-is-forwarded-across-the-ordinary-family: a "
+           "read beneath plugin reentry bypassed conversion and loss retention\n");
 }
 
 static void scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log(void) {
@@ -675,6 +699,8 @@ int main(int argc, char **argv) {
         {"sign-flip-rank-exceeding-maxdim-refuses-without-core-call", scenario_sign_flip_rank_exceeding_maxdim_refuses_without_core_call},
         {"reentrant-read-is-forwarded-unchanged", scenario_reentrant_read_is_forwarded_unchanged},
         {"reentrant-read-does-not-reapply-a-sign-flip", scenario_reentrant_read_does_not_reapply_a_sign_flip},
+        {"plugin-reentrant-read-is-forwarded-across-the-ordinary-family",
+         scenario_plugin_reentrant_read_is_forwarded_across_the_ordinary_family},
         {"sign-flip-invalid-shape-refuses-without-modifying-buffer", scenario_sign_flip_invalid_shape_refuses_without_modifying_buffer},
         {"sign-flip-shape-override-respects-read-rank", scenario_sign_flip_shape_override_respects_read_rank},
         {"sign-flip-not-found-skips-value-transformation", scenario_sign_flip_not_found_skips_value_transformation},

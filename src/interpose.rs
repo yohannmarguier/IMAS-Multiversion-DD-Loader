@@ -18,8 +18,8 @@
 //!   place after the read.
 //! - ADR 0012 — the three-way read outcome and the refusal/loss reporting
 //!   channel, via [`crate::conversion::read_outcome`] and the registry's loss log.
-//! - ADR 0014 — a read arriving beneath an in-flight one is forwarded
-//!   untouched, by call depth (see [`SHIM_READ_DEPTH`] and [`ReadDepthGuard`]).
+//! - ADR 0014 — a seam arriving beneath an in-flight one is forwarded
+//!   untouched, by call depth (see [`SHIM_REENTRY_DEPTH`] and [`ReentryGuard`]).
 //!
 //! Issue #101 split this layer from `core_binding` and `seam_policy` in a
 //! series rather than one unreviewable change. The layer used to be called
@@ -40,36 +40,36 @@ use crate::registry::context_registry::{ConversionRecord, MapCacheKey, REGISTRY}
 use crate::version::version_stamp;
 
 thread_local! {
-    /// How many shim read seams this thread is currently inside (ADR 0014).
-    /// Only ever read through [`ReadDepthGuard`]; a thread-local rather than a
+    /// How many guarded shim seams this thread is currently inside (ADR 0014).
+    /// Only ever read through [`ReentryGuard`]; a thread-local rather than a
     /// global because the depth describes one call stack, and ADR 0003 already
     /// puts concurrent use of a single IMAS-Core context out of scope.
-    static SHIM_READ_DEPTH: Cell<u32> = const { Cell::new(0) };
+    static SHIM_REENTRY_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
 
-/// Raises the thread's shim-read depth for as long as one read seam is on the
-/// stack, so a read that arrives *underneath* an in-flight one can recognise
-/// itself as reentrant (ADR 0014). The guard must wrap the forwarded IMAS-Core
-/// call too, not just the resolution around it — the reentrant call happens
-/// inside that call.
-struct ReadDepthGuard;
+/// Raises the thread's shim-seam depth for as long as a guarded seam is on the
+/// stack, so a call that arrives *underneath* an in-flight IMAS-Core call can
+/// recognise itself as reentrant (ADR 0014). The guard wraps the forwarded
+/// call too, not just any conversion policy around it — the reentrant call
+/// happens inside that call.
+struct ReentryGuard;
 
-impl ReadDepthGuard {
-    /// Enters a read seam, reporting whether one was already in flight on this
+impl ReentryGuard {
+    /// Enters a guarded seam, reporting whether one was already in flight on this
     /// thread.
     fn enter() -> (Self, bool) {
-        let already_reading = SHIM_READ_DEPTH.with(|depth| {
+        let already_entered = SHIM_REENTRY_DEPTH.with(|depth| {
             let entered = depth.get();
             depth.set(entered + 1);
             entered > 0
         });
-        (Self, already_reading)
+        (Self, already_entered)
     }
 }
 
-impl Drop for ReadDepthGuard {
+impl Drop for ReentryGuard {
     fn drop(&mut self) {
-        SHIM_READ_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        SHIM_REENTRY_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
     }
 }
 
@@ -515,7 +515,7 @@ unsafe fn open_occurrence(
         version_stamp::discover(
             opened_octx_id,
             |ctx_id, field, timebase, data, datatype, dim, size| {
-                let (_depth_guard, _already_reading) = ReadDepthGuard::enter();
+                let (_reentry_guard, _already_entered) = ReentryGuard::enter();
                 forward_status!(read_data(
                     ctx_id, field, timebase, data, datatype, dim, size
                 ))
@@ -1077,8 +1077,8 @@ unsafe fn read_data_impl(
     // an HLI one, apply a second value transformation, and retain a loss entry
     // for a read the caller never issued. Forward it exactly as received
     // (ADR 0014).
-    let (_depth_guard, already_reading) = ReadDepthGuard::enter();
-    if already_reading {
+    let (_reentry_guard, already_entered) = ReentryGuard::enter();
+    if already_entered {
         return call_read(family, ctx_id, field, timebase, data, datatype, dim, size);
     }
     let Some(record) = live_conversion_record(ctx_id) else {
@@ -1530,6 +1530,10 @@ fn write_data_impl(
     dim: c_int,
     size: *mut c_int,
 ) -> al_status_t {
+    let (_reentry_guard, already_entered) = ReentryGuard::enter();
+    if already_entered {
+        return call_write(family, ctx_id, field, timebase, data, datatype, dim, size);
+    }
     if let Some(record) = live_conversion_record(ctx_id) {
         return contextual_refusal(
             &record,
@@ -1552,6 +1556,10 @@ fn write_data_impl(
 /// `path` must be a valid, NUL-terminated C string, or null where
 /// IMAS-Core's own contract allows it.
 pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t {
+    let (_reentry_guard, already_entered) = ReentryGuard::enter();
+    if already_entered {
+        return forward_status!(delete_data(ctx, path));
+    }
     if let Some(record) = live_conversion_record(ctx) {
         return contextual_refusal(
             &record,
@@ -1623,10 +1631,12 @@ pub(crate) unsafe fn unbind_plugin(
 }
 
 pub(crate) fn bind_readback_plugins(ctx_id: c_int) -> al_status_t {
+    let (_reentry_guard, _already_entered) = ReentryGuard::enter();
     forward_status!(bind_readback_plugins(ctx_id))
 }
 
 pub(crate) fn unbind_readback_plugins(ctx_id: c_int) -> al_status_t {
+    let (_reentry_guard, _already_entered) = ReentryGuard::enter();
     forward_status!(unbind_readback_plugins(ctx_id))
 }
 
@@ -1638,6 +1648,7 @@ pub(crate) unsafe fn is_plugin_registered(
 }
 
 pub(crate) fn write_plugins_metadata(ctx_id: c_int) -> al_status_t {
+    let (_reentry_guard, _already_entered) = ReentryGuard::enter();
     forward_status!(write_plugins_metadata(ctx_id))
 }
 

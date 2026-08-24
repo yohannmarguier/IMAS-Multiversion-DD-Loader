@@ -327,6 +327,11 @@ add_stub_test(read-path-reentrant-read-does-not-reapply-a-sign-flip
     STAMP_VERSION 3.39.0
     ENV "RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-9e40,3.2,-4.0")
 
+add_stub_test(read-path-plugin-reentrant-read-is-forwarded-across-the-ordinary-family
+    read_path_test plugin-reentrant-read-is-forwarded-across-the-ordinary-family
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+
 add_stub_test(read-path-sign-flip-invalid-shape-refuses-without-modifying-buffer
     read_path_test sign-flip-invalid-shape-refuses-without-modifying-buffer
     HLI_DD_VERSION 4.1.1
@@ -492,6 +497,35 @@ add_test(NAME write-delete-delete-conversion-disabled-forwards-unchanged
         $<TARGET_FILE:write_delete_conversion_test> delete-conversion-disabled-forwards-unchanged)
 set_tests_properties(write-delete-delete-conversion-disabled-forwards-unchanged PROPERTIES
     ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+
+# --- Issue #123: one reentry guard for every seam IMAS-Core calls beneath ---
+add_executable(reentry_guard_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/reentry_guard_test.c")
+target_link_libraries(reentry_guard_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
+target_compile_definitions(reentry_guard_test PRIVATE
+    "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+add_dependencies(reentry_guard_test imas_mvdd_capi recording_stub)
+set_target_properties(reentry_guard_test PROPERTIES
+    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+function(add_reentry_guard_test name scenario)
+    add_stub_test("${name}" reentry_guard_test "${scenario}"
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+endfunction()
+
+add_reentry_guard_test(reentry-guard-write-data-forwards-across-plugin-family
+    write-data-reentry-forwards-across-the-plugin-family)
+add_reentry_guard_test(reentry-guard-plugin-write-data-forwards-across-ordinary-family
+    plugin-write-data-reentry-forwards-across-the-ordinary-family)
+add_reentry_guard_test(reentry-guard-delete-data-forwards-unchanged
+    delete-data-reentry-forwards-unchanged)
+add_reentry_guard_test(reentry-guard-write-plugins-metadata-forwards-unchanged
+    write-plugins-metadata-reentry-forwards-unchanged)
+add_reentry_guard_test(reentry-guard-bind-readback-plugins-forwards-unchanged
+    bind-readback-plugins-reentry-forwards-unchanged)
+add_reentry_guard_test(reentry-guard-unbind-readback-plugins-forwards-unchanged
+    unbind-readback-plugins-reentry-forwards-unchanged)
 
 # --- Issue #61: arraystruct path conversion through the public C ABI ---
 add_executable(arraystruct_path_test
