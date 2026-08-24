@@ -1,89 +1,60 @@
 # IMAS-Multiversion-DD-Loader
 
-Shim between the IMAS HLIs and IMAS-Core for path conversion across DD versions, with explicitly lossy semantics.
+A shim between an IMAS HLI (Fortran, C++, …) and IMAS-Core that translates
+Data Dictionary paths across DD versions, so an HLI compiled against one DD
+version can read a pulse stored under another. Conversion is explicitly
+lossy where it has to be, and surfaces that loss rather than hiding it.
 
-The library is Rust. The C ABI artefacts — shared library, generated header,
-pkg-config file — are produced by [cargo-c]; CMake drives cargo-c rather than
-compiling anything itself, so consumers depend on this project the way they
-depend on IMAS-Core.
+```
+HLI (imas-Fortran, imas-CPP; compiled against DD version V)
+        │
+        ▼
+IMAS-Multiversion-DD-Loader   ← this project: re-exports IMAS-Core's C ABI verbatim,
+        │                        translates DD paths V ⇄ W in between
+        ▼
+IMAS-Core (libal)             ← stores the IDS under DD version W
+```
 
-**Status: runtime binding proven on all 37 linkable IMAS-Core C exports;
-read-path DD conversion implemented for one IDS and one version pair.**
-`al_context_info`, six utility/version accessors, thirteen
-data-entry/action-lifecycle/data-operation functions, and seventeen
-plugin-management/reentry functions use the runtime-binding architecture
-(`src/core/core_binding.rs`, `src/core/dl.rs`): the shim resolves IMAS-Core lazily via
-`dlopen`/`dlsym`, version-checks it, and forwards each call unchanged.
-`al_plugin_begin_timerange_action` is deliberately absent because IMAS-Core's
-public declaration is unlinkable upstream; `al_begin_array_struct_action` is
-not an IMAS-Core export. The signatures and exported symbol list are checked
-mechanically against IMAS-Core, and the forwarding seams are exercised against
-both a recording stub and a real Core.
+**Jump to:** [Status](#status) · [Toolchain](#toolchain) ·
+[Build, test, install](#build-test-install) ·
+[Using it with an HLI](#using-it-with-an-hli) ·
+[Scope and limitations](#scope-and-limitations) · [Layout](#layout) ·
+[Installed layout](#installed-layout-and-consuming-the-package) ·
+[Tests](#tests)
 
-On top of that, reads of a stored equilibrium occurrence are converted between
-DD 3.39.0 and DD 4.1.1 in both directions: the shim discovers the stored DD
-version from the occurrence's own `ids_properties/version_put/data_dictionary`
-stamp, translates `al_read_data`'s `field` and `timebase` (including beneath
-nested arraystruct contexts), applies COCOS sign flips, refuses paths the
-conversion map declares unservable, and reports non-exact reads through a loss
-log the caller drains from the root context. Writes and deletes against a
-mismatched occurrence refuse rather than convert. Read the limitations below
-before drawing conclusions from that list.
+## Status
 
-## Scope and limitations
+**Runtime binding is proven on all 37 linkable IMAS-Core C exports.
+Read-path DD conversion is implemented for one IDS and one version pair.**
 
-These are deliberate boundaries, not gaps awaiting a patch. The first, fifth and
-sixth are pinned by a named test, so they cannot quietly stop being true. The
-other three are scoping decisions no test can express — which is itself worth
-knowing when reading a green suite.
+- **Verbatim forwarding.** `al_context_info`, six utility/version accessors,
+  thirteen data-entry/action-lifecycle/data-operation functions, and
+  seventeen plugin-management/reentry functions all resolve IMAS-Core
+  lazily via `dlopen`/`dlsym` (`src/core/core_binding.rs`, `src/core/dl.rs`),
+  version-check it, and forward each call unchanged.
+  `al_plugin_begin_timerange_action` is deliberately absent — its public
+  declaration is unlinkable upstream — and `al_begin_array_struct_action`
+  is not an IMAS-Core export at all. The exported symbol list and every
+  signature are checked mechanically against IMAS-Core, and the forwarding
+  seams are exercised against both a recording stub and a real Core.
+- **Read-path conversion.** Reads of a stored **equilibrium** occurrence
+  convert between DD **3.39.0** and DD **4.1.1**, in both directions. The
+  shim discovers the stored DD version from the occurrence's own
+  `ids_properties/version_put/data_dictionary` stamp, translates
+  `al_read_data`'s `field` and `timebase` (including beneath nested
+  arraystruct contexts), applies COCOS sign flips, refuses paths the
+  conversion map declares unservable, and reports non-exact reads through a
+  loss log the caller drains from the root context (see [Draining the loss
+  log](#draining-the-loss-log) below).
+- **Not yet done:** writes and deletes against a mismatched occurrence
+  refuse rather than convert (by design — see ADR 0002); reading a
+  `merged`/`split` candidate plan is proven only for the one embedded
+  artifact; `al_list_filled_paths` and `al_bind_plugin`/`al_unbind_plugin`
+  are deliberately not yet translated.
 
-- **One DD version per process.** The calling HLI's DD version latches once, on
-  the first `imas_mvdd_set_hli_dd_version()` call or from
-  `IMAS_MVDD_HLI_DD_VERSION` at the first open, and never changes afterwards
-  (`docs/adr/0005-hli-dd-version-entry-point.md`). It cannot vary per pulse,
-  per `DBEntry`-equivalent, or per thread. Reading two different HLI DD
-  versions therefore takes two processes, and because the fallback is an
-  environment variable, the version is a property of how the process was
-  launched. Every conversion test in the suite is registered as its own CTest
-  process for exactly this reason.
-- **Self-converting clients are excluded.** imas-python is not a client: it
-  converts DD versions itself and holds one DD version per `DBEntry` rather
-  than one per process, so stacking this shim beneath it would convert twice.
-  The criterion is the client's shape — one DD version for the life of the
-  process, no conversion of its own — not the language it is written in.
-- **Validation is IMAS-Fortran-first.** The conversion behaviour is proven at
-  this project's own C ABI, which is the ABI imas-Fortran consumes. imas-CPP is
-  expected to fit the same client shape but has not been validated here;
-  imas-Matlab and imas-Java have not been judged at all.
-- **A green suite is not a deployment mechanism.** The tests call this library
-  directly. They do not place it in front of a real HLI, do not substitute it
-  for IMAS-Core in any HLI's link line or runtime search path, and so do not
-  demonstrate that any HLI can be made to load it. How an HLI comes to resolve
-  `libal`'s symbols to this shim in a real deployment is a separate, unsolved
-  question, and no amount of green here answers it.
-- **Conversion coverage is one IDS and one version pair.** equilibrium
-  3.39.0 ⇄ 4.1.1, served from the single conversion-map artifact embedded in
-  `src/conversion/known_artifacts.rs` (`docs/3.39.0--4.1.1.xml`). Any other IDS, or any
-  other version pair, is forwarded unconverted — as is an occurrence whose
-  stamp matches the HLI or is absent
-  (`docs/adr/0007-unstamped-ids-occurrences-match-hli.md`).
-- **The completeness proof's oracle is two inventories, not the DD.** The
-  artifact is proven complete against `docs/inventory/equilibrium-{3.39.0,4.1.1}.txt`
-  — the imas-dd path sets for those versions, which exclude the
-  `ids_properties/**` and `code/**` metadata subtrees wholesale, plus
-  `ids_properties/version_put/data_dictionary`, added by hand because the shim
-  reads it at every open. Nothing proves either inventory complete against its
-  own DD version, and the artifact's `<default rel="identical"/>` means the
-  proof's content is *not* "a rule claims every path": it is "every path a rule
-  does not claim exists by the same spelling on the other side". The coverage
-  report prints that split (`by rule=` versus `by identity default=`) so the
-  weight each carries is visible rather than implied.
-- **Three conversion-relevant seams are deliberately not translated.**
-  `al_list_filled_paths` still returns paths in the *stored* version's
-  spelling, and `al_bind_plugin` / `al_unbind_plugin` still take a `fieldPath`
-  in it. CLAUDE.md lists all three as seams that will eventually need
-  translation; until they get it, `scoped-passthrough-*` pins the current
-  behaviour so it cannot change by accident in either direction.
+Read [Scope and limitations](#scope-and-limitations) before drawing
+conclusions from that list — several of the boundaries below are permanent
+design decisions, not gaps waiting on the next PR.
 
 ## Toolchain
 
@@ -94,7 +65,8 @@ $ source scripts/iter-env.sh     # Rust/1.88.0-GCCcore-14.3.0 + cargo-c/0.10.15-
 ```
 
 Elsewhere: Rust ≥ 1.88, `cargo install cargo-c`, CMake ≥ 3.21, a C and C++
-compiler, and IMAS-Core itself — see the acquisition options below.
+compiler, and IMAS-Core itself — see the acquisition options in [Build,
+test, install](#build-test-install).
 
 CMake fails at configure time with the module names above if either tool is
 missing, so a wrong environment is caught immediately rather than mid-build.
@@ -103,11 +75,11 @@ missing, so a wrong environment is caught immediately rather than mid-build.
 
 Real IMAS-Core is required by the default configure profile. Installed-package
 lookup (`find_package(al-core CONFIG)`) is the default; a missing IMAS-Core
-fails configure immediately with all three acquisition options and the cluster
-module-load hint. CI's explicit `IMAS_MVDD_REAL_CORE_TESTS=OFF` profile is the
-only stub-only path: it registers the recording-stub seams and does not pretend
-to cover the drift or real-Core checks. See `CMakeLists.txt`'s IMAS-Core
-acquisition section for the full rationale.
+fails configure immediately with all three acquisition options and the
+cluster module-load hint. CI's explicit `IMAS_MVDD_REAL_CORE_TESTS=OFF` profile
+is the only stub-only path: it registers the recording-stub seams and does
+not pretend to cover the drift or real-Core checks. See `CMakeLists.txt`'s
+IMAS-Core acquisition section for the full rationale.
 
 ```console
 $ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -133,6 +105,202 @@ packaging use.
 
 Use a single-config generator (Ninja, Unix Makefiles) and set
 `CMAKE_BUILD_TYPE`; multi-config generators are rejected at configure time.
+
+## Using it with an HLI
+
+The shim mirrors IMAS-Core's C ABI symbol-for-symbol, but its build output
+is named differently — `libimas_mvdd_loader.{a,so,dylib}` /
+`imas_mvdd_loader.h`, not `libal.so` / `al_lowlevel.h`. That is what is
+*proven*: a client links or `dlopen`s the shim exactly as it would
+IMAS-Core, under the shim's own name, and gets converting reads. What
+*isn't* proven is getting an already-built HLI binary — one that already
+links `-lal` and includes `al_lowlevel.h` — to resolve to this shim with
+zero changes to that binary. See [Scope and limitations](#scope-and-limitations)
+for exactly where that line sits.
+
+### The three things a client does
+
+Whatever the calling language, a client of this shim does these three
+things, in order (`docs/adr/0005-hli-dd-version-entry-point.md`):
+
+**1. Link against the shim exactly as you would against IMAS-Core.**
+
+```cmake
+find_package(imas-mvdd-loader REQUIRED)
+target_link_libraries(my_hli_target PRIVATE imas-mvdd-loader::imas-mvdd-loader)
+```
+
+or, for a non-CMake build:
+
+```console
+$ pkg-config --cflags --libs imas-mvdd-loader
+```
+
+Every mirrored function (`al_begin_global_action`, `al_read_data`, …) is
+called exactly as it would be against IMAS-Core. The shim resolves the real
+IMAS-Core underneath, itself, via `dlopen` (see [Locating real
+IMAS-Core](#locating-real-imas-core) below) — nothing in the calling code
+needs to know it's talking to a shim rather than IMAS-Core directly.
+
+**2. Report the HLI's own DD version before the first open.** The shim
+cannot ask IMAS-Core what DD version a pulse was written under
+(`getDDVersion()` is deliberately dead upstream), so the caller has to say
+what version *it itself* was built against, once, up front. Two routes:
+
+```c
+al_status_t status = imas_mvdd_set_hli_dd_version("4.1.1");
+```
+
+or, when the calling binary has no hook to call a setter from — true of
+today's IMAS-Fortran/IMAS-CPP, investigated and confirmed: neither has an
+initialiser hook that runs on its own without patching upstream:
+
+```console
+$ export IMAS_MVDD_HLI_DD_VERSION=4.1.1
+```
+
+The value **latches for the life of the process**: it's a compile-time
+constant of the calling binary, not a per-pulse or per-thread setting. An
+identical repeat is accepted; a conflicting later report is refused with
+both versions named in the error message. The setter always wins over the
+environment variable, so prefer it wherever the binary can call one. Leave
+both unset and the shim reads no version stamp at all and forwards every
+call unchanged — the zero-cost passthrough path.
+
+**Do not** set `IMAS_MVDD_HLI_DD_VERSION` in a process that also runs an
+HLI performing its own DD conversion (imas-python is the known example —
+see [Scope and limitations](#scope-and-limitations)): the shim cannot tell
+the two callers apart, and would silently convert the self-converting one's
+reads too.
+
+**3. Just read.** Open a pulse and call `al_read_data` as usual. If the
+occurrence's stored DD version matches the HLI's latched version, every
+call forwards unchanged. If it doesn't — and the shim has a conversion map
+for that IDS and version pair (today: **equilibrium**, 3.39.0 ⇄ 4.1.1) — the
+path is translated, sign flips are applied, and the outcome is classified
+as an exact read, a lossy-but-served read, or a refusal, before IMAS-Core is
+called.
+
+### Locating real IMAS-Core
+
+The shim never links against IMAS-Core; it opens it at runtime via
+`dlopen`/`dlsym` with a handle-scoped symbol lookup, specifically so the
+shim's own exports can't shadow IMAS-Core's (ADR 0001). By default it looks
+for the bare soname `libal.so` / `libal.dylib` — IMAS-Core's own — through
+the dynamic loader's normal search path. Two ways to control what it finds:
+
+```console
+$ export LD_LIBRARY_PATH=/path/to/real/imas-core/lib:$LD_LIBRARY_PATH   # bare-soname search order
+$ export IMAS_CORE_LIBRARY=/opt/iter/lib/libal.so                       # or pin an exact path
+```
+
+`IMAS_CORE_LIBRARY` wins when set.
+
+### A drop-in placement is possible in principle, not validated here
+
+Because the fallback lookup is the literal soname `libal.so`, and because
+`RTLD_LOCAL` handle-scoped resolution means the shim's own `al_read_data`
+export never shadows the one it calls into, the runtime-binding design
+*permits* deploying the shim as `libal.so` itself, ahead of the real
+IMAS-Core on the search path, with `IMAS_CORE_LIBRARY` pointing at the real
+one's actual file so the shim's own lookup doesn't just find itself again.
+That would let an **unmodified** HLI binary — one that was never rebuilt or
+relinked — pick up the shim transparently.
+
+No test, script, or CI job in this repository does this, and ADR 0001
+rejected `LD_PRELOAD`-style interposition as fragile and invisible in a
+normal build for the shim's own IMAS-Core dispatch — the same fragility
+argument applies to using a renamed artifact as a transparent swap
+underneath an HLI. Treat the paragraph above as "the architecture doesn't
+forbid it," not as a supported deployment recipe.
+
+### Draining the loss log
+
+A non-exact but served read is logged, not silently accepted. Two
+shim-owned exports let a caller inspect it without allocating:
+
+```c
+int count = 0;
+imas_mvdd_context_loss_count(ctx_id, &count);   /* entries on ctx_id's root context */
+
+for (int i = 0; i < count; ++i) {
+    char path[256];
+    int verdict = 0;
+    imas_mvdd_context_loss_at(ctx_id, i, path, sizeof(path), &verdict);
+    /* verdict is IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, _LOSSY, or _UNMAPPABLE */
+}
+```
+
+A query on a child context (e.g. one opened by `al_begin_arraystruct_action`)
+resolves to the same log as its root; an untracked context reports `0`
+rather than a refusal.
+
+### Environment variables at a glance
+
+| Variable | Read by | Purpose |
+|---|---|---|
+| `IMAS_MVDD_HLI_DD_VERSION` | the shim, at first open | Fallback for `imas_mvdd_set_hli_dd_version()` — the calling HLI's own DD version |
+| `IMAS_CORE_LIBRARY` | the shim, at first IMAS-Core call | Absolute path to the real IMAS-Core shared library, overriding the bare-soname search |
+
+These are the only two environment variables the shim itself reads.
+
+## Scope and limitations
+
+These are deliberate boundaries, not gaps awaiting a patch. The first,
+fifth and sixth are pinned by a named test, so they cannot quietly stop
+being true. The others are scoping decisions no test can express — which
+is itself worth knowing when reading a green suite.
+
+- **How an unmodified HLI binary comes to load this shim instead of
+  IMAS-Core is still open.** Everything under [Using it with an
+  HLI](#using-it-with-an-hli) is proven at this project's own C ABI and at
+  `tests/package/find_package/`, which links against the shim as a normal
+  library dependency the way a *newly built* consumer would — it never
+  renames the shim to `libal.so` or makes an HLI-shaped binary resolve to
+  it in place of IMAS-Core. A green suite is not a deployment mechanism:
+  the tests do not place this library in front of a real HLI binary, and no
+  amount of green here answers that question on its own.
+- **One DD version per process.** The calling HLI's DD version latches once,
+  on the first `imas_mvdd_set_hli_dd_version()` call or from
+  `IMAS_MVDD_HLI_DD_VERSION` at the first open, and never changes afterwards
+  (`docs/adr/0005-hli-dd-version-entry-point.md`). It cannot vary per pulse,
+  per `DBEntry`-equivalent, or per thread. Reading two different HLI DD
+  versions therefore takes two processes, and because the fallback is an
+  environment variable, the version is a property of how the process was
+  launched. Every conversion test in the suite is registered as its own CTest
+  process for exactly this reason.
+- **Self-converting clients are excluded.** imas-python is not a client: it
+  converts DD versions itself and holds one DD version per `DBEntry` rather
+  than one per process, so stacking this shim beneath it would convert twice.
+  The criterion is the client's shape — one DD version for the life of the
+  process, no conversion of its own — not the language it is written in.
+- **Validation is IMAS-Fortran-first.** The conversion behaviour is proven at
+  this project's own C ABI, which is the ABI imas-Fortran consumes. imas-CPP is
+  expected to fit the same client shape but has not been validated here;
+  imas-Matlab and imas-Java have not been judged at all.
+- **Conversion coverage is one IDS and one version pair.** equilibrium
+  3.39.0 ⇄ 4.1.1, served from the single conversion-map artifact embedded in
+  `src/conversion/known_artifacts.rs` (`docs/3.39.0--4.1.1.xml`). Any other IDS, or any
+  other version pair, is forwarded unconverted — as is an occurrence whose
+  stamp matches the HLI or is absent
+  (`docs/adr/0007-unstamped-ids-occurrences-match-hli.md`).
+- **The completeness proof's oracle is two inventories, not the DD.** The
+  artifact is proven complete against `docs/inventory/equilibrium-{3.39.0,4.1.1}.txt`
+  — the imas-dd path sets for those versions, which exclude the
+  `ids_properties/**` and `code/**` metadata subtrees wholesale, plus
+  `ids_properties/version_put/data_dictionary`, added by hand because the shim
+  reads it at every open. Nothing proves either inventory complete against its
+  own DD version, and the artifact's `<default rel="identical"/>` means the
+  proof's content is *not* "a rule claims every path": it is "every path a rule
+  does not claim exists by the same spelling on the other side". The coverage
+  report prints that split (`by rule=` versus `by identity default=`) so the
+  weight each carries is visible rather than implied.
+- **Three conversion-relevant seams are deliberately not translated.**
+  `al_list_filled_paths` still returns paths in the *stored* version's
+  spelling, and `al_bind_plugin` / `al_unbind_plugin` still take a `fieldPath`
+  in it. CLAUDE.md lists all three as seams that will eventually need
+  translation; until they get it, `scoped-passthrough-*` pins the current
+  behaviour so it cannot change by accident in either direction.
 
 ## Layout
 
@@ -190,7 +358,8 @@ package config (`cmake/imas-mvdd-loaderConfig.cmake.in`) is authored by hand
 `SameMajorVersion` compatibility.
 
 A downstream CMake project consumes the installed package the same way it
-would IMAS-Core:
+would IMAS-Core — see [Using it with an HLI](#using-it-with-an-hli) for the
+full sequence (link, set the HLI DD version, read):
 
 ```cmake
 find_package(imas-mvdd-loader REQUIRED)
