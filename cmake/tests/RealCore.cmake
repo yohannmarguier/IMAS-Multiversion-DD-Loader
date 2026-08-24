@@ -71,10 +71,14 @@ set_tests_properties(runtime-binding-real-core-forwarding PROPERTIES
 # checked-in equilibrium HDF5 fixture pair rather than a throwaway pulse.
 add_executable(equilibrium_read_test
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/equilibrium_read_test.c")
-target_include_directories(equilibrium_read_test PRIVATE ${_imas_core_include_dirs})
+target_include_directories(equilibrium_read_test PRIVATE
+    ${_imas_core_include_dirs}
+    ${HDF5_C_INCLUDE_DIRS})
 target_compile_definitions(equilibrium_read_test PRIVATE
     "EQUILIBRIUM_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/imas-python-fixtures/fixtures\"")
-target_link_libraries(equilibrium_read_test PRIVATE imas_mvdd_loader)
+target_link_libraries(equilibrium_read_test PRIVATE
+    imas_mvdd_loader
+    ${HDF5_C_LIBRARIES})
 add_dependencies(equilibrium_read_test imas_mvdd_capi)
 set_target_properties(equilibrium_read_test PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
@@ -191,5 +195,13 @@ add_test(NAME equilibrium-read-conversion-disabled-is-unaffected
 set_tests_properties(equilibrium-read-conversion-disabled-is-unaffected PROPERTIES
     LABELS real-core
     RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
+
+# This scenario opens only a unique copied fixture directory, so it cannot
+# race the scenarios above that open a checked-in pulse and need HDF5 locks.
+add_test(NAME equilibrium-read-copied-fixture-harness-reproves-renamed-read
+    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+        $<TARGET_FILE:equilibrium_read_test> copied-fixture-harness-reproves-renamed-read)
+set_tests_properties(equilibrium-read-copied-fixture-harness-reproves-renamed-read PROPERTIES
+    LABELS real-core)
 
 endif()

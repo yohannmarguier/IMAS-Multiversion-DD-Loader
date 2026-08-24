@@ -1,6 +1,6 @@
 # tests/ — what is covered, and where
 
-**174 ctest tests** (17 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
+**175 ctest tests** (18 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
 stub-only profile registers 153). None of the C sources here is registered by
 itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
@@ -9,7 +9,7 @@ settles once. A scenario name maps to `<executable> <scenario-argument>`.
 
 ```console
 $ ctest --test-dir build --output-on-failure    # everything
-$ ctest --test-dir build -L real-core           # the 17 real-IMAS-Core ones
+$ ctest --test-dir build -L real-core           # the 18 real-IMAS-Core ones
 $ ctest --test-dir build -R read-path           # one group
 $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 ```
@@ -20,7 +20,7 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 |---|---|
 | `support/` | `shim_test_support.h` — the one shared C harness: `CHECK`/`CHECK_OK`/`CHECK_REFUSAL_MESSAGE`, IMAS-Core's four data-type codes, `open_recording_stub` plus the `{string,int,double,pointer}_from_stub` accessors, `open_mismatched_occurrence`, and the `{name, function}` scenario table `RUN_NAMED_SCENARIO` dispatches `argv[1]` through. Include this instead of writing a prologue. |
 | `stub/` | `recording_stub.c` — a fake `libal` exporting the whole runtime-bound surface and recording what it received, so assertions are made on what crossed the boundary rather than inferred from a data round trip. ~23 `RECORDING_STUB_*` env knobs drive fixtures and failures (stamp version, not-found, sign-flip values, per-seam `*_FAIL` knobs, filled-paths CSV, reentrant reads and writes). |
-| `shim/` | 11 C suites driving the public ABI against that stub — 144 tests. |
+| `shim/` | 11 C suites driving the public ABI against that stub — 146 tests. |
 | `real_core/` | 3 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core and the checked-in equilibrium HDF5 fixture pair. |
 | `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 3 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
 | `cmake/` | `cmake -P` checks of the build/CI configuration itself, each with a guard-the-guard companion that proves it rejects what it claims. |
@@ -66,7 +66,7 @@ HLI version is a plain forward.
 > is proven the only way it is externally observable: a *second* open of the
 > same occurrence translates `datapath` before Core is called.
 
-### `read-path-*` — 34 · `shim/read_path_test.c`
+### `read-path-*` — 35 · `shim/read_path_test.c`
 
 `al_read_data`, the main conversion seam (issues #56 and #65, ADR 0014).
 
@@ -140,7 +140,7 @@ deliberately the two spellings of a real rename rule, so a shim that started
 rewriting them would produce a visibly different string rather than pass by
 coincidence. Also pins `getDDVersion()`'s `"!!DEPRECATED!!"` sentinel.
 
-### `equilibrium-read-*` — 16, `real-core` · `real_core/equilibrium_read_test.c`
+### `equilibrium-read-*` — 17, `real-core` · `real_core/equilibrium_read_test.c`
 
 The same conversion policy against genuine IMAS-Core and the checked-in
 equilibrium HDF5 fixture pair, in **both** fixture directions: a renamed scalar
@@ -150,7 +150,10 @@ under `time_slice`, `merged` and `split` read plans, refusals for an unmappable
 unavailable in practice), a write/delete/plugin-write refusal across a real
 boundary, a real context lifecycle, and the two no-op cases (same version,
 conversion disabled). Scenarios sharing a fixture directory hold a ctest
-`RESOURCE_LOCK`, because of HDF5's own file locking.
+`RESOURCE_LOCK`, because of HDF5's own file locking. One harness scenario uses
+an isolated temporary copy instead: it reads the copied DD-version stamp and a
+numeric dataset through raw HDF5, then re-proves a translated read against that
+copy, leaving the checked-in pair untouched.
 
 ### `runtime-binding-real-core-forwarding` — 1, `real-core` · `real_core/real_core_forwarding_test.c`
 
