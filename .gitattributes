@@ -1,0 +1,21 @@
+# Normalize line endings on commit; check out LF everywhere.
+# Every text file here is LF today — this keeps it that way when a contributor's
+# core.autocrlf would otherwise commit CRLF. A CRLF scripts/*.sh fails on the
+# ITER cluster with "bad interpreter: /bin/bash^M".
+* text=auto eol=lf
+
+# Binary fixtures: never normalize, never diff as text.
+*.h5 binary
+
+# Better diff hunk headers (enclosing function shown in @@ lines).
+*.rs  diff=rust
+*.c   diff=cpp
+*.h   diff=cpp
+*.cpp diff=cpp
+*.py  diff=python
+*.md  diff=markdown
+
+# GitHub language stats and diff collapsing.
+docs/**           linguist-documentation
+dd-3.39.0-html/** linguist-generated
+Cargo.lock        linguist-generated
