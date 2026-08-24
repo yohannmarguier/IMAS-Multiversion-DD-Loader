@@ -442,4 +442,39 @@ performing the same install and consumer checks. Every CTest invocation uses
 `--no-tests=error`; both jobs stay pinned to the cluster's Rust and cargo-c
 module versions.
 
+### HLI validation
+
+Both jobs above call the C ABI directly, with arguments a test author chose.
+`.github/workflows/hli-validation.yml` is the only place a *real HLI* calls the
+shim. It installs the shim, builds the IMAS-Fortran fork pinned in
+`IMAS_FORTRAN_REF` with `AL_USE_MULTIVERSION_SHIM=ON` and
+`find_package(imas-mvdd-loader CONFIG)`, and runs that HLI's own suite. It runs
+on pull requests based on `develop` or `main` whose diff can affect the result,
+and on demand.
+
+It makes two claims from one build. The 83 generated per-IDS tests write and read
+every IDS across the memory, ASCII and HDF5 backends with the HLI DD version
+equal to the stored DD version, so nothing converts and every value must return
+unchanged — far more seam traffic than the C ABI suite drives, asserting only
+that the shim is not there. `play_eq_two_dd-cross` then reads a 3.39.0 pulse with
+a 4.1.1 HLI, and requires the `retyped` refusal to name
+`grids_ggd/grid/space/coordinates_type`, so a shim that stopped registering
+conversion records fails rather than passing quietly.
+
+IMAS-Core deliberately floats — the HLI acquires whichever one its own default
+names, because the shim's version gate is major-only and pinning it would mean
+editing this repository for every IMAS-Core release. The Data Dictionary is
+pinned to 4.1.1 instead, because the shim ships exactly one conversion-map
+artifact and a different DD version does not weaken the conversion test but
+dissolves it. `docs/adr/0020-hli-validation-floats-core-and-pins-the-dd.md`
+records that asymmetry.
+
+Three things a green run does **not** prove. Twenty of the HLI's `examples/` I/O
+tests can never run in a shim build — they are gated on both the MDSplus and
+HDF5 backends, and the HLI refuses MDSplus alongside the shim — so the workflow
+asserts that disabled count rather than letting it pass unnoticed. A NAG build
+hardcodes `-lal` and silently links IMAS-Core directly, and this job runs
+gfortran only. And whether a converted *value* is right belongs to
+`tests/real_core/equilibrium_read_test.c`, not here.
+
 [cargo-c]: https://github.com/lu-zero/cargo-c
