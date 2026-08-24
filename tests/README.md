@@ -1,6 +1,6 @@
 # tests/ — what is covered, and where
 
-**167 ctest tests** (17 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
+**168 ctest tests** (18 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
 stub-only profile registers 146). None of the C sources here is registered by
 itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
@@ -9,7 +9,7 @@ settles once. A scenario name maps to `<executable> <scenario-argument>`.
 
 ```console
 $ ctest --test-dir build --output-on-failure    # everything
-$ ctest --test-dir build -L real-core           # the 17 real-IMAS-Core ones
+$ ctest --test-dir build -L real-core           # the 18 real-IMAS-Core ones
 $ ctest --test-dir build -R read-path           # one group
 $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 ```
@@ -140,7 +140,7 @@ deliberately the two spellings of a real rename rule, so a shim that started
 rewriting them would produce a visibly different string rather than pass by
 coincidence. Also pins `getDDVersion()`'s `"!!DEPRECATED!!"` sentinel.
 
-### `equilibrium-read-*` — 16, `real-core` · `real_core/equilibrium_read_test.c`
+### `equilibrium-read-*` — 17, `real-core` · `real_core/equilibrium_read_test.c`
 
 The same conversion policy against genuine IMAS-Core and the checked-in
 equilibrium HDF5 fixture pair, in **both** fixture directions: a renamed scalar
@@ -150,7 +150,10 @@ under `time_slice`, `merged` and `split` read plans, refusals for an unmappable
 unavailable in practice), a write/delete/plugin-write refusal across a real
 boundary, a real context lifecycle, and the two no-op cases (same version,
 conversion disabled). Scenarios sharing a fixture directory hold a ctest
-`RESOURCE_LOCK`, because of HDF5's own file locking.
+`RESOURCE_LOCK`, because of HDF5's own file locking. One harness scenario uses
+an isolated temporary copy instead: it reads the copied DD-version stamp and a
+numeric dataset through raw HDF5, then re-proves a translated read against that
+copy, leaving the checked-in pair untouched.
 
 ### `runtime-binding-real-core-forwarding` — 1, `real-core` · `real_core/real_core_forwarding_test.c`
 

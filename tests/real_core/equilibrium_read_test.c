@@ -67,9 +67,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <al_const.h>
-#include "../support/shim_test_support.h"
+#include <hdf5.h>
+#include "../support/real_core_fixture_support.h"
 
 #ifndef EQUILIBRIUM_FIXTURE_DIR
 #error "EQUILIBRIUM_FIXTURE_DIR must name the imas-python-fixtures/fixtures directory"
@@ -146,6 +149,145 @@ static double read_nested_constraint_scalar_at_slice_zero(int pulse_ctx, const c
 
 static void close_fixture_pulse(int pulse_ctx) {
     CHECK_OK(al_close_pulse(pulse_ctx, CLOSE_PULSE));
+}
+
+/* The HDF5 backend flattens this one AOS component as `time_slice[]` and
+ * joins the remaining DD path components with `&`. */
+static void time_slice_dataset_path(const char *dd_path, char *dataset, size_t dataset_size) {
+    int length = snprintf(dataset, dataset_size, "/equilibrium/time_slice[]&%s", dd_path);
+    CHECK(length > 0 && (size_t)length < dataset_size);
+    for (char *component = dataset + strlen("/equilibrium/time_slice[]&"); *component != '\0';
+         ++component) {
+        if (*component == '/') {
+            *component = '&';
+        }
+    }
+}
+
+/* Read one numeric value directly from the copied fixture. This accepts a DD
+ * path relative to `time_slice`, not an HDF5 object name, and validates the
+ * fixture's expected one-dimensional double representation. */
+static double read_time_slice_double_from_disk(const char *ids_file, const char *dd_path,
+                                               hsize_t slice) {
+    char dataset_path[1024];
+    time_slice_dataset_path(dd_path, dataset_path, sizeof dataset_path);
+    hid_t file = H5Fopen(ids_file, H5F_ACC_RDONLY, H5P_DEFAULT);
+    CHECK(file >= 0);
+    hid_t dataset = H5Dopen2(file, dataset_path, H5P_DEFAULT);
+    CHECK(dataset >= 0);
+    hid_t datatype = H5Dget_type(dataset);
+    CHECK(datatype >= 0);
+    CHECK(H5Tget_class(datatype) == H5T_FLOAT);
+    hid_t dataspace = H5Dget_space(dataset);
+    CHECK(dataspace >= 0);
+    CHECK(H5Sget_simple_extent_ndims(dataspace) == 1);
+    hsize_t length = 0;
+    CHECK(H5Sget_simple_extent_dims(dataspace, &length, NULL) == 1);
+    CHECK(slice < length);
+    double *values = malloc((size_t)length * sizeof *values);
+    CHECK(values != NULL);
+    CHECK(H5Dread(dataset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, values) >= 0);
+    double value = values[slice];
+    free(values);
+    CHECK(H5Sclose(dataspace) >= 0);
+    CHECK(H5Tclose(datatype) >= 0);
+    CHECK(H5Dclose(dataset) >= 0);
+    CHECK(H5Fclose(file) >= 0);
+    return value;
+}
+
+/* The DD-version stamp is a scalar UTF-8 variable-length string. The caller
+ * owns only its fixed output buffer; HDF5 allocates and releases `stored`. */
+static void read_dd_version_stamp_from_disk(const char *ids_file, char *version,
+                                            size_t version_size) {
+    hid_t file = H5Fopen(ids_file, H5F_ACC_RDONLY, H5P_DEFAULT);
+    CHECK(file >= 0);
+    hid_t dataset = H5Dopen2(file, "/equilibrium/ids_properties&version_put&data_dictionary",
+                             H5P_DEFAULT);
+    CHECK(dataset >= 0);
+    hid_t datatype = H5Dget_type(dataset);
+    CHECK(datatype >= 0);
+    CHECK(H5Tget_class(datatype) == H5T_STRING);
+    CHECK(H5Tis_variable_str(datatype) > 0);
+    char *stored = NULL;
+    CHECK(H5Dread(dataset, datatype, H5S_ALL, H5S_ALL, H5P_DEFAULT, &stored) >= 0);
+    CHECK(stored != NULL);
+    int length = snprintf(version, version_size, "%s", stored);
+    CHECK(length >= 0 && (size_t)length < version_size);
+    CHECK(H5free_memory(stored) >= 0);
+    CHECK(H5Tclose(datatype) >= 0);
+    CHECK(H5Dclose(dataset) >= 0);
+    CHECK(H5Fclose(file) >= 0);
+}
+
+typedef struct {
+    char temp_dir[1024];
+    char pulse_dir[1024];
+    int is_live;
+} fixture_copy;
+
+static fixture_copy copied_fixture;
+
+static void remove_fixture_pair(void) {
+    if (!copied_fixture.is_live) {
+        return;
+    }
+    if (copied_fixture.pulse_dir[0] != '\0') {
+        remove_fixture_file(copied_fixture.pulse_dir, "equilibrium.h5");
+        remove_fixture_file(copied_fixture.pulse_dir, "master.h5");
+        CHECK(rmdir(copied_fixture.pulse_dir) == 0 || errno == ENOENT);
+    }
+    CHECK(rmdir(copied_fixture.temp_dir) == 0 || errno == ENOENT);
+    copied_fixture.is_live = 0;
+}
+
+static void copy_fixture_pair(const char *dd_version) {
+    int temp_length = snprintf(copied_fixture.temp_dir, sizeof copied_fixture.temp_dir,
+                               "/tmp/imas-mvdd-equilibrium-XXXXXX");
+    CHECK(temp_length > 0 && (size_t)temp_length < sizeof copied_fixture.temp_dir);
+    CHECK(mkdtemp(copied_fixture.temp_dir) != NULL);
+    copied_fixture.is_live = 1;
+    CHECK(atexit(remove_fixture_pair) == 0);
+    int pulse_length = snprintf(copied_fixture.pulse_dir, sizeof copied_fixture.pulse_dir,
+                                "%s/dd-%s", copied_fixture.temp_dir, dd_version);
+    CHECK(pulse_length > 0 && (size_t)pulse_length < sizeof copied_fixture.pulse_dir);
+    CHECK(mkdir(copied_fixture.pulse_dir, 0700) == 0);
+    static const char *const files[] = {"equilibrium.h5", "master.h5"};
+    for (size_t i = 0; i < sizeof files / sizeof files[0]; ++i) {
+        char source[1024];
+        char copy[1024];
+        int source_length = snprintf(source, sizeof source, "%s/dd-%s/%s", EQUILIBRIUM_FIXTURE_DIR,
+                                     dd_version, files[i]);
+        int copy_length = snprintf(copy, sizeof copy, "%s/%s", copied_fixture.pulse_dir, files[i]);
+        CHECK(source_length > 0 && (size_t)source_length < sizeof source);
+        CHECK(copy_length > 0 && (size_t)copy_length < sizeof copy);
+        copy_fixture_file(source, copy);
+    }
+}
+
+/* Issue #132: prove the mutable-fixture harness against an existing read
+ * claim. The source fixture is copied byte-for-byte and never opened through
+ * HDF5 or IMAS-Core; all raw and ABI access targets the private copy. */
+static void scenario_copied_fixture_harness_reproves_renamed_read(void) {
+    copy_fixture_pair("3.39.0");
+    char equilibrium_file[1024];
+    int file_length = snprintf(equilibrium_file, sizeof equilibrium_file, "%s/equilibrium.h5",
+                               copied_fixture.pulse_dir);
+    CHECK(file_length > 0 && (size_t)file_length < sizeof equilibrium_file);
+    char stamp[64];
+    read_dd_version_stamp_from_disk(equilibrium_file, stamp, sizeof stamp);
+    CHECK(strcmp(stamp, "3.39.0") == 0);
+    CHECK(read_time_slice_double_from_disk(equilibrium_file, "global_quantities/beta_normal", 0)
+          == 1.8);
+    CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
+    char uri[1024];
+    int uri_length = snprintf(uri, sizeof uri, "imas:hdf5?path=%s", copied_fixture.pulse_dir);
+    CHECK(uri_length > 0 && (size_t)uri_length < sizeof uri);
+    int pulse_ctx = -1;
+    CHECK_OK(al_begin_dataentry_action(uri, OPEN_PULSE, &pulse_ctx));
+    CHECK(read_scalar_at_slice_zero(pulse_ctx, "global_quantities/beta_tor_norm") == 1.8);
+    close_fixture_pulse(pulse_ctx);
+    remove_fixture_pair();
 }
 
 /* --- reverse: an HLI declaring 3.39.0 reads the 4.1.1 fixture ------------- */
@@ -645,6 +787,8 @@ int main(int argc, char **argv) {
         {"conversion-disabled-read-is-unaffected", scenario_conversion_disabled_read_is_unaffected},
         {"forward-write-and-delete-refuse-against-mismatch", scenario_forward_write_and_delete_refuse_against_mismatch},
         {"forward-context-lifecycle-keeps-conversion-live", scenario_forward_context_lifecycle_keeps_conversion_live},
+        {"copied-fixture-harness-reproves-renamed-read",
+         scenario_copied_fixture_harness_reproves_renamed_read},
     };
     return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }
