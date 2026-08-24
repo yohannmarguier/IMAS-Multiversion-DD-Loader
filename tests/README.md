@@ -1,7 +1,7 @@
 # tests/ — what is covered, and where
 
-**167 ctest tests** (17 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
-stub-only profile registers 146). None of the C sources here is registered by
+**171 ctest tests** (17 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
+stub-only profile registers 150). None of the C sources here is registered by
 itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
 (ADR 0005) and the context registry (ADR 0003) are process-wide state that
@@ -20,9 +20,9 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 |---|---|
 | `support/` | `shim_test_support.h` — the one shared C harness: `CHECK`/`CHECK_OK`/`CHECK_REFUSAL_MESSAGE`, IMAS-Core's four data-type codes, `open_recording_stub` plus the `{string,int,double,pointer}_from_stub` accessors, `open_mismatched_occurrence`, and the `{name, function}` scenario table `RUN_NAMED_SCENARIO` dispatches `argv[1]` through. Include this instead of writing a prologue. |
 | `stub/` | `recording_stub.c` — a fake `libal` exporting the whole runtime-bound surface and recording what it received, so assertions are made on what crossed the boundary rather than inferred from a data round trip. ~23 `RECORDING_STUB_*` env knobs drive fixtures and failures (stamp version, not-found, sign-flip values, per-seam `*_FAIL` knobs, filled-paths CSV, reentrant read). |
-| `shim/` | 10 C suites driving the public ABI against that stub — 137 tests. |
+| `shim/` | 10 C suites driving the public ABI against that stub — 141 tests. |
 | `real_core/` | 3 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core and the checked-in equilibrium HDF5 fixture pair. |
-| `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 3 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
+| `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 4 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
 | `cmake/` | `cmake -P` checks of the build/CI configuration itself, each with a guard-the-guard companion that proves it rejects what it claims. |
 | `scripts/` | Install/packaging shell checks. **CI-only — not in ctest.** |
 | `package/` | A downstream `find_package()` consumer project, used by `scripts/check-installed-package.sh`. |
@@ -66,7 +66,7 @@ HLI version is a plain forward.
 > is proven the only way it is externally observable: a *second* open of the
 > same occurrence translates `datapath` before Core is called.
 
-### `read-path-*` — 34 · `shim/read_path_test.c`
+### `read-path-*` — 38 · `shim/read_path_test.c`
 
 `al_read_data`, the main conversion seam (issues #56 and #65, ADR 0014).
 
@@ -84,8 +84,8 @@ HLI version is a plain forward.
   untouched and does not re-apply a sign flip.
 - **Bypass** — matching, unknown, unstamped and conversion-disabled contexts.
 - **Loss log** — lossy `merged`/`moved` reads retained, log destroyed with its
-  context, plus the six safety refusals of the `imas_mvdd_context_loss_*` query
-  exports (null out, negative / out-of-range index, short buffer).
+  context, plus the ten safety refusals of the `imas_mvdd_context_loss_*` query
+  exports (null output, negative / out-of-range index, short buffer).
 
 ### `arraystruct-path-*` — 8 · `shim/arraystruct_path_test.c`
 

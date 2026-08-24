@@ -378,7 +378,7 @@ add_stub_test(read-path-core-failure-propagates-unchanged
     STAMP_VERSION 3.39.0
     ENV "RECORDING_STUB_READ_FAIL=1")
 
-# --- Issue #65: the root-context fidelity loss log and its query exports ---
+# --- Issues #65 and #124: root-context loss log and query exports ---
 # Both scenarios below need the HLI reading in its own, 3.39.0 spelling
 # (Direction::Forward) to hit a rule this artifact declares lossy in that
 # direction: fold-ggd-bfield (merged) and move-gap (moved).
@@ -418,6 +418,14 @@ add_loss_query_test(read-path-loss-at-out-of-range-index-is-refused
     loss-at-out-of-range-index-is-refused)
 add_loss_query_test(read-path-loss-at-insufficient-buffer-is-refused
     loss-at-insufficient-buffer-is-refused)
+add_loss_query_test(read-path-loss-operation-at-null-output-is-refused
+    loss-operation-at-null-output-is-refused)
+add_loss_query_test(read-path-loss-operation-at-negative-index-is-refused
+    loss-operation-at-negative-index-is-refused)
+add_loss_query_test(read-path-loss-operation-at-out-of-range-index-is-refused
+    loss-operation-at-out-of-range-index-is-refused)
+add_loss_query_test(read-path-loss-operation-at-untracked-context-is-refused-after-zero-count
+    loss-operation-at-untracked-context-is-refused-after-zero-count)
 
 # --- Issue #64: al_write_data / al_delete_data refusal through the public C ABI ---
 add_executable(write_delete_conversion_test

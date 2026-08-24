@@ -26,7 +26,7 @@ A different three-way distinction does reach the shim, and decision 3 governs it
 
 6. **Exports for the log, and nothing is allocated.** `imas_mvdd_context_loss_count(ctx, *n)` and `imas_mvdd_context_loss_at(ctx, i, path_buf, buf_len, *verdict)`. No struct layout is published and no memory crosses the boundary, so ADR 0006's finding that the mirrored ABI has no free seam continues to hold. With `imas_mvdd_set_hli_dd_version` this made three shim-owned exports, all on ADR 0005's drift list.
 
-   Decision 2's operation field needs a **fourth**: `imas_mvdd_context_loss_operation_at(ctx, i, *operation)`. It is a separate accessor rather than a wider `loss_at`, because `loss_at` is already public and supported and its signature cannot change; and it is a separate accessor rather than a wider verdict enum, because an operation is not a fidelity and folding one into the other would make `IMAS_MVDD_FIDELITY_*` mean two unrelated things at once.
+   Decision 2's operation field is reported by the **fourth** export: `imas_mvdd_context_loss_operation_at(ctx, i, *operation)`. It is a separate accessor rather than a wider `loss_at`, because `loss_at` is already public and supported and its signature cannot change; and it is a separate accessor rather than a wider verdict enum, because an operation is not a fidelity and folding one into the other would make `IMAS_MVDD_FIDELITY_*` mean two unrelated things at once.
 
 7. **The log dies with its root context** at `al_end_action`, alongside the context record (ADR 0003). Draining it before the context ends is the HLI's responsibility, and whether a given HLI does so is an HLI implementation concern, out of scope for this effort.
 
@@ -47,5 +47,5 @@ A different three-way distinction does reach the shim, and decision 3 governs it
 - **ADR 0008's open question closes.** The four fidelity verdicts reach the caller by the context log. They are still never verified at read time: a `merged` rule's aliases are not compared, so a read never holds two buffers, and ADR 0006's remark that detecting the disagreement is a reporting concern is settled as a deliberate refusal to detect.
 - **ADR 0003's context record gains one field**, the loss log, and uses the parent context ID it already stores. The registry's existing lock covers it.
 - **ADR 0010's message specification is complete**, and its `-1000` is now the allocated member of a reserved block rather than a lone number.
-- **Shim-owned exports go from one to three, and to four once the write path lands.** The export-drift check's owned list grows by two now and by one more with decision 6's operation accessor.
+- **Shim-owned exports go from one to four.** The export-drift check's owned list includes the operation accessor from decision 6.
 - **The read-outcome classifier is a reviewable rule, not a convention.** Spelling `*data == NULL` anywhere else in the shim is a defect a reader can see without knowing the design.

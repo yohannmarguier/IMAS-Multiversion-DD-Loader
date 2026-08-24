@@ -1305,7 +1305,7 @@ pub(crate) unsafe fn context_loss_at(
             "imas_mvdd_context_loss_at buffer length must not be negative",
         );
     };
-    let Some(copy_result) = REGISTRY.with_loss_at(ctx_id, index, |path, fidelity| {
+    let Some(copy_result) = REGISTRY.with_loss_at(ctx_id, index, |path, fidelity, _| {
         if path.len() >= buf_len {
             return Err("imas_mvdd_context_loss_at buffer is too small for this path");
         }
@@ -1329,6 +1329,43 @@ pub(crate) unsafe fn context_loss_at(
     al_status_t::default()
 }
 
+/// Implements `imas_mvdd_context_loss_operation_at` (ADR 0012): reports
+/// which operation produced the `index`-th loss-log entry retained on
+/// `ctx_id`'s root context, without allocating. Refuses — leaving the output
+/// untouched — for a null output pointer, a negative index, or an
+/// out-of-range index (which also covers an untracked context).
+///
+/// # Safety
+/// `operation` must be a valid, writable `*mut c_int`, or null.
+pub(crate) unsafe fn context_loss_operation_at(
+    ctx_id: c_int,
+    index: c_int,
+    operation: *mut c_int,
+) -> al_status_t {
+    if operation.is_null() {
+        return crate::conversion_refusal(
+            "imas_mvdd_context_loss_operation_at requires a non-null operation output",
+        );
+    }
+    let Ok(index) = usize::try_from(index) else {
+        return crate::conversion_refusal(
+            "imas_mvdd_context_loss_operation_at index must not be negative",
+        );
+    };
+    let Some(()) = REGISTRY.with_loss_at(ctx_id, index, |_, _, entry_operation| {
+        // SAFETY: `operation` is non-null and valid for writes per this
+        // function's safety contract.
+        unsafe {
+            *operation = loss_operation_code(entry_operation);
+        }
+    }) else {
+        return crate::conversion_refusal(
+            "imas_mvdd_context_loss_operation_at index is out of range for this context",
+        );
+    };
+    al_status_t::default()
+}
+
 fn fidelity_verdict_code(fidelity: Fidelity) -> c_int {
     match fidelity {
         Fidelity::Exact => {
@@ -1337,6 +1374,17 @@ fn fidelity_verdict_code(fidelity: Fidelity) -> c_int {
         Fidelity::PotentiallyLossy => crate::IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY,
         Fidelity::Lossy => crate::IMAS_MVDD_FIDELITY_LOSSY,
         Fidelity::Unmappable => crate::IMAS_MVDD_FIDELITY_UNMAPPABLE,
+    }
+}
+
+fn loss_operation_code(operation: crate::registry::context_registry::LossOperation) -> c_int {
+    match operation {
+        crate::registry::context_registry::LossOperation::Read => {
+            crate::IMAS_MVDD_LOSS_OPERATION_READ
+        }
+        crate::registry::context_registry::LossOperation::Write => {
+            crate::IMAS_MVDD_LOSS_OPERATION_WRITE
+        }
     }
 }
 

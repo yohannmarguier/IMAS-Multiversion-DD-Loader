@@ -135,13 +135,26 @@ enum Entry {
     Conversion(ConversionRecord),
 }
 
+/// Which successful or refused seam operation earned a loss-log entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "issue #124 exposes the write operation before the write seam records entries"
+)]
+pub(crate) enum LossOperation {
+    Read,
+    Write,
+}
+
 /// A non-exact path requested through one root conversion context.
 /// The log is root-owned so child contexts contribute to the same eventual
-/// conversion report (ADR 0012); its public query ABI is deferred to #65.
+/// conversion report (ADR 0012); the query ABI exposes its path, fidelity,
+/// and operation through separate allocation-free accessors.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ReadLoss {
+struct LossEntry {
     hli_path: String,
     fidelity: Fidelity,
+    operation: LossOperation,
 }
 
 #[derive(Default)]
@@ -149,7 +162,7 @@ struct State {
     entries: HashMap<ContextId, Entry>,
     /// Losses are separate from cloned conversion snapshots so a child never
     /// accidentally owns a copied log. A root context owns exactly one log.
-    loss_logs: HashMap<ContextId, Vec<ReadLoss>>,
+    loss_logs: HashMap<ContextId, Vec<LossEntry>>,
     maps: HashMap<MapCacheKey, Weak<ConversionMap>>,
 }
 
@@ -361,7 +374,11 @@ impl ContextRegistry {
         }
         let mut state = self.state.lock().unwrap();
         if let Some(losses) = state.loss_logs.get_mut(&root_id) {
-            losses.push(ReadLoss { hli_path, fidelity });
+            losses.push(LossEntry {
+                hli_path,
+                fidelity,
+                operation: LossOperation::Read,
+            });
         }
     }
 
@@ -391,14 +408,14 @@ impl ContextRegistry {
         &self,
         ctx_id: ContextId,
         index: usize,
-        read: impl FnOnce(&str, Fidelity) -> T,
+        read: impl FnOnce(&str, Fidelity, LossOperation) -> T,
     ) -> Option<T> {
         let state = self.state.lock().unwrap();
         let Some(Entry::Conversion(record)) = state.entries.get(&ctx_id) else {
             return None;
         };
         let loss = state.loss_logs.get(&record.root_id)?.get(index)?;
-        Some(read(&loss.hli_path, loss.fidelity))
+        Some(read(&loss.hli_path, loss.fidelity, loss.operation))
     }
 
     /// Removes exactly the record at `ctx_id`, if any (mirrors a successful

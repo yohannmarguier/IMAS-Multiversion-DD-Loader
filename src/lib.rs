@@ -21,9 +21,10 @@
 //! stored spelling, `merged`/`split` rules try stored candidates in declared
 //! precedence order, a selected COCOS sign flip is applied in place, and a
 //! rule the shim cannot serve refuses before IMAS-Core rather than returning
-//! wrong data. Every non-exact successful read reaches its root context's
-//! loss log, drainable through `imas_mvdd_context_loss_count` /
-//! `imas_mvdd_context_loss_at` (ADR 0008, ADR 0012). IMAS-Core's returned
+//! wrong data. Every non-exact read outcome reaches its root context's loss
+//! log, drainable through `imas_mvdd_context_loss_count`,
+//! `imas_mvdd_context_loss_at`, and `imas_mvdd_context_loss_operation_at`
+//! (ADR 0008, ADR 0012). IMAS-Core's returned
 //! allocation is forwarded unchanged throughout: the shim neither
 //! substitutes nor frees it.
 //!
@@ -82,6 +83,11 @@ pub const IMAS_MVDD_CONVERSION_ERROR: c_int = -1000;
 pub const IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY: c_int = 0;
 pub const IMAS_MVDD_FIDELITY_LOSSY: c_int = 1;
 pub const IMAS_MVDD_FIDELITY_UNMAPPABLE: c_int = 2;
+
+/// Loss-operation codes `imas_mvdd_context_loss_operation_at` writes to its
+/// `operation` output (ADR 0012).
+pub const IMAS_MVDD_LOSS_OPERATION_READ: c_int = 0;
+pub const IMAS_MVDD_LOSS_OPERATION_WRITE: c_int = 1;
 
 /// Status returned by every ABI entry point. `code == 0` means success.
 ///
@@ -349,6 +355,28 @@ pub unsafe extern "C" fn imas_mvdd_context_loss_at(
     verdict: *mut c_int,
 ) -> al_status_t {
     unsafe { resolve::context_loss_at(ctx_id, index, path_buf, buf_len, verdict) }
+}
+
+/// Shim-owned export (ADR 0012) — listed on `tests/owned_exports.def`
+/// alongside the other loss-query exports. Writes the operation that produced
+/// the `index`-th entry in `ctxID`'s root loss log to caller-owned storage:
+/// `IMAS_MVDD_LOSS_OPERATION_READ` or `IMAS_MVDD_LOSS_OPERATION_WRITE`.
+/// Nothing is allocated.
+///
+/// Refuses — leaving `*operation` untouched — for a null `operation`, a
+/// negative `index`, or an index at or past
+/// `imas_mvdd_context_loss_count`'s reported count (which also covers every
+/// untracked context, whose count is always zero).
+///
+/// # Safety
+/// `operation` must be a valid, writable `*mut c_int`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn imas_mvdd_context_loss_operation_at(
+    ctx_id: c_int,
+    index: c_int,
+    operation: *mut c_int,
+) -> al_status_t {
+    unsafe { resolve::context_loss_operation_at(ctx_id, index, operation) }
 }
 
 /// Mirrors IMAS-Core's `al_begin_dataentry_action` exactly. Opens a pulse

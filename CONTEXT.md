@@ -37,7 +37,7 @@ Fixing a value on its first use for the life of the process: an identical later 
 _Avoid_: lock, freeze, pin, cache, memoise.
 
 **shim-owned export**:
-A public symbol this project defines rather than mirrors from IMAS-Core, carrying the `imas_mvdd_` prefix and listed explicitly in the export-drift check. There are three — `imas_mvdd_set_hli_dd_version`, `imas_mvdd_context_loss_count` and `imas_mvdd_context_loss_at` — and a fourth, `imas_mvdd_context_loss_operation_at`, is decided but not yet built. None of them allocates memory that crosses the boundary.
+A public symbol this project defines rather than mirrors from IMAS-Core, carrying the `imas_mvdd_` prefix and listed explicitly in the export-drift check. There are four — `imas_mvdd_set_hli_dd_version`, `imas_mvdd_context_loss_count`, `imas_mvdd_context_loss_at` and `imas_mvdd_context_loss_operation_at`. None of them allocates memory that crosses the boundary.
 _Avoid_: extra symbol, extension, custom API, private API — they are public and supported.
 **IDS name**:
 The stable logical key of an IDS, such as `equilibrium`. It selects the same IDS across DD versions and is not a DD path that the shim translates.
