@@ -1,7 +1,7 @@
 # tests/ — what is covered, and where
 
-**205 ctest tests** (18 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
-stub-only profile registers 183). None of the C sources here is registered by
+**207 ctest tests** (18 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
+stub-only profile registers 185). None of the C sources here is registered by
 itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
 (ADR 0005) and the context registry (ADR 0003) are process-wide state that
@@ -111,7 +111,7 @@ record intact, a recycled context ID never exposes a stale record, and the
 latter two seams forward unchanged without touching the registry. Observed
 indirectly, via whether a later read still translates.
 
-### `write-delete-*` — 40 · `shim/write_delete_conversion_test.c`
+### `write-delete-*` — 42 · `shim/write_delete_conversion_test.c`
 
 Issue #125's safe write slice: `al_write_data` and `al_plugin_write_data`
 independently resolve identity, `renamed`, and `moved` field/timebase paths to
@@ -143,6 +143,16 @@ skips not-found candidates, and returns a distinguishable probe/delete failure
 only after attempting the rest. An empty delete forwards as the caller's
 explicit whole-DATAOBJECT migration route, and delete never retains a loss-log
 entry.
+
+Issue #131 admits a *trivial* structure delete instead of refusing every
+non-leaf path outright: `time_slice` and `time_slice/constraints` now resolve
+and delete, while `time_slice/boundary` still refuses under a DD4 HLI because
+a `moved` rule nested underneath it targets a stored path outside that
+subtree (an **escaping rule**, ADR 0017 decision 4). `time_slice/
+boundary_separatrix` still refuses under a DD3 HLI too, but for an unrelated,
+pre-existing reason — `drop-boundary-separatrix` (`left_only`) claims that
+exact path itself, so it resolves to no stored source before the
+escaping-rule check ever runs.
 
 ### `plugin-reentry-policy-*` — 22 · `shim/plugin_reentry_policy_test.c`
 
