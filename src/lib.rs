@@ -567,9 +567,10 @@ pub unsafe extern "C" fn al_read_data(
 
 /// Mirrors IMAS-Core's `al_write_data` ABI. A context with a known DD version
 /// mismatch resolves each identity, `renamed`, or `moved` `field`/`timebase`
-/// path to one stored spelling; unsupported paths, candidate plans, value
-/// transformations, and the DD-version stamp refuse before IMAS-Core is
-/// called. Other contexts forward unchanged.
+/// path to one stored spelling; a candidate plan writes only its declared
+/// precedence-1 stored path, while non-primary aliases, unsupported paths,
+/// value transformations, and the DD-version stamp refuse before IMAS-Core
+/// is called. Other contexts forward unchanged.
 ///
 /// # Safety
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null

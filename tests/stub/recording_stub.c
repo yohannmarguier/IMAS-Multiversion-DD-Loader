@@ -378,6 +378,24 @@ enum { RECORDING_STUB_MAXDIM = 7 };
 static double g_read_double_values[RECORDING_STUB_CSV_CAPACITY];
 static int g_read_size_override[RECORDING_STUB_CSV_CAPACITY];
 
+enum {
+    RECORDING_STUB_DATA_EVENT_READ = 1,
+    RECORDING_STUB_DATA_EVENT_DELETE = 2,
+    RECORDING_STUB_DATA_EVENT_CAPACITY = 128,
+};
+static int g_data_event_count = 0;
+static int g_data_event_kinds[RECORDING_STUB_DATA_EVENT_CAPACITY];
+static char *g_data_event_paths[RECORDING_STUB_DATA_EVENT_CAPACITY];
+
+static void record_data_event(int kind, const char *path) {
+    if (g_data_event_count < RECORDING_STUB_DATA_EVENT_CAPACITY) {
+        g_data_event_kinds[g_data_event_count] = kind;
+        free(g_data_event_paths[g_data_event_count]);
+        g_data_event_paths[g_data_event_count] = record_str(path);
+    }
+    g_data_event_count++;
+}
+
 /* RECORDING_STUB_READ_DOUBLE_VALUES and RECORDING_STUB_READ_SIZE_CSV give a
  * test the array shapes value-transform execution (issue #59) actually needs
  * to validate: an element count and per-element content that a single fixed
@@ -505,6 +523,8 @@ static al_status_t compute_read_response(const char *field, void **data, int dim
     if (data != NULL) {
         if (double_values_csv != NULL) {
             *data = (void *)g_read_double_values;
+        } else if (getenv("RECORDING_STUB_READ_ALLOCATE") != NULL) {
+            *data = record_str(g_read_buffer);
         } else {
             *data = getenv("RECORDING_STUB_READ_DOUBLE") != NULL ? (void *)&g_read_double_buffer
                                                                   : (void *)g_read_buffer;
@@ -627,6 +647,7 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
     g_read_timebase = record_str(timebase);
     g_read_datatype = datatype;
     g_read_dim = dim;
+    record_data_event(RECORDING_STUB_DATA_EVENT_READ, field);
 
     if (g_reentrant_read != NULL && field != NULL) {
         g_reentrant_active = 1;
@@ -634,6 +655,9 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
         int reentrant_size[RECORDING_STUB_MAXDIM] = {0};
         g_reentrant_read(ctxID, g_reentrant_field, "", &reentrant_data, datatype, dim,
                          reentrant_size);
+        if (getenv("RECORDING_STUB_READ_ALLOCATE") != NULL) {
+            free(reentrant_data);
+        }
         g_reentrant_active = 0;
     }
 
@@ -871,6 +895,7 @@ al_status_t al_delete_data(int ctx, const char *path) {
     if (g_delete_call_count <= RECORDING_STUB_DELETE_LOG_CAPACITY) {
         g_delete_paths[g_delete_call_count - 1] = record_str(path);
     }
+    record_data_event(RECORDING_STUB_DATA_EVENT_DELETE, path);
     trigger_reentrant_data(RECORDING_STUB_REENTRANT_DELETE_DATA, NULL, 0, 0, NULL);
 
     const char *failed_path = getenv("RECORDING_STUB_DELETE_FAIL_FIELD");
@@ -1474,6 +1499,21 @@ int recording_stub_end_action_ctx_id(void) {
 
 int recording_stub_read_call_count(void) {
     return g_read_call_count;
+}
+int recording_stub_data_event_count(void) {
+    return g_data_event_count;
+}
+int recording_stub_data_event_kind_at(int index) {
+    if (index < 0 || index >= g_data_event_count || index >= RECORDING_STUB_DATA_EVENT_CAPACITY) {
+        return 0;
+    }
+    return g_data_event_kinds[index];
+}
+const char *recording_stub_data_event_path_at(int index) {
+    if (index < 0 || index >= g_data_event_count || index >= RECORDING_STUB_DATA_EVENT_CAPACITY) {
+        return NULL;
+    }
+    return g_data_event_paths[index];
 }
 int recording_stub_read_ctx_id(void) {
     return g_read_ctx_id;

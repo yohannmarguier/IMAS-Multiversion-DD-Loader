@@ -25,11 +25,29 @@ static int loss_count(int ctx_id) {
 }
 
 typedef const char *(*delete_path_at_fn)(int);
+typedef int (*data_event_kind_at_fn)(int);
+typedef const char *(*data_event_path_at_fn)(int);
 typedef al_status_t (*read_data_fn)(int, const char *, const char *, void **, int, int, int *);
 typedef void (*set_reentrant_read_fn)(read_data_fn, const char *);
 
 static const char *delete_path_at(int index) {
     return ((delete_path_at_fn)stub_symbol_or_die("recording_stub_delete_path_at"))(index);
+}
+
+static int data_event_kind_at(int index) {
+    return ((data_event_kind_at_fn)stub_symbol_or_die("recording_stub_data_event_kind_at"))(index);
+}
+
+static const char *data_event_path_at(int index) {
+    return ((data_event_path_at_fn)stub_symbol_or_die("recording_stub_data_event_path_at"))(index);
+}
+
+static void enable_probe_allocations(void) {
+    CHECK(setenv("RECORDING_STUB_READ_ALLOCATE", "1", 1) == 0);
+}
+
+static void disable_probe_allocations(void) {
+    unsetenv("RECORDING_STUB_READ_ALLOCATE");
 }
 
 static void arm_reentrant_read(read_data_fn callback, const char *field) {
@@ -181,24 +199,13 @@ static void scenario_write_nested_child_context_resolves_relative_and_absolute_f
            "a child write used its own anchor for relative paths and the IDS root for absolute paths\n");
 }
 
-static void scenario_write_refuses_candidate_on_either_argument(void) {
+static void scenario_write_uses_the_primary_candidate_without_fanout(void) {
     int operation_ctx = open_mismatched_equilibrium();
-    int writes_before = int_from_stub("recording_stub_write_call_count");
-    double sentinel = 42.0;
-    int size[1] = {73};
+    check_write_lands(operation_ctx, "time_slice/profiles_2d/b_field_phi", "time",
+                      "time_slice/profiles_2d/b_field_phi", "time");
 
-    CHECK(write_field(operation_ctx, "time_slice/profiles_2d/b_field_phi", "time", &sentinel,
-                      size)
-              .code == IMAS_MVDD_CONVERSION_ERROR);
-    CHECK(write_field(operation_ctx, "time_slice/boundary/elongation",
-                      "time_slice/profiles_2d/b_field_phi", &sentinel, size)
-              .code == IMAS_MVDD_CONVERSION_ERROR);
-    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
-    CHECK(sentinel == 42.0);
-    CHECK(size[0] == 73);
-
-    printf("write_delete_conversion_test write-refuses-candidate-on-either-argument: "
-           "each ambiguous resolution refused before Core\n");
+    printf("write_delete_conversion_test write-uses-the-primary-candidate-without-fanout: "
+           "a write chose only precedence one while the paired delete fan-out removes all sources\n");
 }
 
 static void scenario_write_cocos_sign_flip_uses_a_shim_owned_rank_seven_copy(void) {
@@ -479,14 +486,26 @@ static void scenario_delete_fans_out_over_candidates_in_declared_order(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int reads_before = int_from_stub("recording_stub_read_call_count");
     int deletes_before = int_from_stub("recording_stub_delete_call_count");
+    int events_before = int_from_stub("recording_stub_data_event_count");
 
+    enable_probe_allocations();
     CHECK(al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi").code == 0);
+    disable_probe_allocations();
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 3);
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 3);
     CHECK(strcmp(delete_path_at(deletes_before), "time_slice/profiles_2d/b_field_phi") == 0);
     CHECK(strcmp(delete_path_at(deletes_before + 1), "time_slice/profiles_2d/b_field_tor") ==
           0);
     CHECK(strcmp(delete_path_at(deletes_before + 2), "time_slice/profiles_2d/b_tor") == 0);
+    CHECK(int_from_stub("recording_stub_data_event_count") == events_before + 6);
+    for (int index = 0; index < 3; ++index) {
+        CHECK(data_event_kind_at(events_before + 2 * index) == 1 /* READ */);
+        CHECK(data_event_kind_at(events_before + 2 * index + 1) == 2 /* DELETE */);
+        CHECK(strcmp(data_event_path_at(events_before + 2 * index),
+                     delete_path_at(deletes_before + index)) == 0);
+        CHECK(strcmp(data_event_path_at(events_before + 2 * index + 1),
+                     delete_path_at(deletes_before + index)) == 0);
+    }
     CHECK(loss_count(operation_ctx) == 0);
 }
 
@@ -495,10 +514,12 @@ static void scenario_delete_skips_not_found_candidates(void) {
     int reads_before = int_from_stub("recording_stub_read_call_count");
     int deletes_before = int_from_stub("recording_stub_delete_call_count");
 
-    CHECK(setenv("RECORDING_STUB_READ_NOT_FOUND_FIELD", "time_slice/profiles_2d/b_field_tor",
-                 1) == 0);
+    enable_probe_allocations();
+    CHECK(setenv("RECORDING_STUB_READ_NOT_FOUND_FIELD", "time_slice/profiles_2d/b_field_tor", 1) ==
+          0);
     CHECK(al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi").code == 0);
     unsetenv("RECORDING_STUB_READ_NOT_FOUND_FIELD");
+    disable_probe_allocations();
 
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 3);
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 2);
@@ -512,10 +533,11 @@ static void scenario_delete_reports_probe_and_delete_failures_distinctly(void) {
     int reads_before = int_from_stub("recording_stub_read_call_count");
     int deletes_before = int_from_stub("recording_stub_delete_call_count");
 
-    CHECK(setenv("RECORDING_STUB_READ_FAIL_FIELD", "time_slice/profiles_2d/b_field_tor", 1) ==
-          0);
+    enable_probe_allocations();
+    CHECK(setenv("RECORDING_STUB_READ_FAIL_FIELD", "time_slice/profiles_2d/b_field_tor", 1) == 0);
     al_status_t probe_failure = al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi");
     unsetenv("RECORDING_STUB_READ_FAIL_FIELD");
+    disable_probe_allocations();
     CHECK(probe_failure.code == -23);
     CHECK(strcmp(probe_failure.message,
                  "IMAS-MVDD: probe failed for stored candidate time_slice/profiles_2d/b_field_tor") ==
@@ -527,11 +549,13 @@ static void scenario_delete_reports_probe_and_delete_failures_distinctly(void) {
 
     reads_before = int_from_stub("recording_stub_read_call_count");
     deletes_before = int_from_stub("recording_stub_delete_call_count");
+    enable_probe_allocations();
     CHECK(setenv("RECORDING_STUB_DELETE_FAIL_FIELD", "time_slice/profiles_2d/b_field_tor", 1) ==
           0);
     al_status_t delete_failure =
         al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi");
     unsetenv("RECORDING_STUB_DELETE_FAIL_FIELD");
+    disable_probe_allocations();
     CHECK(delete_failure.code == -24);
     CHECK(strcmp(delete_failure.message,
                  "IMAS-MVDD: delete failed for stored candidate time_slice/profiles_2d/b_field_tor") ==
@@ -550,7 +574,9 @@ static void scenario_delete_probes_enter_the_read_reentry_guard(void) {
     int reentrant_before = int_from_stub("recording_stub_reentrant_call_count");
 
     arm_reentrant_read(al_read_data, "time_slice/profiles_2d/b_field_tor");
+    enable_probe_allocations();
     CHECK(al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi").code == 0);
+    disable_probe_allocations();
 
     CHECK(int_from_stub("recording_stub_reentrant_call_count") == reentrant_before + 3);
     CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_field"),
@@ -568,6 +594,22 @@ static void scenario_delete_refuses_non_primary_source_before_core_call(void) {
                           "this path is a non-primary source and cannot delete a shared stored slot",
                           "time_slice/profiles_2d/b_tor", "3.39.0", "4.1.1");
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
+}
+
+static void scenario_write_refuses_non_primary_source_before_core_call(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double sentinel = 42.0;
+    int size[1] = {1};
+    al_status_t status =
+        write_field(operation_ctx, "time_slice/profiles_2d/b_tor", "time", &sentinel, size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path is a non-primary source and cannot write a shared stored slot",
+                          "time_slice/profiles_2d/b_tor", "3.39.0", "4.1.1");
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    CHECK(sentinel == 42.0);
+    CHECK(size[0] == 1);
 }
 
 static void scenario_write_matching_context_forwards_unchanged(void) {
@@ -693,7 +735,7 @@ int main(int argc, char **argv) {
         {"plugin-write-renamed-field-lands-at-stored-spelling", scenario_plugin_write_renamed_field_lands_at_stored_spelling},
         {"plugin-write-matching-context-forwards-unchanged", scenario_plugin_write_matching_context_forwards_unchanged},
         {"write-nested-child-context-resolves-relative-and-absolute-fields", scenario_write_nested_child_context_resolves_relative_and_absolute_fields},
-        {"write-refuses-candidate-on-either-argument", scenario_write_refuses_candidate_on_either_argument},
+        {"write-uses-the-primary-candidate-without-fanout", scenario_write_uses_the_primary_candidate_without_fanout},
         {"write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy", scenario_write_cocos_sign_flip_uses_a_shim_owned_rank_seven_copy},
         {"plugin-write-cocos-sign-flip-uses-a-shim-owned-copy", scenario_plugin_write_cocos_sign_flip_uses_a_shim_owned_copy},
         {"write-cocos-sentinel-forwards-unchanged-without-loss", scenario_write_cocos_sentinel_forwards_unchanged_without_loss},
@@ -712,6 +754,7 @@ int main(int argc, char **argv) {
         {"delete-reports-probe-and-delete-failures-distinctly", scenario_delete_reports_probe_and_delete_failures_distinctly},
         {"delete-probes-enter-the-read-reentry-guard", scenario_delete_probes_enter_the_read_reentry_guard},
         {"delete-refuses-non-primary-source-before-core-call", scenario_delete_refuses_non_primary_source_before_core_call},
+        {"write-refuses-non-primary-source-before-core-call", scenario_write_refuses_non_primary_source_before_core_call},
         {"write-matching-context-forwards-unchanged", scenario_write_matching_context_forwards_unchanged},
         {"write-unknown-context-forwards-unchanged", scenario_write_unknown_context_forwards_unchanged},
         {"write-unstamped-context-forwards-unchanged", scenario_write_unstamped_context_forwards_unchanged},

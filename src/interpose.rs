@@ -39,6 +39,10 @@ use crate::registry::context_registry::{ConversionRecord, MapCacheKey, REGISTRY}
 use crate::version::version_stamp;
 use crate::{al_status_t, write_truncated};
 
+unsafe extern "C" {
+    fn free(ptr: *mut c_void);
+}
+
 thread_local! {
     /// How many guarded shim seams this thread is currently inside (ADR 0014).
     /// Only ever read through [`ReentryGuard`]; a thread-local rather than a
@@ -1785,6 +1789,9 @@ unsafe fn delete_candidates(ctx: c_int, paths: &[CString]) -> al_status_t {
             ReadOutcome::NotFound => {}
             ReadOutcome::Data => {
                 let deletion = forward_status!(delete_data(ctx, path.as_ptr()));
+                // The probe is shim-internal, so no HLI can own the
+                // IMAS-Core allocation returned for this present candidate.
+                unsafe { free(data) };
                 if deletion.code != 0 {
                     first_failure
                         .get_or_insert_with(|| candidate_failure(deletion, "delete", path));
@@ -1800,6 +1807,7 @@ unsafe fn delete_candidates(ctx: c_int, paths: &[CString]) -> al_status_t {
 /// fan-out failed. A failed probe and a failed deletion point callers at
 /// different backend operations, so their messages must stay distinct.
 fn candidate_failure(mut status: al_status_t, operation: &str, path: &CStr) -> al_status_t {
+    status.message = [0; crate::MAX_ERR_MSG_LEN];
     write_truncated(
         &mut status.message,
         &format!(

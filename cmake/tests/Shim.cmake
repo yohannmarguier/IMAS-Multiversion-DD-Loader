@@ -468,8 +468,8 @@ add_write_delete_mismatched_test(write-delete-plugin-write-renamed-field-lands-a
     plugin-write-renamed-field-lands-at-stored-spelling)
 add_write_delete_mismatched_test(write-delete-write-nested-child-context-resolves-relative-and-absolute-fields
     write-nested-child-context-resolves-relative-and-absolute-fields)
-add_write_delete_mismatched_test(write-delete-write-refuses-candidate-on-either-argument
-    write-refuses-candidate-on-either-argument)
+add_write_delete_mismatched_test(write-delete-write-uses-the-primary-candidate-without-fanout
+    write-uses-the-primary-candidate-without-fanout)
 add_write_delete_mismatched_test(write-delete-write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy
     write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy)
 add_write_delete_mismatched_test(write-delete-plugin-write-cocos-sign-flip-uses-a-shim-owned-copy
@@ -508,6 +508,10 @@ add_write_delete_mismatched_test(write-delete-delete-probes-enter-the-read-reent
     delete-probes-enter-the-read-reentry-guard)
 add_stub_test(write-delete-delete-refuses-non-primary-source-before-core-call
     write_delete_conversion_test delete-refuses-non-primary-source-before-core-call
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+add_stub_test(write-delete-write-refuses-non-primary-source-before-core-call
+    write_delete_conversion_test write-refuses-non-primary-source-before-core-call
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
 

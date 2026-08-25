@@ -293,8 +293,9 @@ pub(crate) fn resolve_read_path(record: &ConversionRecord, raw: *const c_char) -
     }
 }
 
-/// Resolves one write argument to the only stored-DD spelling this ticket can
-/// safely write: one path and no candidate plan. The resolved value
+/// Resolves one write argument to the one stored-DD spelling the write policy
+/// may safely choose. A candidate plan selects its declared primary source;
+/// non-primary HLI spellings refuse before this point. The resolved value
 /// transformation still points from stored data to the HLI (because maps
 /// serve reads); `run_write` inverts it before it copies caller data.
 pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) -> WritePath {
@@ -330,12 +331,12 @@ pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) 
         };
     }
 
-    // A `merged`/`split` rule needs the later write policy that selects a
-    // precedence-1 source and reports the candidates it left untouched. This
-    // first write slice only serves identity, renamed, and moved paths.
-    if matches!(explanation.rel, Some(Rel::Merged | Rel::Split)) {
+    if explanation
+        .precedence
+        .is_some_and(|precedence| precedence != 1)
+    {
         return WritePath::Refusal {
-            reason: "this path is served by several stored candidates, and this write cannot choose one safely"
+            reason: "this path is a non-primary source and cannot write a shared stored slot"
                 .to_string(),
             dd_path: hli_absolute,
         };
@@ -350,11 +351,22 @@ pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) 
             reason: "this path has no stored source".to_string(),
             dd_path: hli_absolute,
         },
-        Outcome::Path { candidates, .. } if !candidates.is_empty() => WritePath::Refusal {
-            reason: "this path is served by several stored candidates, and this write cannot choose one safely"
-                .to_string(),
-            dd_path: hli_absolute,
-        },
+        Outcome::Path { candidates, .. } if !candidates.is_empty() => {
+            let primary = candidates
+                .into_iter()
+                .next()
+                .expect("nonempty candidates guard selected a primary source");
+            match stored_c_path(record, &primary.path, is_absolute) {
+                Ok(path) => WritePath::Translated {
+                    path,
+                    value_transformation: primary.value_transformation,
+                },
+                Err(reason) => WritePath::Refusal {
+                    reason,
+                    dd_path: hli_absolute,
+                },
+            }
+        }
         Outcome::Path {
             resolved_path,
             value_transformation,
