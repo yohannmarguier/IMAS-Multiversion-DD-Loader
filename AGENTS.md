@@ -122,8 +122,8 @@ question. Keep it there rather than restating it in prose that can drift.
 
 [cargo-c]: https://github.com/lu-zero/cargo-c
 
-Adding a C ABI test: include `tests/shim_test_support.h` rather than writing a
-prologue. It owns `CHECK`/`CHECK_OK`, IMAS-Core's four data-type codes, the
+Adding a C ABI test: include `tests/support/shim_test_support.h` rather than
+writing a prologue. It owns `CHECK`/`CHECK_OK`, IMAS-Core's four data-type codes, the
 recording-stub accessors (`string_from_stub`, `int_from_stub`,
 `double_from_stub`, `pointer_from_stub`, over one `open_recording_stub`),
 `open_mismatched_occurrence`, and the `{name, function}` scenario table that
