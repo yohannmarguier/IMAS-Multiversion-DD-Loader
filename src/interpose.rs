@@ -29,7 +29,6 @@
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 
-use crate::al_status_t;
 use crate::conversion::conversion_map::{ConversionMap, Fidelity};
 use crate::conversion::known_artifacts;
 use crate::conversion::path_conversion::{self, ContextPathResolution};
@@ -38,6 +37,7 @@ use crate::conversion::seam_policy;
 use crate::core::core_binding::{COMPLEX_DATA_ID, DOUBLE_DATA_ID, INTEGER_DATA_ID, forward_status};
 use crate::registry::context_registry::{ConversionRecord, MapCacheKey, REGISTRY};
 use crate::version::version_stamp;
+use crate::{al_status_t, write_truncated};
 
 thread_local! {
     /// How many guarded shim seams this thread is currently inside (ADR 0014).
@@ -230,6 +230,25 @@ fn call_read(
             ctx_id, field, timebase, data, datatype, dim, size
         )),
     }
+}
+
+/// Calls IMAS-Core's ordinary read symbol without applying conversion policy.
+/// Internal readers enter the reentry guard so an IMAS-Core callback knows the
+/// path in flight is already in the stored DD spelling.
+#[allow(clippy::too_many_arguments)]
+unsafe fn read_data_unconverted(
+    ctx_id: c_int,
+    field: *const c_char,
+    timebase: *const c_char,
+    data: *mut *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    let (_reentry_guard, _already_entered) = ReentryGuard::enter();
+    forward_status!(read_data(
+        ctx_id, field, timebase, data, datatype, dim, size
+    ))
 }
 
 /// Forwards to `al_write_data` or `al_plugin_write_data`, chosen by `family`.
@@ -505,11 +524,8 @@ unsafe fn open_occurrence(
     let decision = seam_policy::decide_occurrence_registration(ids_name, &hli, || {
         version_stamp::discover(
             opened_octx_id,
-            |ctx_id, field, timebase, data, datatype, dim, size| {
-                let (_reentry_guard, _already_entered) = ReentryGuard::enter();
-                forward_status!(read_data(
-                    ctx_id, field, timebase, data, datatype, dim, size
-                ))
+            |ctx_id, field, timebase, data, datatype, dim, size| unsafe {
+                read_data_unconverted(ctx_id, field, timebase, data, datatype, dim, size)
             },
         )
     });
@@ -1735,10 +1751,63 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
                 path.map_or(std::ptr::null(), CStr::as_ptr)
             ))
         }
+        seam_policy::DeleteVerdict::FanOut { paths } => unsafe { delete_candidates(ctx, paths) },
         seam_policy::DeleteVerdict::Refusal { reason, dd_path } => {
             context_path_refusal(&record, &reason, &dd_path)
         }
     }
+}
+
+/// Deletes every stored candidate a multi-source HLI path can resolve to.
+/// Each candidate is probed first because `al_delete_data` cannot represent
+/// not-found. A failure does not stop later candidates: without a rollback,
+/// continuing leaves the least stale data behind.
+unsafe fn delete_candidates(ctx: c_int, paths: &[CString]) -> al_status_t {
+    let mut first_failure = None;
+
+    for path in paths {
+        let mut data = std::ptr::null_mut();
+        let probe = unsafe {
+            read_data_unconverted(
+                ctx,
+                path.as_ptr(),
+                c"".as_ptr(),
+                &mut data,
+                DOUBLE_DATA_ID,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        match read_outcome::classify(&probe, data.cast_const()) {
+            ReadOutcome::Failure => {
+                first_failure.get_or_insert_with(|| candidate_failure(probe, "probe", path));
+            }
+            ReadOutcome::NotFound => {}
+            ReadOutcome::Data => {
+                let deletion = forward_status!(delete_data(ctx, path.as_ptr()));
+                if deletion.code != 0 {
+                    first_failure
+                        .get_or_insert_with(|| candidate_failure(deletion, "delete", path));
+                }
+            }
+        }
+    }
+
+    first_failure.unwrap_or_default()
+}
+
+/// Keeps IMAS-Core's failure code while saying which half of the delete
+/// fan-out failed. A failed probe and a failed deletion point callers at
+/// different backend operations, so their messages must stay distinct.
+fn candidate_failure(mut status: al_status_t, operation: &str, path: &CStr) -> al_status_t {
+    write_truncated(
+        &mut status.message,
+        &format!(
+            "IMAS-MVDD: {operation} failed for stored candidate {}",
+            path.to_string_lossy()
+        ),
+    );
+    status
 }
 
 /// Forwards to IMAS-Core's real `al_iterate_over_arraystruct`, resolving
