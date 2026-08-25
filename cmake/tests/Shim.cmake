@@ -511,6 +511,12 @@ add_write_delete_mismatched_test(write-delete-delete-empty-path-forwards-as-expl
     delete-empty-path-forwards-as-explicit-migration-route)
 add_write_delete_mismatched_test(write-delete-delete-refuses-no-source-unservable-and-structures
     delete-refuses-no-source-unservable-and-structures)
+add_write_delete_mismatched_test(write-delete-delete-admits-trivial-structure-deletes
+    delete-admits-trivial-structure-deletes)
+add_stub_test(write-delete-delete-refuses-boundary-separatrix-reverse-direction
+    write_delete_conversion_test delete-refuses-boundary-separatrix-reverse-direction
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
 add_write_delete_mismatched_test(write-delete-delete-fans-out-over-candidates-in-declared-order
     delete-fans-out-over-candidates-in-declared-order)
 add_write_delete_mismatched_test(write-delete-delete-skips-not-found-candidates
