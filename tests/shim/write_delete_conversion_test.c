@@ -17,6 +17,24 @@ static al_status_t write_field(int ctx_id, const char *field, const char *timeba
     return al_write_data(ctx_id, field, timebase, data, 52 /* DOUBLE_DATA */, 1, size);
 }
 
+static int loss_count(int ctx_id) {
+    int count = -1;
+    CHECK(imas_mvdd_context_loss_count(ctx_id, &count).code == 0);
+    return count;
+}
+
+static void check_loss_at(int ctx_id, int index, const char *expected_path, int expected_verdict,
+                          int expected_operation) {
+    char path[256] = {0};
+    int verdict = -1;
+    int operation = -1;
+    CHECK(imas_mvdd_context_loss_at(ctx_id, index, path, sizeof(path), &verdict).code == 0);
+    CHECK(strcmp(path, expected_path) == 0);
+    CHECK(verdict == expected_verdict);
+    CHECK(imas_mvdd_context_loss_operation_at(ctx_id, index, &operation).code == 0);
+    CHECK(operation == expected_operation);
+}
+
 static void check_write_lands(int ctx_id, const char *field, const char *timebase,
                               const char *stored_field, const char *stored_timebase) {
     int writes_before = int_from_stub("recording_stub_write_call_count");
@@ -178,6 +196,97 @@ static void scenario_write_refuses_dd_version_stamp_but_forwards_its_siblings(vo
            "the immutable stamp was protected while access-layer metadata remained plain writes\n");
 }
 
+static void scenario_write_without_stored_slot_refuses_and_retains_a_write_loss(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double sentinel = 42.0;
+    int size[1] = {73};
+    al_status_t status = write_field(operation_ctx, "time_slice/boundary/phi", "", &sentinel, size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path has no stored source", "time_slice/boundary/phi", "4.1.1",
+                          "3.39.0");
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    CHECK(sentinel == 42.0);
+    CHECK(size[0] == 73);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary/phi", IMAS_MVDD_FIDELITY_UNMAPPABLE,
+                  IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    printf("write_delete_conversion_test write-without-stored-slot-refuses-and-retains-a-write-loss: "
+           "a DD4-only field was refused before Core and retained as a write loss\n");
+}
+
+static void scenario_write_reverse_without_stored_slot_refuses_and_retains_a_write_loss(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double sentinel = 42.0;
+    int size[1] = {73};
+    al_status_t status = write_field(operation_ctx, "time_slice/boundary_secondary_separatrix/gap/r", "",
+                                     &sentinel, size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path has no stored source",
+                          "time_slice/boundary_secondary_separatrix/gap/r", "3.39.0", "4.1.1");
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    CHECK(sentinel == 42.0);
+    CHECK(size[0] == 73);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary_secondary_separatrix/gap/r",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    printf("write_delete_conversion_test write-reverse-without-stored-slot-refuses-and-retains-a-write-loss: "
+           "a DD3-only field was refused before Core and retained as a write loss\n");
+}
+
+static void scenario_write_retyped_path_refuses_and_retains_a_write_loss(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double sentinel = 42.0;
+    int size[1] = {73};
+    al_status_t status = write_field(operation_ctx, "grids_ggd/grid/space/coordinates_type", "", &sentinel,
+                                     size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path's container changed shape and cannot be served",
+                          "grids_ggd/grid/space/coordinates_type", "4.1.1", "3.39.0");
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    CHECK(sentinel == 42.0);
+    CHECK(size[0] == 73);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "grids_ggd/grid/space/coordinates_type",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    printf("write_delete_conversion_test write-retyped-path-refuses-and-retains-a-write-loss: a "
+           "shape-changing path was refused before Core and retained as a write loss\n");
+}
+
+static void scenario_child_write_refusal_is_retained_on_its_root_with_a_complete_path(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int size = -1;
+    int arraystruct_ctx = -1;
+    CHECK(al_begin_arraystruct_action(operation_ctx, "time_slice", "", &size, &arraystruct_ctx)
+              .code == 0);
+
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double sentinel = 42.0;
+    int shape[1] = {73};
+    CHECK(write_field(arraystruct_ctx, "boundary/phi", "", &sentinel, shape).code ==
+          IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    CHECK(sentinel == 42.0);
+    CHECK(shape[0] == 73);
+    CHECK(loss_count(arraystruct_ctx) == 1);
+    check_loss_at(arraystruct_ctx, 0, "time_slice/boundary/phi", IMAS_MVDD_FIDELITY_UNMAPPABLE,
+                  IMAS_MVDD_LOSS_OPERATION_WRITE);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary/phi", IMAS_MVDD_FIDELITY_UNMAPPABLE,
+                  IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    printf("write_delete_conversion_test child-write-refusal-is-retained-on-its-root-with-a-complete-path: "
+           "a child refusal reached the root log under its joined DD path\n");
+}
+
 static void scenario_delete_nested_child_context_refuses_through_mismatched_root(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int size = -1;
@@ -319,6 +428,10 @@ int main(int argc, char **argv) {
         {"write-nested-child-context-resolves-relative-and-absolute-fields", scenario_write_nested_child_context_resolves_relative_and_absolute_fields},
         {"write-refuses-candidate-or-transformation-on-either-argument", scenario_write_refuses_candidate_or_transformation_on_either_argument},
         {"write-refuses-dd-version-stamp-but-forwards-its-siblings", scenario_write_refuses_dd_version_stamp_but_forwards_its_siblings},
+        {"write-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_without_stored_slot_refuses_and_retains_a_write_loss},
+        {"write-reverse-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_reverse_without_stored_slot_refuses_and_retains_a_write_loss},
+        {"write-retyped-path-refuses-and-retains-a-write-loss", scenario_write_retyped_path_refuses_and_retains_a_write_loss},
+        {"child-write-refusal-is-retained-on-its-root-with-a-complete-path", scenario_child_write_refusal_is_retained_on_its_root_with_a_complete_path},
         {"delete-nested-child-context-refuses-through-mismatched-root", scenario_delete_nested_child_context_refuses_through_mismatched_root},
         {"write-matching-context-forwards-unchanged", scenario_write_matching_context_forwards_unchanged},
         {"write-unknown-context-forwards-unchanged", scenario_write_unknown_context_forwards_unchanged},

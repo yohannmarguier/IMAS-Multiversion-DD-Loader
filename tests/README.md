@@ -1,7 +1,7 @@
 # tests/ — what is covered, and where
 
-**183 ctest tests** (18 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
-stub-only profile registers 161). None of the C sources here is registered by
+**187 ctest tests** (18 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
+stub-only profile registers 165). None of the C sources here is registered by
 itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
 (ADR 0005) and the context registry (ADR 0003) are process-wide state that
@@ -111,7 +111,7 @@ record intact, a recycled context ID never exposes a stale record, and the
 latter two seams forward unchanged without touching the registry. Observed
 indirectly, via whether a later read still translates.
 
-### `write-delete-*` — 18 · `shim/write_delete_conversion_test.c`
+### `write-delete-*` — 22 · `shim/write_delete_conversion_test.c`
 
 Issue #125's safe write slice: `al_write_data` and `al_plugin_write_data`
 independently resolve identity, `renamed`, and `moved` field/timebase paths to
@@ -120,6 +120,11 @@ caller-owned `data`/`size`. Candidate plans, value transformations, and the DD
 version stamp refuse before Core; the stamp's access-layer siblings still
 forward. Matching, unstamped, unknown and conversion-disabled contexts forward
 unchanged. `al_delete_data` remains the issue #64 blanket refusal seam.
+
+Issue #126 adds the impossible-write proof: both fixture directions refuse a
+field with no stored slot, and a retyped field refuses before Core. Each refusal
+keeps caller storage untouched, records an `UNMAPPABLE` `WRITE` loss, and a
+child-context refusal reaches its root under the complete joined DD path.
 
 ### `plugin-reentry-policy-*` — 22 · `shim/plugin_reentry_policy_test.c`
 

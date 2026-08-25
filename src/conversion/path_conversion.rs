@@ -631,6 +631,71 @@ mod tests {
         REGISTRY.remove(CTX_ID);
     }
 
+    /// Issue #126 pins the map-derived write refusals with an isolated
+    /// artifact. The registry caches maps by IDS name as well as version
+    /// pair, so this fixture must not claim the shipped `equilibrium` key:
+    /// another test can keep that map live while this one runs.
+    #[test]
+    fn write_pre_resolution_refusals_keep_the_shared_guard_ahead_of_rule_specific_ones() {
+        const CTX_ID: c_int = 0x5D02;
+        const FIXTURE_IDS: &str = "equilibrium-write-refusal-order-fixture";
+        const ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="retyped-wins" rel="retyped" left="shape" right="shape">
+                  <fidelity forward="unmappable" reverse="unmappable"/>
+                </rule>
+                <rule id="declared-impossible" rel="renamed" left="impossible" right="stored">
+                  <fidelity forward="unmappable" reverse="exact"/>
+                </rule>
+                <rule id="no-stored-slot" rel="left_only" left="missing">
+                  <fidelity forward="lossy" reverse="unmappable"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let stored = "4.1.1".parse().expect("known release");
+        let hli = "3.39.0".parse().expect("known release");
+        assert!(REGISTRY.record_root(
+            CTX_ID,
+            String::new(),
+            CTX_ID,
+            MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
+            crate::conversion::conversion_map::Direction::Forward,
+            || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
+        ));
+        let record = REGISTRY
+            .lookup(CTX_ID)
+            .expect("the root record was just registered");
+
+        let assert_refusal = |path: &str, expected_reason: &str| {
+            let path = CString::new(path).expect("fixture paths contain no NUL");
+            match resolve_write_path(&record, path.as_ptr()) {
+                WritePath::Refusal { reason, dd_path } => {
+                    assert_eq!(reason, expected_reason);
+                    assert_eq!(dd_path, path.to_str().expect("fixture paths are ASCII"));
+                }
+                WritePath::Forward | WritePath::Translated(_) => {
+                    panic!("{path:?} must refuse before IMAS-Core")
+                }
+            }
+        };
+
+        assert_refusal(
+            "shape",
+            "this path's container changed shape and cannot be served",
+        );
+        assert_refusal(
+            "impossible",
+            "this path has no safe conversion between DD versions",
+        );
+        assert_refusal("missing", "this path has no stored source");
+
+        REGISTRY.remove(CTX_ID);
+    }
+
     #[test]
     fn join_hli_path_appends_a_relative_path_under_a_nonempty_anchor() {
         assert_eq!(

@@ -143,6 +143,31 @@ fn a_non_exact_read_from_a_child_is_retained_by_its_root_context() {
 }
 
 #[test]
+fn a_refused_write_from_a_child_is_retained_by_its_root_context() {
+    let registry = ContextRegistry::new();
+    assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+    assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+
+    let child = registry.lookup(6).expect("the child must be live");
+    registry.record_write_loss_at_root(
+        child.root_id,
+        "root/path/field".to_string(),
+        Fidelity::Unmappable,
+    );
+
+    let state = registry.state.lock().unwrap();
+    assert_eq!(
+        state.loss_logs.get(&5),
+        Some(&vec![LossEntry {
+            hli_path: "root/path/field".to_string(),
+            fidelity: Fidelity::Unmappable,
+            operation: LossOperation::Write,
+        }])
+    );
+    assert!(!state.loss_logs.contains_key(&6));
+}
+
+#[test]
 fn a_read_uses_its_captured_root_after_its_child_id_is_reused() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "old/root".to_string(), 1));

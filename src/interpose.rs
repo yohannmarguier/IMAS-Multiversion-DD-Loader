@@ -1597,9 +1597,18 @@ fn write_data_impl(
             size,
         ),
         seam_policy::WriteVerdict::Refusal { reason, dd_path } => {
-            context_path_refusal(&record, &reason, &dd_path)
+            finish_write_refusal(&record, &reason, &dd_path)
         }
     }
+}
+
+/// Turns a write-policy refusal into the two caller-visible consequences the
+/// write seam owes: a root-owned `WRITE` loss and the formatted conversion
+/// refusal. The path was already resolved against the live record, so both
+/// effects use that same complete HLI-DD spelling.
+fn finish_write_refusal(record: &ConversionRecord, reason: &str, dd_path: &str) -> al_status_t {
+    REGISTRY.record_write_loss_at_root(record.root_id, dd_path.to_string(), Fidelity::Unmappable);
+    context_path_refusal(record, reason, dd_path)
 }
 
 /// Forwards to IMAS-Core's real `al_delete_data`, resolving IMAS-Core
@@ -1755,6 +1764,8 @@ pub(crate) unsafe fn setvalue_double_scalar_parameter_plugin(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conversion::conversion_map::Direction;
+    use crate::conversion::path_conversion::WritePath;
 
     /// Issue #56 AC5: "Matching, unknown, unstamped, and conversion-disabled
     /// contexts bypass registry lookup and rule resolution." The
@@ -1798,6 +1809,67 @@ mod tests {
         assert!(
             live_conversion_record(CTX_ID).is_none(),
             "the seam must answer from the latch, without consulting the registry"
+        );
+
+        REGISTRY.remove(CTX_ID);
+    }
+
+    #[test]
+    fn a_declared_unmappable_write_refusal_carries_its_message_and_write_loss() {
+        const CTX_ID: c_int = 0x5D03;
+        const FIXTURE_IDS: &str = "equilibrium-unmappable-write-seam-fixture";
+        const ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="declared-impossible" rel="renamed" left="impossible" right="stored">
+                  <fidelity forward="unmappable" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let stored = "4.1.1".parse().expect("known release");
+        let hli = "3.39.0".parse().expect("known release");
+        assert!(REGISTRY.record_root(
+            CTX_ID,
+            String::new(),
+            CTX_ID,
+            MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
+            Direction::Forward,
+            || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
+        ));
+        let record = REGISTRY
+            .lookup(CTX_ID)
+            .expect("the root record was just registered");
+        let path = CString::new("impossible").expect("fixture path contains no NUL");
+        let (reason, dd_path) = match path_conversion::resolve_write_path(&record, path.as_ptr()) {
+            WritePath::Refusal { reason, dd_path } => (reason, dd_path),
+            WritePath::Forward | WritePath::Translated(_) => {
+                panic!("a declared-unmappable write must refuse")
+            }
+        };
+
+        let status = finish_write_refusal(&record, &reason, &dd_path);
+        assert_eq!(status.code, crate::IMAS_MVDD_CONVERSION_ERROR);
+        let message = unsafe { CStr::from_ptr(status.message.as_ptr()) }
+            .to_str()
+            .expect("refusal message is UTF-8");
+        assert_eq!(
+            message,
+            "IMAS-MVDD: this path has no safe conversion between DD versions; DD path: impossible; \
+             HLI DD version: 3.39.0; stored DD version: 4.1.1"
+        );
+        assert_eq!(REGISTRY.loss_count(CTX_ID), 1);
+        assert_eq!(
+            REGISTRY.with_loss_at(CTX_ID, 0, |path, fidelity, operation| {
+                (path.to_string(), fidelity, operation)
+            }),
+            Some((
+                "impossible".to_string(),
+                Fidelity::Unmappable,
+                crate::registry::context_registry::LossOperation::Write,
+            ))
         );
 
         REGISTRY.remove(CTX_ID);
