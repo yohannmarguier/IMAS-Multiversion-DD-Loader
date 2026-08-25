@@ -189,7 +189,6 @@ static void scenario_write_candidate_lands_at_primary_and_retains_unwritten_cand
     /* The recording stub exposes the value accepted at the stored spelling so
      * this public read proves the precedence-1 write closes the shim round
      * trip. */
-    CHECK(setenv("RECORDING_STUB_READ_LAST_WRITE", "1", 1) == 0);
     CHECK(al_read_data(operation_ctx, "time_slice/profiles_2d/b_field_phi", "time", &read_data,
                        IMAS_DOUBLE_DATA, 1, size)
               .code == 0);

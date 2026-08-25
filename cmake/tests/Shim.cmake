@@ -468,8 +468,11 @@ add_write_delete_mismatched_test(write-delete-plugin-write-renamed-field-lands-a
     plugin-write-renamed-field-lands-at-stored-spelling)
 add_write_delete_mismatched_test(write-delete-write-nested-child-context-resolves-relative-and-absolute-fields
     write-nested-child-context-resolves-relative-and-absolute-fields)
-add_write_delete_mismatched_test(write-delete-write-candidate-lands-at-primary-and-retains-unwritten-candidates
-    write-candidate-lands-at-primary-and-retains-unwritten-candidates)
+add_stub_test(write-delete-write-candidate-lands-at-primary-and-retains-unwritten-candidates
+    write_delete_conversion_test write-candidate-lands-at-primary-and-retains-unwritten-candidates
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_READ_LAST_WRITE=1")
 add_write_delete_mismatched_test(write-delete-write-non-primary-source-refuses-by-precedence
     write-non-primary-source-refuses-by-precedence)
 add_write_delete_mismatched_test(write-delete-child-write-candidate-retains-complete-path-at-root
