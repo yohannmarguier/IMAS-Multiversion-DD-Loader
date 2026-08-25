@@ -150,6 +150,15 @@ pub(crate) enum DataView<'a> {
     NotDouble,
 }
 
+/// A safe, read-only view of a caller-owned write buffer. Unlike [`DataView`]
+/// this source is never changed: a write-side transformation allocates its
+/// own vector and returns it in [`WriteVerdict`] (ADR 0018).
+pub(crate) enum SourceView<'a> {
+    Double(&'a [f64]),
+    InvalidShape(&'static str),
+    NotDouble,
+}
+
 /// What one candidate attempt at IMAS-Core reported, already classified by
 /// the adapter through [`crate::read_outcome::classify`] before policy ever
 /// sees it: policy decides what to do next, never how to read the status or
@@ -178,6 +187,7 @@ pub(crate) struct ReadArgument<'a> {
 pub(crate) struct WriteArgument<'a> {
     pub(crate) resolution: WritePath,
     pub(crate) forward: Option<&'a CStr>,
+    pub(crate) dd_path: String,
 }
 
 /// The write policy's complete answer. The adapter alone turns a successful
@@ -187,6 +197,9 @@ pub(crate) enum WriteVerdict<'a> {
     Forward {
         field: Option<&'a CStr>,
         timebase: Option<&'a CStr>,
+        /// `Some` is a transformed shim-owned copy, borrowed by the adapter
+        /// for exactly one IMAS-Core call. `None` forwards caller storage.
+        data: Option<Vec<f64>>,
     },
     Refusal {
         reason: String,
@@ -199,6 +212,8 @@ pub(crate) enum WriteVerdict<'a> {
 pub(crate) fn run_write<'a>(
     field: &'a WriteArgument<'a>,
     timebase: &'a WriteArgument<'a>,
+    shape: BufferShape,
+    source: SourceView<'a>,
 ) -> WriteVerdict<'a> {
     let field = match write_argument_path(field) {
         Ok(path) => path,
@@ -208,7 +223,45 @@ pub(crate) fn run_write<'a>(
         Ok(path) => path,
         Err(refusal) => return write_refusal(refusal),
     };
-    WriteVerdict::Forward { field, timebase }
+    if timebase.value_transformation != ValueTransformation::None {
+        return WriteVerdict::Refusal {
+            reason: "this timebase needs a value transformation, which al_write_data cannot apply"
+                .to_string(),
+            dd_path: timebase.dd_path.to_string(),
+        };
+    }
+
+    let transformation = match field.value_transformation.inverse() {
+        Some(transformation) => transformation,
+        None => {
+            return WriteVerdict::Refusal {
+                reason:
+                    "this path needs a value transformation that cannot be inverted for a write"
+                        .to_string(),
+                dd_path: field.dd_path.to_string(),
+            };
+        }
+    };
+    if let Err(reason) = validate_value_transformation(&transformation, &shape) {
+        return WriteVerdict::Refusal {
+            reason: reason.to_string(),
+            dd_path: field.dd_path.to_string(),
+        };
+    }
+    let data = match copy_value_transformation(&transformation, source, shape.rank) {
+        Ok(data) => data,
+        Err(reason) => {
+            return WriteVerdict::Refusal {
+                reason: reason.to_string(),
+                dd_path: field.dd_path.to_string(),
+            };
+        }
+    };
+    WriteVerdict::Forward {
+        field: field.path,
+        timebase: timebase.path,
+        data,
+    }
 }
 
 fn write_refusal<'a>((reason, dd_path): (&str, &str)) -> WriteVerdict<'a> {
@@ -218,13 +271,52 @@ fn write_refusal<'a>((reason, dd_path): (&str, &str)) -> WriteVerdict<'a> {
     }
 }
 
+struct ResolvedWriteArgument<'a> {
+    path: Option<&'a CStr>,
+    value_transformation: ValueTransformation,
+    dd_path: &'a str,
+}
+
 fn write_argument_path<'a>(
     argument: &'a WriteArgument<'a>,
-) -> Result<Option<&'a CStr>, (&'a str, &'a str)> {
+) -> Result<ResolvedWriteArgument<'a>, (&'a str, &'a str)> {
     match &argument.resolution {
-        WritePath::Forward => Ok(argument.forward),
-        WritePath::Translated(path) => Ok(Some(path.as_c_str())),
+        WritePath::Forward => Ok(ResolvedWriteArgument {
+            path: argument.forward,
+            value_transformation: ValueTransformation::None,
+            dd_path: &argument.dd_path,
+        }),
+        WritePath::Translated {
+            path,
+            value_transformation,
+        } => Ok(ResolvedWriteArgument {
+            path: Some(path.as_c_str()),
+            value_transformation: value_transformation.clone(),
+            dd_path: &argument.dd_path,
+        }),
         WritePath::Refusal { reason, dd_path } => Err((reason, dd_path)),
+    }
+}
+
+/// Applies a write-side transformation to a copy the policy owns. Rank-zero
+/// `EMPTY_DOUBLE` is IMAS-Core's "unset" marker, so it intentionally returns
+/// `None`: forwarding that original scalar lets Core retain its silent-skip
+/// behaviour instead of turning it into a fabricated positive measurement.
+fn copy_value_transformation(
+    transformation: &ValueTransformation,
+    source: SourceView<'_>,
+    rank: c_int,
+) -> Result<Option<Vec<f64>>, &'static str> {
+    match transformation {
+        ValueTransformation::None => Ok(None),
+        ValueTransformation::SignFlip { .. } => match source {
+            SourceView::Double(values) if rank == 0 && values == [EMPTY_DOUBLE] => Ok(None),
+            SourceView::Double(values) => Ok(Some(values.iter().map(|value| -*value).collect())),
+            SourceView::InvalidShape(reason) => Err(reason),
+            SourceView::NotDouble => Err(
+                "value-transform execution requires DOUBLE_DATA and a rank no greater than MAXDIM",
+            ),
+        },
     }
 }
 
@@ -823,5 +915,147 @@ mod tests {
             "the complete anchor-joined path must survive into the verdict"
         );
         assert_eq!(verdict.field.fidelity, Fidelity::Lossy);
+    }
+
+    fn write_argument(path: &str, transformation: ValueTransformation) -> WriteArgument<'static> {
+        WriteArgument {
+            resolution: WritePath::Translated {
+                path: CString::new(path).expect("fixture paths contain no NUL"),
+                value_transformation: transformation,
+            },
+            forward: None,
+            dd_path: path.to_string(),
+        }
+    }
+
+    fn plain_timebase() -> WriteArgument<'static> {
+        WriteArgument {
+            resolution: WritePath::Forward,
+            forward: None,
+            dd_path: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_write_sign_flip_copies_and_transforms_the_source() {
+        let field = write_argument(
+            "time_slice/constraints/flux_loop/measured",
+            sign_flip_transformation(),
+        );
+        let timebase = plain_timebase();
+        let caller_values = [1.25, -2.5, 3.75];
+
+        let verdict = run_write(
+            &field,
+            &timebase,
+            BufferShape {
+                datatype: BufferDataType::Double,
+                rank: 1,
+            },
+            SourceView::Double(&caller_values),
+        );
+
+        assert_eq!(
+            caller_values,
+            [1.25, -2.5, 3.75],
+            "policy must only read caller storage"
+        );
+        match verdict {
+            WriteVerdict::Forward {
+                data: Some(values), ..
+            } => {
+                assert_eq!(values, [-1.25, 2.5, -3.75]);
+            }
+            WriteVerdict::Forward { data: None, .. } => {
+                panic!("a COCOS write must carry a shim-owned transformed copy")
+            }
+            WriteVerdict::Refusal { reason, .. } => {
+                panic!("the sign flip must be writable: {reason}")
+            }
+        }
+    }
+
+    #[test]
+    fn an_uninvertible_write_transformation_refuses_before_any_copy() {
+        use crate::conversion::conversion_map::TransformationDirection;
+        let same_convention = match sign_flip_transformation() {
+            ValueTransformation::SignFlip { from_cocos, .. } => from_cocos,
+            ValueTransformation::None => panic!("fixture must declare a COCOS sign flip"),
+        };
+        let field = write_argument(
+            "time_slice/constraints/flux_loop/measured",
+            ValueTransformation::SignFlip {
+                from_cocos: same_convention.clone(),
+                to_cocos: same_convention,
+                direction: TransformationDirection::ToHli,
+            },
+        );
+        let timebase = plain_timebase();
+        let caller_values = [1.25];
+
+        let verdict = run_write(
+            &field,
+            &timebase,
+            BufferShape {
+                datatype: BufferDataType::Double,
+                rank: 0,
+            },
+            SourceView::Double(&caller_values),
+        );
+
+        assert!(matches!(
+            verdict,
+            WriteVerdict::Refusal { ref reason, .. }
+                if reason == "this path needs a value transformation that cannot be inverted for a write"
+        ));
+        assert_eq!(caller_values, [1.25]);
+    }
+
+    #[test]
+    fn an_unsupported_write_shape_refuses_before_it_can_copy() {
+        let field = write_argument(
+            "time_slice/constraints/flux_loop/measured",
+            sign_flip_transformation(),
+        );
+        let timebase = plain_timebase();
+        let caller_values = [1.25];
+
+        for shape in [
+            BufferShape {
+                datatype: BufferDataType::Other,
+                rank: 0,
+            },
+            BufferShape {
+                datatype: BufferDataType::Double,
+                rank: crate::MAXDIM as c_int + 1,
+            },
+        ] {
+            let verdict = run_write(&field, &timebase, shape, SourceView::Double(&caller_values));
+            assert!(matches!(verdict, WriteVerdict::Refusal { .. }));
+        }
+        assert_eq!(caller_values, [1.25]);
+    }
+
+    #[test]
+    fn an_unset_scalar_forwards_without_a_transformed_copy() {
+        let field = write_argument(
+            "time_slice/constraints/flux_loop/measured",
+            sign_flip_transformation(),
+        );
+        let timebase = plain_timebase();
+        let caller_values = [EMPTY_DOUBLE];
+
+        let verdict = run_write(
+            &field,
+            &timebase,
+            BufferShape {
+                datatype: BufferDataType::Double,
+                rank: 0,
+            },
+            SourceView::Double(&caller_values),
+        );
+
+        assert!(matches!(verdict, WriteVerdict::Forward { data: None, .. }));
+        assert_eq!(caller_values, [EMPTY_DOUBLE]);
     }
 }

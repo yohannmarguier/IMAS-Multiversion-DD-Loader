@@ -1191,6 +1191,53 @@ unsafe fn build_data_view<'a>(
     }
 }
 
+/// Builds the read-only source view a write-side transformation can copy.
+/// This never modifies caller storage; invalid raw shape metadata becomes a
+/// policy refusal before an IMAS-Core write is attempted.
+///
+/// # Safety
+/// `data`, when non-null, must point to the caller-owned buffer described by
+/// `datatype`, `dim`, and `size`, matching IMAS-Core's write ABI contract.
+unsafe fn build_source_view<'a>(
+    data: *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> seam_policy::SourceView<'a> {
+    if datatype != DOUBLE_DATA_ID {
+        return seam_policy::SourceView::NotDouble;
+    }
+    let element_count = if dim == 0 {
+        Ok(1usize)
+    } else if !(0..=crate::MAXDIM as c_int).contains(&dim) {
+        Err("value-transform execution received an invalid array shape")
+    } else if size.is_null() {
+        Err("value-transform execution needs array dimensions")
+    } else {
+        // SAFETY: the ABI requires one initialized extent per write rank.
+        unsafe { std::slice::from_raw_parts(size, dim as usize) }
+            .iter()
+            .try_fold(1usize, |count, &extent| {
+                usize::try_from(extent)
+                    .ok()
+                    .and_then(|extent| count.checked_mul(extent))
+            })
+            .ok_or("value-transform execution received an invalid array shape")
+    };
+    match element_count {
+        Ok(_) if data.is_null() => {
+            seam_policy::SourceView::InvalidShape("value-transform execution needs a data buffer")
+        }
+        Ok(count) => {
+            // SAFETY: the caller's write ABI contract supplies an initialized
+            // DOUBLE_DATA buffer of exactly this shape.
+            let values = unsafe { std::slice::from_raw_parts(data.cast::<f64>(), count) };
+            seam_policy::SourceView::Double(values)
+        }
+        Err(reason) => seam_policy::SourceView::InvalidShape(reason),
+    }
+}
+
 /// Turns a [`seam_policy::ReadVerdict`] into the `al_status_t` `read_data_impl`
 /// returns, writing both arguments' retained fidelities to `record`'s root
 /// loss log first. This is the one call site that ever writes to the loss
@@ -1518,11 +1565,8 @@ pub(crate) unsafe fn write_data(
     )
 }
 
-/// Follows the same rule as [`write_data`] (issue #64), forwarded through
-/// IMAS-Core's plugin reentry write symbol rather than its ordinary twin: a
-/// live conversion record on `ctx_id` refuses before IMAS-Core is called;
-/// otherwise this forwards unchanged. No path translation is introduced for
-/// writes, ordinary or plugin.
+/// Follows the same policy as [`write_data`], forwarded through IMAS-Core's
+/// plugin reentry write symbol rather than its ordinary twin.
 ///
 /// # Safety
 /// Same contract as [`write_data`].
@@ -1578,24 +1622,47 @@ fn write_data_impl(
         // SAFETY: this function's contract requires `field` to be a valid,
         // NUL-terminated C string, or null.
         forward: unsafe { c_str_ref(field) },
+        dd_path: read_argument_path(&record, field),
     };
     let timebase_argument = seam_policy::WriteArgument {
         resolution: path_conversion::resolve_write_path(&record, timebase),
         // SAFETY: this function's contract requires `timebase` to be a valid,
         // NUL-terminated C string, or null.
         forward: unsafe { c_str_ref(timebase) },
+        dd_path: read_argument_path(&record, timebase),
     };
-    match seam_policy::run_write(&field_argument, &timebase_argument) {
-        seam_policy::WriteVerdict::Forward { field, timebase } => call_write(
-            family,
-            ctx_id,
-            field.map_or(std::ptr::null(), CStr::as_ptr),
-            timebase.map_or(std::ptr::null(), CStr::as_ptr),
-            data,
-            datatype,
-            dim,
-            size,
-        ),
+    let shape = seam_policy::BufferShape {
+        datatype: if datatype == DOUBLE_DATA_ID {
+            seam_policy::BufferDataType::Double
+        } else {
+            seam_policy::BufferDataType::Other
+        },
+        rank: dim,
+    };
+    // SAFETY: `write_data_impl` has the same pointer contract as
+    // `build_source_view`; it borrows the caller buffer only long enough for
+    // the policy to build its owned transformed copy.
+    let source = unsafe { build_source_view(data, datatype, dim, size) };
+    match seam_policy::run_write(&field_argument, &timebase_argument, shape, source) {
+        seam_policy::WriteVerdict::Forward {
+            field,
+            timebase,
+            data: transformed_data,
+        } => {
+            let forward_data = transformed_data
+                .as_ref()
+                .map_or(data, |values| values.as_ptr().cast_mut().cast::<c_void>());
+            call_write(
+                family,
+                ctx_id,
+                field.map_or(std::ptr::null(), CStr::as_ptr),
+                timebase.map_or(std::ptr::null(), CStr::as_ptr),
+                forward_data,
+                datatype,
+                dim,
+                size,
+            )
+        }
         seam_policy::WriteVerdict::Refusal { reason, dd_path } => {
             context_path_refusal(&record, &reason, &dd_path)
         }
