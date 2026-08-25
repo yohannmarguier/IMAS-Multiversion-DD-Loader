@@ -137,10 +137,6 @@ enum Entry {
 
 /// Which successful or refused seam operation earned a loss-log entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "issue #124 exposes the write operation before the write seam records entries"
-)]
 pub(crate) enum LossOperation {
     Read,
     Write,
@@ -369,6 +365,33 @@ impl ContextRegistry {
         hli_path: String,
         fidelity: Fidelity,
     ) {
+        self.record_loss_at_root(root_id, hli_path, fidelity, LossOperation::Read);
+    }
+
+    /// Appends a non-exact write outcome directly to the loss log belonging
+    /// to the root captured in a write's conversion-record snapshot. Exact
+    /// writes never enter the log; if that root has ended, its log is gone
+    /// and the outcome is deliberately not retained.
+    ///
+    /// This mirrors [`Self::record_read_loss_at_root`]: retaining against the
+    /// captured root prevents a child context ID recycled during a seam call
+    /// from receiving a stale loss entry.
+    pub(crate) fn record_write_loss_at_root(
+        &self,
+        root_id: ContextId,
+        hli_path: String,
+        fidelity: Fidelity,
+    ) {
+        self.record_loss_at_root(root_id, hli_path, fidelity, LossOperation::Write);
+    }
+
+    fn record_loss_at_root(
+        &self,
+        root_id: ContextId,
+        hli_path: String,
+        fidelity: Fidelity,
+        operation: LossOperation,
+    ) {
         if fidelity == Fidelity::Exact {
             return;
         }
@@ -377,7 +400,7 @@ impl ContextRegistry {
             losses.push(LossEntry {
                 hli_path,
                 fidelity,
-                operation: LossOperation::Read,
+                operation,
             });
         }
     }

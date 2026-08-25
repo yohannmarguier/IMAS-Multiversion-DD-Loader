@@ -1597,6 +1597,11 @@ fn write_data_impl(
             size,
         ),
         seam_policy::WriteVerdict::Refusal { reason, dd_path } => {
+            REGISTRY.record_write_loss_at_root(
+                record.root_id,
+                dd_path.clone(),
+                Fidelity::Unmappable,
+            );
             context_path_refusal(&record, &reason, &dd_path)
         }
     }
