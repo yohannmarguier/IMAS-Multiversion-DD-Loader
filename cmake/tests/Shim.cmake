@@ -496,8 +496,16 @@ add_write_delete_mismatched_test(write-delete-delete-refuses-stamp-subtrees-befo
     delete-refuses-stamp-subtrees-before-core-call)
 add_write_delete_mismatched_test(write-delete-delete-empty-path-forwards-as-explicit-migration-route
     delete-empty-path-forwards-as-explicit-migration-route)
-add_write_delete_mismatched_test(write-delete-delete-refuses-no-source-unservable-and-candidates
-    delete-refuses-no-source-unservable-and-candidates)
+add_write_delete_mismatched_test(write-delete-delete-refuses-no-source-unservable-and-structures
+    delete-refuses-no-source-unservable-and-structures)
+add_write_delete_mismatched_test(write-delete-delete-fans-out-over-candidates-in-declared-order
+    delete-fans-out-over-candidates-in-declared-order)
+add_write_delete_mismatched_test(write-delete-delete-skips-not-found-candidates
+    delete-skips-not-found-candidates)
+add_write_delete_mismatched_test(write-delete-delete-reports-probe-and-delete-failures-distinctly
+    delete-reports-probe-and-delete-failures-distinctly)
+add_write_delete_mismatched_test(write-delete-delete-probes-enter-the-read-reentry-guard
+    delete-probes-enter-the-read-reentry-guard)
 add_stub_test(write-delete-delete-refuses-non-primary-source-before-core-call
     write_delete_conversion_test delete-refuses-non-primary-source-before-core-call
     HLI_DD_VERSION 3.39.0
