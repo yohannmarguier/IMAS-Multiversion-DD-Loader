@@ -340,6 +340,25 @@ is itself worth knowing when reading a green suite.
   limitation here with no test standing behind it in either direction: the
   first conversion-map artifact whose rules touch a timebase path must reopen
   the question rather than read this silence as a decision that it is safe.
+- **A refused write can leave a partly written IDS, and which failure mode you
+  get depends on your HLI.** The shim refuses a write it cannot serve *before*
+  IMAS-Core, which is the correct answer — but it cannot undo what the caller
+  already wrote. IMAS-Fortran's generated `put`/`put_slice` routines have no
+  refusal-tolerance branch: any nonzero status ends the DD traversal, with
+  everything written earlier already on disk and no rollback. So against an
+  **unmodified upstream** IMAS-Fortran, a refusal partway through a `put_slice`
+  leaves a torn time slice plus an error rather than a clean failure. Against
+  an HLI patched with a put-side tolerance, the unwritable field is skipped and
+  reported instead. This is a **documented limitation of this shim, not a
+  defect in it** — the refusal belongs here and the tolerance belongs in the
+  HLI, and the shim deliberately does not *require* the HLI-side half
+  (`docs/adr/0019-a-refusal-is-only-safe-if-someone-catches-it.md`, decision
+  4). The HLI-side work is tracked at
+  [yohannmarguier/IMAS-Fortran#61](https://github.com/yohannmarguier/IMAS-Fortran/issues/61).
+  A separate consequence of the same shape: a refusal reaching IMAS-Core's own
+  plugin manager would be `abort()`, not a returned failure, which is why the
+  reentry guard keeps IMAS-Core's internal traffic out of the conversion path
+  entirely (`docs/adr/0014-reentrant-reads-forward-untouched.md`).
 
 ## Layout
 
