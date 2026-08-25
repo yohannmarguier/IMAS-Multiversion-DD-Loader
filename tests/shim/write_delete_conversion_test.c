@@ -85,8 +85,8 @@ static void scenario_delete_identity_renamed_and_moved_fields_land_at_stored_spe
                        "time_slice/boundary/elongation");
     check_delete_lands(operation_ctx, "time_slice/global_quantities/beta_tor_norm",
                        "time_slice/global_quantities/beta_normal");
-    check_delete_lands(operation_ctx, "time_slice/boundary/closest_wall_point",
-                       "time_slice/boundary_separatrix/closest_wall_point");
+    check_delete_lands(operation_ctx, "time_slice/boundary/closest_wall_point/r",
+                       "time_slice/boundary_separatrix/closest_wall_point/r");
     CHECK(loss_count(operation_ctx) == 0);
 }
 
@@ -96,8 +96,8 @@ static void scenario_delete_reverse_identity_renamed_and_moved_fields_land_at_st
                        "time_slice/boundary/elongation");
     check_delete_lands(operation_ctx, "time_slice/global_quantities/beta_normal",
                        "time_slice/global_quantities/beta_tor_norm");
-    check_delete_lands(operation_ctx, "time_slice/boundary_separatrix/closest_wall_point",
-                       "time_slice/boundary/closest_wall_point");
+    check_delete_lands(operation_ctx, "time_slice/boundary_separatrix/closest_wall_point/r",
+                       "time_slice/boundary/closest_wall_point/r");
 }
 
 static void scenario_plugin_write_renamed_field_lands_at_stored_spelling(void) {
@@ -246,6 +246,10 @@ static void scenario_delete_refuses_no_source_unservable_and_candidates(void) {
     CHECK_REFUSAL_MESSAGE(status,
                           "this path is served by several stored candidates, and this delete cannot remove them safely",
                           "time_slice/profiles_2d/b_field_phi", "4.1.1", "3.39.0");
+    status = al_delete_data(operation_ctx, "time_slice/boundary");
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this delete path is a structure, and only leaf deletes are supported",
+                          "time_slice/boundary", "4.1.1", "3.39.0");
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
 }
 

@@ -39,8 +39,10 @@
 //! `moved` field/timebase paths to one stored spelling before IMAS-Core is
 //! called. Candidate plans, declared value transformations, and a write to
 //! the DD-version stamp refuse; matching, unknown, unstamped and
-//! conversion-disabled contexts forward unchanged. `al_delete_data` remains
-//! a blanket mismatched-context refusal (ADR 0016).
+//! conversion-disabled contexts forward unchanged. `al_delete_data` resolves
+//! a safe identity, renamed, or moved leaf to its stored spelling; an empty
+//! path forwards as the caller's whole-DATAOBJECT migration route, while
+//! structures and candidate plans refuse.
 //!
 //! Each entry point below documents its own seam behaviour, but the policy
 //! itself lives beside its implementation in `src/interpose.rs` — go there for

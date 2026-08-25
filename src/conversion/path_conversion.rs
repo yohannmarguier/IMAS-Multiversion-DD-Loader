@@ -21,7 +21,7 @@
 use std::ffi::{CStr, CString, c_char};
 
 use crate::conversion::conversion_map::{
-    Fidelity, Outcome, RefusalReason, Rel, ValueTransformation,
+    Direction, Fidelity, Outcome, RefusalReason, Rel, ValueTransformation,
 };
 use crate::registry::context_registry::ConversionRecord;
 
@@ -436,6 +436,13 @@ pub(crate) fn resolve_delete_path(record: &ConversionRecord, raw: *const c_char)
                 .to_string(),
             dd_path: hli_absolute,
         },
+        Outcome::Path { resolved_path: _, .. } if !is_equilibrium_leaf(record, &hli_absolute) => {
+            DeletePath::Refusal {
+                reason: "this delete path is a structure, and only leaf deletes are supported"
+                    .to_string(),
+                dd_path: hli_absolute,
+            }
+        }
         Outcome::Path { resolved_path, .. } => match stored_c_path(record, &resolved_path, is_absolute) {
             Ok(path) => DeletePath::Translated(path),
             Err(reason) => DeletePath::Refusal {
@@ -444,6 +451,23 @@ pub(crate) fn resolve_delete_path(record: &ConversionRecord, raw: *const c_char)
             },
         },
     }
+}
+
+/// `al_delete_data` gives the shim a path string but no datatype or other
+/// marker distinguishing an IDS leaf from a container. The one embedded
+/// equilibrium artifact is shipped with its real DD leaf inventories, so the
+/// leaf-only delete policy can answer that question before IMAS-Core is
+/// called. A future generated artifact must carry the equivalent inventory
+/// before this seam can serve it; today it cannot be a live conversion map.
+fn is_equilibrium_leaf(record: &ConversionRecord, hli_path: &str) -> bool {
+    const LEFT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-3.39.0.txt");
+    const RIGHT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-4.1.1.txt");
+
+    let inventory = match record.direction_to_stored {
+        Direction::Forward => LEFT_LEAVES,
+        Direction::Reverse => RIGHT_LEAVES,
+    };
+    inventory.lines().any(|leaf| leaf == hli_path)
 }
 
 /// Distinguishes a conditional merged/split conversion from an unconditional
