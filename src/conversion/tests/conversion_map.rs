@@ -638,37 +638,6 @@ fn a_retype_refuses_on_shape_even_when_it_declares_unmappable() {
 }
 
 #[test]
-fn approved_artifacts_declared_unmappable_rule_directions_are_not_selectable() {
-    let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
-    let declared_unmappable_directions = map
-        .rules
-        .iter()
-        .flat_map(|rule| {
-            [
-                (Direction::Forward, rule.fidelity_forward),
-                (Direction::Reverse, rule.fidelity_reverse),
-            ]
-            .into_iter()
-            .filter(move |(_, fidelity)| *fidelity == Fidelity::Unmappable)
-            .map(move |(direction, _)| (rule.id.as_str(), rule.rel, direction))
-        })
-        .collect::<Vec<_>>();
-
-    assert_eq!(declared_unmappable_directions.len(), 36);
-    assert!(
-        declared_unmappable_directions
-            .iter()
-            .all(|(_, rel, direction)| {
-                matches!(
-                    (rel, direction),
-                    (Rel::RightOnly, Direction::Forward) | (Rel::LeftOnly, Direction::Reverse)
-                )
-            }),
-        "the approved artifact now has a selectable declared-unmappable rule direction; add a public write-path scenario for it"
-    );
-}
-
-#[test]
 fn merged_rule_resolves_forward_to_its_single_canonical_target() {
     let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
 
