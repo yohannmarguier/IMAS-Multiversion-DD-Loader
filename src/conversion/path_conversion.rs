@@ -457,8 +457,11 @@ pub(crate) fn resolve_delete_path(record: &ConversionRecord, raw: *const c_char)
 /// marker distinguishing an IDS leaf from a container. The one embedded
 /// equilibrium artifact is shipped with its real DD leaf inventories, so the
 /// leaf-only delete policy can answer that question before IMAS-Core is
-/// called. A future generated artifact must carry the equivalent inventory
-/// before this seam can serve it; today it cannot be a live conversion map.
+/// called. This is a safety classification only, not conversion-rule
+/// selection; ADR 0013 decision 6 records the narrow exception to the
+/// inventories' proof role. A future generated artifact must carry the
+/// equivalent inventory before this seam can serve it; today it cannot be a
+/// live conversion map.
 fn is_equilibrium_leaf(record: &ConversionRecord, hli_path: &str) -> bool {
     const LEFT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-3.39.0.txt");
     const RIGHT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-4.1.1.txt");
