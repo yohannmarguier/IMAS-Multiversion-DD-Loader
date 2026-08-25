@@ -1,6 +1,6 @@
 # tests/ — what is covered, and where
 
-**205 ctest tests** (18 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
+**208 ctest tests** (21 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
 stub-only profile registers 183). None of the C sources here is registered by
 itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
@@ -9,7 +9,7 @@ settles once. A scenario name maps to `<executable> <scenario-argument>`.
 
 ```console
 $ ctest --test-dir build --output-on-failure    # everything
-$ ctest --test-dir build -L real-core           # the 18 real-IMAS-Core ones
+$ ctest --test-dir build -L real-core           # the 21 real-IMAS-Core ones
 $ ctest --test-dir build -R read-path           # one group
 $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 ```
@@ -21,7 +21,7 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 | `support/` | `shim_test_support.h` — the one shared C harness: `CHECK`/`CHECK_OK`/`CHECK_REFUSAL_MESSAGE`, IMAS-Core's four data-type codes, `open_recording_stub` plus the `{string,int,double,double_at,pointer}_from_stub` accessors, `open_mismatched_occurrence`, and the `{name, function}` scenario table `RUN_NAMED_SCENARIO` dispatches `argv[1]` through. Include this instead of writing a prologue. |
 | `stub/` | `recording_stub.c` — a fake `libal` exporting the whole runtime-bound surface and recording what it received, including snapshots of write payloads whose shim-owned buffers are freed on return, so assertions are made on what crossed the boundary rather than inferred from a data round trip. ~23 `RECORDING_STUB_*` env knobs drive fixtures and failures (stamp version, not-found, sign-flip values, per-seam `*_FAIL` knobs, filled-paths CSV, reentrant reads and writes). |
 | `shim/` | 11 C suites driving the public ABI against that stub — 176 tests. |
-| `real_core/` | 3 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core and the checked-in equilibrium HDF5 fixture pair. |
+| `real_core/` | 4 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core and the checked-in equilibrium HDF5 fixture pair. |
 | `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 4 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
 | `cmake/` | `cmake -P` checks of the build/CI configuration itself, each with a guard-the-guard companion that proves it rejects what it claims. |
 | `scripts/` | Install/packaging shell checks. **CI-only — not in ctest.** |
@@ -180,6 +180,24 @@ Scenarios sharing a fixture directory hold a ctest
 an isolated temporary copy instead: it reads the copied DD-version stamp and a
 numeric dataset through raw HDF5, then re-proves a translated read against that
 copy, leaving the checked-in pair untouched.
+
+### `write-delete-oracle-*` — 3, `real-core` · `real_core/write_delete_oracle_test.c`
+
+The on-disk oracle for the write and delete seams (issue #133): every
+scenario mutates its own private temp-directory copy of the equilibrium
+fixture through the shim, then reads the result back with raw HDF5 — never
+through the shim or IMAS-Core — because a shim round trip cannot verify a
+sign flip, a stored spelling, a stamp, or a fan-out on its own (ADR 0016's
+"Consequences"). Only one of the ticket's five planned claims is provable
+against this real IMAS-Core version: a `WRITE_OP`-opened context never
+registers a conversion record on real Core's HDF5 backend (issue #136), so a
+successful, translating write or delete cannot currently be driven through
+real Core at all. `forward-refused-write-leaves-stamp-untouched` and its
+reverse prove the one claim that needs no such write — a refusal that never
+reaches Core leaves the DD-version stamp exactly as it was —
+and `write-op-root-does-not-register-a-mismatch` pins today's gap as a
+regression marker that starts failing once #136 lands, which is the signal to
+implement the four deferred claims.
 
 ### `runtime-binding-real-core-forwarding` — 1, `real-core` · `real_core/real_core_forwarding_test.c`
 
