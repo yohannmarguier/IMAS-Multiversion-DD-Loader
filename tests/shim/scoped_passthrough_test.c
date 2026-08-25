@@ -414,6 +414,15 @@ static void scenario_writing_get_occurrences_forwards_ids_name_unchanged(void) {
     CHECK(status.code == 0);
     CHECK(int_from_stub("recording_stub_occurrences_call_count") == 1);
     CHECK(int_from_stub("recording_stub_occurrences_pctx_id") == pulse_ctx);
+    /* Weaker than its two siblings below, and deliberately so: this seam's only
+     * path-bearing argument is the IDS *name*, and IDS names are stable across
+     * this version pair — ADR 0002 forwards it unchanged for exactly that
+     * reason. So there is no pair of spellings to seed here the way
+     * `al_list_filled_paths` and the bind/unbind family get one, and
+     * "forwarded unchanged" and "correctly translated" agree. What this pins
+     * is only that the shim does not *invent* a difference; it cannot catch a
+     * translation that happens to be the identity. Stated rather than left for
+     * a reader to assume the assertion is stronger than it is. */
     CHECK(strcmp(string_from_stub("recording_stub_occurrences_ids_name"), "equilibrium") == 0);
     CHECK(size == 3);
     CHECK(occurrences != NULL);
