@@ -475,6 +475,10 @@ add_stub_test(write-delete-write-candidate-lands-at-primary-and-retains-unwritte
     ENV "RECORDING_STUB_READ_LAST_WRITE=1")
 add_write_delete_mismatched_test(write-delete-write-non-primary-source-refuses-by-precedence
     write-non-primary-source-refuses-by-precedence)
+add_stub_test(write-delete-write-split-candidate-lands-at-primary
+    write_delete_conversion_test write-split-candidate-lands-at-primary
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
 add_write_delete_mismatched_test(write-delete-child-write-candidate-retains-complete-path-at-root
     child-write-candidate-retains-complete-path-at-root)
 add_write_delete_mismatched_test(write-delete-write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy

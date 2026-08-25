@@ -217,6 +217,25 @@ static void scenario_write_non_primary_source_refuses_by_precedence(void) {
                   IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_WRITE);
 }
 
+static void scenario_write_split_candidate_lands_at_primary(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double value = 42.0;
+    int size[1] = {1};
+
+    CHECK(write_field(operation_ctx, "time_slice/global_quantities/psi_axis", "time", &value, size)
+              .code == 0);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 1);
+    CHECK(strcmp(string_from_stub("recording_stub_write_field"),
+                 "time_slice/global_quantities/psi_axis") == 0);
+    CHECK(pointer_from_stub("recording_stub_write_data") != &value);
+    CHECK(double_at_from_stub("recording_stub_write_double_at", 0) == -value);
+    CHECK(value == 42.0);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/global_quantities/psi_axis",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+}
+
 static void scenario_child_write_candidate_retains_complete_path_at_root(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int child_size = -1;
@@ -663,6 +682,7 @@ int main(int argc, char **argv) {
         {"write-nested-child-context-resolves-relative-and-absolute-fields", scenario_write_nested_child_context_resolves_relative_and_absolute_fields},
         {"write-candidate-lands-at-primary-and-retains-unwritten-candidates", scenario_write_candidate_lands_at_primary_and_retains_unwritten_candidates},
         {"write-non-primary-source-refuses-by-precedence", scenario_write_non_primary_source_refuses_by_precedence},
+        {"write-split-candidate-lands-at-primary", scenario_write_split_candidate_lands_at_primary},
         {"child-write-candidate-retains-complete-path-at-root", scenario_child_write_candidate_retains_complete_path_at_root},
         {"write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy", scenario_write_cocos_sign_flip_uses_a_shim_owned_rank_seven_copy},
         {"plugin-write-cocos-sign-flip-uses-a-shim-owned-copy", scenario_plugin_write_cocos_sign_flip_uses_a_shim_owned_copy},

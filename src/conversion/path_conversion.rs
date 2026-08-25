@@ -101,6 +101,7 @@ pub(crate) enum WritePath {
 
 pub(crate) struct WriteCandidate {
     pub(crate) path: CString,
+    pub(crate) precedence: u32,
     pub(crate) value_transformation: ValueTransformation,
 }
 
@@ -370,6 +371,7 @@ pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) 
             .map(|candidate| {
                 stored_c_path(record, &candidate.path, is_absolute).map(|path| WriteCandidate {
                     path,
+                    precedence: candidate.precedence,
                     value_transformation: candidate.value_transformation,
                 })
             })

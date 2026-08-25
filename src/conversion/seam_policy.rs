@@ -335,8 +335,14 @@ fn write_argument_path<'a>(
             unwritten_candidates: 0,
         }),
         WritePath::Candidates(candidates) => {
-            let Some(primary) = candidates.first() else {
-                unreachable!("conversion maps never produce an empty candidate plan")
+            let Some(primary) = candidates
+                .iter()
+                .find(|candidate| candidate.precedence == 1)
+            else {
+                return Err((
+                    "this candidate plan has no precedence-1 source for a write",
+                    &argument.dd_path,
+                ));
             };
             Ok(ResolvedWriteArgument {
                 path: Some(primary.path.as_c_str()),
