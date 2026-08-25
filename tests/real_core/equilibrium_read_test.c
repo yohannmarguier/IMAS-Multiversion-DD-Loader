@@ -621,18 +621,13 @@ static void scenario_conversion_disabled_read_is_unaffected(void) {
            "version left the read a plain forward\n");
 }
 
-/* --- P4: spec #43 tier-2 cells that were covered only against the stub ----- */
+/* --- Issue #125: the remaining real-Core refusal boundary ------------------ */
 
-/* Obligation (c)'s missing refusal: "write against mismatch ... returns -1000
- * with a well-formed message". tests/write_delete_conversion_test.c proves the
- * policy against the recording stub; this proves it across a real IMAS-Core
- * boundary, on a real mismatched occurrence.
- *
- * The pulse is opened READ_OP, and the refusal happens before IMAS-Core is
- * called, so nothing here can write to the checked-in fixture. The scenario
- * then reads through the same context to show the refusal did not come from a
- * broken or unregistered context: the very same op_ctx still converts. */
-static void scenario_forward_write_and_delete_refuse_against_mismatch(void) {
+/* Safe writes are proven at the recording-stub boundary, where the exact
+ * stored spelling delivered to IMAS-Core is observable. The checked-in HDF5
+ * fixture is opened only for reads, so its real-Core probe keeps the one
+ * remaining mismatched mutation policy: delete must still refuse. */
+static void scenario_forward_delete_refuses_against_mismatch(void) {
     CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
     int pulse_ctx = open_fixture_pulse("3.39.0");
 
@@ -640,18 +635,6 @@ static void scenario_forward_write_and_delete_refuse_against_mismatch(void) {
     CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
 
     const char *field = "time_slice/global_quantities/beta_tor_norm";
-    double sentinel = 42.0;
-    void *data = &sentinel;
-    int size[1] = {73};
-    al_status_t write_status = al_write_data(op_ctx, field, "", data, DOUBLE_DATA, 1, size);
-    CHECK(write_status.code == IMAS_MVDD_CONVERSION_ERROR);
-    CHECK_REFUSAL_MESSAGE(write_status,
-                          "al_write_data refuses on a context with a known DD version mismatch",
-                          field, "4.1.1", "3.39.0");
-    /* A refusal must not touch caller storage (issue #58's last criterion). */
-    CHECK(data == &sentinel);
-    CHECK(sentinel == 42.0);
-    CHECK(size[0] == 73);
 
     al_status_t delete_status = al_delete_data(op_ctx, field);
     CHECK(delete_status.code == IMAS_MVDD_CONVERSION_ERROR);
@@ -659,16 +642,8 @@ static void scenario_forward_write_and_delete_refuse_against_mismatch(void) {
                           "al_delete_data refuses on a context with a known DD version mismatch",
                           field, "4.1.1", "3.39.0");
 
-    al_status_t plugin_write_status =
-        al_plugin_write_data(op_ctx, field, "", data, DOUBLE_DATA, 1, size);
-    CHECK(plugin_write_status.code == IMAS_MVDD_CONVERSION_ERROR);
-    CHECK_REFUSAL_MESSAGE(
-        plugin_write_status,
-        "al_plugin_write_data refuses on a context with a known DD version mismatch", field,
-        "4.1.1", "3.39.0");
-
-    /* The same context still converts a read, so the three refusals above were
-     * the policy acting, not a context that had been left unusable. */
+    /* The same context still converts a read, so the refusal was policy,
+     * rather than an unusable real-Core context. */
     int slice_size = -1;
     int aos_ctx = -1;
     CHECK_OK(al_begin_arraystruct_action(op_ctx, "time_slice", "", &slice_size, &aos_ctx));
@@ -683,9 +658,8 @@ static void scenario_forward_write_and_delete_refuse_against_mismatch(void) {
     CHECK_OK(al_end_action(aos_ctx));
     CHECK_OK(al_end_action(op_ctx));
     close_fixture_pulse(pulse_ctx);
-    printf("equilibrium_read_test forward-write-and-delete-refuse-against-mismatch: real-Core "
-           "write, delete and plugin-write refused with -1000 and a full message, caller storage "
-           "untouched, and the same context still converted a read\n");
+    printf("equilibrium_read_test forward-delete-refuses-against-mismatch: real Core kept delete "
+           "refused while the same mismatched context continued to convert reads\n");
 }
 
 /* Obligation (g): "non-LIFO context closure, recycled context IDs,
@@ -785,7 +759,7 @@ int main(int argc, char **argv) {
         {"forward-sign-flip-applies-through-nested-container", scenario_forward_sign_flip_applies_through_nested_container},
         {"same-version-read-is-unaffected", scenario_same_version_read_is_unaffected},
         {"conversion-disabled-read-is-unaffected", scenario_conversion_disabled_read_is_unaffected},
-        {"forward-write-and-delete-refuse-against-mismatch", scenario_forward_write_and_delete_refuse_against_mismatch},
+        {"forward-delete-refuses-against-mismatch", scenario_forward_delete_refuses_against_mismatch},
         {"forward-context-lifecycle-keeps-conversion-live", scenario_forward_context_lifecycle_keeps_conversion_live},
         {"copied-fixture-harness-reproves-renamed-read",
          scenario_copied_fixture_harness_reproves_renamed_read},

@@ -450,14 +450,24 @@ function(add_write_delete_mismatched_test name scenario)
         STAMP_VERSION 3.39.0)
 endfunction()
 
-add_write_delete_mismatched_test(write-delete-write-refuses-under-known-mismatched-root-before-core-call
-    write-refuses-under-known-mismatched-root-before-core-call)
+add_write_delete_mismatched_test(write-delete-write-renamed-field-lands-at-stored-spelling
+    write-renamed-field-lands-at-stored-spelling)
+add_write_delete_mismatched_test(write-delete-write-identity-and-moved-fields-land-at-stored-spelling
+    write-identity-and-moved-fields-land-at-stored-spelling)
+add_stub_test(write-delete-write-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling
+    write_delete_conversion_test write-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
 add_write_delete_mismatched_test(write-delete-delete-refuses-under-known-mismatched-root-before-core-call
     delete-refuses-under-known-mismatched-root-before-core-call)
-add_write_delete_mismatched_test(write-delete-plugin-write-refuses-under-known-mismatched-root-before-core-call
-    plugin-write-refuses-under-known-mismatched-root-before-core-call)
-add_write_delete_mismatched_test(write-delete-write-nested-child-context-refuses-through-mismatched-root
-    write-nested-child-context-refuses-through-mismatched-root)
+add_write_delete_mismatched_test(write-delete-plugin-write-renamed-field-lands-at-stored-spelling
+    plugin-write-renamed-field-lands-at-stored-spelling)
+add_write_delete_mismatched_test(write-delete-write-nested-child-context-resolves-relative-and-absolute-fields
+    write-nested-child-context-resolves-relative-and-absolute-fields)
+add_write_delete_mismatched_test(write-delete-write-refuses-candidate-or-transformation-on-either-argument
+    write-refuses-candidate-or-transformation-on-either-argument)
+add_write_delete_mismatched_test(write-delete-write-refuses-dd-version-stamp-but-forwards-its-siblings
+    write-refuses-dd-version-stamp-but-forwards-its-siblings)
 add_write_delete_mismatched_test(write-delete-delete-nested-child-context-refuses-through-mismatched-root
     delete-nested-child-context-refuses-through-mismatched-root)
 

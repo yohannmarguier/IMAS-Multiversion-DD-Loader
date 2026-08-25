@@ -262,15 +262,6 @@ fn call_end(family: CallFamily, ctx_id: c_int) -> al_status_t {
     }
 }
 
-/// The short ABI name for a live-conversion-record write refusal message
-/// (issue #58 AC3), chosen by `family`.
-fn write_seam_name(family: CallFamily) -> &'static str {
-    match family {
-        CallFamily::Ordinary => "al_write_data",
-        CallFamily::Plugin => "al_plugin_write_data",
-    }
-}
-
 /// The result of one occurrence-opening adapter call. A malformed stamp is
 /// deliberately returned rather than ended inside policy: only the ABI
 /// wrapper knows which action family opened the context and therefore which
@@ -1492,12 +1483,10 @@ fn live_conversion_record(ctx_id: c_int) -> Option<ConversionRecord> {
     REGISTRY.lookup(ctx_id)
 }
 
-/// A short, stable refusal message for a write seam whose `ctx_id`
-/// carries a live conversion record (ADR 0002: "If known versions differ,
-/// return failure without calling IMAS-Core"). Unlike the read path, this is
-/// a blanket refusal keyed only on the context, never on `field`/`path`
-/// content — write-path translation is not introduced by this seam.
-fn mismatched_context_write_refusal(function_name: &str) -> String {
+/// A short, stable refusal message for the delete seam, which still refuses
+/// wholesale on a live conversion record. The write seam resolves each path
+/// through its own policy instead.
+fn mismatched_context_mutation_refusal(function_name: &str) -> String {
     format!("{function_name} refuses on a context with a known DD version mismatch")
 }
 
@@ -1559,14 +1548,13 @@ pub(crate) unsafe fn plugin_write_data(
     )
 }
 
-/// The policy shared by `write_data` and `plugin_write_data` (issue #64,
+/// The policy shared by `write_data` and `plugin_write_data` (issue #125,
 /// consolidated onto [`CallFamily`] by issue #109).
 ///
-/// When `ctx_id` names a live conversion record — a known mismatched root,
-/// or a child context that inherited one — this refuses before IMAS-Core is
-/// called, leaving `data` and `size` untouched. Matching, unknown,
-/// unstamped, and conversion-disabled contexts carry no record and forward
-/// unchanged.
+/// A live conversion record resolves `field` and `timebase` independently;
+/// the policy forwards only when both name one safe stored-DD path. Matching,
+/// unknown, unstamped, and conversion-disabled contexts carry no record and
+/// forward unchanged.
 #[allow(clippy::too_many_arguments)]
 fn write_data_impl(
     family: CallFamily,
@@ -1582,14 +1570,37 @@ fn write_data_impl(
     if already_entered {
         return call_write(family, ctx_id, field, timebase, data, datatype, dim, size);
     }
-    if let Some(record) = live_conversion_record(ctx_id) {
-        return contextual_refusal(
-            &record,
-            &mismatched_context_write_refusal(write_seam_name(family)),
-            field,
-        );
+    let Some(record) = live_conversion_record(ctx_id) else {
+        return call_write(family, ctx_id, field, timebase, data, datatype, dim, size);
+    };
+
+    let field_argument = seam_policy::WriteArgument {
+        resolution: path_conversion::resolve_write_path(&record, field),
+        // SAFETY: this function's contract requires `field` to be a valid,
+        // NUL-terminated C string, or null.
+        forward: unsafe { c_str_ref(field) },
+    };
+    let timebase_argument = seam_policy::WriteArgument {
+        resolution: path_conversion::resolve_write_path(&record, timebase),
+        // SAFETY: this function's contract requires `timebase` to be a valid,
+        // NUL-terminated C string, or null.
+        forward: unsafe { c_str_ref(timebase) },
+    };
+    match seam_policy::run_write(&field_argument, &timebase_argument) {
+        seam_policy::WriteVerdict::Forward { field, timebase } => call_write(
+            family,
+            ctx_id,
+            field.map_or(std::ptr::null(), CStr::as_ptr),
+            timebase.map_or(std::ptr::null(), CStr::as_ptr),
+            data,
+            datatype,
+            dim,
+            size,
+        ),
+        seam_policy::WriteVerdict::Refusal { reason, dd_path } => {
+            read_refusal(&record, &reason, &dd_path)
+        }
     }
-    call_write(family, ctx_id, field, timebase, data, datatype, dim, size)
 }
 
 /// Forwards to IMAS-Core's real `al_delete_data`, resolving IMAS-Core
@@ -1611,7 +1622,7 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
     if let Some(record) = live_conversion_record(ctx) {
         return contextual_refusal(
             &record,
-            &mismatched_context_write_refusal("al_delete_data"),
+            &mismatched_context_mutation_refusal("al_delete_data"),
             path,
         );
     }

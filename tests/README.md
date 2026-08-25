@@ -1,7 +1,7 @@
 # tests/ — what is covered, and where
 
-**179 ctest tests** (18 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
-stub-only profile registers 157). None of the C sources here is registered by
+**183 ctest tests** (18 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
+stub-only profile registers 161). None of the C sources here is registered by
 itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
 (ADR 0005) and the context registry (ADR 0003) are process-wide state that
@@ -20,7 +20,7 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 |---|---|
 | `support/` | `shim_test_support.h` — the one shared C harness: `CHECK`/`CHECK_OK`/`CHECK_REFUSAL_MESSAGE`, IMAS-Core's four data-type codes, `open_recording_stub` plus the `{string,int,double,pointer}_from_stub` accessors, `open_mismatched_occurrence`, and the `{name, function}` scenario table `RUN_NAMED_SCENARIO` dispatches `argv[1]` through. Include this instead of writing a prologue. |
 | `stub/` | `recording_stub.c` — a fake `libal` exporting the whole runtime-bound surface and recording what it received, so assertions are made on what crossed the boundary rather than inferred from a data round trip. ~23 `RECORDING_STUB_*` env knobs drive fixtures and failures (stamp version, not-found, sign-flip values, per-seam `*_FAIL` knobs, filled-paths CSV, reentrant reads and writes). |
-| `shim/` | 11 C suites driving the public ABI against that stub — 150 tests. |
+| `shim/` | 11 C suites driving the public ABI against that stub — 154 tests. |
 | `real_core/` | 3 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core and the checked-in equilibrium HDF5 fixture pair. |
 | `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 4 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
 | `cmake/` | `cmake -P` checks of the build/CI configuration itself, each with a guard-the-guard companion that proves it rejects what it claims. |
@@ -111,14 +111,15 @@ record intact, a recycled context ID never exposes a stale record, and the
 latter two seams forward unchanged without touching the registry. Observed
 indirectly, via whether a later read still translates.
 
-### `write-delete-*` — 14 · `shim/write_delete_conversion_test.c`
+### `write-delete-*` — 18 · `shim/write_delete_conversion_test.c`
 
-ADR 0002's write policy (issue #64): `al_write_data`, `al_delete_data` and
-`al_plugin_write_data` refuse **before** Core whenever `ctx_id` carries a live
-conversion record (a mismatched root, or a child that inherited one), leaving
-the caller's `data`/`size` untouched; matching, unstamped, unknown and
-conversion-disabled contexts forward unchanged. No path translation is
-introduced — the check is keyed on the context, never on the path.
+Issue #125's safe write slice: `al_write_data` and `al_plugin_write_data`
+independently resolve identity, `renamed`, and `moved` field/timebase paths to
+one stored spelling, preserving relative/absolute child-context semantics and
+caller-owned `data`/`size`. Candidate plans, value transformations, and the DD
+version stamp refuse before Core; the stamp's access-layer siblings still
+forward. Matching, unstamped, unknown and conversion-disabled contexts forward
+unchanged. `al_delete_data` remains the issue #64 blanket refusal seam.
 
 ### `plugin-reentry-policy-*` — 22 · `shim/plugin_reentry_policy_test.c`
 
@@ -147,9 +148,11 @@ equilibrium HDF5 fixture pair, in **both** fixture directions: a renamed scalar
 read through the HLI's own spelling, renamed and sign-flipped fields nested
 under `time_slice`, `merged` and `split` read plans, refusals for an unmappable
 `redefine` and for the artifact's one `retyped` rule (lossless in principle,
-unavailable in practice), a write/delete/plugin-write refusal across a real
-boundary, a real context lifecycle, and the two no-op cases (same version,
-conversion disabled). Scenarios sharing a fixture directory hold a ctest
+unavailable in practice), the remaining mismatched delete refusal across a
+real boundary, a real context lifecycle, and the two no-op cases (same
+version, conversion disabled). Safe writes are asserted at the recording-stub
+boundary, where their translated Core arguments are directly observable.
+Scenarios sharing a fixture directory hold a ctest
 `RESOURCE_LOCK`, because of HDF5's own file locking. One harness scenario uses
 an isolated temporary copy instead: it reads the copied DD-version stamp and a
 numeric dataset through raw HDF5, then re-proves a translated read against that

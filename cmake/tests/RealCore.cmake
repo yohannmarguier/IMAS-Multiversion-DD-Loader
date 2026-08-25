@@ -102,14 +102,13 @@ set_tests_properties(equilibrium-read-forward-reads-renamed-value PROPERTIES
     LABELS real-core
     RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
 
-# Spec #43 tier-2 cells (c) and (g), previously covered only against the
-# recording stub: a write/delete/plugin-write refusal across a real
-# IMAS-Core boundary, and a real context lifecycle that must leave
-# conversion working through whatever is still open.
-add_test(NAME equilibrium-read-forward-write-and-delete-refuse-against-mismatch
+# Issue #125 keeps the write proof at the spelling-observable recording-stub
+# boundary. This real-Core probe retains delete's mismatched refusal, while a
+# real context lifecycle leaves conversion working through whatever is open.
+add_test(NAME equilibrium-read-forward-delete-refuses-against-mismatch
     COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> forward-write-and-delete-refuse-against-mismatch)
-set_tests_properties(equilibrium-read-forward-write-and-delete-refuse-against-mismatch PROPERTIES
+        $<TARGET_FILE:equilibrium_read_test> forward-delete-refuses-against-mismatch)
+set_tests_properties(equilibrium-read-forward-delete-refuses-against-mismatch PROPERTIES
     LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
 
 add_test(NAME equilibrium-read-forward-context-lifecycle-keeps-conversion-live

@@ -1,5 +1,5 @@
-//! The `al_read_data`/`al_plugin_read_data` read loop (issue #107, part C of
-//! the #101 series; see ADR 0015).
+//! The `al_read_data`/`al_plugin_read_data` read loop and the
+//! `al_write_data`/`al_plugin_write_data` write decision (see ADR 0015).
 //!
 //! Before this module existed, `read_data_impl` (`src/interpose.rs`) mixed
 //! raw-pointer marshalling with the read-loop decisions ADR 0010, ADR 0012
@@ -11,15 +11,15 @@
 //! loop bookkeeping, not path resolution, and neither is reachable from
 //! `cargo test` while the loop lives beside `unsafe` marshalling code.
 //!
-//! This module owns that loop and nothing else: it takes an already-resolved
-//! [`path_conversion::ReadPath`] per argument, a buffer's shape, and a reader
-//! closure the adapter injects, and returns a [`ReadVerdict`] the adapter
-//! turns into an `al_status_t` and a pair of loss-log writes. It contains no
-//! `unsafe`, never touches [`crate::registry::context_registry::REGISTRY`] or the HLI
-//! version latch, and never calls into [`crate::core::dl`] — every raw pointer,
-//! every registry lookup, and the two ADR-0014/HLI-version gates
-//! ahead of it stay in `src/interpose.rs`, the interposition layer ADR 0015
-//! names.
+//! This module owns those decisions and nothing else: the read loop takes an
+//! already-resolved [`path_conversion::ReadPath`] per argument, a buffer's
+//! shape, and a reader closure; the write decision takes one
+//! [`path_conversion::WritePath`] per argument. Their verdicts tell the
+//! adapter what to forward or refuse. This module contains no `unsafe`, never
+//! touches [`crate::registry::context_registry::REGISTRY`] or the HLI version
+//! latch, and never calls into [`crate::core::dl`] — every raw pointer, every
+//! registry lookup, and the ADR-0014/HLI-version gates ahead of them stay in
+//! `src/interpose.rs`, the interposition layer ADR 0015 names.
 //!
 //! [`ReadVerdict`]'s `field`/`timebase` fidelities are mandatory struct
 //! fields rather than a separately-returned loss list: every branch of
@@ -35,7 +35,7 @@ use std::ffi::{CStr, c_int};
 use crate::al_status_t;
 use crate::conversion::conversion_map::{Fidelity, ValueTransformation};
 use crate::conversion::known_artifacts::{self, ArtifactMatch};
-use crate::conversion::path_conversion::{self, ReadPath, TranslatedReadPath};
+use crate::conversion::path_conversion::{self, ReadPath, TranslatedReadPath, WritePath};
 use crate::version::dd_version::DdVersion;
 use crate::version::version_stamp::StampOutcome;
 
@@ -170,6 +170,65 @@ pub(crate) struct ReadArgument<'a> {
     pub(crate) resolution: ReadPath,
     pub(crate) forward: Option<&'a CStr>,
     pub(crate) dd_path: String,
+}
+
+/// One path-bearing write argument reduced to the decision the write seam
+/// needs: either the one safe stored spelling or a refusal, plus the original
+/// C string for the ordinary forward case.
+pub(crate) struct WriteArgument<'a> {
+    pub(crate) resolution: WritePath,
+    pub(crate) forward: Option<&'a CStr>,
+}
+
+/// The write policy's complete answer. The adapter alone turns a successful
+/// decision into an IMAS-Core call, so this layer never touches raw pointers
+/// or process-global state.
+pub(crate) enum WriteVerdict<'a> {
+    Forward {
+        field: Option<&'a CStr>,
+        timebase: Option<&'a CStr>,
+    },
+    Refusal {
+        reason: String,
+        dd_path: String,
+    },
+}
+
+/// Resolves `field` and `timebase` independently, refusing the entire write
+/// when either one cannot name one safe stored-DD path.
+pub(crate) fn run_write<'a>(
+    field: &'a WriteArgument<'a>,
+    timebase: &'a WriteArgument<'a>,
+) -> WriteVerdict<'a> {
+    let field = match write_argument_path(field) {
+        Ok(path) => path,
+        Err((reason, dd_path)) => {
+            return WriteVerdict::Refusal {
+                reason: reason.to_string(),
+                dd_path: dd_path.to_string(),
+            };
+        }
+    };
+    let timebase = match write_argument_path(timebase) {
+        Ok(path) => path,
+        Err((reason, dd_path)) => {
+            return WriteVerdict::Refusal {
+                reason: reason.to_string(),
+                dd_path: dd_path.to_string(),
+            };
+        }
+    };
+    WriteVerdict::Forward { field, timebase }
+}
+
+fn write_argument_path<'a>(
+    argument: &'a WriteArgument<'a>,
+) -> Result<Option<&'a CStr>, (&'a str, &'a str)> {
+    match &argument.resolution {
+        WritePath::Forward => Ok(argument.forward),
+        WritePath::Translated(path) => Ok(Some(path.as_c_str())),
+        WritePath::Refusal { reason, dd_path } => Err((reason, dd_path)),
+    }
 }
 
 /// One argument's read-loop fidelity verdict: the fidelity the loop actually

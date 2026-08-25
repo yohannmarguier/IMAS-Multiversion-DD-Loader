@@ -10,10 +10,11 @@
 //!
 //! It knows nothing about seams, attempts, loops or IMAS-Core: it takes a
 //! live [`ConversionRecord`] and a raw HLI argument, and answers either "what
-//! stored path does this mean" ([`resolve_context_path`], for a seam that
-//! must hand IMAS-Core one concrete spelling) or "what stored read plan does
-//! this mean" ([`resolve_read_path`], for the one seam — `al_read_data` —
-//! that can try several candidates and apply a value transformation).
+//! stored path does this mean" ([`resolve_context_path`] for a context-open,
+//! [`resolve_write_path`] for one safe write spelling), or "what stored read
+//! plan does this mean" ([`resolve_read_path`], for the one seam —
+//! `al_read_data` — that can try several candidates and apply a value
+//! transformation).
 //!
 //! Issue #101 (part B); see ADR 0015 for the layering this belongs to.
 
@@ -77,6 +78,18 @@ pub(crate) enum ReadPath {
         dd_path: String,
         fidelity: Fidelity,
     },
+}
+
+/// The one stored-DD spelling a write may safely hand to IMAS-Core, or the
+/// reason this write must refuse. Unlike a read, a write never tries an
+/// ordered candidate plan or applies a value transformation in place.
+pub(crate) enum WritePath {
+    /// No path was supplied, so preserve IMAS-Core's own handling.
+    Forward,
+    /// One concrete stored-DD spelling for IMAS-Core to receive.
+    Translated(CString),
+    /// The supplied HLI-DD path cannot safely be written through this seam.
+    Refusal { reason: String, dd_path: String },
 }
 
 pub(crate) struct TranslatedReadPath {
@@ -257,6 +270,86 @@ pub(crate) fn resolve_read_path(record: &ConversionRecord, raw: *const c_char) -
                 dd_path: hli_absolute,
                 fidelity: Fidelity::Unmappable,
             }),
+    }
+}
+
+/// Resolves one write argument to the only stored-DD spelling this ticket can
+/// safely write: one path with no value transformation and no candidate plan.
+/// Every other claimed path refuses, so a mismatched write can never fall
+/// through under its HLI-DD spelling.
+pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) -> WritePath {
+    let argument = match claimed_argument(record, raw) {
+        ReadArgument::Absent => return WritePath::Forward,
+        ReadArgument::Unclaimed => {
+            let dd_path = c_str_or_none(raw)
+                .filter(|path| !path.is_empty())
+                .map(|path| join_hli_path(&record.resolved_path, path))
+                .unwrap_or_else(|| record.resolved_path.clone());
+            return WritePath::Refusal {
+                reason: "this path is unclaimed by the conversion map".to_string(),
+                dd_path,
+            };
+        }
+        ReadArgument::Claimed(argument) => argument,
+    };
+    let ClaimedArgument {
+        is_absolute,
+        hli_absolute,
+        explanation,
+    } = argument;
+
+    // A write through a mismatch must never rewrite the occurrence's DD
+    // version stamp: the rest of this call can only translate one field, not
+    // migrate the whole occurrence into the HLI DD version. The two sibling
+    // `version_put` fields describe the writing library rather than the DD
+    // and therefore continue through ordinary resolution below.
+    if hli_absolute == "ids_properties/version_put/data_dictionary" {
+        return WritePath::Refusal {
+            reason: "the DD-version stamp is immutable under a version mismatch".to_string(),
+            dd_path: hli_absolute,
+        };
+    }
+
+    // A `merged`/`split` rule needs the later write policy that selects a
+    // precedence-1 source and reports the candidates it left untouched. This
+    // first write slice only serves identity, renamed, and moved paths.
+    if matches!(explanation.rel, Some(Rel::Merged | Rel::Split)) {
+        return WritePath::Refusal {
+            reason: "this path is served by several stored candidates, and this write cannot choose one safely"
+                .to_string(),
+            dd_path: hli_absolute,
+        };
+    }
+
+    match explanation.outcome {
+        Outcome::Refusal(reason) => WritePath::Refusal {
+            reason: refusal_reason_message(reason),
+            dd_path: hli_absolute,
+        },
+        Outcome::NoSource => WritePath::Refusal {
+            reason: "this path has no stored source".to_string(),
+            dd_path: hli_absolute,
+        },
+        Outcome::Path { candidates, .. } if !candidates.is_empty() => WritePath::Refusal {
+            reason: "this path is served by several stored candidates, and this write cannot choose one safely"
+                .to_string(),
+            dd_path: hli_absolute,
+        },
+        Outcome::Path {
+            value_transformation,
+            ..
+        } if value_transformation != ValueTransformation::None => WritePath::Refusal {
+            reason: "this path needs a value transformation, which this write cannot apply"
+                .to_string(),
+            dd_path: hli_absolute,
+        },
+        Outcome::Path { resolved_path, .. } => match stored_c_path(record, &resolved_path, is_absolute) {
+            Ok(path) => WritePath::Translated(path),
+            Err(reason) => WritePath::Refusal {
+                reason,
+                dd_path: hli_absolute,
+            },
+        },
     }
 }
 
