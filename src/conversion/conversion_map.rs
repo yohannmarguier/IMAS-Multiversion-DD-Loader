@@ -989,6 +989,107 @@ impl ConversionMap {
         None
     }
 
+    /// Whether deleting `path` as a whole subtree is trivial: every rule
+    /// whose `direction`-side selector nests at or under `path` must resolve
+    /// its stored-side target(s) at or under `resolved_subtree` — `path`'s
+    /// own resolved stored spelling. A rule that fails this is an **escaping
+    /// rule** (CONTEXT.md, ADR 0017 decision 4): its data would survive a
+    /// delete of `resolved_subtree` at a stored location the caller never
+    /// asked to touch.
+    ///
+    /// Deliberately a property of the rule set alone, not of any one
+    /// resolution: a `merged`/`split` rule with one declared candidate
+    /// outside `resolved_subtree` fails this check even where a fan-out
+    /// delete would in fact have found every candidate inside it. An empty
+    /// rule set nested under `path` is vacuously trivial.
+    pub(crate) fn subtree_delete_is_trivial(
+        &self,
+        path: &str,
+        resolved_subtree: &str,
+        direction: Direction,
+    ) -> bool {
+        let sources = match direction {
+            Direction::Forward => &self.left_sources,
+            Direction::Reverse => &self.right_sources,
+        };
+        sources
+            .iter()
+            .filter(|entry| Self::nests_at_or_under(entry.selector.pattern(), path))
+            .all(|entry| {
+                Self::rule_targets(&self.rules[entry.rule_index], direction)
+                    .into_iter()
+                    .all(|target| Self::nests_at_or_under(target, resolved_subtree))
+            })
+    }
+
+    /// The stored-side location(s) `rule` declares for `direction`'s source
+    /// role. `Renamed`/`Moved`/`Retyped` each declare exactly one;
+    /// `Merged`/`Split` declare one or several depending on which side is
+    /// ambiguous in this direction (the `froms` side); `LeftOnly`/
+    /// `RightOnly` declare none at all, because there is no stored
+    /// counterpart to escape to — which is why those two kinds can never be
+    /// an escaping rule.
+    fn rule_targets(rule: &Rule, direction: Direction) -> Vec<&str> {
+        match (rule.rel, direction) {
+            (Rel::Renamed | Rel::Moved | Rel::Retyped, Direction::Forward) => vec![
+                rule.right
+                    .as_ref()
+                    .expect("renamed, moved or retyped rule always carries both paths")
+                    .pattern(),
+            ],
+            (Rel::Renamed | Rel::Moved | Rel::Retyped, Direction::Reverse) => vec![
+                rule.left
+                    .as_ref()
+                    .expect("renamed, moved or retyped rule always carries both paths")
+                    .pattern(),
+            ],
+            (Rel::LeftOnly, _) | (Rel::RightOnly, _) => Vec::new(),
+            (Rel::Merged, Direction::Forward) => {
+                vec![
+                    rule.right
+                        .as_ref()
+                        .expect("merged rule has a right path")
+                        .pattern(),
+                ]
+            }
+            (Rel::Merged, Direction::Reverse) => rule
+                .froms
+                .iter()
+                .map(|from| from.selector.pattern())
+                .collect(),
+            (Rel::Split, Direction::Forward) => rule
+                .froms
+                .iter()
+                .map(|from| from.selector.pattern())
+                .collect(),
+            (Rel::Split, Direction::Reverse) => {
+                vec![
+                    rule.left
+                        .as_ref()
+                        .expect("split rule has a left path")
+                        .pattern(),
+                ]
+            }
+        }
+    }
+
+    /// True when `pattern` names a location at or under `path`: equal, or
+    /// nested beneath it. Segment-wise so a `Glob` `*` is treated as matching
+    /// whatever concrete segment `path` has there — the escaping-rule
+    /// predicate cares only about a selector's own declared location, not
+    /// about any run-time capture, so this deliberately does not call
+    /// `Selector::try_match`.
+    fn nests_at_or_under(pattern: &str, path: &str) -> bool {
+        let mut pattern_segments = pattern.split('/');
+        for path_segment in path.split('/') {
+            match pattern_segments.next() {
+                Some(segment) if segment == "*" || segment == path_segment => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+
     /// The refusal a matched rule owes before any path is resolved, or
     /// `None` when resolution may proceed.
     ///

@@ -575,8 +575,43 @@ static void scenario_delete_refuses_no_source_unservable_and_structures(void) {
                           "grids_ggd/grid/space/coordinates_type", "4.1.1", "3.39.0");
     status = al_delete_data(operation_ctx, "time_slice/boundary");
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
-    CHECK_REFUSAL_MESSAGE(status, "this delete path is a structure, and only leaf deletes are supported",
+    CHECK_REFUSAL_MESSAGE(status,
+                          "this subtree delete would leave data at a stored path outside the "
+                          "requested subtree",
                           "time_slice/boundary", "4.1.1", "3.39.0");
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
+}
+
+/* Issue #131 / ADR 0017 decision 4: a structure delete is trivial and
+ * proceeds when no rule nested underneath it targets a stored path outside
+ * the subtree it resolves to. "time_slice" and "time_slice/constraints" are
+ * ADR 0017's own examples of subtrees every nested rule stays inside. */
+static void scenario_delete_admits_trivial_structure_deletes(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+
+    check_delete_lands(operation_ctx, "time_slice", "time_slice");
+    check_delete_lands(operation_ctx, "time_slice/constraints", "time_slice/constraints");
+    CHECK(loss_count(operation_ctx) == 0);
+}
+
+/* ADR 0017 decision 4's "boundary_separatrix" example, under the opposite
+ * HLI/stored pairing from scenario_delete_refuses_no_source_unservable_and_
+ * structures (run via a CMake registration that sets HLI_DD_VERSION 3.39.0 /
+ * STAMP_VERSION 4.1.1). This still refuses under a DD3 HLI, but for a
+ * different, pre-existing reason: `drop-boundary-separatrix` (`left_only`)
+ * claims this exact path itself, so it resolves to no stored source before
+ * the escaping-rule check ever runs — it never reaches the leaf/structure
+ * classification at all. The escaping check is what makes "time_slice/
+ * boundary" (below) refuse in the *other* direction, where no rule directly
+ * claims the whole structure. */
+static void scenario_delete_refuses_boundary_separatrix_reverse_direction(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int deletes_before = int_from_stub("recording_stub_delete_call_count");
+
+    al_status_t status = al_delete_data(operation_ctx, "time_slice/boundary_separatrix");
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path has no stored source",
+                          "time_slice/boundary_separatrix", "3.39.0", "4.1.1");
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
 }
 
@@ -851,6 +886,8 @@ int main(int argc, char **argv) {
         {"delete-refuses-stamp-subtrees-before-core-call", scenario_delete_refuses_stamp_subtrees_before_core_call},
         {"delete-empty-path-forwards-as-explicit-migration-route", scenario_delete_empty_path_forwards_as_explicit_migration_route},
         {"delete-refuses-no-source-unservable-and-structures", scenario_delete_refuses_no_source_unservable_and_structures},
+        {"delete-admits-trivial-structure-deletes", scenario_delete_admits_trivial_structure_deletes},
+        {"delete-refuses-boundary-separatrix-reverse-direction", scenario_delete_refuses_boundary_separatrix_reverse_direction},
         {"delete-fans-out-over-candidates-in-declared-order", scenario_delete_fans_out_over_candidates_in_declared_order},
         {"delete-skips-not-found-candidates", scenario_delete_skips_not_found_candidates},
         {"delete-reports-probe-and-delete-failures-distinctly", scenario_delete_reports_probe_and_delete_failures_distinctly},

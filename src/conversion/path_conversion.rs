@@ -467,9 +467,18 @@ pub(crate) fn resolve_delete_path(record: &ConversionRecord, raw: *const c_char)
             reason: "this path has no stored source".to_string(),
             dd_path: hli_absolute,
         },
-        Outcome::Path { .. } if !is_equilibrium_leaf(record, &hli_absolute) => {
+        Outcome::Path {
+            ref resolved_path, ..
+        } if !is_equilibrium_leaf(record, &hli_absolute)
+            && !record.map.subtree_delete_is_trivial(
+                &hli_absolute,
+                resolved_path,
+                record.direction_to_stored,
+            ) =>
+        {
             DeletePath::Refusal {
-                reason: "this delete path is a structure, and only leaf deletes are supported"
+                reason: "this subtree delete would leave data at a stored path outside the \
+                         requested subtree"
                     .to_string(),
                 dd_path: hli_absolute,
             }
@@ -854,6 +863,78 @@ mod tests {
             "this path has no safe conversion between DD versions",
         );
         assert_refusal("missing", "this path has no stored source");
+
+        REGISTRY.remove(CTX_ID);
+    }
+
+    /// Issue #131 / ADR 0017 decision 4: a structure delete resolves and
+    /// deletes when it is trivial, and refuses before IMAS-Core when it is
+    /// not. `resolve_delete_path`'s own leaf/structure classification runs
+    /// against the real embedded equilibrium inventories regardless of this
+    /// fixture map, so both paths below — invented names that appear in
+    /// neither inventory — are classified as structures by construction,
+    /// which is what lets this fixture exercise the escaping-rule check at
+    /// all without needing a real DD leaf name.
+    #[test]
+    fn resolve_delete_path_admits_a_trivial_structure_and_refuses_an_escaping_one() {
+        const CTX_ID: c_int = 0x5D03;
+        const FIXTURE_IDS: &str = "equilibrium-escaping-rule-fixture";
+        const ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <default rel="identical"/>
+              <rules>
+                <rule id="move-out" rel="moved"
+                      left="escaping_root/leaf" right="elsewhere/leaf" subtree="yes">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+                <rule id="rename-within" rel="renamed"
+                      left="trivial_root/old_name" right="trivial_root/new_name">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let stored = "4.1.1".parse().expect("known release");
+        let hli = "3.39.0".parse().expect("known release");
+        assert!(REGISTRY.record_root(
+            CTX_ID,
+            String::new(),
+            CTX_ID,
+            MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
+            crate::conversion::conversion_map::Direction::Forward,
+            || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
+        ));
+        let record = REGISTRY
+            .lookup(CTX_ID)
+            .expect("the root record was just registered");
+
+        let trivial = CString::new("trivial_root").expect("no interior NUL");
+        match resolve_delete_path(&record, trivial.as_ptr()) {
+            DeletePath::Translated(path) => {
+                assert_eq!(path.to_str().expect("ASCII"), "trivial_root");
+            }
+            DeletePath::Refusal { reason, .. } => {
+                panic!("a trivial structure delete must resolve, refused instead: {reason}")
+            }
+            DeletePath::Forward | DeletePath::Candidates(_) => {
+                panic!("a trivial structure delete must resolve to one translated path")
+            }
+        }
+
+        let escaping = CString::new("escaping_root").expect("no interior NUL");
+        match resolve_delete_path(&record, escaping.as_ptr()) {
+            DeletePath::Refusal { reason, dd_path } => {
+                assert_eq!(
+                    reason,
+                    "this subtree delete would leave data at a stored path outside the \
+                     requested subtree"
+                );
+                assert_eq!(dd_path, "escaping_root");
+            }
+            _ => panic!("an escaping-rule subtree delete must refuse before IMAS-Core"),
+        }
 
         REGISTRY.remove(CTX_ID);
     }
