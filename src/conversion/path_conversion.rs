@@ -21,7 +21,7 @@
 use std::ffi::{CStr, CString, c_char};
 
 use crate::conversion::conversion_map::{
-    Fidelity, Outcome, RefusalReason, Rel, ValueTransformation,
+    Direction, Fidelity, Outcome, RefusalReason, Rel, ValueTransformation,
 };
 use crate::registry::context_registry::ConversionRecord;
 
@@ -92,6 +92,20 @@ pub(crate) enum WritePath {
         value_transformation: ValueTransformation,
     },
     /// The supplied HLI-DD path cannot safely be written through this seam.
+    Refusal { reason: String, dd_path: String },
+}
+
+/// The one stored-DD spelling a delete may safely remove, or the reason the
+/// delete must refuse. Unlike a write, deleting one stored field needs no
+/// value transformation; unlike a later fan-out delete, it cannot yet serve
+/// an ordered candidate plan.
+pub(crate) enum DeletePath {
+    /// No path was supplied, or it was empty: preserve IMAS-Core's
+    /// whole-DATAOBJECT delete handling.
+    Forward,
+    /// One concrete stored-DD spelling for IMAS-Core to remove.
+    Translated(CString),
+    /// The supplied HLI-DD path cannot safely be removed through this seam.
     Refusal { reason: String, dd_path: String },
 }
 
@@ -353,6 +367,112 @@ pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) 
             },
         },
     }
+}
+
+/// Resolves one delete path to the only stored-DD spelling this ticket can
+/// safely remove: one concrete path, with no ordered candidate plan. A
+/// delete does not carry data, so an otherwise-safe value transformation is
+/// irrelevant; it removes the resolved stored field directly.
+pub(crate) fn resolve_delete_path(record: &ConversionRecord, raw: *const c_char) -> DeletePath {
+    let Some(raw_path) = c_str_or_none(raw) else {
+        return DeletePath::Forward;
+    };
+    if raw_path.is_empty() {
+        return DeletePath::Forward;
+    }
+
+    let argument = match claimed_argument(record, raw) {
+        ReadArgument::Absent => unreachable!("a nonempty path is claimed or unclaimed"),
+        ReadArgument::Unclaimed => {
+            return DeletePath::Refusal {
+                reason: "this path is unclaimed by the conversion map".to_string(),
+                dd_path: join_hli_path(&record.resolved_path, raw_path),
+            };
+        }
+        ReadArgument::Claimed(argument) => argument,
+    };
+    let ClaimedArgument {
+        is_absolute,
+        hli_absolute,
+        explanation,
+    } = argument;
+
+    if matches!(
+        hli_absolute.as_str(),
+        "ids_properties"
+            | "ids_properties/version_put"
+            | "ids_properties/version_put/data_dictionary"
+    ) {
+        return DeletePath::Refusal {
+            reason: "this delete would remove the DD-version stamp while stored data remains"
+                .to_string(),
+            dd_path: hli_absolute,
+        };
+    }
+
+    // `Outcome::Refusal` is the shared pre-resolution guard: it is computed
+    // by ConversionMap before any consumer narrows a path. A non-primary
+    // source is the delete-specific guard that follows it.
+    if explanation
+        .precedence
+        .is_some_and(|precedence| precedence != 1)
+    {
+        return DeletePath::Refusal {
+            reason: "this path is a non-primary source and cannot delete a shared stored slot"
+                .to_string(),
+            dd_path: hli_absolute,
+        };
+    }
+
+    match explanation.outcome {
+        Outcome::Refusal(reason) => DeletePath::Refusal {
+            reason: refusal_reason_message(reason),
+            dd_path: hli_absolute,
+        },
+        Outcome::NoSource => DeletePath::Refusal {
+            reason: "this path has no stored source".to_string(),
+            dd_path: hli_absolute,
+        },
+        Outcome::Path { candidates, .. } if !candidates.is_empty() => DeletePath::Refusal {
+            reason: "this path is served by several stored candidates, and this delete cannot remove them safely"
+                .to_string(),
+            dd_path: hli_absolute,
+        },
+        Outcome::Path { .. } if !is_equilibrium_leaf(record, &hli_absolute) => {
+            DeletePath::Refusal {
+                reason: "this delete path is a structure, and only leaf deletes are supported"
+                    .to_string(),
+                dd_path: hli_absolute,
+            }
+        }
+        Outcome::Path { resolved_path, .. } => match stored_c_path(record, &resolved_path, is_absolute) {
+            Ok(path) => DeletePath::Translated(path),
+            Err(reason) => DeletePath::Refusal {
+                reason,
+                dd_path: hli_absolute,
+            },
+        },
+    }
+}
+
+/// `al_delete_data` gives the shim a path string but no datatype or other
+/// marker distinguishing an IDS leaf from a container. The one embedded
+/// equilibrium artifact is shipped with its real DD leaf inventories, so the
+/// leaf-only delete policy can answer that question before IMAS-Core is
+/// called. This is a safety classification only, not conversion-rule
+/// selection; ADR 0013 decision 6 records the narrow exception to the
+/// inventories' proof role. A future generated artifact must carry the
+/// equivalent inventory before this seam can serve it; today it cannot be a
+/// live conversion map.
+fn is_equilibrium_leaf(record: &ConversionRecord, hli_path: &str) -> bool {
+    const LEFT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-3.39.0.txt");
+    const RIGHT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-4.1.1.txt");
+
+    let inventory = match record.direction_to_stored {
+        Direction::Forward => LEFT_LEAVES,
+        Direction::Reverse => RIGHT_LEAVES,
+    };
+    inventory.lines().any(|leaf| leaf == hli_path)
 }
 
 /// Distinguishes a conditional merged/split conversion from an unconditional
@@ -679,7 +799,7 @@ mod tests {
                     assert_eq!(reason, expected_reason);
                     assert_eq!(dd_path, path.to_str().expect("fixture paths are ASCII"));
                 }
-                WritePath::Forward | WritePath::Translated(_) => {
+                WritePath::Forward | WritePath::Translated { .. } => {
                     panic!("{path:?} must refuse before IMAS-Core")
                 }
             }

@@ -1,7 +1,7 @@
 # tests/ — what is covered, and where
 
-**187 ctest tests** (18 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
-stub-only profile registers 165). None of the C sources here is registered by
+**196 ctest tests** (18 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
+stub-only profile registers 174). None of the C sources here is registered by
 itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
 (ADR 0005) and the context registry (ADR 0003) are process-wide state that
@@ -20,7 +20,7 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 |---|---|
 | `support/` | `shim_test_support.h` — the one shared C harness: `CHECK`/`CHECK_OK`/`CHECK_REFUSAL_MESSAGE`, IMAS-Core's four data-type codes, `open_recording_stub` plus the `{string,int,double,double_at,pointer}_from_stub` accessors, `open_mismatched_occurrence`, and the `{name, function}` scenario table `RUN_NAMED_SCENARIO` dispatches `argv[1]` through. Include this instead of writing a prologue. |
 | `stub/` | `recording_stub.c` — a fake `libal` exporting the whole runtime-bound surface and recording what it received, including snapshots of write payloads whose shim-owned buffers are freed on return, so assertions are made on what crossed the boundary rather than inferred from a data round trip. ~23 `RECORDING_STUB_*` env knobs drive fixtures and failures (stamp version, not-found, sign-flip values, per-seam `*_FAIL` knobs, filled-paths CSV, reentrant reads and writes). |
-| `shim/` | 11 C suites driving the public ABI against that stub — 158 tests. |
+| `shim/` | 11 C suites driving the public ABI against that stub — 167 tests. |
 | `real_core/` | 3 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core and the checked-in equilibrium HDF5 fixture pair. |
 | `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 4 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
 | `cmake/` | `cmake -P` checks of the build/CI configuration itself, each with a guard-the-guard companion that proves it rejects what it claims. |
@@ -111,7 +111,7 @@ record intact, a recycled context ID never exposes a stale record, and the
 latter two seams forward unchanged without touching the registry. Observed
 indirectly, via whether a later read still translates.
 
-### `write-delete-*` — 22 · `shim/write_delete_conversion_test.c`
+### `write-delete-*` — 31 · `shim/write_delete_conversion_test.c`
 
 Issue #125's safe write slice: `al_write_data` and `al_plugin_write_data`
 independently resolve identity, `renamed`, and `moved` field/timebase paths to
@@ -121,13 +121,18 @@ a sign-flipped, shim-owned copy (including rank 7) while preserving caller
 storage; an unset rank-0 sentinel forwards unchanged so Core keeps its own
 skip behaviour. Candidate plans and the DD version stamp refuse before Core;
 the stamp's access-layer siblings still forward. Matching, unstamped, unknown
-and conversion-disabled contexts forward unchanged. `al_delete_data` remains
-the issue #64 blanket refusal seam.
+and conversion-disabled contexts forward unchanged.
 
 Issue #126 adds the impossible-write proof: both fixture directions refuse a
 field with no stored slot, and a retyped field refuses before Core. Each refusal
 keeps caller storage untouched, records an `UNMAPPABLE` `WRITE` loss, and a
 child-context refusal reaches its root under the complete joined DD path.
+
+Issue #129 translates identity, `renamed`, and `moved` leaf deletes to one
+stored spelling in both directions; it refuses the DD-version stamp and
+containing subtrees, non-primary aliases, no-source and unservable paths, and
+candidate plans. An empty delete forwards as the caller's explicit whole-
+DATAOBJECT migration route, and delete never retains a loss-log entry.
 
 ### `plugin-reentry-policy-*` — 22 · `shim/plugin_reentry_policy_test.c`
 

@@ -35,7 +35,9 @@ use std::ffi::{CStr, c_int};
 use crate::al_status_t;
 use crate::conversion::conversion_map::{Fidelity, ValueTransformation};
 use crate::conversion::known_artifacts::{self, ArtifactMatch};
-use crate::conversion::path_conversion::{self, ReadPath, TranslatedReadPath, WritePath};
+use crate::conversion::path_conversion::{
+    self, DeletePath, ReadPath, TranslatedReadPath, WritePath,
+};
 use crate::version::dd_version::DdVersion;
 use crate::version::version_stamp::StampOutcome;
 
@@ -194,6 +196,14 @@ pub(crate) struct WriteArgument<'a> {
     pub(crate) dd_path: String,
 }
 
+/// One delete path reduced to the decision the delete seam needs: either one
+/// safe stored spelling or a refusal, plus the original C string for an empty
+/// whole-DATAOBJECT delete.
+pub(crate) struct DeleteArgument<'a> {
+    pub(crate) resolution: DeletePath,
+    pub(crate) forward: Option<&'a CStr>,
+}
+
 /// The write policy's complete answer. The adapter alone turns a successful
 /// decision into an IMAS-Core call, so this layer never touches raw pointers
 /// or process-global state.
@@ -332,6 +342,31 @@ fn copy_value_transformation(
             SourceView::NotDouble => Err(
                 "value-transform execution requires DOUBLE_DATA and a rank no greater than MAXDIM",
             ),
+        },
+    }
+}
+
+/// The delete policy's complete answer. The adapter alone performs the one
+/// IMAS-Core call, so this layer remains free of raw pointers and state.
+pub(crate) enum DeleteVerdict<'a> {
+    Forward { path: Option<&'a CStr> },
+    Refusal { reason: String, dd_path: String },
+}
+
+/// Resolves one delete argument. An empty path deliberately forwards: it is
+/// IMAS-Core's explicit whole-DATAOBJECT delete, the only legitimate route to
+/// discard a mismatched occurrence before recreating it in the HLI DD.
+pub(crate) fn run_delete<'a>(argument: &'a DeleteArgument<'a>) -> DeleteVerdict<'a> {
+    match &argument.resolution {
+        DeletePath::Forward => DeleteVerdict::Forward {
+            path: argument.forward,
+        },
+        DeletePath::Translated(path) => DeleteVerdict::Forward {
+            path: Some(path.as_c_str()),
+        },
+        DeletePath::Refusal { reason, dd_path } => DeleteVerdict::Refusal {
+            reason: reason.to_string(),
+            dd_path: dd_path.to_string(),
         },
     }
 }

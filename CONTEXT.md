@@ -123,7 +123,7 @@ A generated record of the DD paths that a conversion-map artifact covers. It is 
 `ConversionMap::check_completeness`'s result: whether every path in a real, checked-in path inventory pair is claimed by an explicit rule or a valid document-level default, and whether every rule's own primary selector corresponds to something real rather than a hallucinated path. It replaces trust in the hand-authored coverage record with an executable check; it never runs inside `resolve` and has no bearing on rule execution. See `docs/adr/0013-completeness-proven-against-real-inventories.md`.
 
 **path inventory**:
-A checked-in, real listing of the DD leaf paths for one IDS at one specific DD version, consulted only by the completeness proof.
+A checked-in, real listing of the DD leaf paths for one IDS at one specific DD version. It supplies the completeness proof and, for the current embedded equilibrium artifact only, the delete seam's leaf-versus-structure safety guard; it never selects a conversion rule. See `docs/adr/0013-completeness-proven-against-real-inventories.md`.
 _Avoid_: coverage record — a different, hand-authored concept the proof supersedes for verification purposes.
 
 **conversion chain**:

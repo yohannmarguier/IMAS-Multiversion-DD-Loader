@@ -51,6 +51,14 @@ static void check_write_lands(int ctx_id, const char *field, const char *timebas
     CHECK(size[0] == 73);
 }
 
+static void check_delete_lands(int ctx_id, const char *path, const char *stored_path) {
+    int deletes_before = int_from_stub("recording_stub_delete_call_count");
+    CHECK(al_delete_data(ctx_id, path).code == 0);
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 1);
+    CHECK(int_from_stub("recording_stub_delete_ctx") == ctx_id);
+    CHECK(strcmp(string_from_stub("recording_stub_delete_path"), stored_path) == 0);
+}
+
 static void scenario_write_renamed_field_lands_at_stored_spelling(void) {
     int operation_ctx = open_mismatched_equilibrium();
     check_write_lands(operation_ctx, "time_slice/global_quantities/beta_tor_norm", "time",
@@ -84,20 +92,25 @@ static void scenario_write_reverse_identity_renamed_and_moved_fields_land_at_sto
            "identity, renamed and moved DD3 fields landed at their DD4 spellings\n");
 }
 
-static void scenario_delete_refuses_under_known_mismatched_root_before_core_call(void) {
+static void scenario_delete_identity_renamed_and_moved_fields_land_at_stored_spelling(void) {
     int operation_ctx = open_mismatched_equilibrium();
-    int deletes_before = int_from_stub("recording_stub_delete_call_count");
+    check_delete_lands(operation_ctx, "time_slice/boundary/elongation",
+                       "time_slice/boundary/elongation");
+    check_delete_lands(operation_ctx, "time_slice/global_quantities/beta_tor_norm",
+                       "time_slice/global_quantities/beta_normal");
+    check_delete_lands(operation_ctx, "time_slice/boundary/closest_wall_point/r",
+                       "time_slice/boundary_separatrix/closest_wall_point/r");
+    CHECK(loss_count(operation_ctx) == 0);
+}
 
-    al_status_t status =
-        al_delete_data(operation_ctx, "time_slice/global_quantities/beta_tor_norm");
-
-    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
-    CHECK_REFUSAL_MESSAGE(status, "al_delete_data refuses on a context with a known DD version mismatch",
-                          "time_slice/global_quantities/beta_tor_norm", "4.1.1", "3.39.0");
-    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
-
-    printf("write_delete_conversion_test delete-refuses-under-known-mismatched-root-before-core-call: "
-           "IMAS-Core was never called and the refusal named the path and both DD versions\n");
+static void scenario_delete_reverse_identity_renamed_and_moved_fields_land_at_stored_spelling(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    check_delete_lands(operation_ctx, "time_slice/boundary/elongation",
+                       "time_slice/boundary/elongation");
+    check_delete_lands(operation_ctx, "time_slice/global_quantities/beta_normal",
+                       "time_slice/global_quantities/beta_tor_norm");
+    check_delete_lands(operation_ctx, "time_slice/boundary_separatrix/closest_wall_point/r",
+                       "time_slice/boundary/closest_wall_point/r");
 }
 
 static void scenario_plugin_write_renamed_field_lands_at_stored_spelling(void) {
@@ -398,21 +411,72 @@ static void scenario_child_write_refusal_is_retained_on_its_root_with_a_complete
            "a child refusal reached the root log under its joined DD path\n");
 }
 
-static void scenario_delete_nested_child_context_refuses_through_mismatched_root(void) {
+static void scenario_delete_nested_child_context_translates_relative_path(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int size = -1;
     int arraystruct_ctx = -1;
     CHECK(al_begin_arraystruct_action(operation_ctx, "time_slice", "", &size, &arraystruct_ctx)
               .code == 0);
 
+    check_delete_lands(arraystruct_ctx, "global_quantities/beta_tor_norm",
+                       "global_quantities/beta_normal");
+}
+
+static void scenario_delete_refuses_stamp_subtrees_before_core_call(void) {
+    int operation_ctx = open_mismatched_equilibrium();
     int deletes_before = int_from_stub("recording_stub_delete_call_count");
-    al_status_t status = al_delete_data(arraystruct_ctx, "global_quantities/beta_tor_norm");
+    const char *reason =
+        "this delete would remove the DD-version stamp while stored data remains";
+    const char *paths[] = {"ids_properties/version_put/data_dictionary",
+                           "ids_properties/version_put", "ids_properties"};
+    for (size_t index = 0; index < sizeof(paths) / sizeof(paths[0]); index++) {
+        al_status_t status = al_delete_data(operation_ctx, paths[index]);
+        CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+        CHECK_REFUSAL_MESSAGE(status, reason, paths[index], "4.1.1", "3.39.0");
+    }
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
+}
+
+static void scenario_delete_empty_path_forwards_as_explicit_migration_route(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    check_delete_lands(operation_ctx, "", "");
+    CHECK(loss_count(operation_ctx) == 0);
+}
+
+static void scenario_delete_refuses_no_source_unservable_and_candidates(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int deletes_before = int_from_stub("recording_stub_delete_call_count");
+    al_status_t status = al_delete_data(operation_ctx, "time_slice/boundary/phi");
 
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path has no stored source", "time_slice/boundary/phi",
+                          "4.1.1", "3.39.0");
+    status = al_delete_data(operation_ctx, "grids_ggd/grid/space/coordinates_type");
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path's container changed shape and cannot be served",
+                          "grids_ggd/grid/space/coordinates_type", "4.1.1", "3.39.0");
+    status = al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi");
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status,
+                          "this path is served by several stored candidates, and this delete cannot remove them safely",
+                          "time_slice/profiles_2d/b_field_phi", "4.1.1", "3.39.0");
+    status = al_delete_data(operation_ctx, "time_slice/boundary");
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this delete path is a structure, and only leaf deletes are supported",
+                          "time_slice/boundary", "4.1.1", "3.39.0");
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
+}
 
-    printf("write_delete_conversion_test delete-nested-child-context-refuses-through-mismatched-root: "
-           "a child arraystruct context inherited its root's refusal\n");
+static void scenario_delete_refuses_non_primary_source_before_core_call(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int deletes_before = int_from_stub("recording_stub_delete_call_count");
+    al_status_t status = al_delete_data(operation_ctx, "time_slice/profiles_2d/b_tor");
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status,
+                          "this path is a non-primary source and cannot delete a shared stored slot",
+                          "time_slice/profiles_2d/b_tor", "3.39.0", "4.1.1");
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
 }
 
 static void scenario_write_matching_context_forwards_unchanged(void) {
@@ -533,7 +597,8 @@ int main(int argc, char **argv) {
         {"write-renamed-field-lands-at-stored-spelling", scenario_write_renamed_field_lands_at_stored_spelling},
         {"write-identity-and-moved-fields-land-at-stored-spelling", scenario_write_identity_and_moved_fields_land_at_stored_spelling},
         {"write-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling", scenario_write_reverse_identity_renamed_and_moved_fields_land_at_stored_spelling},
-        {"delete-refuses-under-known-mismatched-root-before-core-call", scenario_delete_refuses_under_known_mismatched_root_before_core_call},
+        {"delete-identity-renamed-and-moved-fields-land-at-stored-spelling", scenario_delete_identity_renamed_and_moved_fields_land_at_stored_spelling},
+        {"delete-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling", scenario_delete_reverse_identity_renamed_and_moved_fields_land_at_stored_spelling},
         {"plugin-write-renamed-field-lands-at-stored-spelling", scenario_plugin_write_renamed_field_lands_at_stored_spelling},
         {"plugin-write-matching-context-forwards-unchanged", scenario_plugin_write_matching_context_forwards_unchanged},
         {"write-nested-child-context-resolves-relative-and-absolute-fields", scenario_write_nested_child_context_resolves_relative_and_absolute_fields},
@@ -547,7 +612,11 @@ int main(int argc, char **argv) {
         {"write-reverse-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_reverse_without_stored_slot_refuses_and_retains_a_write_loss},
         {"write-retyped-path-refuses-and-retains-a-write-loss", scenario_write_retyped_path_refuses_and_retains_a_write_loss},
         {"child-write-refusal-is-retained-on-its-root-with-a-complete-path", scenario_child_write_refusal_is_retained_on_its_root_with_a_complete_path},
-        {"delete-nested-child-context-refuses-through-mismatched-root", scenario_delete_nested_child_context_refuses_through_mismatched_root},
+        {"delete-nested-child-context-translates-relative-path", scenario_delete_nested_child_context_translates_relative_path},
+        {"delete-refuses-stamp-subtrees-before-core-call", scenario_delete_refuses_stamp_subtrees_before_core_call},
+        {"delete-empty-path-forwards-as-explicit-migration-route", scenario_delete_empty_path_forwards_as_explicit_migration_route},
+        {"delete-refuses-no-source-unservable-and-candidates", scenario_delete_refuses_no_source_unservable_and_candidates},
+        {"delete-refuses-non-primary-source-before-core-call", scenario_delete_refuses_non_primary_source_before_core_call},
         {"write-matching-context-forwards-unchanged", scenario_write_matching_context_forwards_unchanged},
         {"write-unknown-context-forwards-unchanged", scenario_write_unknown_context_forwards_unchanged},
         {"write-unstamped-context-forwards-unchanged", scenario_write_unstamped_context_forwards_unchanged},
