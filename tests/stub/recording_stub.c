@@ -6,6 +6,7 @@
  * generated header: a real IMAS-Core defines its own copy independently of
  * this project's header, and this stub should behave the same way. */
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -793,6 +794,40 @@ static const void *g_write_data = NULL;
 static int g_write_datatype = 0;
 static int g_write_dim = 0;
 static int g_write_size_first = 0;
+static double *g_write_double_values = NULL;
+static size_t g_write_double_count = 0;
+
+/* A transformed write buffer belongs to the shim and is freed as soon as its
+ * IMAS-Core call returns, so its pointer alone cannot be inspected by a test.
+ * Snapshot DOUBLE_DATA values while the call is in progress instead. */
+static void snapshot_double_payload(double **snapshot, size_t *snapshot_count, void *data,
+                                    int datatype, int dim, int *size) {
+    free(*snapshot);
+    *snapshot = NULL;
+    *snapshot_count = 0;
+    if (datatype != 52 /* DOUBLE_DATA */ || data == NULL || dim < 0 ||
+        dim > RECORDING_STUB_MAXDIM || (dim > 0 && size == NULL)) {
+        return;
+    }
+
+    size_t count = 1;
+    for (int index = 0; index < dim; ++index) {
+        if (size[index] < 0 || count > SIZE_MAX / (size_t)size[index]) {
+            return;
+        }
+        count *= (size_t)size[index];
+    }
+    if (count == 0 || count > SIZE_MAX / sizeof **snapshot) {
+        return;
+    }
+    double *copy = malloc(count * sizeof *copy);
+    if (copy == NULL) {
+        return;
+    }
+    memcpy(copy, data, count * sizeof *copy);
+    *snapshot = copy;
+    *snapshot_count = count;
+}
 
 al_status_t al_write_data(int ctxID, const char *field, const char *timebase, void *data,
                            int datatype, int dim, int *size) {
@@ -811,6 +846,8 @@ al_status_t al_write_data(int ctxID, const char *field, const char *timebase, vo
     if (size != NULL && dim > 0) {
         g_write_size_first = size[0];
     }
+    snapshot_double_payload(&g_write_double_values, &g_write_double_count, data, datatype, dim,
+                            size);
     trigger_reentrant_data(RECORDING_STUB_REENTRANT_WRITE_DATA, data, datatype, dim, size);
     return ok_status();
 }
@@ -966,6 +1003,8 @@ static int g_plugin_second_int = 0;
 static double g_plugin_double = 0.0;
 static const void *g_plugin_pointer = NULL;
 static const void *g_plugin_size_pointer = NULL;
+static double *g_plugin_write_double_values = NULL;
+static size_t g_plugin_write_double_count = 0;
 
 /* `first`/`second` are copied rather than retained as raw pointers: a
  * translated argument the shim forwards (issue #67) is a temporary buffer
@@ -1231,6 +1270,8 @@ al_status_t al_plugin_write_data(int ctx_id, const char *field, const char *time
     g_plugin_second_int = dim;
     g_plugin_pointer = data;
     g_plugin_size_pointer = size;
+    snapshot_double_payload(&g_plugin_write_double_values, &g_plugin_write_double_count, data,
+                            datatype, dim, size);
     (void)ctx_id;
     (void)field;
     (void)timebase;
@@ -1254,6 +1295,12 @@ int recording_stub_plugin_second_int(void) { return g_plugin_second_int; }
 double recording_stub_plugin_double(void) { return g_plugin_double; }
 const void *recording_stub_plugin_pointer(void) { return g_plugin_pointer; }
 const void *recording_stub_plugin_size_pointer(void) { return g_plugin_size_pointer; }
+int recording_stub_plugin_write_double_count(void) { return (int)g_plugin_write_double_count; }
+double recording_stub_plugin_write_double_at(int index) {
+    return index >= 0 && (size_t)index < g_plugin_write_double_count
+               ? g_plugin_write_double_values[index]
+               : 0.0;
+}
 
 /* Introspection accessors below: not part of the mirrored IMAS-Core ABI.
  * tests/runtime_binding_test.c dlsym's these directly rather than linking this stub —
@@ -1453,6 +1500,12 @@ int recording_stub_write_dim(void) {
 }
 int recording_stub_write_size_first(void) {
     return g_write_size_first;
+}
+int recording_stub_write_double_count(void) {
+    return (int)g_write_double_count;
+}
+double recording_stub_write_double_at(int index) {
+    return index >= 0 && (size_t)index < g_write_double_count ? g_write_double_values[index] : 0.0;
 }
 
 int recording_stub_delete_call_count(void) {

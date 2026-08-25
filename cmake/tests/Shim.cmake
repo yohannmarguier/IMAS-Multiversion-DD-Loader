@@ -464,8 +464,16 @@ add_write_delete_mismatched_test(write-delete-plugin-write-renamed-field-lands-a
     plugin-write-renamed-field-lands-at-stored-spelling)
 add_write_delete_mismatched_test(write-delete-write-nested-child-context-resolves-relative-and-absolute-fields
     write-nested-child-context-resolves-relative-and-absolute-fields)
-add_write_delete_mismatched_test(write-delete-write-refuses-candidate-or-transformation-on-either-argument
-    write-refuses-candidate-or-transformation-on-either-argument)
+add_write_delete_mismatched_test(write-delete-write-refuses-candidate-on-either-argument
+    write-refuses-candidate-on-either-argument)
+add_write_delete_mismatched_test(write-delete-write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy
+    write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy)
+add_write_delete_mismatched_test(write-delete-plugin-write-cocos-sign-flip-uses-a-shim-owned-copy
+    plugin-write-cocos-sign-flip-uses-a-shim-owned-copy)
+add_write_delete_mismatched_test(write-delete-write-cocos-sentinel-forwards-unchanged-without-loss
+    write-cocos-sentinel-forwards-unchanged-without-loss)
+add_write_delete_mismatched_test(write-delete-write-cocos-invalid-shape-or-type-refuses-before-core
+    write-cocos-invalid-shape-or-type-refuses-before-core)
 add_write_delete_mismatched_test(write-delete-write-refuses-dd-version-stamp-but-forwards-its-siblings
     write-refuses-dd-version-stamp-but-forwards-its-siblings)
 add_write_delete_mismatched_test(write-delete-delete-nested-child-context-refuses-through-mismatched-root

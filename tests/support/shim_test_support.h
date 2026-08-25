@@ -141,6 +141,7 @@ static inline int run_named_scenario(int argc, char **argv, const shim_test_scen
 typedef const char *(*shim_test_string_accessor_fn)(void);
 typedef int (*shim_test_int_accessor_fn)(void);
 typedef double (*shim_test_double_accessor_fn)(void);
+typedef double (*shim_test_double_at_accessor_fn)(int);
 typedef const void *(*shim_test_pointer_accessor_fn)(void);
 
 /* The recording stub is already loaded as the shim's IMAS-Core; opening it
@@ -174,6 +175,10 @@ static inline int int_from_stub(const char *symbol_name) {
 
 static inline double double_from_stub(const char *symbol_name) {
     return ((shim_test_double_accessor_fn)stub_symbol_or_die(symbol_name))();
+}
+
+static inline double double_at_from_stub(const char *symbol_name, int index) {
+    return ((shim_test_double_at_accessor_fn)stub_symbol_or_die(symbol_name))(index);
 }
 
 static inline const void *pointer_from_stub(const char *symbol_name) {
