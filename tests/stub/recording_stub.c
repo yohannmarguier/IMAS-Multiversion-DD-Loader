@@ -371,6 +371,9 @@ static int g_read_datatype = 0;
 static int g_read_dim = 0;
 static char g_read_buffer[] = "recording-stub: read data payload";
 static double g_read_double_buffer = 1.5;
+static char *g_last_written_field = NULL;
+static double *g_last_written_values = NULL;
+static size_t g_last_written_count = 0;
 
 #define RECORDING_STUB_CSV_CAPACITY 16
 /* IMAS-Core's MAXDIM is part of the duplicated ABI contract above. */
@@ -494,6 +497,21 @@ static al_status_t compute_read_response(const char *field, void **data, int dim
         memset(status.message, 0, sizeof status.message);
         strncpy(status.message, "recording-stub: read refused", sizeof status.message - 1);
         return status;
+    }
+
+    /* Lets a seam test prove a write/read round trip through the public ABI.
+     * This intentionally models only the DOUBLE_DATA payloads that write
+     * tests already snapshot; every ordinary recording-stub read keeps its
+     * existing canned response. */
+    if (getenv("RECORDING_STUB_READ_LAST_WRITE") != NULL && g_last_written_field != NULL &&
+        field != NULL && strcmp(field, g_last_written_field) == 0) {
+        if (data != NULL) {
+            *data = g_last_written_values;
+        }
+        if (size != NULL && dim > 0) {
+            size[0] = (int)g_last_written_count;
+        }
+        return ok_status();
     }
 
     const char *double_values_csv = getenv("RECORDING_STUB_READ_DOUBLE_VALUES");
@@ -848,6 +866,20 @@ al_status_t al_write_data(int ctxID, const char *field, const char *timebase, vo
     }
     snapshot_double_payload(&g_write_double_values, &g_write_double_count, data, datatype, dim,
                             size);
+    free(g_last_written_field);
+    g_last_written_field = record_str(field);
+    free(g_last_written_values);
+    g_last_written_values = NULL;
+    g_last_written_count = g_write_double_count;
+    if (g_last_written_count > 0) {
+        g_last_written_values = malloc(g_last_written_count * sizeof *g_last_written_values);
+        if (g_last_written_values != NULL) {
+            memcpy(g_last_written_values, g_write_double_values,
+                   g_last_written_count * sizeof *g_last_written_values);
+        } else {
+            g_last_written_count = 0;
+        }
+    }
     trigger_reentrant_data(RECORDING_STUB_REENTRANT_WRITE_DATA, data, datatype, dim, size);
     return ok_status();
 }

@@ -91,8 +91,17 @@ pub(crate) enum WritePath {
         path: CString,
         value_transformation: ValueTransformation,
     },
+    /// An ordered plan whose first candidate is the only stored path a write
+    /// may change. Later candidates stay untouched and earn a potential-loss
+    /// entry only after that one write succeeds.
+    Candidates(Vec<WriteCandidate>),
     /// The supplied HLI-DD path cannot safely be written through this seam.
     Refusal { reason: String, dd_path: String },
+}
+
+pub(crate) struct WriteCandidate {
+    pub(crate) path: CString,
+    pub(crate) value_transformation: ValueTransformation,
 }
 
 /// The one stored-DD spelling a delete may safely remove, or the reason the
@@ -327,12 +336,21 @@ pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) 
         };
     }
 
-    // A `merged`/`split` rule needs the later write policy that selects a
-    // precedence-1 source and reports the candidates it left untouched. This
-    // first write slice only serves identity, renamed, and moved paths.
-    if matches!(explanation.rel, Some(Rel::Merged | Rel::Split)) {
+    // Keep the shared guard ahead of the write-specific precedence guard:
+    // a rule that cannot be served at all must not appear to be merely a
+    // collision risk.
+    if let Outcome::Refusal(reason) = &explanation.outcome {
         return WritePath::Refusal {
-            reason: "this path is served by several stored candidates, and this write cannot choose one safely"
+            reason: refusal_reason_message(*reason),
+            dd_path: hli_absolute,
+        };
+    }
+    if explanation
+        .precedence
+        .is_some_and(|precedence| precedence != 1)
+    {
+        return WritePath::Refusal {
+            reason: "this path is a non-primary source and cannot write a shared stored slot"
                 .to_string(),
             dd_path: hli_absolute,
         };
@@ -347,11 +365,20 @@ pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) 
             reason: "this path has no stored source".to_string(),
             dd_path: hli_absolute,
         },
-        Outcome::Path { candidates, .. } if !candidates.is_empty() => WritePath::Refusal {
-            reason: "this path is served by several stored candidates, and this write cannot choose one safely"
-                .to_string(),
-            dd_path: hli_absolute,
-        },
+        Outcome::Path { candidates, .. } if !candidates.is_empty() => candidates
+            .into_iter()
+            .map(|candidate| {
+                stored_c_path(record, &candidate.path, is_absolute).map(|path| WriteCandidate {
+                    path,
+                    value_transformation: candidate.value_transformation,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(WritePath::Candidates)
+            .unwrap_or_else(|reason| WritePath::Refusal {
+                reason,
+                dd_path: hli_absolute,
+            }),
         Outcome::Path {
             resolved_path,
             value_transformation,
@@ -799,7 +826,7 @@ mod tests {
                     assert_eq!(reason, expected_reason);
                     assert_eq!(dd_path, path.to_str().expect("fixture paths are ASCII"));
                 }
-                WritePath::Forward | WritePath::Translated { .. } => {
+                WritePath::Forward | WritePath::Translated { .. } | WritePath::Candidates(_) => {
                     panic!("{path:?} must refuse before IMAS-Core")
                 }
             }

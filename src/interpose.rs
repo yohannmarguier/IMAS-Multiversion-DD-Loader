@@ -1670,11 +1670,12 @@ fn write_data_impl(
             field,
             timebase,
             data: transformed_data,
+            unwritten_candidates,
         } => {
             let forward_data = transformed_data
                 .as_ref()
                 .map_or(data, |values| values.as_ptr().cast_mut().cast::<c_void>());
-            call_write(
+            let status = call_write(
                 family,
                 ctx_id,
                 field.map_or(std::ptr::null(), CStr::as_ptr),
@@ -1683,7 +1684,17 @@ fn write_data_impl(
                 datatype,
                 dim,
                 size,
-            )
+            );
+            if status.code == 0 {
+                for dd_path in unwritten_candidates {
+                    REGISTRY.record_write_loss_at_root(
+                        record.root_id,
+                        dd_path.to_string(),
+                        Fidelity::PotentiallyLossy,
+                    );
+                }
+            }
+            status
         }
         seam_policy::WriteVerdict::Refusal { reason, dd_path } => {
             finish_write_refusal(&record, &reason, &dd_path)
@@ -1949,7 +1960,7 @@ mod tests {
         let path = CString::new("impossible").expect("fixture path contains no NUL");
         let (reason, dd_path) = match path_conversion::resolve_write_path(&record, path.as_ptr()) {
             WritePath::Refusal { reason, dd_path } => (reason, dd_path),
-            WritePath::Forward | WritePath::Translated { .. } => {
+            WritePath::Forward | WritePath::Translated { .. } | WritePath::Candidates(_) => {
                 panic!("a declared-unmappable write must refuse")
             }
         };

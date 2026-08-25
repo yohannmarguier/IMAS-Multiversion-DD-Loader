@@ -468,8 +468,12 @@ add_write_delete_mismatched_test(write-delete-plugin-write-renamed-field-lands-a
     plugin-write-renamed-field-lands-at-stored-spelling)
 add_write_delete_mismatched_test(write-delete-write-nested-child-context-resolves-relative-and-absolute-fields
     write-nested-child-context-resolves-relative-and-absolute-fields)
-add_write_delete_mismatched_test(write-delete-write-refuses-candidate-on-either-argument
-    write-refuses-candidate-on-either-argument)
+add_write_delete_mismatched_test(write-delete-write-candidate-lands-at-primary-and-retains-unwritten-candidates
+    write-candidate-lands-at-primary-and-retains-unwritten-candidates)
+add_write_delete_mismatched_test(write-delete-write-non-primary-source-refuses-by-precedence
+    write-non-primary-source-refuses-by-precedence)
+add_write_delete_mismatched_test(write-delete-child-write-candidate-retains-complete-path-at-root
+    child-write-candidate-retains-complete-path-at-root)
 add_write_delete_mismatched_test(write-delete-write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy
     write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy)
 add_write_delete_mismatched_test(write-delete-plugin-write-cocos-sign-flip-uses-a-shim-owned-copy

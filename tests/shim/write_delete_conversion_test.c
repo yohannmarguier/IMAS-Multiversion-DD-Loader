@@ -168,24 +168,84 @@ static void scenario_write_nested_child_context_resolves_relative_and_absolute_f
            "a child write used its own anchor for relative paths and the IDS root for absolute paths\n");
 }
 
-static void scenario_write_refuses_candidate_on_either_argument(void) {
+static void scenario_write_candidate_lands_at_primary_and_retains_unwritten_candidates(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int writes_before = int_from_stub("recording_stub_write_call_count");
-    double sentinel = 42.0;
-    int size[1] = {73};
+    double value = 42.0;
+    int size[1] = {1};
+    void *read_data = NULL;
 
-    CHECK(write_field(operation_ctx, "time_slice/profiles_2d/b_field_phi", "time", &sentinel,
-                      size)
-              .code == IMAS_MVDD_CONVERSION_ERROR);
-    CHECK(write_field(operation_ctx, "time_slice/boundary/elongation",
-                      "time_slice/profiles_2d/b_field_phi", &sentinel, size)
-              .code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(write_field(operation_ctx, "time_slice/profiles_2d/b_field_phi", "time", &value, size)
+              .code == 0);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 1);
+    CHECK(strcmp(string_from_stub("recording_stub_write_field"),
+                 "time_slice/profiles_2d/b_field_phi") == 0);
+    CHECK(loss_count(operation_ctx) == 2);
+    check_loss_at(operation_ctx, 0, "time_slice/profiles_2d/b_field_phi",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+    check_loss_at(operation_ctx, 1, "time_slice/profiles_2d/b_field_phi",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    /* The recording stub exposes the value accepted at the stored spelling so
+     * this public read proves the precedence-1 write closes the shim round
+     * trip. */
+    CHECK(setenv("RECORDING_STUB_READ_LAST_WRITE", "1", 1) == 0);
+    CHECK(al_read_data(operation_ctx, "time_slice/profiles_2d/b_field_phi", "time", &read_data,
+                       IMAS_DOUBLE_DATA, 1, size)
+              .code == 0);
+    CHECK(read_data != NULL);
+    CHECK(*(double *)read_data == value);
+
+    printf("write_delete_conversion_test write-candidate-lands-at-primary-and-retains-unwritten-candidates: "
+           "only precedence 1 was written, the other candidates were retained as potential write losses, and the round trip closed\n");
+}
+
+static void scenario_write_non_primary_source_refuses_by_precedence(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double value = 42.0;
+    int size[1] = {1};
+    al_status_t status = write_field(operation_ctx, "time_slice/global_quantities/psi_magnetic_axis",
+                                     "time", &value, size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status,
+                          "this path is a non-primary source and cannot write a shared stored slot",
+                          "time_slice/global_quantities/psi_magnetic_axis", "4.1.1", "3.39.0");
     CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
-    CHECK(sentinel == 42.0);
-    CHECK(size[0] == 73);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/global_quantities/psi_magnetic_axis",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_WRITE);
+}
 
-    printf("write_delete_conversion_test write-refuses-candidate-on-either-argument: "
-           "each ambiguous resolution refused before Core\n");
+static void scenario_child_write_candidate_retains_complete_path_at_root(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int child_size = -1;
+    int child_ctx = -1;
+    double value = 42.0;
+    int size[1] = {1};
+
+    CHECK(al_begin_arraystruct_action(operation_ctx, "time_slice", "", &child_size, &child_ctx)
+              .code == 0);
+    CHECK(write_field(child_ctx, "profiles_2d/b_field_phi", "time", &value, size).code == 0);
+    CHECK(loss_count(operation_ctx) == 2);
+    CHECK(loss_count(child_ctx) == 2);
+    check_loss_at(child_ctx, 0, "time_slice/profiles_2d/b_field_phi",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+    check_loss_at(child_ctx, 1, "time_slice/profiles_2d/b_field_phi",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    for (int index = 0; index < loss_count(operation_ctx); ++index) {
+        char path[256] = {0};
+        int verdict = -1;
+        CHECK(imas_mvdd_context_loss_at(operation_ctx, index, path, sizeof(path), &verdict).code ==
+              0);
+        if (verdict == IMAS_MVDD_FIDELITY_LOSSY) {
+            fprintf(stderr,
+                    "a write-side LOSSY verdict needs real coverage before it is allowed\n");
+            abort();
+        }
+    }
 }
 
 static void scenario_write_cocos_sign_flip_uses_a_shim_owned_rank_seven_copy(void) {
@@ -602,7 +662,9 @@ int main(int argc, char **argv) {
         {"plugin-write-renamed-field-lands-at-stored-spelling", scenario_plugin_write_renamed_field_lands_at_stored_spelling},
         {"plugin-write-matching-context-forwards-unchanged", scenario_plugin_write_matching_context_forwards_unchanged},
         {"write-nested-child-context-resolves-relative-and-absolute-fields", scenario_write_nested_child_context_resolves_relative_and_absolute_fields},
-        {"write-refuses-candidate-on-either-argument", scenario_write_refuses_candidate_on_either_argument},
+        {"write-candidate-lands-at-primary-and-retains-unwritten-candidates", scenario_write_candidate_lands_at_primary_and_retains_unwritten_candidates},
+        {"write-non-primary-source-refuses-by-precedence", scenario_write_non_primary_source_refuses_by_precedence},
+        {"child-write-candidate-retains-complete-path-at-root", scenario_child_write_candidate_retains_complete_path_at_root},
         {"write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy", scenario_write_cocos_sign_flip_uses_a_shim_owned_rank_seven_copy},
         {"plugin-write-cocos-sign-flip-uses-a-shim-owned-copy", scenario_plugin_write_cocos_sign_flip_uses_a_shim_owned_copy},
         {"write-cocos-sentinel-forwards-unchanged-without-loss", scenario_write_cocos_sentinel_forwards_unchanged_without_loss},

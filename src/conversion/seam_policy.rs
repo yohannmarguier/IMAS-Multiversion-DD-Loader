@@ -214,6 +214,10 @@ pub(crate) enum WriteVerdict<'a> {
         /// `Some` is a transformed shim-owned copy, borrowed by the adapter
         /// for exactly one IMAS-Core call. `None` forwards caller storage.
         data: Option<Vec<f64>>,
+        /// Every stored candidate that deliberately remains unwritten. These
+        /// are retained as potentially lossy only after IMAS-Core accepts the
+        /// one precedence-1 write.
+        unwritten_candidates: Vec<&'a str>,
     },
     Refusal {
         reason: String,
@@ -242,6 +246,7 @@ pub(crate) fn run_write<'a>(
             field: field.path,
             timebase: timebase.path,
             data: None,
+            unwritten_candidates: Vec::new(),
         };
     }
     if timebase.value_transformation != ValueTransformation::None {
@@ -282,6 +287,7 @@ pub(crate) fn run_write<'a>(
         field: field.path,
         timebase: timebase.path,
         data,
+        unwritten_candidates: unwritten_candidate_paths(&field, &timebase),
     }
 }
 
@@ -296,6 +302,17 @@ struct ResolvedWriteArgument<'a> {
     path: Option<&'a CStr>,
     value_transformation: ValueTransformation,
     dd_path: &'a str,
+    unwritten_candidates: usize,
+}
+
+fn unwritten_candidate_paths<'a>(
+    field: &ResolvedWriteArgument<'a>,
+    timebase: &ResolvedWriteArgument<'a>,
+) -> Vec<&'a str> {
+    let mut paths = Vec::with_capacity(field.unwritten_candidates + timebase.unwritten_candidates);
+    paths.extend((0..field.unwritten_candidates).map(|_| field.dd_path));
+    paths.extend((0..timebase.unwritten_candidates).map(|_| timebase.dd_path));
+    paths
 }
 
 fn write_argument_path<'a>(
@@ -306,6 +323,7 @@ fn write_argument_path<'a>(
             path: argument.forward,
             value_transformation: ValueTransformation::None,
             dd_path: &argument.dd_path,
+            unwritten_candidates: 0,
         }),
         WritePath::Translated {
             path,
@@ -314,7 +332,19 @@ fn write_argument_path<'a>(
             path: Some(path.as_c_str()),
             value_transformation: value_transformation.clone(),
             dd_path: &argument.dd_path,
+            unwritten_candidates: 0,
         }),
+        WritePath::Candidates(candidates) => {
+            let Some(primary) = candidates.first() else {
+                unreachable!("conversion maps never produce an empty candidate plan")
+            };
+            Ok(ResolvedWriteArgument {
+                path: Some(primary.path.as_c_str()),
+                value_transformation: primary.value_transformation.clone(),
+                dd_path: &argument.dd_path,
+                unwritten_candidates: candidates.len() - 1,
+            })
+        }
         WritePath::Refusal { reason, dd_path } => Err((reason, dd_path)),
     }
 }
