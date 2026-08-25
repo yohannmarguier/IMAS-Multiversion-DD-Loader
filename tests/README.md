@@ -111,7 +111,7 @@ record intact, a recycled context ID never exposes a stale record, and the
 latter two seams forward unchanged without touching the registry. Observed
 indirectly, via whether a later read still translates.
 
-### `write-delete-*` — 31 · `shim/write_delete_conversion_test.c`
+### `write-delete-*` — 35 · `shim/write_delete_conversion_test.c`
 
 Issue #125's safe write slice: `al_write_data` and `al_plugin_write_data`
 independently resolve identity, `renamed`, and `moved` field/timebase paths to
@@ -130,9 +130,12 @@ child-context refusal reaches its root under the complete joined DD path.
 
 Issue #129 translates identity, `renamed`, and `moved` leaf deletes to one
 stored spelling in both directions; it refuses the DD-version stamp and
-containing subtrees, non-primary aliases, no-source and unservable paths, and
-candidate plans. An empty delete forwards as the caller's explicit whole-
-DATAOBJECT migration route, and delete never retains a loss-log entry.
+containing subtrees, non-primary aliases, no-source and unservable paths. Issue
+#130 fans a candidate plan out in declared order: it probes each stored path,
+skips not-found candidates, and returns a distinguishable probe/delete failure
+only after attempting the rest. An empty delete forwards as the caller's
+explicit whole-DATAOBJECT migration route, and delete never retains a loss-log
+entry.
 
 ### `plugin-reentry-policy-*` — 22 · `shim/plugin_reentry_policy_test.c`
 

@@ -1,6 +1,6 @@
 # A write asserts a value, a delete asserts an absence
 
-Where one HLI path resolves to several stored candidate paths, a write and a delete take **opposite** answers to what looks like the same question. A write writes only the precedence-1 candidate (ADR 0016 decision 4). A delete deletes **all** of them. This ADR exists because that asymmetry looks like an inconsistency and is not, and because a reader who assumes symmetry will "fix" one of the two. Issue #129 implements the safe single-path leaf case and its stamp guard; candidate-plan fan-out, probes, and subtree handling remain deferred to #130 and the following ticket.
+Where one HLI path resolves to several stored candidate paths, a write and a delete take **opposite** answers to what looks like the same question. A write writes only the precedence-1 candidate (ADR 0016 decision 4). A delete deletes **all** of them. This ADR exists because that asymmetry looks like an inconsistency and is not, and because a reader who assumes symmetry will "fix" one of the two. Issue #129 implements the safe single-path leaf case and its stamp guard; issue #130 adds candidate-plan fan-out and probes. Subtree handling remains deferred to the following ticket.
 
 ## Why the answers differ
 
