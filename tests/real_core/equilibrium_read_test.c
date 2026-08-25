@@ -621,25 +621,26 @@ static void scenario_conversion_disabled_read_is_unaffected(void) {
            "version left the read a plain forward\n");
 }
 
-/* --- Issue #125: the remaining real-Core refusal boundary ------------------ */
+/* --- Issue #129: the real-Core stamp-protection boundary ------------------- */
 
-/* Safe writes are proven at the recording-stub boundary, where the exact
- * stored spelling delivered to IMAS-Core is observable. The checked-in HDF5
- * fixture is opened only for reads, so its real-Core probe keeps the one
- * remaining mismatched mutation policy: delete must still refuse. */
-static void scenario_forward_delete_refuses_against_mismatch(void) {
+/* Safe leaf deletes are proven at the recording-stub boundary, where the
+ * exact stored spelling delivered to IMAS-Core is observable. The checked-in
+ * HDF5 fixture is opened only for reads, so this real-Core probe keeps the
+ * refusal that must occur before any mutation: deleting the DD-version stamp
+ * or its containing subtree. */
+static void scenario_forward_delete_refuses_stamp_removal(void) {
     CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
     int pulse_ctx = open_fixture_pulse("3.39.0");
 
     int op_ctx = -1;
     CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
 
-    const char *field = "time_slice/global_quantities/beta_tor_norm";
+    const char *field = "ids_properties/version_put";
 
     al_status_t delete_status = al_delete_data(op_ctx, field);
     CHECK(delete_status.code == IMAS_MVDD_CONVERSION_ERROR);
     CHECK_REFUSAL_MESSAGE(delete_status,
-                          "al_delete_data refuses on a context with a known DD version mismatch",
+                          "this delete would remove the DD-version stamp while stored data remains",
                           field, "4.1.1", "3.39.0");
 
     /* The same context still converts a read, so the refusal was policy,
@@ -658,8 +659,8 @@ static void scenario_forward_delete_refuses_against_mismatch(void) {
     CHECK_OK(al_end_action(aos_ctx));
     CHECK_OK(al_end_action(op_ctx));
     close_fixture_pulse(pulse_ctx);
-    printf("equilibrium_read_test forward-delete-refuses-against-mismatch: real Core kept delete "
-           "refused while the same mismatched context continued to convert reads\n");
+    printf("equilibrium_read_test forward-delete-refuses-stamp-removal: real Core kept the "
+           "DD-version stamp protected while the same mismatch still converted reads\n");
 }
 
 /* Obligation (g): "non-LIFO context closure, recycled context IDs,
@@ -759,7 +760,7 @@ int main(int argc, char **argv) {
         {"forward-sign-flip-applies-through-nested-container", scenario_forward_sign_flip_applies_through_nested_container},
         {"same-version-read-is-unaffected", scenario_same_version_read_is_unaffected},
         {"conversion-disabled-read-is-unaffected", scenario_conversion_disabled_read_is_unaffected},
-        {"forward-delete-refuses-against-mismatch", scenario_forward_delete_refuses_against_mismatch},
+        {"forward-delete-refuses-stamp-removal", scenario_forward_delete_refuses_stamp_removal},
         {"forward-context-lifecycle-keeps-conversion-live", scenario_forward_context_lifecycle_keeps_conversion_live},
         {"copied-fixture-harness-reproves-renamed-read",
          scenario_copied_fixture_harness_reproves_renamed_read},

@@ -46,11 +46,13 @@ Read-path DD conversion is implemented for one IDS and one version pair.**
   conversion map declares unservable, and reports non-exact reads through a
   loss log the caller drains from the root context (see [Draining the loss
   log](#draining-the-loss-log) below).
-- **Not yet done:** writes and deletes against a mismatched occurrence
-  refuse rather than convert (by design — see ADR 0002); reading a
-  `merged`/`split` candidate plan is proven only for the one embedded
-  artifact; `al_list_filled_paths` and `al_bind_plugin`/`al_unbind_plugin`
-  are deliberately not yet translated.
+- **Write/delete conversion.** Safe mismatched writes translate one
+  unambiguous path. Deletes translate identity, renamed, and moved leaf paths
+  to their stored spelling; deleting the whole DATAOBJECT is the explicit
+  migration route, while a DD-version stamp, unsafe source, no-source path,
+  or candidate plan refuses. Candidate-plan write and delete behavior remains
+  deferred. `al_list_filled_paths` and `al_bind_plugin`/`al_unbind_plugin` are
+  deliberately not translated.
 
 Read [Scope and limitations](#scope-and-limitations) before drawing
 conclusions from that list — several of the boundaries below are permanent

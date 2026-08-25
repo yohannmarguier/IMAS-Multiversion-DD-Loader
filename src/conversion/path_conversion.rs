@@ -436,7 +436,7 @@ pub(crate) fn resolve_delete_path(record: &ConversionRecord, raw: *const c_char)
                 .to_string(),
             dd_path: hli_absolute,
         },
-        Outcome::Path { resolved_path: _, .. } if !is_equilibrium_leaf(record, &hli_absolute) => {
+        Outcome::Path { .. } if !is_equilibrium_leaf(record, &hli_absolute) => {
             DeletePath::Refusal {
                 reason: "this delete path is a structure, and only leaf deletes are supported"
                     .to_string(),
