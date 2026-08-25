@@ -202,23 +202,20 @@ pub(crate) fn run_write<'a>(
 ) -> WriteVerdict<'a> {
     let field = match write_argument_path(field) {
         Ok(path) => path,
-        Err((reason, dd_path)) => {
-            return WriteVerdict::Refusal {
-                reason: reason.to_string(),
-                dd_path: dd_path.to_string(),
-            };
-        }
+        Err(refusal) => return write_refusal(refusal),
     };
     let timebase = match write_argument_path(timebase) {
         Ok(path) => path,
-        Err((reason, dd_path)) => {
-            return WriteVerdict::Refusal {
-                reason: reason.to_string(),
-                dd_path: dd_path.to_string(),
-            };
-        }
+        Err(refusal) => return write_refusal(refusal),
     };
     WriteVerdict::Forward { field, timebase }
+}
+
+fn write_refusal<'a>((reason, dd_path): (&str, &str)) -> WriteVerdict<'a> {
+    WriteVerdict::Refusal {
+        reason: reason.to_string(),
+        dd_path: dd_path.to_string(),
+    }
 }
 
 fn write_argument_path<'a>(

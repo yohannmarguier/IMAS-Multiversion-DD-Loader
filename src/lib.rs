@@ -34,10 +34,13 @@
 //! resolving it again would translate twice, flip a sign twice, and log a loss
 //! the caller never earned (ADR 0014).
 //!
-//! The write path is deliberately not translated. `al_write_data`,
-//! `al_delete_data` and `al_plugin_write_data` refuse before IMAS-Core is
-//! called whenever the context carries a live conversion record, and forward
-//! unchanged otherwise (ADR 0002).
+//! On a live conversion record, `al_write_data` and
+//! `al_plugin_write_data` independently resolve identity, `renamed`, and
+//! `moved` field/timebase paths to one stored spelling before IMAS-Core is
+//! called. Candidate plans, declared value transformations, and a write to
+//! the DD-version stamp refuse; matching, unknown, unstamped and
+//! conversion-disabled contexts forward unchanged. `al_delete_data` remains
+//! a blanket mismatched-context refusal (ADR 0016).
 //!
 //! Each entry point below documents its own seam behaviour, but the policy
 //! itself lives beside its implementation in `src/interpose.rs` — go there for
@@ -559,10 +562,11 @@ pub unsafe extern "C" fn al_read_data(
     unsafe { resolve::read_data(ctx_id, field, timebase, data, datatype, dim, size) }
 }
 
-/// Mirrors IMAS-Core's `al_write_data` exactly. A context with a known DD
-/// version mismatch refuses before IMAS-Core is called; other contexts forward
-/// unchanged. `field` and `timebase` remain verbatim: write-path translation
-/// is not introduced here.
+/// Mirrors IMAS-Core's `al_write_data` ABI. A context with a known DD version
+/// mismatch resolves each identity, `renamed`, or `moved` `field`/`timebase`
+/// path to one stored spelling; unsupported paths, candidate plans, value
+/// transformations, and the DD-version stamp refuse before IMAS-Core is
+/// called. Other contexts forward unchanged.
 ///
 /// # Safety
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null
@@ -901,10 +905,10 @@ pub unsafe extern "C" fn al_plugin_read_data(
     unsafe { resolve::plugin_read_data(ctx_id, field, timebase, data, datatype, dim, size) }
 }
 
-/// Mirrors IMAS-Core's plugin reentry write-data function exactly. A context
-/// with a known DD version mismatch refuses before IMAS-Core is called; other
-/// contexts forward unchanged. `field` and `timebase` remain verbatim:
-/// write-path translation is not introduced here.
+/// Mirrors IMAS-Core's plugin reentry write-data ABI with the same policy as
+/// [`al_write_data`]: a known mismatch translates only safe identity,
+/// `renamed`, and `moved` paths; unsupported paths refuse before IMAS-Core;
+/// other contexts forward unchanged.
 ///
 /// # Safety
 /// All pointers must meet IMAS-Core's data-access contract.

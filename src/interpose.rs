@@ -1208,7 +1208,7 @@ fn finish_read(
         seam_policy::SeamOutcome::Data(status) => status,
         seam_policy::SeamOutcome::NotFound => no_source_read(data),
         seam_policy::SeamOutcome::Refusal { reason, dd_path } => {
-            read_refusal(record, &reason, &dd_path)
+            context_path_refusal(record, &reason, &dd_path)
         }
     }
 }
@@ -1387,9 +1387,9 @@ fn read_argument_path(
 }
 
 /// Formats a path-conversion refusal using the version pair retained by its
-/// live context record. Both `field` and `timebase` resolve through this one
+/// live context record. Read, write, and context-opening seams use this one
 /// status boundary, so their caller-visible diagnostics cannot drift.
-fn read_refusal(
+fn context_path_refusal(
     record: &crate::registry::context_registry::ConversionRecord,
     reason: &str,
     dd_path: &str,
@@ -1398,10 +1398,9 @@ fn read_refusal(
 }
 
 /// A refusal from a seam that holds a live conversion record but has not
-/// resolved a path through the map — the write/delete seams, whose refusal is
-/// a blanket context-keyed check that deliberately never consults a rule
-/// (issue #64), and the arraystruct opens, whose own resolution already
-/// failed.
+/// resolved a path through the map — the delete seam, whose refusal remains a
+/// blanket context-keyed check, and arraystruct opens, whose own resolution
+/// already failed.
 ///
 /// Issue #58 AC3 asks that *every* refusal message name the reason, the DD
 /// path and both DD versions, and these seams used to emit the reason alone.
@@ -1421,7 +1420,7 @@ fn contextual_refusal(
     let dd_path = joined_argument_path(record, raw_path)
         .or_else(|| (!record.resolved_path.is_empty()).then(|| record.resolved_path.clone()))
         .unwrap_or_else(|| "(no path argument)".to_string());
-    read_refusal(record, reason, &dd_path)
+    context_path_refusal(record, reason, &dd_path)
 }
 
 /// Returns the C ABI's normal not-found outcome for a path the artifact says
@@ -1598,7 +1597,7 @@ fn write_data_impl(
             size,
         ),
         seam_policy::WriteVerdict::Refusal { reason, dd_path } => {
-            read_refusal(&record, &reason, &dd_path)
+            context_path_refusal(&record, &reason, &dd_path)
         }
     }
 }
