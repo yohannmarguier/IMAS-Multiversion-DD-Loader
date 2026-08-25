@@ -42,7 +42,8 @@
 //! conversion-disabled contexts forward unchanged. `al_delete_data` resolves
 //! a safe identity, renamed, or moved leaf to its stored spelling; an empty
 //! path forwards as the caller's whole-DATAOBJECT migration route, while
-//! structures and candidate plans refuse.
+//! structures refuse. A candidate plan probes each stored spelling and
+//! deletes every candidate that is present.
 //!
 //! Each entry point below documents its own seam behaviour, but the policy
 //! itself lives beside its implementation in `src/interpose.rs` — go there for
@@ -566,9 +567,10 @@ pub unsafe extern "C" fn al_read_data(
 
 /// Mirrors IMAS-Core's `al_write_data` ABI. A context with a known DD version
 /// mismatch resolves each identity, `renamed`, or `moved` `field`/`timebase`
-/// path to one stored spelling; unsupported paths, candidate plans, value
-/// transformations, and the DD-version stamp refuse before IMAS-Core is
-/// called. Other contexts forward unchanged.
+/// path to one stored spelling; a candidate plan writes only its declared
+/// precedence-1 stored path, while non-primary aliases, unsupported paths,
+/// value transformations, and the DD-version stamp refuse before IMAS-Core
+/// is called. Other contexts forward unchanged.
 ///
 /// # Safety
 /// `field` and `timebase` must be valid, NUL-terminated C strings, or null
@@ -587,10 +589,11 @@ pub unsafe extern "C" fn al_write_data(
     unsafe { resolve::write_data(ctx_id, field, timebase, data, datatype, dim, size) }
 }
 
-/// Mirrors IMAS-Core's `al_delete_data` exactly. A context with a known DD
-/// version mismatch refuses before IMAS-Core is called; other contexts forward
-/// unchanged. `path` remains verbatim: write-path translation is not
-/// introduced here.
+/// Mirrors IMAS-Core's `al_delete_data`. A context with a known DD version
+/// mismatch translates safe leaves to their stored spelling. When a leaf
+/// resolves to several stored candidates, each is probed unconverted and
+/// every candidate holding data is deleted in declared order; other contexts
+/// forward unchanged.
 ///
 /// # Safety
 /// `path` must be a valid, NUL-terminated C string, or null where

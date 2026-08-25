@@ -105,16 +105,20 @@ pub(crate) struct WriteCandidate {
     pub(crate) value_transformation: ValueTransformation,
 }
 
-/// The one stored-DD spelling a delete may safely remove, or the reason the
-/// delete must refuse. Unlike a write, deleting one stored field needs no
-/// value transformation; unlike a later fan-out delete, it cannot yet serve
-/// an ordered candidate plan.
+/// The stored-DD spelling or spellings a delete may safely remove, or the
+/// reason the delete must refuse. Unlike a write, which may change only its
+/// declared primary source, deleting one stored field needs no value
+/// transformation and an ordered candidate plan is safe here, because
+/// deleting every possible source asserts the same absence.
 pub(crate) enum DeletePath {
     /// No path was supplied, or it was empty: preserve IMAS-Core's
     /// whole-DATAOBJECT delete handling.
     Forward,
     /// One concrete stored-DD spelling for IMAS-Core to remove.
     Translated(CString),
+    /// Every stored candidate that can satisfy the HLI path, in declared
+    /// precedence order.
+    Candidates(Vec<CString>),
     /// The supplied HLI-DD path cannot safely be removed through this seam.
     Refusal { reason: String, dd_path: String },
 }
@@ -300,8 +304,9 @@ pub(crate) fn resolve_read_path(record: &ConversionRecord, raw: *const c_char) -
     }
 }
 
-/// Resolves one write argument to the only stored-DD spelling this ticket can
-/// safely write: one path and no candidate plan. The resolved value
+/// Resolves one write argument to the stored-DD spelling the write policy may
+/// safely change, or to the ordered plan whose primary source it may change;
+/// non-primary HLI spellings refuse before this point. The resolved value
 /// transformation still points from stored data to the HLI (because maps
 /// serve reads); `run_write` inverts it before it copies caller data.
 pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) -> WritePath {
@@ -398,10 +403,10 @@ pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) 
     }
 }
 
-/// Resolves one delete path to the only stored-DD spelling this ticket can
-/// safely remove: one concrete path, with no ordered candidate plan. A
-/// delete does not carry data, so an otherwise-safe value transformation is
-/// irrelevant; it removes the resolved stored field directly.
+/// Resolves one delete path to the stored-DD spelling or candidate plan it
+/// can safely remove. A delete does not carry data, so an otherwise-safe
+/// value transformation is irrelevant; it removes each resolved stored field
+/// directly.
 pub(crate) fn resolve_delete_path(record: &ConversionRecord, raw: *const c_char) -> DeletePath {
     let Some(raw_path) = c_str_or_none(raw) else {
         return DeletePath::Forward;
@@ -462,11 +467,6 @@ pub(crate) fn resolve_delete_path(record: &ConversionRecord, raw: *const c_char)
             reason: "this path has no stored source".to_string(),
             dd_path: hli_absolute,
         },
-        Outcome::Path { candidates, .. } if !candidates.is_empty() => DeletePath::Refusal {
-            reason: "this path is served by several stored candidates, and this delete cannot remove them safely"
-                .to_string(),
-            dd_path: hli_absolute,
-        },
         Outcome::Path { .. } if !is_equilibrium_leaf(record, &hli_absolute) => {
             DeletePath::Refusal {
                 reason: "this delete path is a structure, and only leaf deletes are supported"
@@ -474,13 +474,24 @@ pub(crate) fn resolve_delete_path(record: &ConversionRecord, raw: *const c_char)
                 dd_path: hli_absolute,
             }
         }
-        Outcome::Path { resolved_path, .. } => match stored_c_path(record, &resolved_path, is_absolute) {
-            Ok(path) => DeletePath::Translated(path),
-            Err(reason) => DeletePath::Refusal {
+        Outcome::Path { candidates, .. } if !candidates.is_empty() => candidates
+            .into_iter()
+            .map(|candidate| stored_c_path(record, &candidate.path, is_absolute))
+            .collect::<Result<Vec<_>, _>>()
+            .map(DeletePath::Candidates)
+            .unwrap_or_else(|reason| DeletePath::Refusal {
                 reason,
                 dd_path: hli_absolute,
-            },
-        },
+            }),
+        Outcome::Path { resolved_path, .. } => {
+            match stored_c_path(record, &resolved_path, is_absolute) {
+                Ok(path) => DeletePath::Translated(path),
+                Err(reason) => DeletePath::Refusal {
+                    reason,
+                    dd_path: hli_absolute,
+                },
+            }
+        }
     }
 }
 

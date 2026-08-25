@@ -30,7 +30,7 @@
 //! single mechanical write after `run_read` returns — that ever writes to
 //! the loss log.
 
-use std::ffi::{CStr, c_int};
+use std::ffi::{CStr, CString, c_int};
 
 use crate::al_status_t;
 use crate::conversion::conversion_map::{Fidelity, ValueTransformation};
@@ -384,10 +384,12 @@ fn copy_value_transformation(
     }
 }
 
-/// The delete policy's complete answer. The adapter alone performs the one
-/// IMAS-Core call, so this layer remains free of raw pointers and state.
+/// The delete policy's complete answer. The adapter alone performs the
+/// IMAS-Core calls and probes, so this layer remains free of raw pointers and
+/// state.
 pub(crate) enum DeleteVerdict<'a> {
     Forward { path: Option<&'a CStr> },
+    FanOut { paths: &'a [CString] },
     Refusal { reason: String, dd_path: String },
 }
 
@@ -402,6 +404,7 @@ pub(crate) fn run_delete<'a>(argument: &'a DeleteArgument<'a>) -> DeleteVerdict<
         DeletePath::Translated(path) => DeleteVerdict::Forward {
             path: Some(path.as_c_str()),
         },
+        DeletePath::Candidates(paths) => DeleteVerdict::FanOut { paths },
         DeletePath::Refusal { reason, dd_path } => DeleteVerdict::Refusal {
             reason: reason.to_string(),
             dd_path: dd_path.to_string(),

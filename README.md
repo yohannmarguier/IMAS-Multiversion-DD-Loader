@@ -56,9 +56,10 @@ Read-path DD conversion is implemented for one IDS and one version pair.**
   or non-primary source refuses. A candidate-plan write reaches only
   precedence 1 and records every skipped candidate as potentially lossy (apart
   from ADR 0018's unset rank-zero scalar, which stores no value and earns no
-  loss);
-  candidate-plan delete behavior remains deferred. `al_list_filled_paths` and `al_bind_plugin`/`al_unbind_plugin` are
-  deliberately not translated.
+  loss), while a candidate-plan delete fans out over every stored source in
+  declared order — a write asserts one value, a delete asserts an absence
+  (ADR 0017). `al_list_filled_paths` and `al_bind_plugin`/`al_unbind_plugin`
+  are deliberately not translated.
 
 Read [Scope and limitations](#scope-and-limitations) before drawing
 conclusions from that list — several of the boundaries below are permanent
