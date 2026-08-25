@@ -458,8 +458,12 @@ add_stub_test(write-delete-write-reverse-identity-renamed-and-moved-fields-land-
     write_delete_conversion_test write-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
-add_write_delete_mismatched_test(write-delete-delete-refuses-under-known-mismatched-root-before-core-call
-    delete-refuses-under-known-mismatched-root-before-core-call)
+add_write_delete_mismatched_test(write-delete-delete-identity-renamed-and-moved-fields-land-at-stored-spelling
+    delete-identity-renamed-and-moved-fields-land-at-stored-spelling)
+add_stub_test(write-delete-delete-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling
+    write_delete_conversion_test delete-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
 add_write_delete_mismatched_test(write-delete-plugin-write-renamed-field-lands-at-stored-spelling
     plugin-write-renamed-field-lands-at-stored-spelling)
 add_write_delete_mismatched_test(write-delete-write-nested-child-context-resolves-relative-and-absolute-fields
@@ -468,8 +472,18 @@ add_write_delete_mismatched_test(write-delete-write-refuses-candidate-or-transfo
     write-refuses-candidate-or-transformation-on-either-argument)
 add_write_delete_mismatched_test(write-delete-write-refuses-dd-version-stamp-but-forwards-its-siblings
     write-refuses-dd-version-stamp-but-forwards-its-siblings)
-add_write_delete_mismatched_test(write-delete-delete-nested-child-context-refuses-through-mismatched-root
-    delete-nested-child-context-refuses-through-mismatched-root)
+add_write_delete_mismatched_test(write-delete-delete-nested-child-context-translates-relative-path
+    delete-nested-child-context-translates-relative-path)
+add_write_delete_mismatched_test(write-delete-delete-refuses-stamp-subtrees-before-core-call
+    delete-refuses-stamp-subtrees-before-core-call)
+add_write_delete_mismatched_test(write-delete-delete-empty-path-forwards-as-explicit-migration-route
+    delete-empty-path-forwards-as-explicit-migration-route)
+add_write_delete_mismatched_test(write-delete-delete-refuses-no-source-unservable-and-candidates
+    delete-refuses-no-source-unservable-and-candidates)
+add_stub_test(write-delete-delete-refuses-non-primary-source-before-core-call
+    write_delete_conversion_test delete-refuses-non-primary-source-before-core-call
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
 
 add_stub_test(write-delete-write-unstamped-context-forwards-unchanged
     write_delete_conversion_test write-unstamped-context-forwards-unchanged
