@@ -956,3 +956,16 @@ add_scoped_passthrough_test(
     bind-and-unbind-plugin-forward-field-path-unchanged)
 add_scoped_passthrough_test(scoped-passthrough-remaining-non-seam-exports-forward-unchanged
     remaining-non-seam-exports-forward-unchanged)
+
+# Issue #134: the same three path-bearing passthrough seams, asserted while a
+# WRITE_OP-opened occurrence is demonstrably converting a write rather than a
+# read. Same conversion setup and same seeded stored spelling — only the
+# operation proving the conversion is active differs.
+add_scoped_passthrough_test(scoped-passthrough-writing-get-occurrences-forwards-ids-name-unchanged
+    writing-get-occurrences-forwards-ids-name-unchanged)
+add_scoped_passthrough_test(
+    scoped-passthrough-writing-list-filled-paths-forwards-name-and-returns-stored-paths-unchanged
+    writing-list-filled-paths-forwards-name-and-returns-stored-paths-unchanged)
+add_scoped_passthrough_test(
+    scoped-passthrough-writing-bind-and-unbind-plugin-forward-field-path-unchanged
+    writing-bind-and-unbind-plugin-forward-field-path-unchanged)
