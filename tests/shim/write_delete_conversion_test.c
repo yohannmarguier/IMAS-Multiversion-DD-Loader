@@ -2,6 +2,7 @@
  * against the recording stub. */
 
 #include <dlfcn.h>
+#include <complex.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -158,6 +159,7 @@ static void scenario_write_refuses_candidate_on_either_argument(void) {
 
 static void scenario_write_cocos_sign_flip_uses_a_shim_owned_rank_seven_copy(void) {
     int operation_ctx = open_mismatched_equilibrium();
+    double scalar = 2.5;
     double values[128];
     int size[7] = {2, 2, 2, 2, 2, 2, 2};
     int writes_before = int_from_stub("recording_stub_write_call_count");
@@ -165,10 +167,19 @@ static void scenario_write_cocos_sign_flip_uses_a_shim_owned_rank_seven_copy(voi
         values[index] = (double)(index - 64);
     }
 
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time", &scalar,
+                        IMAS_DOUBLE_DATA, 0, NULL)
+              .code == 0);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 1);
+    CHECK(pointer_from_stub("recording_stub_write_data") != &scalar);
+    CHECK(int_from_stub("recording_stub_write_double_count") == 1);
+    CHECK(double_at_from_stub("recording_stub_write_double_at", 0) == -2.5);
+    CHECK(scalar == 2.5);
+
     CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time", values,
                         IMAS_DOUBLE_DATA, 7, size)
               .code == 0);
-    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 1);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 2);
     CHECK(pointer_from_stub("recording_stub_write_data") != values);
     CHECK(int_from_stub("recording_stub_write_double_count") == 128);
     for (int index = 0; index < 128; ++index) {
@@ -206,6 +217,8 @@ static void scenario_plugin_write_cocos_sign_flip_uses_a_shim_owned_copy(void) {
 static void scenario_write_cocos_sentinel_forwards_unchanged_without_loss(void) {
     int operation_ctx = open_mismatched_equilibrium();
     double unset = -9.0E40;
+    int unset_int = -999999999;
+    double complex unset_complex = -9.0E40 - 9.0E40 * I;
     int writes_before = int_from_stub("recording_stub_write_call_count");
 
     CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time", &unset,
@@ -216,6 +229,17 @@ static void scenario_write_cocos_sentinel_forwards_unchanged_without_loss(void) 
     CHECK(int_from_stub("recording_stub_write_double_count") == 1);
     CHECK(double_at_from_stub("recording_stub_write_double_at", 0) == -9.0E40);
     CHECK(unset == -9.0E40);
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time",
+                        &unset_int, IMAS_INTEGER_DATA, 0, NULL)
+              .code == 0);
+    CHECK(pointer_from_stub("recording_stub_write_data") == &unset_int);
+    CHECK(unset_int == -999999999);
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time",
+                        &unset_complex, IMAS_COMPLEX_DATA, 0, NULL)
+              .code == 0);
+    CHECK(pointer_from_stub("recording_stub_write_data") == &unset_complex);
+    CHECK(creal(unset_complex) == -9.0E40);
+    CHECK(cimag(unset_complex) == -9.0E40);
     int loss_count = -1;
     CHECK_OK(imas_mvdd_context_loss_count(operation_ctx, &loss_count));
     CHECK(loss_count == 0);

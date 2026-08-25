@@ -35,7 +35,7 @@ use crate::conversion::known_artifacts;
 use crate::conversion::path_conversion::{self, ContextPathResolution};
 use crate::conversion::read_outcome::{self, ReadOutcome};
 use crate::conversion::seam_policy;
-use crate::core::core_binding::{DOUBLE_DATA_ID, forward_status};
+use crate::core::core_binding::{COMPLEX_DATA_ID, DOUBLE_DATA_ID, INTEGER_DATA_ID, forward_status};
 use crate::registry::context_registry::{ConversionRecord, MapCacheKey, REGISTRY};
 use crate::version::version_stamp;
 
@@ -1204,6 +1204,9 @@ unsafe fn build_source_view<'a>(
     dim: c_int,
     size: *mut c_int,
 ) -> seam_policy::SourceView<'a> {
+    if unsafe { is_empty_scalar(data, datatype, dim) } {
+        return seam_policy::SourceView::UnsetScalar;
+    }
     if datatype != DOUBLE_DATA_ID {
         return seam_policy::SourceView::NotDouble;
     }
@@ -1235,6 +1238,32 @@ unsafe fn build_source_view<'a>(
             seam_policy::SourceView::Double(values)
         }
         Err(reason) => seam_policy::SourceView::InvalidShape(reason),
+    }
+}
+
+/// Whether a scalar is one of IMAS-Core's own unset sentinels. This mirrors
+/// the rank-zero half of `Lowlevel::data_has_non_zero_shape`: forwarding the
+/// original bytes preserves Core's silent skip instead of letting a COCOS
+/// flip fabricate a measurement (ADR 0018).
+///
+/// # Safety
+/// When non-null, `data` must point to the scalar representation declared by
+/// `datatype`. IMAS-Core's C ABI represents `COMPLEX_DATA` as consecutive
+/// real and imaginary `double` values, matching its `complex_t` HDF5 bridge.
+unsafe fn is_empty_scalar(data: *mut c_void, datatype: c_int, dim: c_int) -> bool {
+    const EMPTY_INT: c_int = -999_999_999;
+    const EMPTY_DOUBLE: f64 = -9e40;
+    if dim != 0 || data.is_null() {
+        return false;
+    }
+    match datatype {
+        INTEGER_DATA_ID => unsafe { *data.cast::<c_int>() == EMPTY_INT },
+        DOUBLE_DATA_ID => unsafe { *data.cast::<f64>() == EMPTY_DOUBLE },
+        COMPLEX_DATA_ID => {
+            let values = unsafe { std::slice::from_raw_parts(data.cast::<f64>(), 2) };
+            values == [EMPTY_DOUBLE, EMPTY_DOUBLE]
+        }
+        _ => false,
     }
 }
 

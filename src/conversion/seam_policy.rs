@@ -155,6 +155,10 @@ pub(crate) enum DataView<'a> {
 /// own vector and returns it in [`WriteVerdict`] (ADR 0018).
 pub(crate) enum SourceView<'a> {
     Double(&'a [f64]),
+    /// IMAS-Core's rank-zero empty sentinel, in any scalar datatype whose
+    /// shape gate understands one. It forwards unchanged before the declared
+    /// transformation's datatype gate (ADR 0018).
+    UnsetScalar,
     InvalidShape(&'static str),
     NotDouble,
 }
@@ -223,6 +227,13 @@ pub(crate) fn run_write<'a>(
         Ok(path) => path,
         Err(refusal) => return write_refusal(refusal),
     };
+    if matches!(source, SourceView::UnsetScalar) {
+        return WriteVerdict::Forward {
+            field: field.path,
+            timebase: timebase.path,
+            data: None,
+        };
+    }
     if timebase.value_transformation != ValueTransformation::None {
         return WriteVerdict::Refusal {
             reason: "this timebase needs a value transformation, which al_write_data cannot apply"
@@ -248,7 +259,7 @@ pub(crate) fn run_write<'a>(
             dd_path: field.dd_path.to_string(),
         };
     }
-    let data = match copy_value_transformation(&transformation, source, shape.rank) {
+    let data = match copy_value_transformation(&transformation, source) {
         Ok(data) => data,
         Err(reason) => {
             return WriteVerdict::Refusal {
@@ -299,19 +310,24 @@ fn write_argument_path<'a>(
 }
 
 /// Applies a write-side transformation to a copy the policy owns. Rank-zero
-/// `EMPTY_DOUBLE` is IMAS-Core's "unset" marker, so it intentionally returns
-/// `None`: forwarding that original scalar lets Core retain its silent-skip
-/// behaviour instead of turning it into a fabricated positive measurement.
+/// Scalar sentinels are returned before this function runs. A sentinel inside
+/// an array remains a value and therefore is transformed with its neighbours,
+/// matching the scope of IMAS-Core's own shape gate (ADR 0018).
 fn copy_value_transformation(
     transformation: &ValueTransformation,
     source: SourceView<'_>,
-    rank: c_int,
 ) -> Result<Option<Vec<f64>>, &'static str> {
     match transformation {
         ValueTransformation::None => Ok(None),
         ValueTransformation::SignFlip { .. } => match source {
-            SourceView::Double(values) if rank == 0 && values == [EMPTY_DOUBLE] => Ok(None),
             SourceView::Double(values) => Ok(Some(values.iter().map(|value| -*value).collect())),
+            SourceView::UnsetScalar => {
+                debug_assert!(
+                    false,
+                    "scalar sentinels must return before transformation validation"
+                );
+                Ok(None)
+            }
             SourceView::InvalidShape(reason) => Err(reason),
             SourceView::NotDouble => Err(
                 "value-transform execution requires DOUBLE_DATA and a rank no greater than MAXDIM",
@@ -1043,8 +1059,6 @@ mod tests {
             sign_flip_transformation(),
         );
         let timebase = plain_timebase();
-        let caller_values = [EMPTY_DOUBLE];
-
         let verdict = run_write(
             &field,
             &timebase,
@@ -1052,10 +1066,9 @@ mod tests {
                 datatype: BufferDataType::Double,
                 rank: 0,
             },
-            SourceView::Double(&caller_values),
+            SourceView::UnsetScalar,
         );
 
         assert!(matches!(verdict, WriteVerdict::Forward { data: None, .. }));
-        assert_eq!(caller_values, [EMPTY_DOUBLE]);
     }
 }
