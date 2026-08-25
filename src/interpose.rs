@@ -1414,9 +1414,11 @@ fn record_argument_loss(
 }
 
 /// The raw HLI argument joined onto `record`'s own anchor, or `None` if the
-/// argument itself is absent. Shared by `read_argument_path`, which falls
-/// back to the bare anchor for a display path, and `retain_read_fidelity`,
-/// which skips logging outright when there was no argument to join.
+/// argument itself is absent. Shared by its two callers, which want opposite
+/// things from that `None`: `read_argument_path` falls back to the bare anchor,
+/// because a loss entry always needs some path to name, while
+/// `contextual_refusal` prefers a non-empty anchor and otherwise says so
+/// explicitly rather than reporting a misleading one.
 fn joined_argument_path(
     record: &crate::registry::context_registry::ConversionRecord,
     raw_path: *const c_char,
