@@ -1052,12 +1052,16 @@ impl ConversionMap {
                         .pattern(),
                 ]
             }
-            (Rel::Merged, Direction::Reverse) => {
-                rule.froms.iter().map(|from| from.selector.pattern()).collect()
-            }
-            (Rel::Split, Direction::Forward) => {
-                rule.froms.iter().map(|from| from.selector.pattern()).collect()
-            }
+            (Rel::Merged, Direction::Reverse) => rule
+                .froms
+                .iter()
+                .map(|from| from.selector.pattern())
+                .collect(),
+            (Rel::Split, Direction::Forward) => rule
+                .froms
+                .iter()
+                .map(|from| from.selector.pattern())
+                .collect(),
             (Rel::Split, Direction::Reverse) => {
                 vec![
                     rule.left
