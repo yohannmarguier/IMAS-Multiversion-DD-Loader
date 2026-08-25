@@ -468,6 +468,16 @@ add_write_delete_mismatched_test(write-delete-write-refuses-candidate-or-transfo
     write-refuses-candidate-or-transformation-on-either-argument)
 add_write_delete_mismatched_test(write-delete-write-refuses-dd-version-stamp-but-forwards-its-siblings
     write-refuses-dd-version-stamp-but-forwards-its-siblings)
+add_write_delete_mismatched_test(write-delete-write-without-stored-slot-refuses-and-retains-a-write-loss
+    write-without-stored-slot-refuses-and-retains-a-write-loss)
+add_stub_test(write-delete-write-reverse-without-stored-slot-refuses-and-retains-a-write-loss
+    write_delete_conversion_test write-reverse-without-stored-slot-refuses-and-retains-a-write-loss
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+add_write_delete_mismatched_test(write-delete-write-retyped-path-refuses-and-retains-a-write-loss
+    write-retyped-path-refuses-and-retains-a-write-loss)
+add_write_delete_mismatched_test(write-delete-child-write-refusal-is-retained-on-its-root-with-a-complete-path
+    child-write-refusal-is-retained-on-its-root-with-a-complete-path)
 add_write_delete_mismatched_test(write-delete-delete-nested-child-context-refuses-through-mismatched-root
     delete-nested-child-context-refuses-through-mismatched-root)
 
