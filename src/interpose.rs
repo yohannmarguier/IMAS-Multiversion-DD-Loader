@@ -1482,13 +1482,6 @@ fn live_conversion_record(ctx_id: c_int) -> Option<ConversionRecord> {
     REGISTRY.lookup(ctx_id)
 }
 
-/// A short, stable refusal message for the delete seam, which still refuses
-/// wholesale on a live conversion record. The write seam resolves each path
-/// through its own policy instead.
-fn mismatched_context_mutation_refusal(function_name: &str) -> String {
-    format!("{function_name} refuses on a context with a known DD version mismatch")
-}
-
 /// Forwards to IMAS-Core's real `al_write_data`, resolving IMAS-Core
 /// lazily on first use. See [`write_data_impl`] for the shared policy this
 /// and [`plugin_write_data`] both carry out.
@@ -1605,10 +1598,12 @@ fn write_data_impl(
 /// Forwards to IMAS-Core's real `al_delete_data`, resolving IMAS-Core
 /// lazily on first use.
 ///
-/// Follows the same rule as [`write_data`]: a live conversion record on
-/// `ctx_id` refuses before IMAS-Core is called; otherwise this forwards
-/// unchanged. Unlike `write_data`, this seam takes no [`CallFamily`]
-/// parameter: `al_delete_data` has no plugin twin at all (issue #109 AC2).
+/// A live conversion record resolves a nonempty `path` to one safe stored-DD
+/// spelling. The empty path deliberately forwards unchanged: IMAS-Core reads
+/// it as an explicit whole-DATAOBJECT delete, leaving no foreign-version data
+/// behind for a later unstamped open to mistake for HLI-version data. Unlike
+/// [`write_data`], this seam takes no [`CallFamily`] parameter:
+/// `al_delete_data` has no plugin twin at all (issue #109 AC2).
 ///
 /// # Safety
 /// `path` must be a valid, NUL-terminated C string, or null where
@@ -1618,14 +1613,27 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
     if already_entered {
         return forward_status!(delete_data(ctx, path));
     }
-    if let Some(record) = live_conversion_record(ctx) {
-        return contextual_refusal(
-            &record,
-            &mismatched_context_mutation_refusal("al_delete_data"),
-            path,
-        );
+    let Some(record) = live_conversion_record(ctx) else {
+        return forward_status!(delete_data(ctx, path));
+    };
+
+    let argument = seam_policy::DeleteArgument {
+        resolution: path_conversion::resolve_delete_path(&record, path),
+        // SAFETY: this function's contract requires `path` to be a valid,
+        // NUL-terminated C string, or null.
+        forward: unsafe { c_str_ref(path) },
+    };
+    match seam_policy::run_delete(&argument) {
+        seam_policy::DeleteVerdict::Forward { path } => {
+            forward_status!(delete_data(
+                ctx,
+                path.map_or(std::ptr::null(), CStr::as_ptr)
+            ))
+        }
+        seam_policy::DeleteVerdict::Refusal { reason, dd_path } => {
+            context_path_refusal(&record, &reason, &dd_path)
+        }
     }
-    forward_status!(delete_data(ctx, path))
 }
 
 /// Forwards to IMAS-Core's real `al_iterate_over_arraystruct`, resolving
