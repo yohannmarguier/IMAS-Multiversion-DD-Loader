@@ -1213,11 +1213,7 @@ fn a_moved_rule_always_escapes_its_own_source_subtree() {
             </ids-map>
         "#;
     let map = ConversionMap::load(xml).expect("fixture artifact must load");
-    assert!(!map.subtree_delete_is_trivial(
-        "container/sub",
-        "container/sub",
-        Direction::Forward,
-    ));
+    assert!(!map.subtree_delete_is_trivial("container/sub", "container/sub", Direction::Forward,));
     assert!(!map.subtree_delete_is_trivial("container", "container", Direction::Forward));
     assert!(!map.subtree_delete_is_trivial("other", "other", Direction::Reverse));
 }
