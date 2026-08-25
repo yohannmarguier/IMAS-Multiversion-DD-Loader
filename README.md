@@ -53,8 +53,9 @@ Read-path DD conversion is implemented for one IDS and one version pair.**
   Deletes translate identity, renamed, and moved leaf paths
   to their stored spelling; deleting the whole DATAOBJECT is the explicit
   migration route, while a DD-version stamp, unsafe source, no-source path,
-  or candidate plan refuses. Candidate-plan write and delete behavior remains
-  deferred. `al_list_filled_paths` and `al_bind_plugin`/`al_unbind_plugin` are
+  or non-primary source refuses. A candidate-plan write reaches only
+  precedence 1 and records every skipped candidate as potentially lossy;
+  candidate-plan delete behavior remains deferred. `al_list_filled_paths` and `al_bind_plugin`/`al_unbind_plugin` are
   deliberately not translated.
 
 Read [Scope and limitations](#scope-and-limitations) before drawing
