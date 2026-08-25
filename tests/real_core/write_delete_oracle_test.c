@@ -79,6 +79,9 @@
 #define BETA_TOR_NORM_DATASET "/equilibrium/time_slice[]&global_quantities&beta_tor_norm"
 #define IP_DATASET "/equilibrium/time_slice[]&global_quantities&ip"
 #define PSI_AXIS_DATASET "/equilibrium/time_slice[]&global_quantities&psi_axis"
+#define Q_MIN_PSI_DATASET "/equilibrium/time_slice[]&global_quantities&q_min&psi"
+#define Q_MIN_VALUE_DATASET "/equilibrium/time_slice[]&global_quantities&q_min&value"
+#define TIME_SLICE_AOS_SHAPE_DATASET "/equilibrium/time_slice[]&AOS_SHAPE"
 #define PSI_MAGNETIC_AXIS_DATASET "/equilibrium/time_slice[]&global_quantities&psi_magnetic_axis"
 
 /* --- copied-fixture management (issue #132 harness, reproduced per-file --- */
@@ -184,6 +187,22 @@ static int read_double_slices_from_disk(const char *ids_file, const char *datase
     CHECK(H5Dclose(dataset) >= 0);
     CHECK(H5Fclose(file) >= 0);
     return (int)extent;
+}
+
+static double read_double_scalar_from_disk(const char *ids_file, const char *dataset_path) {
+    hid_t file = H5Fopen(ids_file, H5F_ACC_RDONLY, H5P_DEFAULT);
+    CHECK(file >= 0);
+    hid_t dataset = H5Dopen2(file, dataset_path, H5P_DEFAULT);
+    CHECK(dataset >= 0);
+    hid_t space = H5Dget_space(dataset);
+    CHECK(space >= 0);
+    CHECK(H5Sget_simple_extent_ndims(space) == 0);
+    double value = 0.0;
+    CHECK(H5Dread(dataset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &value) >= 0);
+    CHECK(H5Sclose(space) >= 0);
+    CHECK(H5Dclose(dataset) >= 0);
+    CHECK(H5Fclose(file) >= 0);
+    return value;
 }
 
 /* --- shim access to the copied fixture ----------------------------------- */
@@ -377,8 +396,19 @@ static void scenario_reverse_write_leaves_the_precedence_two_candidate_alone(voi
  * is `split-psi-axis`'s precedence-2 *source* when a 4.1.1 HLI writes into a
  * 3.39.0 store, and ADR 0016 decision 2 refuses every non-primary source
  * before IMAS-Core is called. The on-disk assertion is the one that matters:
- * a refusal must leave the stored counterpart exactly as it was, so the caller
- * cannot have half-written through a path the shim declined. */
+ * the refusal must leave the stored counterpart exactly as it was, so the
+ * caller cannot have half-written through a path the shim declined.
+ *
+ * It does *not* leave the occurrence untouched, and that is asserted here
+ * rather than glossed. The caller's own `al_begin_arraystruct_action(size=1)`
+ * widens `time_slice` to a third slice before any leaf write is attempted, and
+ * IMAS-Core commits that shape at end-action time whether or not a leaf value
+ * followed. So a refused write leaves an *empty appended slice* behind — every
+ * leaf dataset unchanged, the container one element longer. That is the on-disk
+ * form of the limitation this project already records in prose: a shim refusal
+ * on a write aborts the put where it stands, with no rollback, so what the HLI
+ * had already committed to the traversal stays committed. Reading it off the
+ * disk is the point of this file. */
 static void scenario_forward_write_through_a_non_primary_source_refuses(void) {
     copy_fixture_pair("3.39.0");
     CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
@@ -391,9 +421,12 @@ static void scenario_forward_write_through_a_non_primary_source_refuses(void) {
     int size = 1;
     int aos_ctx = -1;
     CHECK_OK(al_begin_arraystruct_action(op_ctx, "time_slice", "time", &size, &aos_ctx));
-    al_status_t status = al_write_data(aos_ctx, "global_quantities/psi_magnetic_axis", "time",
-                                       &sentinel, DOUBLE_DATA, 0, NULL);
+    const char *field = "global_quantities/psi_magnetic_axis";
+    al_status_t status =
+        al_write_data(aos_ctx, field, "time", &sentinel, DOUBLE_DATA, 0, NULL);
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path is a non-primary source and cannot write a shared stored slot",
+                          "time_slice/global_quantities/psi_magnetic_axis", "4.1.1", "3.39.0");
     CHECK(sentinel == 7.5);
     CHECK_OK(al_end_action(aos_ctx));
     CHECK_OK(al_end_action(op_ctx));
@@ -407,12 +440,66 @@ static void scenario_forward_write_through_a_non_primary_source_refuses(void) {
     CHECK(slices == FIXTURE_SLICES);
     CHECK(!dataset_exists_on_disk(equilibrium_file, PSI_MAGNETIC_AXIS_DATASET));
     check_stamp_still_reads("3.39.0");
+    /* The empty appended slice the refusal left behind. */
+    double aos_shape[FIXTURE_SLICE_CAPACITY];
+    CHECK(read_double_slices_from_disk(equilibrium_file, TIME_SLICE_AOS_SHAPE_DATASET, aos_shape,
+                                       FIXTURE_SLICE_CAPACITY) == 1);
+    CHECK(aos_shape[0] == (double)(FIXTURE_SLICES + 1));
 
     remove_fixture_pair();
     printf("write_delete_oracle_test forward-write-through-a-non-primary-source-refuses: the "
-           "4.1.1 psi_magnetic_axis write was refused before IMAS-Core and the 3.39.0 fixture's "
-           "psi_axis kept its original %d slices\n",
+           "4.1.1 psi_magnetic_axis write was refused before IMAS-Core, the 3.39.0 fixture's "
+           "psi_axis kept its original %d slices, and the refusal left one empty appended slice "
+           "behind\n",
            FIXTURE_SLICES);
+}
+
+/* The third refusal ADR 0016 names, and the last of the three issue #136's
+ * acceptance criteria asks for on a real write-mode context. `new-q-min-psi`
+ * declares `time_slice/global_quantities/q_min/psi` `right_only`: DD 4.1.1 has
+ * it and DD 3.39.0 has no slot for it at all, so decision 3 refuses the write
+ * rather than reporting success for data that went nowhere. The on-disk
+ * assertion is that the path really is absent afterwards — a refusal that
+ * quietly created the dataset would be worse than one that reported failure. */
+static void scenario_forward_write_with_no_stored_slot_refuses(void) {
+    copy_fixture_pair("3.39.0");
+    CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
+    int pulse_ctx = open_copied_fixture_pulse();
+
+    int op_ctx = -1;
+    CHECK_OK(al_begin_slice_action(pulse_ctx, "equilibrium", WRITE_OP, APPENDED_SLICE_TIME,
+                                   UNDEFINED_INTERP, &op_ctx));
+    int size = 1;
+    int aos_ctx = -1;
+    CHECK_OK(al_begin_arraystruct_action(op_ctx, "time_slice", "time", &size, &aos_ctx));
+
+    double sentinel = 7.5;
+    al_status_t status =
+        al_write_data(aos_ctx, "global_quantities/q_min/psi", "time", &sentinel, DOUBLE_DATA, 0,
+                      NULL);
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path has no stored source",
+                          "time_slice/global_quantities/q_min/psi", "4.1.1", "3.39.0");
+    CHECK(sentinel == 7.5);
+
+    CHECK_OK(al_end_action(aos_ctx));
+    CHECK_OK(al_end_action(op_ctx));
+    close_fixture_pulse(pulse_ctx);
+
+    char equilibrium_file[1024];
+    equilibrium_file_path(equilibrium_file, sizeof equilibrium_file);
+    CHECK(!dataset_exists_on_disk(equilibrium_file, Q_MIN_PSI_DATASET));
+    /* Its DD 3.39.0 siblings under the same structure are untouched, so the
+     * refusal was scoped to the path with no slot rather than to `q_min`. */
+    double siblings[FIXTURE_SLICE_CAPACITY];
+    CHECK(read_double_slices_from_disk(equilibrium_file, Q_MIN_VALUE_DATASET, siblings,
+                                       FIXTURE_SLICE_CAPACITY) == FIXTURE_SLICES);
+    check_stamp_still_reads("3.39.0");
+
+    remove_fixture_pair();
+    printf("write_delete_oracle_test forward-write-with-no-stored-slot-refuses: the 4.1.1 "
+           "q_min/psi write was refused before IMAS-Core and no such dataset exists in the "
+           "3.39.0 fixture\n");
 }
 
 /* --- claim 4's delete half: pinned as unreachable on this backend -------- */
@@ -459,7 +546,12 @@ static void scenario_reverse_delete_fan_out_does_not_reach_disk(void) {
 
     int op_ctx = -1;
     CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", WRITE_OP, &op_ctx));
-    CHECK_OK(al_delete_data(op_ctx, "time_slice/global_quantities/psi_axis"));
+    /* Deliberately not CHECK_OK: this success is the defect, not the contract.
+     * ADR 0016 decision 1 forbids returning `code == 0` for an operation the
+     * shim did not perform, and issue #138 is that. Asserting it explicitly
+     * keeps the scenario from reading as an endorsement. */
+    al_status_t deletion = al_delete_data(op_ctx, "time_slice/global_quantities/psi_axis");
+    CHECK(deletion.code == 0);
     CHECK_OK(al_end_action(op_ctx));
     close_fixture_pulse(pulse_ctx);
 
@@ -525,6 +617,63 @@ static void scenario_reverse_refused_write_leaves_stamp_untouched(void) {
            "3.39.0 stamp write left the 4.1.1 fixture's stamp exactly as it was\n");
 }
 
+/* --- the probe's cost on the workflow ADR 0016 leaves untouched ---------- */
+
+/* ADR 0020's probe fires on every write-mode open, including the one case it
+ * can never learn anything from: a brand-new occurrence, which has no stamp to
+ * read. That is the single most ordinary thing a writer does, so the claim that
+ * a failed probe is harmless is asserted rather than argued.
+ *
+ * The on-disk half is the part worth having. ADR 0007 presumes an unstamped
+ * occurrence matches the HLI, so a full `put` into a fresh one must reach disk
+ * spelled the HLI's own way and must not be translated. `rename-beta-normal`
+ * makes that observable: a 4.1.1 HLI's `beta_tor_norm` has to stay
+ * `beta_tor_norm`, and the 3.39.0 spelling must not appear. If the probe ever
+ * started registering a record for an occurrence it could not read, this is
+ * the scenario that would catch it. */
+static void scenario_fresh_occurrence_write_is_untranslated(void) {
+    char temp_dir[1024];
+    int temp_length = snprintf(temp_dir, sizeof temp_dir, "/tmp/imas-mvdd-fresh-occurrence-XXXXXX");
+    CHECK(temp_length > 0 && (size_t)temp_length < sizeof temp_dir);
+    CHECK(mkdtemp(temp_dir) != NULL);
+    CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
+
+    char uri[1024];
+    int uri_length = snprintf(uri, sizeof uri, "imas:hdf5?path=%s", temp_dir);
+    CHECK(uri_length > 0 && (size_t)uri_length < sizeof uri);
+    int pulse_ctx = -1;
+    CHECK_OK(al_begin_dataentry_action(uri, CREATE_PULSE, &pulse_ctx));
+
+    /* The probe's own READ_OP open of an occurrence that does not exist yet
+     * happens here, and must not make this open fail. */
+    int op_ctx = -1;
+    CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", WRITE_OP, &op_ctx));
+
+    double value = 7.5;
+    CHECK_OK(al_write_data(op_ctx, "time_slice/global_quantities/beta_tor_norm", "", &value,
+                           DOUBLE_DATA, 0, NULL));
+    CHECK_OK(al_end_action(op_ctx));
+    CHECK_OK(al_close_pulse(pulse_ctx, CLOSE_PULSE));
+
+    char equilibrium_file[1024];
+    int file_length = snprintf(equilibrium_file, sizeof equilibrium_file, "%s/equilibrium.h5",
+                               temp_dir);
+    CHECK(file_length > 0 && (size_t)file_length < sizeof equilibrium_file);
+    /* A `put` outside any arraystruct context writes the untensorized name, so
+     * these are the fresh-occurrence spellings rather than the `time_slice[]&`
+     * ones every other scenario in this file reads. */
+    CHECK(read_double_scalar_from_disk(
+              equilibrium_file, "/equilibrium/time_slice&global_quantities&beta_tor_norm") == 7.5);
+    CHECK(!dataset_exists_on_disk(equilibrium_file,
+                                  "/equilibrium/time_slice&global_quantities&beta_normal"));
+
+    remove_fixture_file(temp_dir, "equilibrium.h5");
+    remove_fixture_file(temp_dir, "master.h5");
+    CHECK(rmdir(temp_dir) == 0 || errno == ENOENT);
+    printf("write_delete_oracle_test fresh-occurrence-write-is-untranslated: a 4.1.1 put into a "
+           "brand-new occurrence survived the stamp probe and reached disk spelled its own way\n");
+}
+
 int main(int argc, char **argv) {
     static const shim_test_scenario scenarios[] = {
         {"forward-refused-write-leaves-stamp-untouched",
@@ -541,8 +690,12 @@ int main(int argc, char **argv) {
          scenario_reverse_write_leaves_the_precedence_two_candidate_alone},
         {"forward-write-through-a-non-primary-source-refuses",
          scenario_forward_write_through_a_non_primary_source_refuses},
+        {"forward-write-with-no-stored-slot-refuses",
+         scenario_forward_write_with_no_stored_slot_refuses},
         {"reverse-delete-fan-out-does-not-reach-disk",
          scenario_reverse_delete_fan_out_does_not_reach_disk},
+        {"fresh-occurrence-write-is-untranslated",
+         scenario_fresh_occurrence_write_is_untranslated},
     };
     return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

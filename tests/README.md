@@ -1,7 +1,7 @@
 # tests/ — what is covered, and where
 
-**216 ctest tests** (27 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
-stub-only profile registers 185). None of the C sources here is registered by
+**224 ctest tests** (29 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
+stub-only profile registers 191). None of the C sources here is registered by
 itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
 (ADR 0005) and the context registry (ADR 0003) are process-wide state that
@@ -9,7 +9,7 @@ settles once. A scenario name maps to `<executable> <scenario-argument>`.
 
 ```console
 $ ctest --test-dir build --output-on-failure    # everything
-$ ctest --test-dir build -L real-core           # the 27 real-IMAS-Core ones
+$ ctest --test-dir build -L real-core           # the 29 real-IMAS-Core ones
 $ ctest --test-dir build -R read-path           # one group
 $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 ```
@@ -20,7 +20,7 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 |---|---|
 | `support/` | `shim_test_support.h` — the one shared C harness: `CHECK`/`CHECK_OK`/`CHECK_REFUSAL_MESSAGE`, IMAS-Core's four data-type codes, `open_recording_stub` plus the `{string,int,double,double_at,pointer}_from_stub` accessors, `open_mismatched_occurrence`, and the `{name, function}` scenario table `RUN_NAMED_SCENARIO` dispatches `argv[1]` through. Include this instead of writing a prologue. |
 | `stub/` | `recording_stub.c` — a fake `libal` exporting the whole runtime-bound surface and recording what it received, including snapshots of write payloads whose shim-owned buffers are freed on return, so assertions are made on what crossed the boundary rather than inferred from a data round trip. ~23 `RECORDING_STUB_*` env knobs drive fixtures and failures (stamp version, not-found, sign-flip values, per-seam `*_FAIL` knobs, filled-paths CSV, reentrant reads and writes). |
-| `shim/` | 11 C suites driving the public ABI against that stub — 176 tests. |
+| `shim/` | 11 C suites driving the public ABI against that stub — 182 tests. |
 | `real_core/` | 4 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core and the checked-in equilibrium HDF5 fixture pair. |
 | `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 4 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
 | `cmake/` | `cmake -P` checks of the build/CI configuration itself, each with a guard-the-guard companion that proves it rejects what it claims. |
@@ -53,7 +53,7 @@ repeat / invalid / null; concurrent identical setters; the
 invalid environment value failing the first open; a setter refused after an
 unset first open has already latched.
 
-### `version-discovery-*` — 22 · `shim/version_discovery_test.c`
+### `version-discovery-*` — 28 · `shim/version_discovery_test.c`
 
 Stamp discovery and registration at `al_begin_{dataentry,global,slice,timerange}_action`
 (ADR 0002/0007/0009/0012, issues #53 and #55). Per seam: unstamped and matching
@@ -65,6 +65,18 @@ HLI version is a plain forward.
 > There is no C-level registry introspection, so "the mismatch was registered"
 > is proven the only way it is externally observable: a *second* open of the
 > same occurrence translates `datapath` before Core is called.
+
+Six scenarios cover ADR 0020 — *where* the stamp is read from. A `READ_OP` open
+reads it through the caller's own context and opens nothing; any other access
+mode reads it through a shim-owned read-mode context of the shim's own, because
+real IMAS-Core's HDF5 backend gives a write-mode context no reader. The probe is
+observed through the stub's plugin-call recorder, since ADR 0020 has it use
+IMAS-Core's plugin-free `al_plugin_*` primitive and no other scenario in this
+suite calls that family. `WRITE_OP`, `REPLACE_OP`, and all three
+occurrence-opening seams are covered; the two that pin what the probe *asks for*
+refuse it, because the stub's recorder resets its integer fields on every call,
+so the probe's own rwmode is only readable while its open is the last plugin
+call made.
 
 ### `read-path-*` — 39 · `shim/read_path_test.c`
 
@@ -191,7 +203,7 @@ an isolated temporary copy instead: it reads the copied DD-version stamp and a
 numeric dataset through raw HDF5, then re-proves a translated read against that
 copy, leaving the checked-in pair untouched.
 
-### `write-delete-oracle-*` — 9, `real-core` · `real_core/write_delete_oracle_test.c`
+### `write-delete-oracle-*` — 11, `real-core` · `real_core/write_delete_oracle_test.c`
 
 The on-disk oracle for the write and delete seams (issue #133): every
 scenario mutates its own private temp-directory copy of the equilibrium
@@ -217,6 +229,21 @@ stored version afterwards. `reverse-write-leaves-the-precedence-two-candidate-al
 proves ADR 0016 decision 4's fan-out answer, and
 `forward-write-through-a-non-primary-source-refuses` its decision 2, each with
 the on-disk assertion that nothing else moved.
+
+`forward-write-with-no-stored-slot-refuses` is the third refusal ADR 0016
+names, on a `right_only` path DD 3.39.0 has no slot for, and all three refusals
+assert the shim's exact message rather than only its code.
+
+Two of these scenarios exist because they contradict something that would
+otherwise be assumed. `forward-write-through-a-non-primary-source-refuses`
+asserts that a refused write leaves **one empty appended slice** behind: the
+caller's own `al_begin_arraystruct_action` widens `time_slice` before any leaf
+write is attempted, and IMAS-Core commits that shape whether or not a value
+followed — the on-disk form of "a refusal aborts the put where it stands, with
+no rollback". And `fresh-occurrence-write-is-untranslated` covers the one case
+ADR 0020's probe can never learn anything from, a brand-new occurrence with no
+stamp: the probe's own open fails, the caller's succeeds, and the value reaches
+disk spelled the HLI's own way, as ADR 0007 requires.
 
 Claim 4's other half — the precedence-2 candidate *removed* by a delete — is
 not observable on this backend, for two independent reasons (issues #138 and

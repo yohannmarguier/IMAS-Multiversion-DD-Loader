@@ -155,6 +155,45 @@ add_stub_test(version-discovery-mismatch-translates-datapath-on-second-open
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
 
+# ADR 0020: a write-mode open reads the stamp through a shim-owned read-mode
+# context of its own. The two scenarios that pin what the probe *asks for*
+# refuse it (RECORDING_STUB_PLUGIN_GLOBAL_FAIL), because the stub's plugin
+# recorder resets its integer fields on every call, so the probe's own rwmode
+# is only readable while its open is the last plugin call made.
+add_stub_test(version-discovery-write-mode-open-probes-through-the-plugin-family
+    version_discovery_test write-mode-open-probes-through-the-plugin-family
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
+add_stub_test(version-discovery-write-mode-probe-asks-for-a-read-context
+    version_discovery_test write-mode-probe-asks-for-a-read-context
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_PLUGIN_GLOBAL_FAIL=1")
+
+add_stub_test(version-discovery-write-mode-slice-open-probes-with-a-global-action
+    version_discovery_test write-mode-slice-open-probes-with-a-global-action
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_PLUGIN_GLOBAL_FAIL=1")
+
+add_stub_test(version-discovery-replace-mode-open-probes-too
+    version_discovery_test replace-mode-open-probes-too
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_PLUGIN_GLOBAL_FAIL=1")
+
+add_stub_test(version-discovery-write-mode-timerange-open-probes-with-a-global-action
+    version_discovery_test write-mode-timerange-open-probes-with-a-global-action
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_PLUGIN_GLOBAL_FAIL=1")
+
+add_stub_test(version-discovery-read-mode-open-does-not-probe
+    version_discovery_test read-mode-open-does-not-probe
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
 add_stub_test(version-discovery-unstamped-stamp-clears-an-earlier-mismatch
     version_discovery_test unstamped-stamp-clears-an-earlier-mismatch
     HLI_DD_VERSION 4.1.1)

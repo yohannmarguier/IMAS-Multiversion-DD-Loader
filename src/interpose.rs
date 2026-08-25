@@ -545,16 +545,9 @@ unsafe fn open_occurrence(
     let (Some(dataobjectname_str), Some(ids_name)) = (dataobjectname_str, ids_name) else {
         return OpenOccurrenceResult::Status(status);
     };
-    let decision =
-        seam_policy::decide_occurrence_registration(ids_name, &hli, || match probed_stamp {
-            Some(outcome) => outcome,
-            None => version_stamp::discover(
-                opened_octx_id,
-                |ctx_id, field, timebase, data, datatype, dim, size| unsafe {
-                    read_data_unconverted(ctx_id, field, timebase, data, datatype, dim, size)
-                },
-            ),
-        });
+    let decision = seam_policy::decide_occurrence_registration(ids_name, &hli, || {
+        probed_stamp.unwrap_or_else(|| discover_stamp(opened_octx_id))
+    });
     apply_discovery_decision(
         pctx_id,
         dataobjectname_str,
@@ -614,14 +607,29 @@ unsafe fn probe_stamp_through_a_read_context(
     if status.code != 0 {
         return version_stamp::StampOutcome::Unstamped;
     }
-    let outcome = version_stamp::discover(
-        probe_ctx_id,
-        |ctx_id, field, timebase, data, datatype, dim, size| unsafe {
-            read_data_unconverted(ctx_id, field, timebase, data, datatype, dim, size)
-        },
-    );
+    let outcome = discover_stamp(probe_ctx_id);
+    // A probe that will not close leaves one IMAS-Core context behind, and
+    // there is nothing better to do with that: the caller asked to open an
+    // occurrence, not to clean up after the shim's own bookkeeping, so failing
+    // their open over it would turn a leak into a denied open. ADR 0020
+    // records the trade.
     let _ = call_end(CallFamily::PLUGIN, probe_ctx_id);
     outcome
+}
+
+/// Reads and classifies the DD-version stamp through `ctx_id`, whether that is
+/// a context the caller opened or one the probe above opened for itself. The
+/// injected reader is the real `al_read_data` with none of the conversion
+/// policy an HLI-issued read carries (ADR 0014's closing section): this read
+/// is what *decides* whether conversion applies, so it cannot be subject to
+/// it.
+fn discover_stamp(ctx_id: c_int) -> version_stamp::StampOutcome {
+    version_stamp::discover(
+        ctx_id,
+        |ctx, field, timebase, data, datatype, dim, size| unsafe {
+            read_data_unconverted(ctx, field, timebase, data, datatype, dim, size)
+        },
+    )
 }
 
 /// Performs the process-global effects a discovery decision returned after a

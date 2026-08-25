@@ -26,11 +26,15 @@ There was no ABI call sequence that avoided it. A write through a `READ_OP` cont
 
    This is also why the probe takes no `CallFamily` parameter from its caller, and why `interpose::open_occurrence` did not have to grow one. The family the probe uses is a property of the probe, not of the seam that triggered it.
 
-4. **The probe is always a global action, whichever seam triggered it.** The stamp is a non-timed `STR_0D`; a slice or time-range context is the wrong shape to ask for it and would drag interpolation and time arguments into a question that has nothing to do with time. `al_begin_slice_action` and `al_begin_timerange_action` therefore trigger a *global* read-mode probe, exactly as `al_begin_global_action` does.
+4. **The probe is always a global action, whichever seam triggered it, and all three occurrence-opening seams trigger one.** The stamp is a non-timed `STR_0D`; a slice or time-range context is the wrong shape to ask for it and would drag interpolation and time arguments into a question that has nothing to do with time. `al_begin_slice_action` and `al_begin_timerange_action` therefore trigger a *global* read-mode probe, exactly as `al_begin_global_action` does.
+
+   Issue #136 names only the global and slice seams, because those are the two it was found through. `al_begin_timerange_action` is included anyway: all three share one adapter (`interpose::open_occurrence`), all three take an `rwmode`, and the defect is a property of the access mode rather than of the seam. Leaving time-range out would have meant a deliberate hole behind a shared function, which is harder to see than the fix.
 
 5. **Every probe failure is `StampOutcome::Unstamped`.** A probe whose open fails — a backend that refuses a read-mode open, an occurrence that does not exist yet, which is the ordinary case for a writer — says nothing about a stored DD version. ADR 0007 already presumes a match in exactly that situation, and this adds no new presumption: it only stops the *absence of a reader* from being mistaken for the absence of a stamp.
 
-6. **The caller's own context is no longer read for the stamp when a probe ran.** Under a non-`READ_OP` open the probe is the single source, rather than a fallback consulted after the caller's context has been asked. Asking twice would cost a read that cannot succeed on this backend and could only disagree with the probe by being wrong.
+6. **A probe that will not close is a leak, and the caller's open still succeeds.** `al_plugin_end_action`'s status is discarded. The caller asked to open an occurrence, not to clean up after the shim's own bookkeeping, so failing their open because the probe would not close turns one leaked IMAS-Core context into a denied open — and denies it for a reason the caller can neither see nor act on. Under a `put_slice` loop the leak is once per slice, which is the sharpest form of this cost and still the better side of the trade.
+
+7. **The caller's own context is no longer read for the stamp when a probe ran.** Under a non-`READ_OP` open the probe is the single source, rather than a fallback consulted after the caller's context has been asked. Asking twice would cost a read that cannot succeed on this backend and could only disagree with the probe by being wrong.
 
 ## What this does not change
 

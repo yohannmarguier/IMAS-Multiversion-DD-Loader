@@ -44,8 +44,10 @@ static al_status_t open_dataentry(int *dectxID) {
     return al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, dectxID);
 }
 
-/* READ_OP (30, al_const.h) — irrelevant to every scenario here beyond being
- * a plausible rwmode. */
+/* READ_OP (30, al_const.h). This used to be an arbitrary plausible rwmode;
+ * since ADR 0020 it decides where the stamp is read from, so every scenario
+ * using this helper discovers through the caller's own context. The
+ * `*_for_write` helpers further down are the other side of that. */
 static al_status_t open_global(const char *dataobjectname, const char *datapath, int *octxID) {
     return al_begin_global_action(1001, dataobjectname, datapath, 30, octxID);
 }
@@ -535,6 +537,191 @@ static void scenario_timerange_action_failure_forwards_status_unchanged(void) {
            "IMAS-Core's refusal without attempting discovery or registering a context\n");
 }
 
+/* --- ADR 0020: where a write-mode open reads the stamp from -------------- */
+
+/* WRITE_OP (31, al_const.h). Unlike the READ_OP above this one is load-bearing:
+ * it is what makes the stamp probe fire. */
+static al_status_t open_global_for_write(const char *dataobjectname, const char *datapath,
+                                        int *octxID) {
+    return al_begin_global_action(1001, dataobjectname, datapath, 31, octxID);
+}
+
+static al_status_t open_slice_for_write(const char *dataobjectname, int *octxID) {
+    return al_begin_slice_action(1001, dataobjectname, 31, 1.5, 0, octxID);
+}
+
+/* The stamp probe is invisible in the shim's *own* exports, so it is observed
+ * where it is externally observable: the recording stub's plugin-call
+ * recorder. IMAS-Core's `al_plugin_*` pair is the plugin-free primitive that
+ * ADR 0020 decision 3 has the probe use, and no scenario in this suite calls
+ * that family for any other reason, so a plugin call here is the probe. */
+static void scenario_write_mode_open_probes_through_the_plugin_family(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    const char *hli_path = "time_slice/global_quantities/beta_tor_norm";
+    const char *stored_path = "time_slice/global_quantities/beta_normal";
+
+    int octxID = -1;
+    CHECK(open_global_for_write("equilibrium", hli_path, &octxID).code == 0);
+
+    /* Exactly two plugin calls: the probe's own open and its own close. */
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == 2);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_last_symbol"), "al_plugin_end_action") ==
+          0);
+    /* Closed through the family it was opened with, on its own context id
+     * (the stub hands 5001 to every al_plugin_begin_global_action) and not on
+     * the caller's. */
+    CHECK(int_from_stub("recording_stub_plugin_last_ctx") == 5001);
+    CHECK(octxID != 5001);
+
+    /* The caller's own open is untouched by the probe: still WRITE_OP, still
+     * its own datapath on an occurrence's first use. */
+    CHECK(int_from_stub("recording_stub_global_rwmode") == 31);
+    CHECK(strcmp(string_from_stub("recording_stub_global_datapath"), hli_path) == 0);
+
+    /* And the probe's stamp read is what registered the mismatch: a second
+     * write-mode open of the same occurrence translates datapath, which is
+     * only possible if the first open's discovery cached it. */
+    int octxID2 = -1;
+    CHECK(open_global_for_write("equilibrium", hli_path, &octxID2).code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_global_datapath"), stored_path) == 0);
+
+    printf("version_discovery_test write-mode-open-probes-through-the-plugin-family: a WRITE_OP "
+           "open discovered the stamp through a shim-owned plugin-family context it opened and "
+           "closed itself\n");
+}
+
+/* What the probe asks IMAS-Core for, and what happens when it cannot have it.
+ * RECORDING_STUB_PLUGIN_GLOBAL_FAIL refuses the probe's own open, which both
+ * freezes the recorder on that call — `record_plugin_call` resets the ints, so
+ * the probe's rwmode is only readable while the open is the last plugin call —
+ * and drives ADR 0020 decision 5: a probe that cannot be opened is
+ * `StampOutcome::Unstamped`, never a failure of the caller's own open. */
+static void scenario_write_mode_probe_asks_for_a_read_context(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    const char *hli_path = "time_slice/global_quantities/beta_tor_norm";
+
+    int octxID = -1;
+    CHECK(open_global_for_write("equilibrium", hli_path, &octxID).code == 0);
+
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_last_symbol"),
+                 "al_plugin_begin_global_action") == 0);
+    /* READ_OP (30), whatever mode the caller used — that is the whole point. */
+    CHECK(int_from_stub("recording_stub_plugin_first_int") == 30);
+    /* Same occurrence, and no datapath: the probe asks only for the stamp. */
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"), "equilibrium") == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_second_string"), "") == 0);
+
+    /* A refused probe registers nothing, so a second open still forwards the
+     * caller's own datapath rather than translating it. */
+    int octxID2 = -1;
+    CHECK(open_global_for_write("equilibrium", hli_path, &octxID2).code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_global_datapath"), hli_path) == 0);
+
+    printf("version_discovery_test write-mode-probe-asks-for-a-read-context: the probe opened "
+           "READ_OP on the same occurrence with no datapath, and its refusal left the caller's "
+           "own open succeeding with nothing registered\n");
+}
+
+/* ADR 0020 decision 4: the stamp is a non-timed STR_0D, so a slice seam's
+ * probe is a *global* action too. Proven with the same fail knob, because a
+ * refused probe is the only state in which the recorder still holds the
+ * probe's own open rather than its close. */
+static void scenario_write_mode_slice_open_probes_with_a_global_action(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int octxID = -1;
+    CHECK(open_slice_for_write("equilibrium", &octxID).code == 0);
+
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_last_symbol"),
+                 "al_plugin_begin_global_action") == 0);
+    CHECK(int_from_stub("recording_stub_plugin_first_int") == 30);
+    /* The caller's own slice open still carries its own arguments. */
+    CHECK(int_from_stub("recording_stub_slice_rwmode") == 31);
+
+    printf("version_discovery_test write-mode-slice-open-probes-with-a-global-action: a WRITE_OP "
+           "slice open probed the stamp through a global action, not a slice one\n");
+}
+
+/* REPLACE_OP (32, al_const.h) is the mode decision 1's predicate exists for.
+ * IMAS-Core's headers accept it on all three occurrence-opening seams, and
+ * HDF5's own `beginAction` initializes neither a reader nor a writer for it, so
+ * a `rwmode == WRITE_OP` predicate would have left it silently unconverted.
+ * Nothing else in this project drives REPLACE_OP; this is its only coverage,
+ * and it is here because ADR 0011 asks a mechanism to be exercised rather
+ * than assumed. */
+static void scenario_replace_mode_open_probes_too(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    int octxID = -1;
+    CHECK(al_begin_global_action(1001, "equilibrium", "", 32, &octxID).code == 0);
+
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_last_symbol"),
+                 "al_plugin_begin_global_action") == 0);
+    CHECK(int_from_stub("recording_stub_plugin_first_int") == 30);
+    CHECK(int_from_stub("recording_stub_global_rwmode") == 32);
+
+    printf("version_discovery_test replace-mode-open-probes-too: a REPLACE_OP open probed the "
+           "stamp through a read-mode context, which a WRITE_OP-only predicate would not have "
+           "done\n");
+}
+
+/* The third occurrence-opening seam. Issue #136 names only global and slice,
+ * but all three share one adapter and one `rwmode`, so leaving time-range out
+ * would have been a hole behind a shared function (ADR 0020 decision 4). */
+static void scenario_write_mode_timerange_open_probes_with_a_global_action(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    double dtime_buffer = 0.0;
+    int dtime_shape = 0;
+    int octxID = -1;
+    CHECK(al_begin_timerange_action(1001, "equilibrium", 31, 1.0, 2.0, &dtime_buffer, &dtime_shape,
+                                     0, &octxID)
+              .code == 0);
+
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_last_symbol"),
+                 "al_plugin_begin_global_action") == 0);
+    CHECK(int_from_stub("recording_stub_plugin_first_int") == 30);
+    CHECK(int_from_stub("recording_stub_timerange_rwmode") == 31);
+
+    printf("version_discovery_test write-mode-timerange-open-probes-with-a-global-action: a "
+           "WRITE_OP time-range open probed the stamp through a global read-mode context\n");
+}
+
+/* The other half of decision 1, and what keeps this suite's other 21 scenarios
+ * meaning what they meant before ADR 0020: a READ_OP open probes nothing,
+ * because the context it was handed can already answer. */
+static void scenario_read_mode_open_does_not_probe(void) {
+    int dectxID = -1;
+    CHECK(open_dataentry(&dectxID).code == 0);
+
+    const char *hli_path = "time_slice/global_quantities/beta_tor_norm";
+    const char *stored_path = "time_slice/global_quantities/beta_normal";
+
+    int octxID = -1;
+    CHECK(open_global("equilibrium", hli_path, &octxID).code == 0);
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == 0);
+
+    /* Discovery still happened, through the caller's own context. */
+    int octxID2 = -1;
+    CHECK(open_global("equilibrium", hli_path, &octxID2).code == 0);
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_global_datapath"), stored_path) == 0);
+
+    printf("version_discovery_test read-mode-open-does-not-probe: a READ_OP open discovered the "
+           "stamp through its own context and opened no probe at all\n");
+}
+
 int main(int argc, char **argv) {
     static const shim_test_scenario scenarios[] = {
         {"dataentry-success-forwards-uri-and-mode", scenario_dataentry_success_forwards_uri_and_mode},
@@ -543,6 +730,16 @@ int main(int argc, char **argv) {
         {"unstamped-occurrence-forwards-datapath-unchanged", scenario_unstamped_occurrence_forwards_datapath_unchanged},
         {"matching-version-forwards-datapath-unchanged", scenario_matching_version_forwards_datapath_unchanged},
         {"mismatch-translates-datapath-on-second-open", scenario_mismatch_translates_datapath_on_second_open},
+        {"write-mode-open-probes-through-the-plugin-family",
+         scenario_write_mode_open_probes_through_the_plugin_family},
+        {"write-mode-probe-asks-for-a-read-context",
+         scenario_write_mode_probe_asks_for_a_read_context},
+        {"write-mode-slice-open-probes-with-a-global-action",
+         scenario_write_mode_slice_open_probes_with_a_global_action},
+        {"replace-mode-open-probes-too", scenario_replace_mode_open_probes_too},
+        {"write-mode-timerange-open-probes-with-a-global-action",
+         scenario_write_mode_timerange_open_probes_with_a_global_action},
+        {"read-mode-open-does-not-probe", scenario_read_mode_open_does_not_probe},
         {"unstamped-stamp-clears-an-earlier-mismatch", scenario_unstamped_stamp_clears_an_earlier_mismatch},
         {"failed-stamp-read-clears-an-earlier-mismatch", scenario_failed_stamp_read_clears_an_earlier_mismatch},
         {"malformed-stamp-refuses-and-ends-context", scenario_malformed_stamp_refuses_and_ends_context},

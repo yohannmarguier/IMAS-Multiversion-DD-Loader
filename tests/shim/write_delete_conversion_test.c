@@ -217,9 +217,16 @@ static void scenario_write_candidate_lands_at_primary_and_retains_unwritten_cand
     check_loss_at(operation_ctx, 1, "time_slice/profiles_2d/b_field_phi",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
 
-    /* The recording stub exposes the value accepted at the stored spelling so
-     * this public read proves the precedence-1 write closes the shim round
-     * trip. */
+    /* A CONSISTENCY CHECK, not a proof of what reached storage — issue #133's
+     * acceptance criteria ask for that label to be here, so nobody later reads
+     * this read as the on-disk claim it cannot make. The write flips
+     * HLI-to-stored and this read flips stored-to-HLI, so the caller's own
+     * value comes back whichever sign, spelling or fan-out actually landed;
+     * what it does prove is that the two directions agree. The on-disk claims
+     * are made natively, against real IMAS-Core, in
+     * tests/real_core/write_delete_oracle_test.c (ADR 0016's "Consequences").
+     * The recording stub exposes the value accepted at the stored spelling,
+     * which is what lets this read close the loop at all. */
     CHECK(al_read_data(operation_ctx, "time_slice/profiles_2d/b_field_phi", "time", &read_data,
                        IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
@@ -227,7 +234,7 @@ static void scenario_write_candidate_lands_at_primary_and_retains_unwritten_cand
     CHECK(*(double *)read_data == value);
 
     printf("write_delete_conversion_test write-candidate-lands-at-primary-and-retains-unwritten-candidates: "
-           "only precedence 1 was written, the other candidates were retained as potential write losses, and the round trip closed\n");
+           "only precedence 1 was written, the other candidates were retained as potential write losses, and the round trip is consistent (a consistency check, not an on-disk claim)\n");
 }
 
 static void scenario_write_non_primary_source_refuses_by_precedence(void) {

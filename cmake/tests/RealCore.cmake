@@ -285,4 +285,16 @@ add_test(NAME write-delete-oracle-reverse-delete-fan-out-does-not-reach-disk
 set_tests_properties(write-delete-oracle-reverse-delete-fan-out-does-not-reach-disk PROPERTIES
     LABELS real-core)
 
+add_test(NAME write-delete-oracle-forward-write-with-no-stored-slot-refuses
+    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+        $<TARGET_FILE:write_delete_oracle_test> forward-write-with-no-stored-slot-refuses)
+set_tests_properties(write-delete-oracle-forward-write-with-no-stored-slot-refuses PROPERTIES
+    LABELS real-core)
+
+add_test(NAME write-delete-oracle-fresh-occurrence-write-is-untranslated
+    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+        $<TARGET_FILE:write_delete_oracle_test> fresh-occurrence-write-is-untranslated)
+set_tests_properties(write-delete-oracle-fresh-occurrence-write-is-untranslated PROPERTIES
+    LABELS real-core)
+
 endif()
