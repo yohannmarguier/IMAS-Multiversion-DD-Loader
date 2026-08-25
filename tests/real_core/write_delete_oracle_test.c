@@ -9,61 +9,45 @@
  * byte-copy helpers; the stamp-reading helper below is private to this file,
  * the same boundary equilibrium_read_test.c already draws.
  *
- * Only one of the five claims in #133's "What to build" is provable against
- * this real IMAS-Core version, and the reason is a discovery this file's
- * development turned up rather than a design choice:
+ * Issue #136 is what made four of #133's five claims reachable at all. When
+ * this file was first written, a `WRITE_OP`-opened context never registered a
+ * conversion record against real IMAS-Core, because stored-DD-version
+ * discovery read the stamp through the caller's own context and real Core's
+ * HDF5 backend initializes the *reader's* per-IDS group only under `READ_OP`.
+ * ADR 0020 records the fix: discovery now probes the stamp through a
+ * shim-owned read-mode context of its own, opened and closed before the
+ * caller's own open, whenever the caller's access mode is not `READ_OP`.
+ * Every scenario below that translates anything is downstream of that, and
+ * `scenario_write_op_root_does_not_register_a_mismatch`, which pinned the gap,
+ * is gone because its assertions flipped.
  *
- *   IMAS-Core's HDF5 backend (`HDF5EventsHandler::beginAction`,
- *   `build/_deps/al-core-src/src/hdf5/hdf5_events_handler.cpp`) initializes
- *   the *reader's* per-IDS HDF5 group only when a context is opened
- *   `READ_OP`; a `WRITE_OP`-opened context (`al_begin_global_action` or
- *   `al_begin_slice_action`, `GLOBAL_OP` or `SLICE_OP` rangemode alike) only
- *   initializes the *writer's* group. Stored-DD-version discovery
- *   (`version_stamp::discover`, `src/version/version_stamp.rs`) reads the
- *   stamp through the *same* ctx_id a seam has just opened
- *   (`src/interpose.rs`'s `open_occurrence`), via an unconverted
- *   `al_read_data`. Through a `WRITE_OP`-opened context that read has no
- *   reader-side group to read from, so it comes back `size == 0` — not an
- *   error, just "not found" — and `version_stamp::discover` treats that
- *   exactly like a genuinely unstamped occurrence (`StampOutcome::Unstamped`,
- *   `ReadOutcome::NotFound` arm), so `decide_occurrence_registration`
- *   registers nothing. Every write or delete through that context is then a
- *   plain forward: no path translation, no refusal, no loss log — confirmed
- *   empirically (see the discovery scenario below) for both
- *   `al_begin_global_action(..., WRITE_OP, ...)` and
- *   `al_begin_slice_action(..., WRITE_OP, ...)`.
+ * Two constraints real IMAS-Core imposes on this file, neither of them the
+ * shim's doing, both established empirically:
  *
- *   The reverse also holds and closes off the obvious workaround: a write
- *   issued through a `READ_OP`-opened context (which *does* discover and
- *   register correctly, and does translate/refuse) fails with a real Core
- *   exception — `HDF5Backend: unexpected value for gid in
- *   HDF5Writer::write_ND_Data()` — because the *writer's* group was never
- *   initialized for a `READ_OP` context. Opening twice (`READ_OP` to
- *   discover, then `WRITE_OP` to write) does not help either:
- *   `decide_occurrence_registration`'s `StampOutcome::Unstamped` arm not only
- *   registers nothing for the new context, it actively forgets the
- *   occurrence cache (`OccurrenceCacheEffect::Forget`) the first open built.
+ *   - **Every successful write here is a `put_slice`.** A `WRITE_OP` *global*
+ *     action takes `HDF5Writer::write_ND_Data`'s non-slice branch, whose
+ *     `create()` is a bare `H5Dcreate2` with no existence check, so it fails
+ *     on every dataset the fixture already holds. The `SLICE_OP` branch checks
+ *     `H5Lexists` and opens instead. That is also exactly ADR 0016's declared
+ *     scope: the append or partial write into an existing, differently-stamped
+ *     occurrence.
+ *   - **The appended slice carries no `time` value.** Real IMAS-Core
+ *     segfaults inside `al_write_data(op_ctx, "time", ...)` through a
+ *     slice-mode operation context. It does so with matching DD versions and
+ *     with the shim doing nothing at all, so it is IMAS-Core's crash; every
+ *     claim below is about one leaf dataset's contents, which a slice without
+ *     its time coordinate still shows.
  *
- *   So on this real IMAS-Core version, there is no single ABI call sequence
- *   that both discovers a version mismatch on an existing occurrence *and*
- *   successfully writes to it — the write-path conversion policy ADR 0016
- *   specifies, and which `write_delete_conversion_test.c`'s stub suite
- *   thoroughly proves at the policy level, is unreachable from a real
- *   `WRITE_OP` caller. Issue #136 tracks this as its own defect, since fixing
- *   it is a shim change (`src/interpose.rs`'s discovery needs to probe the
- *   stamp some other way when the caller's own context cannot read it), not
- *   a test change, and is out of #133's scope.
+ * Of #133's five claims, four are proven below and one is not. Claim 4 has
+ * two halves — the precedence-2 candidate is left alone by a write and removed
+ * by a delete — and only the write half is observable on this backend. See
+ * `scenario_reverse_delete_fan_out_does_not_reach_disk` for the two
+ * independent reasons and for the marker that will fail when either is fixed.
  *
- *   Of the five claims, only the fifth is unaffected: "a refused write
- *   leaves no trace on disk" is decided entirely from registry state before
- *   any write reaches Core, so it needs a context real Core can actually
- *   register — `READ_OP` — not the `WRITE_OP` a literal reading of the claim
- *   might suggest. Claims 1-4 all require a *successful, translating* write
- *   or delete to actually reach Core, which is exactly what issue #136 must
- *   fix before those four can be attempted.
- *   `scenario_write_op_root_does_not_register_a_mismatch` below pins today's
- *   behavior as a regression marker: once #136 lands, this scenario's own
- *   assertions flip, which is the signal to replace it with claims 1-4. */
+ * Direction labels follow equilibrium_read_test.c's convention, which names
+ * the *fixture* under test rather than `conversion_map::Direction`: `forward`
+ * is the 3.39.0 fixture (read or written by a 4.1.1 HLI) and `reverse` is the
+ * 4.1.1 fixture (by a 3.39.0 HLI). */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,6 +62,24 @@
 #ifndef EQUILIBRIUM_FIXTURE_DIR
 #error "EQUILIBRIUM_FIXTURE_DIR must name the imas-python-fixtures/fixtures directory"
 #endif
+
+/* Both fixture pulses hold two equilibrium time slices — the same 2 that
+ * equilibrium_read_test.c asserts `al_begin_arraystruct_action` reports — so a
+ * successful append is observable as a third. */
+#define FIXTURE_SLICES 2
+#define FIXTURE_SLICE_CAPACITY 16
+
+/* Later than either fixture slice (TIME is 1.0 and 1.1), so an append is an
+ * append rather than a replace. */
+#define APPENDED_SLICE_TIME 3.0
+
+/* HDF5 dataset paths, in the backend's own tensorized `&`-separated spelling.
+ * Each names the *stored* side of one artifact rule this file exercises. */
+#define BETA_NORMAL_DATASET "/equilibrium/time_slice[]&global_quantities&beta_normal"
+#define BETA_TOR_NORM_DATASET "/equilibrium/time_slice[]&global_quantities&beta_tor_norm"
+#define IP_DATASET "/equilibrium/time_slice[]&global_quantities&ip"
+#define PSI_AXIS_DATASET "/equilibrium/time_slice[]&global_quantities&psi_axis"
+#define PSI_MAGNETIC_AXIS_DATASET "/equilibrium/time_slice[]&global_quantities&psi_magnetic_axis"
 
 /* --- copied-fixture management (issue #132 harness, reproduced per-file --- */
 /* --- the same way equilibrium_read_test.c's own copy already is)      --- */
@@ -156,6 +158,34 @@ static void read_dd_version_stamp_from_disk(const char *ids_file, char *version,
     CHECK(H5Fclose(file) >= 0);
 }
 
+static int dataset_exists_on_disk(const char *ids_file, const char *dataset_path) {
+    hid_t file = H5Fopen(ids_file, H5F_ACC_RDONLY, H5P_DEFAULT);
+    CHECK(file >= 0);
+    htri_t exists = H5Lexists(file, dataset_path, H5P_DEFAULT);
+    CHECK(exists >= 0);
+    CHECK(H5Fclose(file) >= 0);
+    return exists > 0;
+}
+
+static int read_double_slices_from_disk(const char *ids_file, const char *dataset_path,
+                                       double *values, int capacity) {
+    hid_t file = H5Fopen(ids_file, H5F_ACC_RDONLY, H5P_DEFAULT);
+    CHECK(file >= 0);
+    hid_t dataset = H5Dopen2(file, dataset_path, H5P_DEFAULT);
+    CHECK(dataset >= 0);
+    hid_t space = H5Dget_space(dataset);
+    CHECK(space >= 0);
+    CHECK(H5Sget_simple_extent_ndims(space) == 1);
+    hsize_t extent = 0;
+    CHECK(H5Sget_simple_extent_dims(space, &extent, NULL) == 1);
+    CHECK(extent <= (hsize_t)capacity);
+    CHECK(H5Dread(dataset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, values) >= 0);
+    CHECK(H5Sclose(space) >= 0);
+    CHECK(H5Dclose(dataset) >= 0);
+    CHECK(H5Fclose(file) >= 0);
+    return (int)extent;
+}
+
 /* --- shim access to the copied fixture ----------------------------------- */
 
 static int open_copied_fixture_pulse(void) {
@@ -171,17 +201,293 @@ static void close_fixture_pulse(int pulse_ctx) {
     CHECK_OK(al_close_pulse(pulse_ctx, CLOSE_PULSE));
 }
 
+/* --- the ABI sequence a put_slice performs ------------------------------- */
+
+/* Appends one DOUBLE_DATA scalar to a new time slice through a WRITE_OP slice
+ * action, which is the only write real IMAS-Core's HDF5 backend accepts into an
+ * occurrence that already holds data. A WRITE_OP *global* action would take
+ * HDF5Writer::write_ND_Data's non-slice branch, whose `create()` call is a bare
+ * H5Dcreate2 with no existence check, so it fails on every dataset the fixture
+ * already has; the SLICE_OP branch checks H5Lexists and opens instead. That is
+ * also exactly ADR 0016's scope — the append or partial write into an
+ * existing, differently-stamped occurrence.
+ *
+ * The slice's own `time` value is deliberately not written. Real IMAS-Core
+ * segfaults on al_write_data(op_ctx, "time", ...) through a slice-mode
+ * operation context, before and after the shim's own translation and with
+ * matching DD versions too, so it is IMAS-Core's crash rather than the shim's
+ * and there is nothing here that can avoid it. Every claim below is about one
+ * leaf dataset's own contents, so a slice without its time coordinate is
+ * enough to make it. */
+static al_status_t append_slice_scalar(int pulse_ctx, const char *field, double value) {
+    int op_ctx = -1;
+    CHECK_OK(al_begin_slice_action(pulse_ctx, "equilibrium", WRITE_OP, APPENDED_SLICE_TIME,
+                                   UNDEFINED_INTERP, &op_ctx));
+
+    int size = 1;
+    int aos_ctx = -1;
+    CHECK_OK(al_begin_arraystruct_action(op_ctx, "time_slice", "time", &size, &aos_ctx));
+
+    al_status_t status = al_write_data(aos_ctx, field, "time", &value, DOUBLE_DATA, 0, NULL);
+
+    CHECK_OK(al_end_action(aos_ctx));
+    CHECK_OK(al_end_action(op_ctx));
+    return status;
+}
+
+/* claim 3, asserted after every successful translating write rather than once
+ * on its own: a put_slice must leave the DD-version stamp reading the *stored*
+ * version. ADR 0016 decision 5 makes the stamp immutable under a mismatch, and
+ * the Fortran generator never writes it in slice mode at all, so this is the
+ * on-disk half of both facts. */
+static void check_stamp_still_reads(const char *fixture_version) {
+    char equilibrium_file[1024];
+    equilibrium_file_path(equilibrium_file, sizeof equilibrium_file);
+    char stamp[64];
+    read_dd_version_stamp_from_disk(equilibrium_file, stamp, sizeof stamp);
+    CHECK(strcmp(stamp, fixture_version) == 0);
+}
+
+/* --- claims 1 and 3: the stored spelling holds the value ----------------- */
+
+/* `rename-beta-normal`: 3.39.0's time_slice/global_quantities/beta_normal is
+ * 4.1.1's .../beta_tor_norm, fidelity exact both ways and no value
+ * transformation. Writing through the HLI's own spelling must extend the
+ * *stored* dataset and must not create the HLI's spelling beside it — which is
+ * the half no shim round trip can see, because a later read translates back. */
+static void check_write_lands_on_the_stored_spelling(const char *hli_version,
+                                                     const char *fixture_version,
+                                                     const char *hli_field,
+                                                     const char *stored_dataset,
+                                                     const char *hli_dataset) {
+    copy_fixture_pair(fixture_version);
+    CHECK_OK(imas_mvdd_set_hli_dd_version(hli_version));
+    int pulse_ctx = open_copied_fixture_pulse();
+    CHECK_OK(append_slice_scalar(pulse_ctx, hli_field, 7.5));
+    close_fixture_pulse(pulse_ctx);
+
+    char equilibrium_file[1024];
+    equilibrium_file_path(equilibrium_file, sizeof equilibrium_file);
+    double stored[FIXTURE_SLICE_CAPACITY];
+    int slices = read_double_slices_from_disk(equilibrium_file, stored_dataset, stored,
+                                             FIXTURE_SLICE_CAPACITY);
+    CHECK(slices == FIXTURE_SLICES + 1);
+    CHECK(stored[FIXTURE_SLICES] == 7.5);
+    CHECK(!dataset_exists_on_disk(equilibrium_file, hli_dataset));
+    check_stamp_still_reads(fixture_version);
+
+    remove_fixture_pair();
+}
+
+static void scenario_forward_write_lands_on_the_stored_spelling(void) {
+    check_write_lands_on_the_stored_spelling(
+        "4.1.1", "3.39.0", "global_quantities/beta_tor_norm", BETA_NORMAL_DATASET,
+        BETA_TOR_NORM_DATASET);
+    printf("write_delete_oracle_test forward-write-lands-on-the-stored-spelling: a 4.1.1 write of "
+           "beta_tor_norm reached the 3.39.0 fixture's beta_normal, and beta_tor_norm was never "
+           "created\n");
+}
+
+static void scenario_reverse_write_lands_on_the_stored_spelling(void) {
+    check_write_lands_on_the_stored_spelling("3.39.0", "4.1.1", "global_quantities/beta_normal",
+                                             BETA_TOR_NORM_DATASET, BETA_NORMAL_DATASET);
+    printf("write_delete_oracle_test reverse-write-lands-on-the-stored-spelling: a 3.39.0 write of "
+           "beta_normal reached the 4.1.1 fixture's beta_tor_norm, and beta_normal was never "
+           "created\n");
+}
+
+/* --- claims 2 and 3: the sign on disk is the stored convention ----------- */
+
+/* time_slice/global_quantities/ip spells identically in both DD versions and
+ * carries the COCOS 11-to-17 sign flip. The path therefore proves nothing; the
+ * value is the whole claim, and it is only visible off the disk. */
+static void check_write_flips_the_sign_on_disk(const char *hli_version,
+                                              const char *fixture_version) {
+    copy_fixture_pair(fixture_version);
+    CHECK_OK(imas_mvdd_set_hli_dd_version(hli_version));
+    int pulse_ctx = open_copied_fixture_pulse();
+    CHECK_OK(append_slice_scalar(pulse_ctx, "global_quantities/ip", 7.5));
+    close_fixture_pulse(pulse_ctx);
+
+    char equilibrium_file[1024];
+    equilibrium_file_path(equilibrium_file, sizeof equilibrium_file);
+    double stored[FIXTURE_SLICE_CAPACITY];
+    int slices =
+        read_double_slices_from_disk(equilibrium_file, IP_DATASET, stored, FIXTURE_SLICE_CAPACITY);
+    CHECK(slices == FIXTURE_SLICES + 1);
+    CHECK(stored[FIXTURE_SLICES] == -7.5);
+    check_stamp_still_reads(fixture_version);
+
+    remove_fixture_pair();
+}
+
+static void scenario_forward_write_flips_the_sign_on_disk(void) {
+    check_write_flips_the_sign_on_disk("4.1.1", "3.39.0");
+    printf("write_delete_oracle_test forward-write-flips-the-sign-on-disk: a 4.1.1 write of "
+           "ip=7.5 reached the 3.39.0 fixture as -7.5\n");
+}
+
+static void scenario_reverse_write_flips_the_sign_on_disk(void) {
+    check_write_flips_the_sign_on_disk("3.39.0", "4.1.1");
+    printf("write_delete_oracle_test reverse-write-flips-the-sign-on-disk: a 3.39.0 write of "
+           "ip=7.5 reached the 4.1.1 fixture as -7.5\n");
+}
+
+/* --- claim 4: the precedence-2 candidate is left as it was --------------- */
+
+/* `split-psi-axis` folds 3.39.0's one time_slice/global_quantities/psi_axis
+ * onto two 4.1.1 paths: psi_axis at precedence 1 and psi_magnetic_axis at
+ * precedence 2. ADR 0016 decision 4 writes only the precedence-1 slot, so the
+ * new slice must appear in psi_axis and must *not* appear in
+ * psi_magnetic_axis, which keeps exactly the slices it already had. Both take
+ * the sign flip, so the written value proves the transformation reached the
+ * candidate that was chosen. This claim exists only in the reverse direction:
+ * the fan-out is on the artifact's right-hand (4.1.1) side, so only a 3.39.0
+ * HLI writing into a 4.1.1 store has more than one stored slot to choose
+ * between. */
+static void scenario_reverse_write_leaves_the_precedence_two_candidate_alone(void) {
+    copy_fixture_pair("4.1.1");
+    CHECK_OK(imas_mvdd_set_hli_dd_version("3.39.0"));
+    int pulse_ctx = open_copied_fixture_pulse();
+    CHECK_OK(append_slice_scalar(pulse_ctx, "global_quantities/psi_axis", 7.5));
+    close_fixture_pulse(pulse_ctx);
+
+    char equilibrium_file[1024];
+    equilibrium_file_path(equilibrium_file, sizeof equilibrium_file);
+    double primary[FIXTURE_SLICE_CAPACITY];
+    int primary_slices = read_double_slices_from_disk(equilibrium_file, PSI_AXIS_DATASET, primary,
+                                                     FIXTURE_SLICE_CAPACITY);
+    CHECK(primary_slices == FIXTURE_SLICES + 1);
+    CHECK(primary[FIXTURE_SLICES] == -7.5);
+
+    double secondary[FIXTURE_SLICE_CAPACITY];
+    int secondary_slices = read_double_slices_from_disk(
+        equilibrium_file, PSI_MAGNETIC_AXIS_DATASET, secondary, FIXTURE_SLICE_CAPACITY);
+    CHECK(secondary_slices == FIXTURE_SLICES);
+    check_stamp_still_reads("4.1.1");
+
+    remove_fixture_pair();
+    printf("write_delete_oracle_test reverse-write-leaves-the-precedence-two-candidate-alone: the "
+           "3.39.0 psi_axis write extended the 4.1.1 fixture's psi_axis to -7.5 and left "
+           "psi_magnetic_axis at its original %d slices\n",
+           FIXTURE_SLICES);
+}
+
+/* The forward direction's counterpart to the claim above. `psi_magnetic_axis`
+ * is `split-psi-axis`'s precedence-2 *source* when a 4.1.1 HLI writes into a
+ * 3.39.0 store, and ADR 0016 decision 2 refuses every non-primary source
+ * before IMAS-Core is called. The on-disk assertion is the one that matters:
+ * a refusal must leave the stored counterpart exactly as it was, so the caller
+ * cannot have half-written through a path the shim declined. */
+static void scenario_forward_write_through_a_non_primary_source_refuses(void) {
+    copy_fixture_pair("3.39.0");
+    CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
+    int pulse_ctx = open_copied_fixture_pulse();
+
+    double sentinel = 7.5;
+    int op_ctx = -1;
+    CHECK_OK(al_begin_slice_action(pulse_ctx, "equilibrium", WRITE_OP, APPENDED_SLICE_TIME,
+                                   UNDEFINED_INTERP, &op_ctx));
+    int size = 1;
+    int aos_ctx = -1;
+    CHECK_OK(al_begin_arraystruct_action(op_ctx, "time_slice", "time", &size, &aos_ctx));
+    al_status_t status = al_write_data(aos_ctx, "global_quantities/psi_magnetic_axis", "time",
+                                       &sentinel, DOUBLE_DATA, 0, NULL);
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(sentinel == 7.5);
+    CHECK_OK(al_end_action(aos_ctx));
+    CHECK_OK(al_end_action(op_ctx));
+    close_fixture_pulse(pulse_ctx);
+
+    char equilibrium_file[1024];
+    equilibrium_file_path(equilibrium_file, sizeof equilibrium_file);
+    double stored[FIXTURE_SLICE_CAPACITY];
+    int slices = read_double_slices_from_disk(equilibrium_file, PSI_AXIS_DATASET, stored,
+                                             FIXTURE_SLICE_CAPACITY);
+    CHECK(slices == FIXTURE_SLICES);
+    CHECK(!dataset_exists_on_disk(equilibrium_file, PSI_MAGNETIC_AXIS_DATASET));
+    check_stamp_still_reads("3.39.0");
+
+    remove_fixture_pair();
+    printf("write_delete_oracle_test forward-write-through-a-non-primary-source-refuses: the "
+           "4.1.1 psi_magnetic_axis write was refused before IMAS-Core and the 3.39.0 fixture's "
+           "psi_axis kept its original %d slices\n",
+           FIXTURE_SLICES);
+}
+
+/* --- claim 4's delete half: pinned as unreachable on this backend -------- */
+
+/* ADR 0017's delete fan-out removes *every* candidate a multi-source HLI path
+ * resolves to, which is the opposite answer to decision 4's write. It is not
+ * observable on disk against this real IMAS-Core version, for two independent
+ * reasons found while writing this file, and both are pinned here rather than
+ * asserted away:
+ *
+ *   1. `HDF5Writer::deleteData` ignores its `path` argument entirely (issue
+ *      #139). It
+ *      deletes the IDS occurrence's whole pulse file and its link in the
+ *      master file — there is no per-path delete on the HDF5 backend at all,
+ *      so "the precedence-2 candidate was removed" has nothing to observe. It
+ *      is `datapath`-on-`al_begin_global_action` all over again: an argument
+ *      the ABI carries and this backend drops.
+ *   2. The fan-out probes each candidate with an `al_read_data` through the
+ *      caller's *own* context (`delete_candidates`, `src/interpose.rs`, issue
+ *      #138). Under
+ *      a `WRITE_OP` open that read finds nothing — the same reader-group gap
+ *      issue #136 fixed for stamp discovery, still present for this probe — so
+ *      every candidate is classified not-found, no delete is forwarded at all,
+ *      and the fan-out reports success having done nothing.
+ *
+ * So this scenario asserts what actually happens today: a fan-out delete
+ * through a WRITE_OP context succeeds and leaves the disk untouched. If either
+ * cause above is fixed, this scenario starts failing, which is the signal to
+ * replace it with the real on-disk claim.
+ *
+ * That "untouched" is not the same as "no delete happened at all", and the
+ * difference is worth the assertion. Take the conversion record away -- run
+ * this scenario against a shim without ADR 0020's probe -- and the delete is
+ * forwarded verbatim instead, at which point cause 1 destroys the *entire*
+ * equilibrium occurrence: equilibrium.h5 is gone and this scenario fails on
+ * `H5Fopen`. So the fan-out is what is currently keeping a converted delete
+ * from taking the whole IDS with it, by never reaching Core. Reporting
+ * `code == 0` for that is still a defect -- ADR 0016 decision 1 forbids
+ * exactly it -- but it is a different defect from the one it is hiding. */
+static void scenario_reverse_delete_fan_out_does_not_reach_disk(void) {
+    copy_fixture_pair("4.1.1");
+    CHECK_OK(imas_mvdd_set_hli_dd_version("3.39.0"));
+    int pulse_ctx = open_copied_fixture_pulse();
+
+    int op_ctx = -1;
+    CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", WRITE_OP, &op_ctx));
+    CHECK_OK(al_delete_data(op_ctx, "time_slice/global_quantities/psi_axis"));
+    CHECK_OK(al_end_action(op_ctx));
+    close_fixture_pulse(pulse_ctx);
+
+    char equilibrium_file[1024];
+    equilibrium_file_path(equilibrium_file, sizeof equilibrium_file);
+    double primary[FIXTURE_SLICE_CAPACITY];
+    CHECK(read_double_slices_from_disk(equilibrium_file, PSI_AXIS_DATASET, primary,
+                                       FIXTURE_SLICE_CAPACITY) == FIXTURE_SLICES);
+    double secondary[FIXTURE_SLICE_CAPACITY];
+    CHECK(read_double_slices_from_disk(equilibrium_file, PSI_MAGNETIC_AXIS_DATASET, secondary,
+                                       FIXTURE_SLICE_CAPACITY) == FIXTURE_SLICES);
+    check_stamp_still_reads("4.1.1");
+
+    remove_fixture_pair();
+    printf("write_delete_oracle_test reverse-delete-fan-out-does-not-reach-disk: pinned known gap "
+           "— the fan-out reported success and neither split candidate changed on disk\n");
+}
+
 /* --- claim 5: a refused write leaves no trace on disk -------------------- */
 
-/* Opens READ_OP, not WRITE_OP. See the file header: this real IMAS-Core
- * version's HDF5 backend only initializes the reader's per-IDS group under
- * READ_OP, and stamp discovery's internal read silently reports "not found"
- * through a WRITE_OP-opened context — so a WRITE_OP open of this same
- * mismatched occurrence never registers a conversion record at all, and the
- * refusal this claim is about never fires. The refusal itself needs no Core
- * access — it is decided entirely from registry state before any write
- * reaches Core — so proving it needs only a context real Core can actually
- * register, which READ_OP is. */
+/* This scenario carries two claims at once, and the `WRITE_OP` open is what
+ * makes the second one possible. ADR 0016 decision 5 refuses any write to the
+ * DD-version stamp under a mismatch, before IMAS-Core is called, and that
+ * refusal can only fire if the open registered a conversion record — which,
+ * before ADR 0020, a `WRITE_OP` open never did on real Core. So the refusal
+ * firing here *is* the proof that a write-mode global open now discovers and
+ * registers the mismatch (issue #136), and the untouched stamp on disk is
+ * #133's claim 5. */
 static void check_refused_write_leaves_stamp_untouched(const char *hli_version,
                                                         const char *fixture_version) {
     copy_fixture_pair(fixture_version);
@@ -189,7 +495,7 @@ static void check_refused_write_leaves_stamp_untouched(const char *hli_version,
     int pulse_ctx = open_copied_fixture_pulse();
 
     int op_ctx = -1;
-    CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
+    CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", WRITE_OP, &op_ctx));
 
     const char *field = "ids_properties/version_put/data_dictionary";
     double sentinel = 42.0;
@@ -202,11 +508,7 @@ static void check_refused_write_leaves_stamp_untouched(const char *hli_version,
     CHECK_OK(al_end_action(op_ctx));
     close_fixture_pulse(pulse_ctx);
 
-    char equilibrium_file[1024];
-    equilibrium_file_path(equilibrium_file, sizeof equilibrium_file);
-    char stamp[64];
-    read_dd_version_stamp_from_disk(equilibrium_file, stamp, sizeof stamp);
-    CHECK(strcmp(stamp, fixture_version) == 0);
+    check_stamp_still_reads(fixture_version);
 
     remove_fixture_pair();
 }
@@ -223,48 +525,24 @@ static void scenario_reverse_refused_write_leaves_stamp_untouched(void) {
            "3.39.0 stamp write left the 4.1.1 fixture's stamp exactly as it was\n");
 }
 
-/* --- regression marker for the discovery in this file's header --------- */
-
-/* Pins today's real-Core behavior: a WRITE_OP-opened, genuinely mismatched
- * occurrence registers no conversion record, so the very refusal claim 5
- * proves under READ_OP does *not* fire under WRITE_OP — the write instead
- * reaches Core forwarding the HLI's own untranslated path, which then fails
- * with a real backend error because the stamp dataset already exists
- * (`HDF5DataSetHandler::create` calls a bare `H5Dcreate2` with no existence
- * check). If issue #136 fixes discovery under WRITE_OP, this scenario starts
- * failing — which is the signal to delete it and implement claims 1-4. */
-static void scenario_write_op_root_does_not_register_a_mismatch(void) {
-    copy_fixture_pair("3.39.0");
-    CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
-    int pulse_ctx = open_copied_fixture_pulse();
-
-    int op_ctx = -1;
-    CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", WRITE_OP, &op_ctx));
-
-    double sentinel = 42.0;
-    al_status_t status = al_write_data(
-        op_ctx, "ids_properties/version_put/data_dictionary", "", &sentinel, DOUBLE_DATA, 0, NULL);
-
-    /* Today: the shim's own refusal (IMAS_MVDD_CONVERSION_ERROR) never fires;
-     * Core's own backend exception surfaces instead. */
-    CHECK(status.code != IMAS_MVDD_CONVERSION_ERROR);
-    CHECK(status.code != 0);
-
-    CHECK_OK(al_end_action(op_ctx));
-    close_fixture_pulse(pulse_ctx);
-    printf("write_delete_oracle_test write-op-root-does-not-register-a-mismatch: pinned known "
-           "gap (issue #136) — a WRITE_OP-opened mismatched occurrence still forwards "
-           "unconverted on real Core\n");
-}
-
 int main(int argc, char **argv) {
     static const shim_test_scenario scenarios[] = {
         {"forward-refused-write-leaves-stamp-untouched",
          scenario_forward_refused_write_leaves_stamp_untouched},
         {"reverse-refused-write-leaves-stamp-untouched",
          scenario_reverse_refused_write_leaves_stamp_untouched},
-        {"write-op-root-does-not-register-a-mismatch",
-         scenario_write_op_root_does_not_register_a_mismatch},
+        {"forward-write-lands-on-the-stored-spelling",
+         scenario_forward_write_lands_on_the_stored_spelling},
+        {"reverse-write-lands-on-the-stored-spelling",
+         scenario_reverse_write_lands_on_the_stored_spelling},
+        {"forward-write-flips-the-sign-on-disk", scenario_forward_write_flips_the_sign_on_disk},
+        {"reverse-write-flips-the-sign-on-disk", scenario_reverse_write_flips_the_sign_on_disk},
+        {"reverse-write-leaves-the-precedence-two-candidate-alone",
+         scenario_reverse_write_leaves_the_precedence_two_candidate_alone},
+        {"forward-write-through-a-non-primary-source-refuses",
+         scenario_forward_write_through_a_non_primary_source_refuses},
+        {"reverse-delete-fan-out-does-not-reach-disk",
+         scenario_reverse_delete_fan_out_does_not_reach_disk},
     };
     return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

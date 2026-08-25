@@ -34,14 +34,12 @@ use crate::conversion::known_artifacts;
 use crate::conversion::path_conversion::{self, ContextPathResolution};
 use crate::conversion::read_outcome::{self, ReadOutcome};
 use crate::conversion::seam_policy;
-use crate::core::core_binding::{COMPLEX_DATA_ID, DOUBLE_DATA_ID, INTEGER_DATA_ID, forward_status};
+use crate::core::core_binding::{
+    COMPLEX_DATA_ID, DOUBLE_DATA_ID, INTEGER_DATA_ID, READ_OP_ID, forward_status,
+};
 use crate::registry::context_registry::{ConversionRecord, MapCacheKey, REGISTRY};
 use crate::version::version_stamp;
 use crate::{al_status_t, write_truncated};
-
-unsafe extern "C" {
-    fn free(ptr: *mut c_void);
-}
 
 thread_local! {
     /// How many guarded shim seams this thread is currently inside (ADR 0014).
@@ -462,7 +460,16 @@ unsafe fn begin_global_action_seam(
     };
     // SAFETY: same contract as `open_occurrence`, already upheld by
     // this function's own `unsafe fn` contract.
-    match unsafe { open_occurrence(pctx_id, dataobjectname, Some(datapath), octx_id, forward) } {
+    match unsafe {
+        open_occurrence(
+            pctx_id,
+            dataobjectname,
+            Some(datapath),
+            rwmode,
+            octx_id,
+            forward,
+        )
+    } {
         OpenOccurrenceResult::Status(status) => status,
         OpenOccurrenceResult::RefuseAndEnd {
             opened_ctx_id,
@@ -489,6 +496,7 @@ unsafe fn open_occurrence(
     pctx_id: c_int,
     dataobjectname: *const c_char,
     datapath: Option<*const c_char>,
+    rwmode: c_int,
     octx_id: *mut c_int,
     forward: impl FnOnce(Option<*const c_char>) -> al_status_t,
 ) -> OpenOccurrenceResult {
@@ -514,6 +522,18 @@ unsafe fn open_occurrence(
             .unwrap_or(original)
     });
 
+    // A context the caller did not open for reading cannot be trusted to
+    // answer the stamp question, so ask through one of our own instead --
+    // and ask before the caller's own context exists, not after (ADR 0020).
+    let probed_stamp = if rwmode != READ_OP_ID && ids_name.is_some() {
+        // SAFETY: `dataobjectname` is non-null and a valid, NUL-terminated C
+        // string -- `ids_name` was derived from it above and is `Some` on
+        // exactly that condition.
+        Some(unsafe { probe_stamp_through_a_read_context(pctx_id, dataobjectname) })
+    } else {
+        None
+    };
+
     let status = forward(effective_datapath);
     if status.code != 0 {
         return OpenOccurrenceResult::Status(status);
@@ -525,14 +545,16 @@ unsafe fn open_occurrence(
     let (Some(dataobjectname_str), Some(ids_name)) = (dataobjectname_str, ids_name) else {
         return OpenOccurrenceResult::Status(status);
     };
-    let decision = seam_policy::decide_occurrence_registration(ids_name, &hli, || {
-        version_stamp::discover(
-            opened_octx_id,
-            |ctx_id, field, timebase, data, datatype, dim, size| unsafe {
-                read_data_unconverted(ctx_id, field, timebase, data, datatype, dim, size)
-            },
-        )
-    });
+    let decision =
+        seam_policy::decide_occurrence_registration(ids_name, &hli, || match probed_stamp {
+            Some(outcome) => outcome,
+            None => version_stamp::discover(
+                opened_octx_id,
+                |ctx_id, field, timebase, data, datatype, dim, size| unsafe {
+                    read_data_unconverted(ctx_id, field, timebase, data, datatype, dim, size)
+                },
+            ),
+        });
     apply_discovery_decision(
         pctx_id,
         dataobjectname_str,
@@ -541,6 +563,65 @@ unsafe fn open_occurrence(
         status,
         decision,
     )
+}
+
+/// Reads and classifies an occurrence's DD-version stamp through a shim-owned
+/// context, opened and closed purely for discovery, for a seam whose caller
+/// opened theirs under something other than `READ_OP` (ADR 0020).
+///
+/// Real IMAS-Core's HDF5 backend initializes the *reader's* per-IDS group only
+/// under `READ_OP`; a `WRITE_OP` open initializes the writer's. The stamp read
+/// this seam issues through the caller's own context therefore comes back
+/// not-found rather than failing, ADR 0007 presumes the occurrence matches,
+/// and every write through that context is an untranslated forward. A probe
+/// asks the same question through a context that has a reader.
+///
+/// Three properties of the probe are deliberate:
+///
+/// - **It runs before the caller's own context exists.** Ending a `READ_OP`
+///   context closes the pulse's per-IDS file handle (`HDF5Reader::
+///   close_file_handler` sets the shared `opened_IDS_files` entry to `-1`),
+///   which a caller's still-open write context would be holding. Probing
+///   first, then forwarding, means the caller's own open re-establishes that
+///   handle for itself.
+/// - **It opens and closes through the plugin call family.** IMAS-Core's
+///   `al_begin_global_action` is `al_plugin_begin_global_action` plus plugin
+///   registration and binding; a context no HLI will ever see needs neither,
+///   and a probe issued from inside a plugin callback must not re-enter the
+///   plugin machinery that called it. The two are a matched open/close pair,
+///   so this obeys the same family rule every other seam does.
+/// - **Every failure is [`version_stamp::StampOutcome::Unstamped`].** A probe
+///   that cannot be opened -- a backend that refuses a read-mode open, or an
+///   occurrence that does not exist yet, which is the ordinary case for a
+///   writer -- says nothing about the stored DD version, and ADR 0007 already
+///   presumes a match in exactly that situation.
+///
+/// # Safety
+/// `dataobjectname` must be a valid, NUL-terminated C string.
+unsafe fn probe_stamp_through_a_read_context(
+    pctx_id: c_int,
+    dataobjectname: *const c_char,
+) -> version_stamp::StampOutcome {
+    let mut probe_ctx_id: c_int = 0;
+    let status = call_begin_global(
+        CallFamily::PLUGIN,
+        pctx_id,
+        dataobjectname,
+        c"".as_ptr(),
+        READ_OP_ID,
+        &mut probe_ctx_id,
+    );
+    if status.code != 0 {
+        return version_stamp::StampOutcome::Unstamped;
+    }
+    let outcome = version_stamp::discover(
+        probe_ctx_id,
+        |ctx_id, field, timebase, data, datatype, dim, size| unsafe {
+            read_data_unconverted(ctx_id, field, timebase, data, datatype, dim, size)
+        },
+    );
+    let _ = call_end(CallFamily::PLUGIN, probe_ctx_id);
+    outcome
 }
 
 /// Performs the process-global effects a discovery decision returned after a
@@ -771,7 +852,7 @@ unsafe fn begin_slice_action_seam(
     };
     // SAFETY: same contract as `open_occurrence`, already upheld by
     // this function's own `unsafe fn` contract.
-    match unsafe { open_occurrence(pctx_id, dataobjectname, None, octx_id, forward) } {
+    match unsafe { open_occurrence(pctx_id, dataobjectname, None, rwmode, octx_id, forward) } {
         OpenOccurrenceResult::Status(status) => status,
         OpenOccurrenceResult::RefuseAndEnd {
             opened_ctx_id,
@@ -831,7 +912,11 @@ pub(crate) unsafe fn begin_timerange_action(
     };
     // SAFETY: same contract as `open_occurrence`, already upheld by
     // this function's own safety contract.
-    match unsafe { open_occurrence(pctx_id, dataobjectname, None, octx_id, |_| forward()) } {
+    match unsafe {
+        open_occurrence(pctx_id, dataobjectname, None, rwmode, octx_id, |_| {
+            forward()
+        })
+    } {
         OpenOccurrenceResult::Status(status) => status,
         OpenOccurrenceResult::RefuseAndEnd {
             opened_ctx_id,
@@ -1777,11 +1862,27 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
 /// Each candidate is probed first because `al_delete_data` cannot represent
 /// not-found. A failure does not stop later candidates: without a rollback,
 /// continuing leaves the least stale data behind.
+///
+/// The probe is a `DOUBLE_DATA` scalar read, and both halves of IMAS-Core's
+/// scalar ABI apply to it: the buffer is the *caller's* — IMAS-Core
+/// dereferences `*data` unconditionally for `dim == 0`, so passing a null
+/// pointer crashes it rather than returning not-found — and absence comes
+/// back as the `EMPTY_DOUBLE` sentinel written into that buffer, never as a
+/// null pointer. `probed` is therefore stack-owned and never freed, and the
+/// outcome is classified with
+/// [`read_outcome::classify_scalar_double`](crate::conversion::read_outcome::classify_scalar_double)
+/// rather than the pointer-based classifier every non-scalar read uses.
+///
+/// A layer below IMAS-Core that ignored the scalar contract and returned an
+/// allocation of its own would leak it here. That is the right way round:
+/// freeing a pointer that under the contract is the caller's own stack slot is
+/// a crash, and a leak in a layer that broke the contract is not.
 unsafe fn delete_candidates(ctx: c_int, paths: &[CString]) -> al_status_t {
     let mut first_failure = None;
 
     for path in paths {
-        let mut data = std::ptr::null_mut();
+        let mut probed = 0.0f64;
+        let mut data: *mut c_void = (&raw mut probed).cast();
         let probe = unsafe {
             read_data_unconverted(
                 ctx,
@@ -1793,16 +1894,13 @@ unsafe fn delete_candidates(ctx: c_int, paths: &[CString]) -> al_status_t {
                 std::ptr::null_mut(),
             )
         };
-        match read_outcome::classify(&probe, data.cast_const()) {
+        match read_outcome::classify_scalar_double(&probe, data.cast_const(), probed) {
             ReadOutcome::Failure => {
                 first_failure.get_or_insert_with(|| candidate_failure(probe, "probe", path));
             }
             ReadOutcome::NotFound => {}
             ReadOutcome::Data => {
                 let deletion = forward_status!(delete_data(ctx, path.as_ptr()));
-                // The probe is shim-internal, so no HLI can own the
-                // IMAS-Core allocation returned for this present candidate.
-                unsafe { free(data) };
                 if deletion.code != 0 {
                     first_failure
                         .get_or_insert_with(|| candidate_failure(deletion, "delete", path));

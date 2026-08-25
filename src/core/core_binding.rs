@@ -428,7 +428,11 @@ const MEMORY_BACKEND_ID: c_int = 14;
 const UDA_BACKEND_ID: c_int = 15;
 const GLOBAL_OP_ID: c_int = 20;
 const SLICE_OP_ID: c_int = 21;
-const READ_OP_ID: c_int = 30;
+/// The one access mode under which every IMAS-Core backend initializes a
+/// reader for the context it opens. Read by the interposition layer, which
+/// probes an occurrence's DD-version stamp through a context of its own
+/// whenever the caller opened theirs under any other mode (ADR 0020).
+pub(crate) const READ_OP_ID: c_int = 30;
 const WRITE_OP_ID: c_int = 31;
 const REPLACE_OP_ID: c_int = 32;
 const UNDEFINED_INTERP_ID: c_int = 0;

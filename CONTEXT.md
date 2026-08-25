@@ -106,8 +106,8 @@ Which kind of call produced an entry: a read or a write. Deliberately not called
 _Avoid_: direction, mode, kind.
 
 **read outcome**:
-Which of three things one `al_read_data` call did: **failure** (`code != 0`), **not-found** (`code == 0` with a null data pointer), or **data**. One shim classifier function decides it, and nothing else in the shim compares the data pointer to null.
-_Avoid_: treating not-found as an error, or as data; and never confuse this with `Backend::readData`'s `int` convention, which sits below the C ABI and never reaches the shim.
+Which of three things one `al_read_data` call did: **failure** (`code != 0`), **not-found** (`code == 0` with a null data pointer), or **data**. One shim classifier function decides it, and nothing else in the shim compares the data pointer to null. A **scalar** (`dim == 0`) read is the one exception, and it is an exception in IMAS-Core's ABI rather than in the shim: for `dim == 0` the caller owns the buffer, so the pointer comes back unchanged and absence is signalled by IMAS-Core writing the datatype's EMPTY sentinel into it. One further classifier — and only that one — reads the sentinel, delegating to the same function for everything else.
+_Avoid_: treating not-found as an error, or as data; passing a null `*data` for a scalar read, which IMAS-Core dereferences and so crashes on; and never confuse any of this with `Backend::readData`'s `int` convention, which sits below the C ABI and never reaches the shim.
 
 **refusal**:
 A shim-originated failure returned instead of calling IMAS-Core or instead of returning converted data, carrying the shim-owned code `IMAS_MVDD_CONVERSION_ERROR` (`-1000`). The shim reserves `-1000` to `-1099` and allocates only `-1000`; every other failure propagates IMAS-Core's own code unchanged.

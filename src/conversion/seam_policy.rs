@@ -38,6 +38,7 @@ use crate::conversion::known_artifacts::{self, ArtifactMatch};
 use crate::conversion::path_conversion::{
     self, DeletePath, ReadPath, TranslatedReadPath, WritePath,
 };
+use crate::conversion::read_outcome::EMPTY_DOUBLE;
 use crate::version::dd_version::DdVersion;
 use crate::version::version_stamp::StampOutcome;
 
@@ -110,11 +111,6 @@ pub(crate) fn decide_occurrence_registration(
         },
     }
 }
-
-/// `EMPTY_DOUBLE`, IMAS-Core's sentinel for an absent value in an otherwise
-/// populated `DOUBLE_DATA` array: never sign-flipped, so a caller can tell a
-/// real zero from a hole in the data.
-const EMPTY_DOUBLE: f64 = -9e40;
 
 /// The datatype half of a buffer's shape, mapped by the adapter from
 /// IMAS-Core's raw `datatype` argument before policy ever sees it. A value

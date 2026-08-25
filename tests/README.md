@@ -1,6 +1,6 @@
 # tests/ — what is covered, and where
 
-**210 ctest tests** (21 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
+**216 ctest tests** (27 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
 stub-only profile registers 185). None of the C sources here is registered by
 itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
@@ -9,7 +9,7 @@ settles once. A scenario name maps to `<executable> <scenario-argument>`.
 
 ```console
 $ ctest --test-dir build --output-on-failure    # everything
-$ ctest --test-dir build -L real-core           # the 21 real-IMAS-Core ones
+$ ctest --test-dir build -L real-core           # the 27 real-IMAS-Core ones
 $ ctest --test-dir build -R read-path           # one group
 $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 ```
@@ -191,23 +191,37 @@ an isolated temporary copy instead: it reads the copied DD-version stamp and a
 numeric dataset through raw HDF5, then re-proves a translated read against that
 copy, leaving the checked-in pair untouched.
 
-### `write-delete-oracle-*` — 3, `real-core` · `real_core/write_delete_oracle_test.c`
+### `write-delete-oracle-*` — 9, `real-core` · `real_core/write_delete_oracle_test.c`
 
 The on-disk oracle for the write and delete seams (issue #133): every
 scenario mutates its own private temp-directory copy of the equilibrium
 fixture through the shim, then reads the result back with raw HDF5 — never
 through the shim or IMAS-Core — because a shim round trip cannot verify a
 sign flip, a stored spelling, a stamp, or a fan-out on its own (ADR 0016's
-"Consequences"). Only one of the ticket's five planned claims is provable
-against this real IMAS-Core version: a `WRITE_OP`-opened context never
-registers a conversion record on real Core's HDF5 backend (issue #136), so a
-successful, translating write or delete cannot currently be driven through
-real Core at all. `forward-refused-write-leaves-stamp-untouched` and its
-reverse prove the one claim that needs no such write — a refusal that never
-reaches Core leaves the DD-version stamp exactly as it was —
-and `write-op-root-does-not-register-a-mismatch` pins today's gap as a
-regression marker that starts failing once #136 lands, which is the signal to
-implement the four deferred claims.
+"Consequences"). Four of the ticket's five claims are proven here, and all of them
+became reachable only with issue #136 (ADR 0020): before it, a `WRITE_OP`-opened
+context never registered a conversion record against real Core's HDF5 backend,
+so no successful translating write could be driven through real Core at all.
+Every successful write here is a `put_slice` and none of them writes the
+slice's own `time` — both are constraints real IMAS-Core imposes, spelled out
+in the test file's header.
+
+`*-refused-write-leaves-stamp-untouched` carries two claims at once: the
+stamp-immutability refusal can only fire if the write-mode open registered,
+so the refusal *is* the registration proof, and the untouched on-disk stamp is
+the ticket's claim 5. `*-write-lands-on-the-stored-spelling` proves the value
+reached the stored spelling and the HLI's own spelling was never created;
+`*-write-flips-the-sign-on-disk` proves the sign on disk is the stored
+version's convention; both also re-assert that the stamp still reads the
+stored version afterwards. `reverse-write-leaves-the-precedence-two-candidate-alone`
+proves ADR 0016 decision 4's fan-out answer, and
+`forward-write-through-a-non-primary-source-refuses` its decision 2, each with
+the on-disk assertion that nothing else moved.
+
+Claim 4's other half — the precedence-2 candidate *removed* by a delete — is
+not observable on this backend, for two independent reasons (issues #138 and
+#139) that `reverse-delete-fan-out-does-not-reach-disk` pins and explains. It
+starts failing when either is fixed.
 
 ### `runtime-binding-real-core-forwarding` — 1, `real-core` · `real_core/real_core_forwarding_test.c`
 
