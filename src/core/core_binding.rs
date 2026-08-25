@@ -23,8 +23,9 @@
 //! arguments and gets an `al_status_t` back — including the one synthesised
 //! here when IMAS-Core cannot be resolved at all, which is the only status
 //! this module invents. Everything else this module exposes is data rather
-//! than control: the two IMAS-Core type ids its consumers compare against
-//! (`CHAR_DATA_ID`, `DOUBLE_DATA_ID`) and the six accessors [`crate`] mirrors
+//! than control: the four IMAS-Core type ids its consumers compare against
+//! (`CHAR_DATA_ID`, `INTEGER_DATA_ID`, `DOUBLE_DATA_ID`, `COMPLEX_DATA_ID`)
+//! and the six accessors [`crate`] mirrors
 //! straight out to the ABI. ("Seam" is deliberately not the word for this
 //! boundary — CONTEXT.md reserves it for an ABI entry point carrying a DD
 //! path or IDS name, and this module has none.)
