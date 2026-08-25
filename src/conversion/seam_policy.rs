@@ -242,6 +242,8 @@ pub(crate) fn run_write<'a>(
         Err(refusal) => return write_refusal(refusal),
     };
     if matches!(source, SourceView::UnsetScalar) {
+        // ADR 0018: IMAS-Core will skip this unset scalar, so it neither
+        // writes the primary candidate nor discards a value from the others.
         return WriteVerdict::Forward {
             field: field.path,
             timebase: timebase.path,

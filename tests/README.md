@@ -121,7 +121,8 @@ a sign-flipped, shim-owned copy (including rank 7) while preserving caller
 storage; an unset rank-0 sentinel forwards unchanged so Core keeps its own
 skip behaviour. Issue #128 writes only an ambiguous plan's precedence-1
 candidate, records every skipped candidate as a `POTENTIALLY_LOSSY` `WRITE`
-loss after Core succeeds, and refuses a non-primary source even where its
+loss after Core succeeds (apart from ADR 0018's unset rank-zero scalar, which
+stores no value and earns no loss), and refuses a non-primary source even where its
 artifact entry is not deprecated; a child keeps those losses at its root under
 the complete HLI path. Candidate deletes and the DD-version stamp still refuse
 before Core; the stamp's access-layer siblings still forward. Matching,

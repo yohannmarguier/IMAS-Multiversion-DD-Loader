@@ -54,7 +54,9 @@ Read-path DD conversion is implemented for one IDS and one version pair.**
   to their stored spelling; deleting the whole DATAOBJECT is the explicit
   migration route, while a DD-version stamp, unsafe source, no-source path,
   or non-primary source refuses. A candidate-plan write reaches only
-  precedence 1 and records every skipped candidate as potentially lossy;
+  precedence 1 and records every skipped candidate as potentially lossy (apart
+  from ADR 0018's unset rank-zero scalar, which stores no value and earns no
+  loss);
   candidate-plan delete behavior remains deferred. `al_list_filled_paths` and `al_bind_plugin`/`al_unbind_plugin` are
   deliberately not translated.
 
