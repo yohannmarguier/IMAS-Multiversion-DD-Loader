@@ -369,6 +369,23 @@ static int open_writing_equilibrium(int *operation_ctx) {
     CHECK(al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, &pulse_ctx).code == 0);
     CHECK(al_begin_global_action(pulse_ctx, "equilibrium", "", 31, operation_ctx).code == 0);
 
+    /* The same three the read-side helper above asserts, so the two twins can
+     * be compared line for line rather than leaving a reader to wonder which
+     * differences are deliberate. */
+    CHECK(int_from_stub("recording_stub_dataentry_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_dataentry_uri"),
+                 "imas:hdf5?path=/tmp/pulse")
+          == 0);
+    CHECK(int_from_stub("recording_stub_dataentry_mode") == 7);
+
+    /* One assertion the read-side twin has no need for: the mode IMAS-Core saw
+     * on the caller's own open must be the caller's, not the probe's. ADR 0020
+     * has the shim open a READ_OP global action of its own before this one, so
+     * a 30 here would mean the two got crossed. It reads 31 because the probe
+     * goes through the `al_plugin_*` family and lands in a different recorder
+     * (ADR 0020 decision 3). */
+    CHECK(int_from_stub("recording_stub_global_rwmode") == 31);
+
     /* The proving write: the same `rename-beta-normal` rule whose two
      * spellings every assertion below uses must reach IMAS-Core as the stored
      * one. Without this a passthrough assertion could pass simply because the
