@@ -80,14 +80,17 @@ pub(crate) enum ReadPath {
     },
 }
 
-/// The one stored-DD spelling a write may safely hand to IMAS-Core, or the
-/// reason this write must refuse. Unlike a read, a write never tries an
-/// ordered candidate plan or applies a value transformation in place.
+/// The one stored-DD spelling a write may safely hand to IMAS-Core, plus the
+/// read-direction transformation the seam policy must invert before it can
+/// prepare its own stored-DD buffer.
 pub(crate) enum WritePath {
     /// No path was supplied, so preserve IMAS-Core's own handling.
     Forward,
     /// One concrete stored-DD spelling for IMAS-Core to receive.
-    Translated(CString),
+    Translated {
+        path: CString,
+        value_transformation: ValueTransformation,
+    },
     /// The supplied HLI-DD path cannot safely be written through this seam.
     Refusal { reason: String, dd_path: String },
 }
@@ -274,9 +277,9 @@ pub(crate) fn resolve_read_path(record: &ConversionRecord, raw: *const c_char) -
 }
 
 /// Resolves one write argument to the only stored-DD spelling this ticket can
-/// safely write: one path with no value transformation and no candidate plan.
-/// Every other claimed path refuses, so a mismatched write can never fall
-/// through under its HLI-DD spelling.
+/// safely write: one path and no candidate plan. The resolved value
+/// transformation still points from stored data to the HLI (because maps
+/// serve reads); `run_write` inverts it before it copies caller data.
 pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) -> WritePath {
     let argument = match claimed_argument(record, raw) {
         ReadArgument::Absent => return WritePath::Forward,
@@ -336,15 +339,14 @@ pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) 
             dd_path: hli_absolute,
         },
         Outcome::Path {
+            resolved_path,
             value_transformation,
             ..
-        } if value_transformation != ValueTransformation::None => WritePath::Refusal {
-            reason: "this path needs a value transformation, which this write cannot apply"
-                .to_string(),
-            dd_path: hli_absolute,
-        },
-        Outcome::Path { resolved_path, .. } => match stored_c_path(record, &resolved_path, is_absolute) {
-            Ok(path) => WritePath::Translated(path),
+        } => match stored_c_path(record, &resolved_path, is_absolute) {
+            Ok(path) => WritePath::Translated {
+                path,
+                value_transformation,
+            },
             Err(reason) => WritePath::Refusal {
                 reason,
                 dd_path: hli_absolute,

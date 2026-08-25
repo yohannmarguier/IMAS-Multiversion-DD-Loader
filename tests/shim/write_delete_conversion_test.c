@@ -2,6 +2,7 @@
  * against the recording stub. */
 
 #include <dlfcn.h>
+#include <complex.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -154,7 +155,7 @@ static void scenario_write_nested_child_context_resolves_relative_and_absolute_f
            "a child write used its own anchor for relative paths and the IDS root for absolute paths\n");
 }
 
-static void scenario_write_refuses_candidate_or_transformation_on_either_argument(void) {
+static void scenario_write_refuses_candidate_on_either_argument(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int writes_before = int_from_stub("recording_stub_write_call_count");
     double sentinel = 42.0;
@@ -166,15 +167,125 @@ static void scenario_write_refuses_candidate_or_transformation_on_either_argumen
     CHECK(write_field(operation_ctx, "time_slice/boundary/elongation",
                       "time_slice/profiles_2d/b_field_phi", &sentinel, size)
               .code == IMAS_MVDD_CONVERSION_ERROR);
-    CHECK(write_field(operation_ctx, "time_slice/constraints/flux_loop/measured", "time", &sentinel,
-                      size)
-              .code == IMAS_MVDD_CONVERSION_ERROR);
     CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
     CHECK(sentinel == 42.0);
     CHECK(size[0] == 73);
 
-    printf("write_delete_conversion_test write-refuses-candidate-or-transformation-on-either-argument: "
-           "each deferred resolution refused before Core\n");
+    printf("write_delete_conversion_test write-refuses-candidate-on-either-argument: "
+           "each ambiguous resolution refused before Core\n");
+}
+
+static void scenario_write_cocos_sign_flip_uses_a_shim_owned_rank_seven_copy(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    double scalar = 2.5;
+    double values[128];
+    int size[7] = {2, 2, 2, 2, 2, 2, 2};
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    for (int index = 0; index < 128; ++index) {
+        values[index] = (double)(index - 64);
+    }
+
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time", &scalar,
+                        IMAS_DOUBLE_DATA, 0, NULL)
+              .code == 0);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 1);
+    CHECK(pointer_from_stub("recording_stub_write_data") != &scalar);
+    CHECK(int_from_stub("recording_stub_write_double_count") == 1);
+    CHECK(double_at_from_stub("recording_stub_write_double_at", 0) == -2.5);
+    CHECK(scalar == 2.5);
+
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time", values,
+                        IMAS_DOUBLE_DATA, 7, size)
+              .code == 0);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 2);
+    CHECK(pointer_from_stub("recording_stub_write_data") != values);
+    CHECK(int_from_stub("recording_stub_write_double_count") == 128);
+    for (int index = 0; index < 128; ++index) {
+        CHECK(double_at_from_stub("recording_stub_write_double_at", index) == -values[index]);
+        CHECK(values[index] == (double)(index - 64));
+    }
+    for (int index = 0; index < 7; ++index) {
+        CHECK(size[index] == 2);
+    }
+
+    printf("write_delete_conversion_test write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy: "
+           "Core received every negated value while caller storage stayed unchanged\n");
+}
+
+static void scenario_plugin_write_cocos_sign_flip_uses_a_shim_owned_copy(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    double values[2] = {1.25, -2.5};
+    int size[1] = {2};
+
+    CHECK(al_plugin_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time",
+                               values, IMAS_DOUBLE_DATA, 1, size)
+              .code == 0);
+    CHECK(pointer_from_stub("recording_stub_plugin_pointer") != values);
+    CHECK(int_from_stub("recording_stub_plugin_write_double_count") == 2);
+    CHECK(double_at_from_stub("recording_stub_plugin_write_double_at", 0) == -1.25);
+    CHECK(double_at_from_stub("recording_stub_plugin_write_double_at", 1) == 2.5);
+    CHECK(values[0] == 1.25);
+    CHECK(values[1] == -2.5);
+    CHECK(size[0] == 2);
+
+    printf("write_delete_conversion_test plugin-write-cocos-sign-flip-uses-a-shim-owned-copy: "
+           "the plugin reentry seam used the same copy policy\n");
+}
+
+static void scenario_write_cocos_sentinel_forwards_unchanged_without_loss(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    double unset = -9.0E40;
+    int unset_int = -999999999;
+    double complex unset_complex = -9.0E40 - 9.0E40 * I;
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time", &unset,
+                        IMAS_DOUBLE_DATA, 0, NULL)
+              .code == 0);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 1);
+    CHECK(pointer_from_stub("recording_stub_write_data") == &unset);
+    CHECK(int_from_stub("recording_stub_write_double_count") == 1);
+    CHECK(double_at_from_stub("recording_stub_write_double_at", 0) == -9.0E40);
+    CHECK(unset == -9.0E40);
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time",
+                        &unset_int, IMAS_INTEGER_DATA, 0, NULL)
+              .code == 0);
+    CHECK(pointer_from_stub("recording_stub_write_data") == &unset_int);
+    CHECK(unset_int == -999999999);
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time",
+                        &unset_complex, IMAS_COMPLEX_DATA, 0, NULL)
+              .code == 0);
+    CHECK(pointer_from_stub("recording_stub_write_data") == &unset_complex);
+    CHECK(creal(unset_complex) == -9.0E40);
+    CHECK(cimag(unset_complex) == -9.0E40);
+    int loss_count = -1;
+    CHECK_OK(imas_mvdd_context_loss_count(operation_ctx, &loss_count));
+    CHECK(loss_count == 0);
+
+    printf("write_delete_conversion_test write-cocos-sentinel-forwards-unchanged-without-loss: "
+           "an unset scalar kept IMAS-Core's own skip sentinel\n");
+}
+
+static void scenario_write_cocos_invalid_shape_or_type_refuses_before_core(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    double value = 1.25;
+    int oversized_shape[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time", &value,
+                        IMAS_INTEGER_DATA, 0, NULL)
+              .code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time", &value,
+                        IMAS_DOUBLE_DATA, 8, oversized_shape)
+              .code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    CHECK(value == 1.25);
+    for (int index = 0; index < 8; ++index) {
+        CHECK(oversized_shape[index] == 1);
+    }
+
+    printf("write_delete_conversion_test write-cocos-invalid-shape-or-type-refuses-before-core: "
+           "the ADR-0010 gate rejected both unsupported declarations\n");
 }
 
 static void scenario_write_refuses_dd_version_stamp_but_forwards_its_siblings(void) {
@@ -426,7 +537,11 @@ int main(int argc, char **argv) {
         {"plugin-write-renamed-field-lands-at-stored-spelling", scenario_plugin_write_renamed_field_lands_at_stored_spelling},
         {"plugin-write-matching-context-forwards-unchanged", scenario_plugin_write_matching_context_forwards_unchanged},
         {"write-nested-child-context-resolves-relative-and-absolute-fields", scenario_write_nested_child_context_resolves_relative_and_absolute_fields},
-        {"write-refuses-candidate-or-transformation-on-either-argument", scenario_write_refuses_candidate_or_transformation_on_either_argument},
+        {"write-refuses-candidate-on-either-argument", scenario_write_refuses_candidate_on_either_argument},
+        {"write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy", scenario_write_cocos_sign_flip_uses_a_shim_owned_rank_seven_copy},
+        {"plugin-write-cocos-sign-flip-uses-a-shim-owned-copy", scenario_plugin_write_cocos_sign_flip_uses_a_shim_owned_copy},
+        {"write-cocos-sentinel-forwards-unchanged-without-loss", scenario_write_cocos_sentinel_forwards_unchanged_without_loss},
+        {"write-cocos-invalid-shape-or-type-refuses-before-core", scenario_write_cocos_invalid_shape_or_type_refuses_before_core},
         {"write-refuses-dd-version-stamp-but-forwards-its-siblings", scenario_write_refuses_dd_version_stamp_but_forwards_its_siblings},
         {"write-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_without_stored_slot_refuses_and_retains_a_write_loss},
         {"write-reverse-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_reverse_without_stored_slot_refuses_and_retains_a_write_loss},
