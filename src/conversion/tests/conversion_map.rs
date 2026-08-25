@@ -689,8 +689,9 @@ fn split_rule_resolves_forward_to_all_candidate_destinations_in_precedence_order
         assert_eq!(
             candidate.value_transformation,
             ValueTransformation::SignFlip {
-                from_cocos: CocosConvention("11".to_string()),
-                to_cocos: CocosConvention("17".to_string()),
+                from_cocos: CocosConvention("17".to_string()),
+                to_cocos: CocosConvention("11".to_string()),
+                direction: TransformationDirection::ToHli,
             }
         );
     }
@@ -717,8 +718,9 @@ fn split_rule_resolves_reverse_to_its_single_source_with_matched_precedence() {
     assert_eq!(
         *value_transformation(&explanation),
         ValueTransformation::SignFlip {
-            from_cocos: CocosConvention("17".to_string()),
-            to_cocos: CocosConvention("11".to_string()),
+            from_cocos: CocosConvention("11".to_string()),
+            to_cocos: CocosConvention("17".to_string()),
+            direction: TransformationDirection::ToHli,
         }
     );
     assert!(candidates(&explanation).is_empty());
@@ -763,8 +765,9 @@ fn default_identity_match_surfaces_its_cocos_sign_flip() {
     assert_eq!(
         *value_transformation(&forward),
         ValueTransformation::SignFlip {
-            from_cocos: CocosConvention("11".to_string()),
-            to_cocos: CocosConvention("17".to_string()),
+            from_cocos: CocosConvention("17".to_string()),
+            to_cocos: CocosConvention("11".to_string()),
+            direction: TransformationDirection::ToHli,
         }
     );
 
@@ -775,9 +778,28 @@ fn default_identity_match_surfaces_its_cocos_sign_flip() {
     assert_eq!(
         *value_transformation(&reverse),
         ValueTransformation::SignFlip {
-            from_cocos: CocosConvention("17".to_string()),
-            to_cocos: CocosConvention("11".to_string()),
+            from_cocos: CocosConvention("11".to_string()),
+            to_cocos: CocosConvention("17".to_string()),
+            direction: TransformationDirection::ToHli,
         }
+    );
+}
+
+#[test]
+fn a_read_transformation_inverts_to_the_stored_write_direction() {
+    let read = ValueTransformation::SignFlip {
+        from_cocos: CocosConvention("17".to_string()),
+        to_cocos: CocosConvention("11".to_string()),
+        direction: TransformationDirection::ToHli,
+    };
+
+    assert_eq!(
+        read.inverse(),
+        Some(ValueTransformation::SignFlip {
+            from_cocos: CocosConvention("11".to_string()),
+            to_cocos: CocosConvention("17".to_string()),
+            direction: TransformationDirection::ToStored,
+        })
     );
 }
 

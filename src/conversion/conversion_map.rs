@@ -303,6 +303,27 @@ pub enum Fidelity {
     Unmappable,
 }
 
+/// Which way a value transformation carries data across a DD-version boundary.
+///
+/// Conversion-map resolution serves reads, so its transformations always
+/// describe the stored-DD value IMAS-Core returned becoming the HLI-DD value
+/// the caller receives. A write must explicitly request the inverse rather
+/// than assuming a transformation happens to be an involution (ADR 0016).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransformationDirection {
+    ToHli,
+    ToStored,
+}
+
+impl TransformationDirection {
+    fn inverse(self) -> Self {
+        match self {
+            Self::ToHli => Self::ToStored,
+            Self::ToStored => Self::ToHli,
+        }
+    }
+}
+
 /// A required change to data values during conversion (CONTEXT.md's "value
 /// transformation"), looked up by the resolved right-side path regardless of
 /// which rule or default supplied that path.
@@ -312,7 +333,31 @@ pub enum ValueTransformation {
     SignFlip {
         from_cocos: CocosConvention,
         to_cocos: CocosConvention,
+        direction: TransformationDirection,
     },
+}
+
+impl ValueTransformation {
+    /// The same conversion in the opposite data-flow direction, if the
+    /// declared transformation can be safely reversed for a write.
+    pub(crate) fn inverse(&self) -> Option<Self> {
+        match self {
+            Self::None => Some(Self::None),
+            Self::SignFlip {
+                from_cocos,
+                to_cocos,
+                direction,
+            } if from_cocos != to_cocos => Some(Self::SignFlip {
+                from_cocos: to_cocos.clone(),
+                to_cocos: from_cocos.clone(),
+                direction: direction.inverse(),
+            }),
+            // A sign flip between identical conventions is not a meaningful
+            // conversion. Maps normalize it to `None`, but refusing this
+            // malformed constructed value keeps a future write from guessing.
+            Self::SignFlip { .. } => None,
+        }
+    }
 }
 
 /// One `<rule>` element's `rel` attribute.
@@ -1276,8 +1321,10 @@ impl ConversionMap {
         match self.sign_flips.get(right_side_path) {
             Some((from_cocos, to_cocos)) => {
                 let (from_cocos, to_cocos) = match direction {
-                    Direction::Forward => (from_cocos, to_cocos),
-                    Direction::Reverse => (to_cocos, from_cocos),
+                    // A resolved transformation is applied after IMAS-Core
+                    // reads stored data, so it always points stored -> HLI.
+                    Direction::Forward => (to_cocos, from_cocos),
+                    Direction::Reverse => (from_cocos, to_cocos),
                 };
                 if from_cocos == to_cocos {
                     ValueTransformation::None
@@ -1285,6 +1332,7 @@ impl ConversionMap {
                     ValueTransformation::SignFlip {
                         from_cocos: from_cocos.clone(),
                         to_cocos: to_cocos.clone(),
+                        direction: TransformationDirection::ToHli,
                     }
                 }
             }
