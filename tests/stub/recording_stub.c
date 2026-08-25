@@ -488,7 +488,9 @@ static al_status_t compute_read_response(const char *field, void **data, int dim
         return stamp_read_response(data, size);
     }
 
-    if (getenv("RECORDING_STUB_READ_FAIL") != NULL) {
+    const char *failed_field = getenv("RECORDING_STUB_READ_FAIL_FIELD");
+    if (getenv("RECORDING_STUB_READ_FAIL") != NULL ||
+        (failed_field != NULL && field != NULL && strcmp(field, failed_field) == 0)) {
         al_status_t status;
         status.code = -23;
         memset(status.message, 0, sizeof status.message);
@@ -858,12 +860,27 @@ static int g_delete_call_count = 0;
 static int g_delete_ctx = 0;
 static char *g_delete_path = NULL;
 
+enum { RECORDING_STUB_DELETE_LOG_CAPACITY = 64 };
+static char *g_delete_paths[RECORDING_STUB_DELETE_LOG_CAPACITY];
+
 al_status_t al_delete_data(int ctx, const char *path) {
     g_delete_call_count++;
     g_delete_ctx = ctx;
     free(g_delete_path);
     g_delete_path = record_str(path);
+    if (g_delete_call_count <= RECORDING_STUB_DELETE_LOG_CAPACITY) {
+        g_delete_paths[g_delete_call_count - 1] = record_str(path);
+    }
     trigger_reentrant_data(RECORDING_STUB_REENTRANT_DELETE_DATA, NULL, 0, 0, NULL);
+
+    const char *failed_path = getenv("RECORDING_STUB_DELETE_FAIL_FIELD");
+    if (failed_path != NULL && path != NULL && strcmp(path, failed_path) == 0) {
+        al_status_t status;
+        status.code = -24;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: delete refused", sizeof status.message - 1);
+        return status;
+    }
     return ok_status();
 }
 
@@ -1516,6 +1533,12 @@ int recording_stub_delete_ctx(void) {
 }
 const char *recording_stub_delete_path(void) {
     return g_delete_path;
+}
+const char *recording_stub_delete_path_at(int index) {
+    if (index < 0 || index >= g_delete_call_count || index >= RECORDING_STUB_DELETE_LOG_CAPACITY) {
+        return NULL;
+    }
+    return g_delete_paths[index];
 }
 
 int recording_stub_iterate_call_count(void) {
