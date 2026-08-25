@@ -204,4 +204,50 @@ add_test(NAME equilibrium-read-copied-fixture-harness-reproves-renamed-read
 set_tests_properties(equilibrium-read-copied-fixture-harness-reproves-renamed-read PROPERTIES
     LABELS real-core)
 
+# --- Issue #133: on-disk oracle proof for the write and delete seams. Each
+# scenario mutates its own private copy of the fixture pair and reads the
+# result back with raw HDF5, never through the shim. No RESOURCE_LOCK is
+# needed: each scenario opens only its own unique temp-directory copy, the
+# same reasoning as the copied-fixture-harness scenario above.
+#
+# Only claim 5 ("a refused write leaves no trace on disk") is provable against
+# this real IMAS-Core version — see the test file's header comment and issue
+# #136: a WRITE_OP-opened context never registers a conversion record on real
+# Core's HDF5 backend, so claims 1-4 (which all need a successful, translating
+# write or delete) are currently unreachable. write-op-root-does-not-register-
+# a-mismatch pins that gap as a regression marker; once #136 fixes discovery,
+# that scenario's own assertions flip, which is the signal to replace it with
+# claims 1-4.
+add_executable(write_delete_oracle_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/write_delete_oracle_test.c")
+target_include_directories(write_delete_oracle_test PRIVATE
+    ${_imas_core_include_dirs}
+    ${HDF5_C_INCLUDE_DIRS})
+target_compile_definitions(write_delete_oracle_test PRIVATE
+    "EQUILIBRIUM_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/imas-python-fixtures/fixtures\"")
+target_link_libraries(write_delete_oracle_test PRIVATE
+    imas_mvdd_loader
+    ${HDF5_C_LIBRARIES})
+add_dependencies(write_delete_oracle_test imas_mvdd_capi)
+set_target_properties(write_delete_oracle_test PROPERTIES
+    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+add_test(NAME write-delete-oracle-write-op-root-does-not-register-a-mismatch
+    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+        $<TARGET_FILE:write_delete_oracle_test> write-op-root-does-not-register-a-mismatch)
+set_tests_properties(write-delete-oracle-write-op-root-does-not-register-a-mismatch PROPERTIES
+    LABELS real-core)
+
+add_test(NAME write-delete-oracle-forward-refused-write-leaves-stamp-untouched
+    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+        $<TARGET_FILE:write_delete_oracle_test> forward-refused-write-leaves-stamp-untouched)
+set_tests_properties(write-delete-oracle-forward-refused-write-leaves-stamp-untouched PROPERTIES
+    LABELS real-core)
+
+add_test(NAME write-delete-oracle-reverse-refused-write-leaves-stamp-untouched
+    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+        $<TARGET_FILE:write_delete_oracle_test> reverse-refused-write-leaves-stamp-untouched)
+set_tests_properties(write-delete-oracle-reverse-refused-write-leaves-stamp-untouched PROPERTIES
+    LABELS real-core)
+
 endif()
