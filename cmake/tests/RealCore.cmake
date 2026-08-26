@@ -273,6 +273,12 @@ add_test(NAME write-delete-oracle-reverse-write-leaves-the-precedence-two-candid
 set_tests_properties(write-delete-oracle-reverse-write-leaves-the-precedence-two-candidate-alone PROPERTIES
     LABELS real-core)
 
+add_test(NAME write-delete-oracle-forward-write-leaves-the-precedence-two-candidate-alone
+    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+        $<TARGET_FILE:write_delete_oracle_test> forward-write-leaves-the-precedence-two-candidate-alone)
+set_tests_properties(write-delete-oracle-forward-write-leaves-the-precedence-two-candidate-alone PROPERTIES
+    LABELS real-core)
+
 add_test(NAME write-delete-oracle-forward-write-through-a-non-primary-source-refuses
     COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
         $<TARGET_FILE:write_delete_oracle_test> forward-write-through-a-non-primary-source-refuses)

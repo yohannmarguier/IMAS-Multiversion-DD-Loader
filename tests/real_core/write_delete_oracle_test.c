@@ -78,6 +78,8 @@
 #define BETA_NORMAL_DATASET "/equilibrium/time_slice[]&global_quantities&beta_normal"
 #define BETA_TOR_NORM_DATASET "/equilibrium/time_slice[]&global_quantities&beta_tor_norm"
 #define IP_DATASET "/equilibrium/time_slice[]&global_quantities&ip"
+#define ENERGY_MHD_DATASET "/equilibrium/time_slice[]&global_quantities&energy_mhd"
+#define W_MHD_DATASET "/equilibrium/time_slice[]&global_quantities&w_mhd"
 #define PSI_AXIS_DATASET "/equilibrium/time_slice[]&global_quantities&psi_axis"
 #define Q_MIN_PSI_DATASET "/equilibrium/time_slice[]&global_quantities&q_min&psi"
 #define Q_MIN_VALUE_DATASET "/equilibrium/time_slice[]&global_quantities&q_min&value"
@@ -332,6 +334,41 @@ static void scenario_reverse_write_leaves_the_precedence_two_candidate_alone(voi
     printf("write_delete_oracle_test reverse-write-leaves-the-precedence-two-candidate-alone: the "
            "3.39.0 psi_axis write extended the 4.1.1 fixture's psi_axis to -7.5 and left "
            "psi_magnetic_axis at its original %d slices\n",
+           FIXTURE_SLICES);
+}
+
+/* `fold-energy-mhd` is the forward-direction complement to
+ * `split-psi-axis` above: a 4.1.1 HLI's one `energy_mhd` path resolves to the
+ * 3.39.0 store's precedence-1 `energy_mhd` and precedence-2 `w_mhd`
+ * candidates. A write must extend only the primary dataset. This closes the
+ * directional hole in the on-disk oracle: the reverse scenario above proves
+ * primary-only writes for a `split`; this one proves them for a forward
+ * `merged` plan. */
+static void scenario_forward_write_leaves_the_precedence_two_candidate_alone(void) {
+    copy_fixture_pair("3.39.0");
+    CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
+    int pulse_ctx = open_copied_fixture_pulse();
+    CHECK_OK(append_slice_scalar(pulse_ctx, "global_quantities/energy_mhd", 7.5));
+    close_fixture_pulse(pulse_ctx);
+
+    char equilibrium_file[1024];
+    equilibrium_file_path(equilibrium_file, sizeof equilibrium_file);
+    double primary[FIXTURE_SLICE_CAPACITY];
+    int primary_slices = read_double_slices_from_disk(equilibrium_file, ENERGY_MHD_DATASET,
+                                                     primary, FIXTURE_SLICE_CAPACITY);
+    CHECK(primary_slices == FIXTURE_SLICES + 1);
+    CHECK(primary[FIXTURE_SLICES] == 7.5);
+
+    double secondary[FIXTURE_SLICE_CAPACITY];
+    int secondary_slices = read_double_slices_from_disk(
+        equilibrium_file, W_MHD_DATASET, secondary, FIXTURE_SLICE_CAPACITY);
+    CHECK(secondary_slices == FIXTURE_SLICES);
+    check_stamp_still_reads("3.39.0");
+
+    remove_fixture_pair();
+    printf("write_delete_oracle_test forward-write-leaves-the-precedence-two-candidate-alone: "
+           "the 4.1.1 energy_mhd write extended the 3.39.0 fixture's energy_mhd to 7.5 and "
+           "left w_mhd at its original %d slices\n",
            FIXTURE_SLICES);
 }
 
@@ -631,6 +668,8 @@ int main(int argc, char **argv) {
         {"reverse-write-flips-the-sign-on-disk", scenario_reverse_write_flips_the_sign_on_disk},
         {"reverse-write-leaves-the-precedence-two-candidate-alone",
          scenario_reverse_write_leaves_the_precedence_two_candidate_alone},
+        {"forward-write-leaves-the-precedence-two-candidate-alone",
+         scenario_forward_write_leaves_the_precedence_two_candidate_alone},
         {"forward-write-through-a-non-primary-source-refuses",
          scenario_forward_write_through_a_non_primary_source_refuses},
         {"forward-write-with-no-stored-slot-refuses",

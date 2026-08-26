@@ -1,6 +1,6 @@
 # tests/ — what is covered, and where
 
-**227 ctest tests** (29 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
+**228 ctest tests** (30 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
 stub-only profile registers 194). None of the C sources here is registered by
 itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
@@ -9,7 +9,7 @@ settles once. A scenario name maps to `<executable> <scenario-argument>`.
 
 ```console
 $ ctest --test-dir build --output-on-failure    # everything
-$ ctest --test-dir build -L real-core           # the 29 real-IMAS-Core ones
+$ ctest --test-dir build -L real-core           # the 30 real-IMAS-Core ones
 $ ctest --test-dir build -R read-path           # one group
 $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 ```
@@ -218,7 +218,7 @@ an isolated temporary copy instead: it reads the copied DD-version stamp and a
 numeric dataset through raw HDF5, then re-proves a translated read against that
 copy, leaving the checked-in pair untouched.
 
-### `write-delete-oracle-*` — 11, `real-core` · `real_core/write_delete_oracle_test.c`
+### `write-delete-oracle-*` — 12, `real-core` · `real_core/write_delete_oracle_test.c`
 
 The on-disk oracle for the write and delete seams (issue #133): every
 scenario mutates its own private temp-directory copy of the equilibrium
@@ -240,9 +240,11 @@ the ticket's claim 5. `*-write-lands-on-the-stored-spelling` proves the value
 reached the stored spelling and the HLI's own spelling was never created;
 `*-write-flips-the-sign-on-disk` proves the sign on disk is the stored
 version's convention; both also re-assert that the stamp still reads the
-stored version afterwards. `reverse-write-leaves-the-precedence-two-candidate-alone`
-proves ADR 0016 decision 4's fan-out answer, and
-`forward-write-through-a-non-primary-source-refuses` its decision 2, each with
+stored version afterwards. The two
+`*-write-leaves-the-precedence-two-candidate-alone` scenarios prove ADR 0016
+decision 4's primary-only answer in both directions: a reverse `split` plan
+and a forward `merged` plan. Finally,
+`forward-write-through-a-non-primary-source-refuses` proves decision 2, with
 the on-disk assertion that nothing else moved.
 
 `forward-write-with-no-stored-slot-refuses` is the third refusal ADR 0016
