@@ -1,5 +1,19 @@
-//! The `al_read_data`/`al_plugin_read_data` read loop and the
-//! `al_write_data`/`al_plugin_write_data` write decision (see ADR 0015).
+//! The `al_read_data`/`al_plugin_read_data` read loop, the
+//! `al_write_data`/`al_plugin_write_data` write decision, and the
+//! `al_delete_data` delete verdict (see ADR 0015).
+//!
+//! The three are deliberately not equal in weight. [`run_read`] owns the
+//! candidate loop and its fidelity bookkeeping; [`run_write`] owns the
+//! sentinel skip, transformation inversion, shape validation, the shim-owned
+//! copy and the unwritten-candidate list. [`run_delete`] owns *no* decision
+//! at all — every delete rule is settled one layer down, in
+//! [`path_conversion::resolve_delete_path`], because a delete carries no
+//! value and so has nothing left to decide once its stored spellings are
+//! known. It stays here anyway, thin, so all three data-path seams present
+//! the adapter with the same argument-in/verdict-out shape; a reader who
+//! finds the read and write policy here should not have to learn that delete
+//! is reached differently. Review finding S-J5 called it a Middle Man, which
+//! it is; the uniform seam shape is what it buys.
 //!
 //! Before this module existed, `read_data_impl` (`src/interpose.rs`) mixed
 //! raw-pointer marshalling with the read-loop decisions ADR 0010, ADR 0012
@@ -14,7 +28,8 @@
 //! This module owns those decisions and nothing else: the read loop takes an
 //! already-resolved [`path_conversion::ReadPath`] per argument, a buffer's
 //! shape, and a reader closure; the write decision takes one
-//! [`path_conversion::WritePath`] per argument. Their verdicts tell the
+//! [`path_conversion::WritePath`] per argument, and the delete verdict one
+//! [`path_conversion::DeletePath`]. Their verdicts tell the
 //! adapter what to forward or refuse. This module contains no `unsafe`, never
 //! touches [`crate::registry::context_registry::REGISTRY`] or the HLI version
 //! latch, and never calls into [`crate::core::dl`] — every raw pointer, every
@@ -33,7 +48,7 @@
 use std::ffi::{CStr, CString, c_int};
 
 use crate::al_status_t;
-use crate::conversion::conversion_map::{Fidelity, ValueTransformation};
+use crate::conversion::conversion_map::{Fidelity, TransformationDirection, ValueTransformation};
 use crate::conversion::known_artifacts::{self, ArtifactMatch};
 use crate::conversion::path_conversion::{
     self, DeletePath, ReadPath, TranslatedReadPath, WritePath,
@@ -210,9 +225,11 @@ pub(crate) enum WriteVerdict<'a> {
         /// `Some` is a transformed shim-owned copy, borrowed by the adapter
         /// for exactly one IMAS-Core call. `None` forwards caller storage.
         data: Option<Vec<f64>>,
-        /// Every stored candidate that deliberately remains unwritten. These
-        /// are retained as potentially lossy only after IMAS-Core accepts the
-        /// one precedence-1 write.
+        /// Every stored candidate that deliberately remains unwritten, named
+        /// by its own complete stored-DD spelling rather than by the caller's
+        /// path — the point of the entry is to say where a stale value may
+        /// now be found. These are retained as potentially lossy only after
+        /// IMAS-Core accepts the one precedence-1 write.
         unwritten_candidates: Vec<&'a str>,
     },
     Refusal {
@@ -300,16 +317,21 @@ struct ResolvedWriteArgument<'a> {
     path: Option<&'a CStr>,
     value_transformation: ValueTransformation,
     dd_path: &'a str,
-    unwritten_candidates: usize,
+    /// The complete stored-DD spelling of every candidate this write
+    /// deliberately leaves alone — never the caller's own `dd_path`, because
+    /// the stale value a reader of the stored occurrence may find lives under
+    /// one of *these* names (ADR 0016 decision 4).
+    unwritten_candidates: Vec<&'a str>,
 }
 
 fn unwritten_candidate_paths<'a>(
     field: &ResolvedWriteArgument<'a>,
     timebase: &ResolvedWriteArgument<'a>,
 ) -> Vec<&'a str> {
-    let mut paths = Vec::with_capacity(field.unwritten_candidates + timebase.unwritten_candidates);
-    paths.extend((0..field.unwritten_candidates).map(|_| field.dd_path));
-    paths.extend((0..timebase.unwritten_candidates).map(|_| timebase.dd_path));
+    let mut paths =
+        Vec::with_capacity(field.unwritten_candidates.len() + timebase.unwritten_candidates.len());
+    paths.extend(field.unwritten_candidates.iter().copied());
+    paths.extend(timebase.unwritten_candidates.iter().copied());
     paths
 }
 
@@ -321,7 +343,7 @@ fn write_argument_path<'a>(
             path: argument.forward,
             value_transformation: ValueTransformation::None,
             dd_path: &argument.dd_path,
-            unwritten_candidates: 0,
+            unwritten_candidates: Vec::new(),
         }),
         WritePath::Translated {
             path,
@@ -330,12 +352,12 @@ fn write_argument_path<'a>(
             path: Some(path.as_c_str()),
             value_transformation: value_transformation.clone(),
             dd_path: &argument.dd_path,
-            unwritten_candidates: 0,
+            unwritten_candidates: Vec::new(),
         }),
         WritePath::Candidates(candidates) => {
             let Some(primary) = candidates
                 .iter()
-                .find(|candidate| candidate.precedence == 1)
+                .position(|candidate| candidate.precedence == 1)
             else {
                 return Err((
                     "this candidate plan has no precedence-1 source for a write",
@@ -343,10 +365,19 @@ fn write_argument_path<'a>(
                 ));
             };
             Ok(ResolvedWriteArgument {
-                path: Some(primary.path.as_c_str()),
-                value_transformation: primary.value_transformation.clone(),
+                path: Some(candidates[primary].path.as_c_str()),
+                value_transformation: candidates[primary].value_transformation.clone(),
                 dd_path: &argument.dd_path,
-                unwritten_candidates: candidates.len() - 1,
+                // Every candidate but the one being written, named by its own
+                // stored spelling. Indexing past the primary rather than
+                // filtering on `precedence != 1` keeps this exactly the
+                // complement of the slot chosen above.
+                unwritten_candidates: candidates
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != primary)
+                    .map(|(_, candidate)| candidate.stored_dd_path.as_str())
+                    .collect(),
             })
         }
         WritePath::Refusal { reason, dd_path } => Err((reason, dd_path)),
@@ -357,12 +388,28 @@ fn write_argument_path<'a>(
 /// Scalar sentinels are returned before this function runs. A sentinel inside
 /// an array remains a value and therefore is transformed with its neighbours,
 /// matching the scope of IMAS-Core's own shape gate (ADR 0018).
+///
+/// This is the one place that reads [`TransformationDirection`], and it is
+/// what makes ADR 0016 decision 7 an enforced invariant rather than a naming
+/// convention. Conversion-map resolution only ever produces `ToHli`, because
+/// it serves reads; a write is correct only because [`run_write`] called
+/// [`ValueTransformation::inverse`] first. Refusing a `ToHli` transformation
+/// here means a future write path that forgets that call fails loudly instead
+/// of storing values with the sign the *caller* handed in — which, for the one
+/// transformation that exists today, is exactly the direction that looks
+/// plausible and is wrong. It cannot be reached from the shipped artifact and
+/// is proven by unit test (ADR 0011).
 fn copy_value_transformation(
     transformation: &ValueTransformation,
     source: SourceView<'_>,
 ) -> Result<Option<Vec<f64>>, &'static str> {
     match transformation {
         ValueTransformation::None => Ok(None),
+        ValueTransformation::SignFlip { direction, .. }
+            if *direction != TransformationDirection::ToStored =>
+        {
+            Err("this value transformation was not inverted for the write direction")
+        }
         ValueTransformation::SignFlip { .. } => match source {
             SourceView::Double(values) => Ok(Some(values.iter().map(|value| -*value).collect())),
             SourceView::UnsetScalar => {
@@ -728,6 +775,74 @@ mod tests {
     use path_conversion::ResolvedReadPath;
     use std::cell::RefCell;
     use std::ffi::CString;
+
+    /// Review finding S-J1 / ADR 0016 decision 7: the write-side executor
+    /// reads `TransformationDirection`, so a transformation that was never
+    /// inverted cannot silently execute.
+    ///
+    /// The transformation is not hand-built — `CocosConvention` has no public
+    /// constructor, and hand-building one would prove less anyway. It comes
+    /// out of a loaded artifact exactly as conversion-map resolution produces
+    /// it, which is always `ToHli`, because resolution serves reads. Handing
+    /// that straight to the write executor is precisely the mistake a future
+    /// write path can make: [`run_write`] cannot reach this state today, since
+    /// it calls [`ValueTransformation::inverse`] first, which is why this is a
+    /// direct unit test rather than a seam scenario.
+    #[test]
+    fn a_write_side_transformation_that_was_not_inverted_refuses() {
+        const ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="identity-flipped" rel="renamed" left="flipped" right="flipped">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+              </rules>
+              <transforms>
+                <cocos from="11" to="17">
+                  <flip path="flipped"/>
+                </cocos>
+              </transforms>
+            </ids-map>
+        "#;
+        let map = crate::conversion::conversion_map::ConversionMap::load(ARTIFACT)
+            .expect("fixture artifact must load");
+        let explanation = map
+            .resolve(
+                "flipped",
+                crate::conversion::conversion_map::Direction::Forward,
+            )
+            .expect("the fixture rule claims its own path");
+        let crate::conversion::conversion_map::Outcome::Path {
+            value_transformation,
+            ..
+        } = explanation.outcome
+        else {
+            panic!("the fixture path resolves to a concrete stored path")
+        };
+        assert!(
+            matches!(value_transformation, ValueTransformation::SignFlip { .. }),
+            "the fixture must declare a flip, or this proves nothing"
+        );
+
+        let values = [1.0f64, -2.0];
+        assert_eq!(
+            copy_value_transformation(&value_transformation, SourceView::Double(&values)),
+            Err("this value transformation was not inverted for the write direction")
+        );
+
+        // Inverted, the very same transformation executes and negates a copy,
+        // leaving the caller's own buffer alone (ADR 0018).
+        let inverted = value_transformation
+            .inverse()
+            .expect("a flip between differing conventions inverts");
+        assert_eq!(
+            copy_value_transformation(&inverted, SourceView::Double(&values)),
+            Ok(Some(vec![-1.0, 2.0]))
+        );
+        assert_eq!(values, [1.0f64, -2.0]);
+    }
 
     /// A real [`ValueTransformation::SignFlip`], obtained by loading a tiny
     /// fixture artifact and resolving its one declared flip path — the only

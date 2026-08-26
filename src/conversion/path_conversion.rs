@@ -100,7 +100,15 @@ pub(crate) enum WritePath {
 }
 
 pub(crate) struct WriteCandidate {
+    /// The spelling IMAS-Core receives: anchor-stripped when the caller's own
+    /// argument was relative to a live context.
     pub(crate) path: CString,
+    /// The same candidate as one complete DD path from the IDS root, which is
+    /// what a loss-log entry must name — a caller draining the log is looking
+    /// for the stored spelling that now holds a stale value, and an
+    /// anchor-relative fragment does not tell them where to find it (ADR 0016
+    /// decision 4).
+    pub(crate) stored_dd_path: String,
     pub(crate) precedence: u32,
     pub(crate) value_transformation: ValueTransformation,
 }
@@ -344,7 +352,9 @@ pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) 
 
     // Keep the shared guard ahead of the write-specific precedence guard:
     // a rule that cannot be served at all must not appear to be merely a
-    // collision risk.
+    // collision risk. The `Outcome::Refusal` arm in the `match` below is
+    // reached by nothing once this guard stands; it remains because the match
+    // must be exhaustive over `Outcome`.
     if let Outcome::Refusal(reason) = &explanation.outcome {
         return WritePath::Refusal {
             reason: refusal_reason_message(*reason),
@@ -376,6 +386,7 @@ pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) 
             .map(|candidate| {
                 stored_c_path(record, &candidate.path, is_absolute).map(|path| WriteCandidate {
                     path,
+                    stored_dd_path: candidate.path,
                     precedence: candidate.precedence,
                     value_transformation: candidate.value_transformation,
                 })
@@ -445,8 +456,20 @@ pub(crate) fn resolve_delete_path(record: &ConversionRecord, raw: *const c_char)
     }
 
     // `Outcome::Refusal` is the shared pre-resolution guard: it is computed
-    // by ConversionMap before any consumer narrows a path. A non-primary
-    // source is the delete-specific guard that follows it.
+    // by ConversionMap before any consumer narrows a path. It goes first for
+    // the same reason it does in `resolve_write_path` — a rule that cannot be
+    // served at all must not appear to be merely a collision risk — so one
+    // rule earns one reason at both seams instead of two that disagree. A
+    // non-primary source is the delete-specific guard that follows it. The
+    // `Outcome::Refusal` arm in the `match` below is reached by nothing once
+    // this guard stands; it remains because the match must be exhaustive over
+    // `Outcome`.
+    if let Outcome::Refusal(reason) = &explanation.outcome {
+        return DeletePath::Refusal {
+            reason: refusal_reason_message(*reason),
+            dd_path: hli_absolute,
+        };
+    }
     if explanation
         .precedence
         .is_some_and(|precedence| precedence != 1)
@@ -824,6 +847,11 @@ mod tests {
                 <rule id="no-stored-slot" rel="left_only" left="missing">
                   <fidelity forward="lossy" reverse="unmappable"/>
                 </rule>
+                <rule id="collides-and-unmappable" rel="merged" right="folded">
+                  <from left="primary" precedence="1"/>
+                  <from left="secondary" precedence="2"/>
+                  <fidelity forward="unmappable" reverse="exact"/>
+                </rule>
               </rules>
             </ids-map>
         "#;
@@ -863,6 +891,95 @@ mod tests {
             "this path has no safe conversion between DD versions",
         );
         assert_refusal("missing", "this path has no stored source");
+
+        // The only configuration in which the order is observable at all:
+        // `secondary` is a precedence-2 `<from>`, so the write-specific
+        // collision guard claims it, *and* its rule is declared `unmappable`
+        // in the direction under test, so the shared guard claims it too.
+        // Reporting the rule's own reason is what proves the shared guard ran
+        // first; swapping the two guards leaves every assertion above green
+        // and turns this one into "non-primary source".
+        assert_refusal(
+            "secondary",
+            "this path has no safe conversion between DD versions",
+        );
+
+        REGISTRY.remove(CTX_ID);
+    }
+
+    /// Issue #126 / review finding S-J3: `resolve_delete_path` carries the
+    /// same two guards in the same order, so one rule earns one reason at
+    /// both seams. The write's own order is pinned by
+    /// `write_pre_resolution_refusals_keep_the_shared_guard_ahead_of_rule_specific_ones`
+    /// directly above; this is the delete half of the same claim.
+    ///
+    /// The third refusal issue #126 names — a value transformation that
+    /// cannot be inverted — is not orderable against these two and so is
+    /// absent from both fixtures deliberately: it lives in
+    /// `seam_policy::run_write`, which can only see a transformation *after*
+    /// resolution has produced one, and a delete carries no value at all.
+    #[test]
+    fn delete_pre_resolution_refusals_keep_the_shared_guard_ahead_of_rule_specific_ones() {
+        const CTX_ID: c_int = 0x5D04;
+        const FIXTURE_IDS: &str = "equilibrium-delete-refusal-order-fixture";
+        const ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="collides-and-unmappable" rel="merged" right="folded">
+                  <from left="primary" precedence="1"/>
+                  <from left="secondary" precedence="2"/>
+                  <fidelity forward="unmappable" reverse="exact"/>
+                </rule>
+                <rule id="collides-only" rel="merged" right="other_folded">
+                  <from left="other_primary" precedence="1"/>
+                  <from left="other_secondary" precedence="2"/>
+                  <fidelity forward="lossy" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let stored = "4.1.1".parse().expect("known release");
+        let hli = "3.39.0".parse().expect("known release");
+        assert!(REGISTRY.record_root(
+            CTX_ID,
+            String::new(),
+            CTX_ID,
+            MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
+            crate::conversion::conversion_map::Direction::Forward,
+            || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
+        ));
+        let record = REGISTRY
+            .lookup(CTX_ID)
+            .expect("the root record was just registered");
+
+        let assert_refusal = |path: &str, expected_reason: &str| {
+            let path = CString::new(path).expect("fixture paths contain no NUL");
+            match resolve_delete_path(&record, path.as_ptr()) {
+                DeletePath::Refusal { reason, dd_path } => {
+                    assert_eq!(reason, expected_reason);
+                    assert_eq!(dd_path, path.to_str().expect("fixture paths are ASCII"));
+                }
+                DeletePath::Forward | DeletePath::Translated(_) | DeletePath::Candidates(_) => {
+                    panic!("{path:?} must refuse before IMAS-Core")
+                }
+            }
+        };
+
+        // Both guards claim `secondary`; the shared one answers, exactly as it
+        // does at the write seam.
+        assert_refusal(
+            "secondary",
+            "this path has no safe conversion between DD versions",
+        );
+        // Only the delete-specific guard claims `other_secondary`, so its
+        // reason is the one a caller sees — the hoist above did not swallow
+        // the collision guard.
+        assert_refusal(
+            "other_secondary",
+            "this path is a non-primary source and cannot delete a shared stored slot",
+        );
 
         REGISTRY.remove(CTX_ID);
     }

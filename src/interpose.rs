@@ -1588,10 +1588,9 @@ fn context_path_refusal(
     crate::path_conversion_refusal(reason, dd_path, &record.hli_version, &record.stored_version)
 }
 
-/// A refusal from a seam that holds a live conversion record but has not
-/// resolved a path through the map — the delete seam, whose refusal remains a
-/// blanket context-keyed check, and arraystruct opens, whose own resolution
-/// already failed.
+/// A refusal from a seam that holds a live conversion record but has no
+/// resolved path to name — today the two arraystruct-open arguments, whose
+/// own resolution already failed and so produced no stored spelling.
 ///
 /// Issue #58 AC3 asks that *every* refusal message name the reason, the DD
 /// path and both DD versions, and these seams used to emit the reason alone.
@@ -1599,10 +1598,13 @@ fn context_path_refusal(
 /// that triggered the refusal carries both versions, and `raw_path` is the
 /// caller's own argument, which is the spelling AC3 asks to see anyway.
 ///
-/// A seam whose path argument is null or empty — `al_delete_data` where
-/// IMAS-Core's contract allows it — falls back to the context's own resolved
-/// path, and says so plainly when there is no path at either place rather
-/// than inventing one.
+/// A seam whose path argument is null or empty falls back to the context's
+/// own resolved path, and says so plainly when there is no path at either
+/// place rather than inventing one. That fallback outlives the delete seam
+/// that motivated it: issue #64's blanket context-keyed delete refusal was
+/// this function's original caller, and #129/#131 replaced it with real path
+/// resolution, so `delete_data` now refuses through `context_path_refusal`
+/// with a resolved spelling in hand.
 fn contextual_refusal(
     record: &crate::registry::context_registry::ConversionRecord,
     reason: &str,
@@ -1801,19 +1803,39 @@ fn write_data_impl(
                 size,
             );
             if status.code == 0 {
-                for dd_path in unwritten_candidates {
-                    REGISTRY.record_write_loss_at_root(
-                        record.root_id,
-                        dd_path.to_string(),
-                        Fidelity::PotentiallyLossy,
-                    );
-                }
+                retain_unwritten_candidates(&record, &unwritten_candidates);
             }
             status
         }
         seam_policy::WriteVerdict::Refusal { reason, dd_path } => {
             finish_write_refusal(&record, &reason, &dd_path)
         }
+    }
+}
+
+/// Records the candidates a successful write deliberately left alone.
+///
+/// This is the write path's only fidelity verdict, and it is deliberately not
+/// the one the artifact declares. Every `merged` rule in the shipped artifact
+/// declares `lossy` — ADR 0008's *certain* bucket — but that declaration is a
+/// statement about a **read**, where two stored spellings may disagree and the
+/// reader cannot tell which it got. A write puts one value into one slot, so
+/// what it risks is only that some other reader later finds a stale value
+/// under a spelling this write did not touch: unverified, hence
+/// `PotentiallyLossy` (ADR 0016 decision 12).
+///
+/// Together with `finish_write_refusal`'s `Fidelity::Unmappable`, these are
+/// the only two fidelities the write seam can produce, which is what makes
+/// `Fidelity::Lossy` unreachable from a write. That claim is pinned by
+/// `a_declared_lossy_candidate_plan_still_retains_a_potential_loss` rather
+/// than left to a reader to derive from these two literals (ADR 0011).
+fn retain_unwritten_candidates(record: &ConversionRecord, unwritten: &[&str]) {
+    for dd_path in unwritten {
+        REGISTRY.record_write_loss_at_root(
+            record.root_id,
+            (*dd_path).to_string(),
+            Fidelity::PotentiallyLossy,
+        );
     }
 }
 
@@ -1891,6 +1913,11 @@ unsafe fn delete_candidates(ctx: c_int, paths: &[CString]) -> al_status_t {
     let mut first_failure = None;
 
     for path in paths {
+        // One fixed probe shape for every candidate, whatever its real DD type
+        // and rank are. That is a known unsoundness, not an assumption that
+        // every candidate is a scalar: ADR 0017 decision 2 records why it
+        // cannot be fixed or verified before issue #138, and issue #138 owns
+        // it.
         let mut probed = 0.0f64;
         let mut data: *mut c_void = (&raw mut probed).cast();
         let probe = unsafe {
@@ -2170,6 +2197,110 @@ mod tests {
                 Fidelity::Unmappable,
                 crate::registry::context_registry::LossOperation::Write,
             ))
+        );
+
+        REGISTRY.remove(CTX_ID);
+    }
+
+    /// Issue #128 / ADR 0016 decision 12: the write path produces no
+    /// `Fidelity::Lossy` verdict at all.
+    ///
+    /// The fixture declares its `merged` rule `lossy` in the direction under
+    /// test, which is the one input that could make the certain bucket
+    /// reachable — every `merged` rule in the shipped artifact declares
+    /// exactly that. The write seam must still record `PotentiallyLossy`,
+    /// because the declared fidelity describes a read: it is certain that two
+    /// stored spellings may disagree when *read*, and merely possible that
+    /// some later reader finds the stale one after a write put its value in
+    /// the primary slot.
+    ///
+    /// If this ever records `Lossy`, the write path has grown a producer for a
+    /// verdict that has never had coverage — add real coverage for it rather
+    /// than relaxing this assertion (ADR 0011).
+    #[test]
+    fn a_declared_lossy_candidate_plan_still_retains_a_potential_loss() {
+        const CTX_ID: c_int = 0x5D05;
+        const FIXTURE_IDS: &str = "equilibrium-write-lossy-candidate-fixture";
+        const ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="fold-two" rel="merged" right="folded">
+                  <from left="primary" precedence="1"/>
+                  <from left="secondary" precedence="2"/>
+                  <fidelity forward="exact" reverse="lossy"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        // A `merged` rule offers its candidate plan on the side that folds —
+        // the HLI asks for the one canonical name and several stored names can
+        // serve it — so this record travels reverse: a 4.1.1 HLI over a
+        // 3.39.0 occurrence, which is also the direction the fixture declares
+        // `lossy`.
+        let stored = "3.39.0".parse().expect("known release");
+        let hli = "4.1.1".parse().expect("known release");
+        assert!(REGISTRY.record_root(
+            CTX_ID,
+            String::new(),
+            CTX_ID,
+            MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
+            Direction::Reverse,
+            || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
+        ));
+        let record = REGISTRY
+            .lookup(CTX_ID)
+            .expect("the root record was just registered");
+
+        let field = CString::new("folded").expect("fixture path contains no NUL");
+        let resolution = path_conversion::resolve_write_path(&record, field.as_ptr());
+        assert!(
+            matches!(resolution, WritePath::Candidates(_)),
+            "the fixture must resolve to a candidate plan, or this proves nothing"
+        );
+        let field_argument = seam_policy::WriteArgument {
+            resolution,
+            forward: None,
+            dd_path: "folded".to_string(),
+        };
+        let timebase_argument = seam_policy::WriteArgument {
+            resolution: WritePath::Forward,
+            forward: None,
+            dd_path: String::new(),
+        };
+        let values = [1.0f64];
+        let verdict = seam_policy::run_write(
+            &field_argument,
+            &timebase_argument,
+            seam_policy::BufferShape {
+                datatype: seam_policy::BufferDataType::Double,
+                rank: 1,
+            },
+            seam_policy::SourceView::Double(&values),
+        );
+        let seam_policy::WriteVerdict::Forward {
+            unwritten_candidates,
+            ..
+        } = verdict
+        else {
+            panic!("a precedence-1 write over a candidate plan must forward")
+        };
+        assert_eq!(unwritten_candidates, vec!["secondary"]);
+
+        retain_unwritten_candidates(&record, &unwritten_candidates);
+        assert_eq!(REGISTRY.loss_count(CTX_ID), 1);
+        assert_eq!(
+            REGISTRY.with_loss_at(CTX_ID, 0, |path, fidelity, operation| {
+                (path.to_string(), fidelity, operation)
+            }),
+            Some((
+                "secondary".to_string(),
+                Fidelity::PotentiallyLossy,
+                crate::registry::context_registry::LossOperation::Write,
+            )),
+            "the write seam recorded something other than one PotentiallyLossy entry \
+             for a rule the artifact declares certainly lossy"
         );
 
         REGISTRY.remove(CTX_ID);

@@ -52,23 +52,6 @@ static void check_plugin_stub_field(const char *field) {
     CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"), field) == 0);
 }
 
-static int loss_count(int ctx_id) {
-    int count = -1;
-    al_status_t status = imas_mvdd_context_loss_count(ctx_id, &count);
-    CHECK(status.code == 0);
-    return count;
-}
-
-static void check_loss_at(int ctx_id, int index, const char *expected_path, int expected_verdict) {
-    char path_buf[256] = {0};
-    int verdict = -1;
-    al_status_t status =
-        imas_mvdd_context_loss_at(ctx_id, index, path_buf, sizeof(path_buf), &verdict);
-    CHECK(status.code == 0);
-    CHECK(strcmp(path_buf, expected_path) == 0);
-    CHECK(verdict == expected_verdict);
-}
-
 /* "rename-beta-normal" in docs/3.39.0--4.1.1.xml: 4.1.1's spelling on the
  * right, 3.39.0's on the left. */
 static const char *const ROOT_HLI_FIELD = "time_slice/global_quantities/beta_tor_norm";
@@ -461,7 +444,7 @@ static void scenario_plugin_read_refusal_before_core(void) {
     CHECK(data == (void *)1);
     CHECK(size[0] == 73);
     CHECK(loss_count(operation_ctx) == 1);
-    check_loss_at(operation_ctx, 0, field, IMAS_MVDD_FIDELITY_UNMAPPABLE);
+    check_loss_at(operation_ctx, 0, field, IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("plugin_reentry_policy_test plugin-read-refusal-before-core: a unit redefinition "
            "refused through the plugin reentry seam without calling IMAS-Core\n");
@@ -484,7 +467,7 @@ static void scenario_plugin_read_no_source_returns_null_without_core_call(void) 
     CHECK(int_from_stub("recording_stub_plugin_call_count") == plugin_calls_before);
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/contour_tree/critical_point",
-                  IMAS_MVDD_FIDELITY_LOSSY);
+                  IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("plugin_reentry_policy_test plugin-read-no-source-returns-null-without-core-call: no "
            "stored path was read through the plugin reentry seam\n");
@@ -558,10 +541,10 @@ static void scenario_plugin_read_through_child_context_retains_loss_on_root(void
 
     CHECK(loss_count(time_slice_ctx) == 1);
     check_loss_at(time_slice_ctx, 0, "time_slice/boundary_separatrix/gap/r",
-                  IMAS_MVDD_FIDELITY_LOSSY);
+                  IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r",
-                  IMAS_MVDD_FIDELITY_LOSSY);
+                  IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("plugin_reentry_policy_test plugin-read-through-child-context-retains-loss-on-root: a "
            "non-exact plugin read through a plugin-opened child context appended its complete DD "

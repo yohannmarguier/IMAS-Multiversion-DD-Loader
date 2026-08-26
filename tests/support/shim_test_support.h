@@ -134,6 +134,72 @@ static inline int run_named_scenario(int argc, char **argv, const shim_test_scen
 #define IMAS_DOUBLE_DATA 52
 #define IMAS_COMPLEX_DATA 53
 
+/* The recording stub's own data-event kinds, drained through
+ * `recording_stub_data_event_kind_at`. The stub declares them in a
+ * file-private enum (`tests/stub/recording_stub.c`, RECORDING_STUB_DATA_EVENT_*)
+ * and `tests/stub/` ships no header, so a suite reaching them across the
+ * dlopen boundary has no way to link against the definition. Naming them once
+ * here is the closest thing to that link, and it keeps a bare `1` from
+ * standing in a comparison under a comment claiming to be a constant. */
+#define IMAS_MVDD_STUB_DATA_EVENT_READ 1
+#define IMAS_MVDD_STUB_DATA_EVENT_DELETE 2
+
+/* The loss log a caller drains through the shim's four owned exports
+ * (ADR 0012). These four helpers were copied into five suites — `loss_count`
+ * five times, `check_loss_at` four, and the newest copy of `check_loss_at`
+ * with a fifth parameter the other three lacked, which is precisely the
+ * divergence this header exists to stop. The five-parameter form is the one
+ * that survives: issue #124 put the operation on every entry, so there is no
+ * such thing as an entry whose operation is not worth asserting, and a read
+ * site passing IMAS_MVDD_LOSS_OPERATION_READ says so where it used to say
+ * nothing. That also retires the separate `check_loss_operation_at` two suites
+ * carried: its three call sites each sat directly beneath a `check_loss_at` on
+ * the same context and index, so folding the parameter in covers them without
+ * losing an assertion. */
+static inline int loss_count(int ctx_id) {
+    int count = -1;
+    CHECK(imas_mvdd_context_loss_count(ctx_id, &count).code == 0);
+    return count;
+}
+
+static inline void check_no_loss_entry(int ctx_id) { CHECK(loss_count(ctx_id) == 0); }
+
+/* ADR 0016 decision 12: a write produces no certainly-lossy verdict. Drains
+ * the whole log rather than one index, because the claim is about every entry
+ * a write can put there. The reachability half of it is pinned in Rust, at the
+ * site that chooses the fidelity
+ * (`interpose::tests::a_declared_lossy_candidate_plan_still_retains_a_potential_loss`);
+ * this is the observable half, and if it ever fires the answer is to go add
+ * real coverage for the certain bucket, not to relax it (ADR 0011). */
+static inline void check_no_write_lossy_verdict(int ctx_id) {
+    int count = -1;
+    CHECK(imas_mvdd_context_loss_count(ctx_id, &count).code == 0);
+    for (int index = 0; index < count; ++index) {
+        char path[256] = {0};
+        int verdict = -1;
+        CHECK(imas_mvdd_context_loss_at(ctx_id, index, path, sizeof(path), &verdict).code == 0);
+        if (verdict == IMAS_MVDD_FIDELITY_LOSSY) {
+            fprintf(stderr,
+                    "a write-side LOSSY verdict needs real coverage before it is allowed: "
+                    "entry %d is %s\n",
+                    index, path);
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
+static inline void check_loss_at(int ctx_id, int index, const char *expected_path,
+                                 int expected_verdict, int expected_operation) {
+    char path[256] = {0};
+    int verdict = -1;
+    int operation = -1;
+    CHECK(imas_mvdd_context_loss_at(ctx_id, index, path, sizeof(path), &verdict).code == 0);
+    CHECK(strcmp(path, expected_path) == 0);
+    CHECK(verdict == expected_verdict);
+    CHECK(imas_mvdd_context_loss_operation_at(ctx_id, index, &operation).code == 0);
+    CHECK(operation == expected_operation);
+}
+
 #ifdef RECORDING_STUB_PATH
 
 #include <dlfcn.h>

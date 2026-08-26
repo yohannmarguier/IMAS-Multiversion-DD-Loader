@@ -15,13 +15,7 @@
 
 static al_status_t write_field(int ctx_id, const char *field, const char *timebase, void *data,
                                int *size) {
-    return al_write_data(ctx_id, field, timebase, data, 52 /* DOUBLE_DATA */, 1, size);
-}
-
-static int loss_count(int ctx_id) {
-    int count = -1;
-    CHECK(imas_mvdd_context_loss_count(ctx_id, &count).code == 0);
-    return count;
+    return al_write_data(ctx_id, field, timebase, data, IMAS_DOUBLE_DATA, 1, size);
 }
 
 typedef const char *(*delete_path_at_fn)(int);
@@ -53,18 +47,6 @@ static void disable_probe_allocations(void) {
 static void arm_reentrant_read(read_data_fn callback, const char *field) {
     ((set_reentrant_read_fn)stub_symbol_or_die("recording_stub_set_reentrant_read"))(callback,
                                                                                        field);
-}
-
-static void check_loss_at(int ctx_id, int index, const char *expected_path, int expected_verdict,
-                          int expected_operation) {
-    char path[256] = {0};
-    int verdict = -1;
-    int operation = -1;
-    CHECK(imas_mvdd_context_loss_at(ctx_id, index, path, sizeof(path), &verdict).code == 0);
-    CHECK(strcmp(path, expected_path) == 0);
-    CHECK(verdict == expected_verdict);
-    CHECK(imas_mvdd_context_loss_operation_at(ctx_id, index, &operation).code == 0);
-    CHECK(operation == expected_operation);
 }
 
 static void check_write_lands(int ctx_id, const char *field, const char *timebase,
@@ -150,7 +132,7 @@ static void scenario_plugin_write_renamed_field_lands_at_stored_spelling(void) {
     int size[1] = {73};
     al_status_t status = al_plugin_write_data(
         operation_ctx, "time_slice/global_quantities/beta_tor_norm", "time", &sentinel,
-        52 /* DOUBLE_DATA */, 1, size);
+        IMAS_DOUBLE_DATA, 1, size);
 
     CHECK(status.code == 0);
     CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"),
@@ -171,7 +153,7 @@ static void scenario_plugin_write_matching_context_forwards_unchanged(void) {
 
     al_status_t status = al_plugin_write_data(
         operation_ctx, "time_slice/global_quantities/beta_tor_norm", "time", &sentinel,
-        52 /* DOUBLE_DATA */, 1, size);
+        IMAS_DOUBLE_DATA, 1, size);
 
     CHECK(status.code == 0);
     CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"),
@@ -211,11 +193,18 @@ static void scenario_write_candidate_lands_at_primary_and_retains_unwritten_cand
     CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 1);
     CHECK(strcmp(string_from_stub("recording_stub_write_field"),
                  "time_slice/profiles_2d/b_field_phi") == 0);
+    /* The entries name the two candidates left unwritten, by their own stored
+     * 3.39.0 spellings — not the caller's `b_field_phi`, which is where the
+     * value did land. Story 22 asks the log to say where a stale value may now
+     * be found, so a repeated copy of the caller's own path would answer the
+     * one question it exists to answer with nothing. `fold-p2d-bphi` declares
+     * b_field_phi at precedence 1, b_field_tor at 2, b_tor at 3. */
     CHECK(loss_count(operation_ctx) == 2);
-    check_loss_at(operation_ctx, 0, "time_slice/profiles_2d/b_field_phi",
+    check_loss_at(operation_ctx, 0, "time_slice/profiles_2d/b_field_tor",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
-    check_loss_at(operation_ctx, 1, "time_slice/profiles_2d/b_field_phi",
+    check_loss_at(operation_ctx, 1, "time_slice/profiles_2d/b_tor",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+    check_no_write_lossy_verdict(operation_ctx);
 
     /* A CONSISTENCY CHECK, not a proof of what reached storage — issue #133's
      * acceptance criteria ask for that label to be here, so nobody later reads
@@ -269,9 +258,13 @@ static void scenario_write_split_candidate_lands_at_primary(void) {
     CHECK(pointer_from_stub("recording_stub_write_data") != &value);
     CHECK(double_at_from_stub("recording_stub_write_double_at", 0) == -value);
     CHECK(value == 42.0);
+    /* `split-psi-axis` feeds the 3.39.0 psi_axis into two 4.1.1 slots. Only
+     * precedence 1 is written, and the entry names the precedence-2 stored
+     * spelling that keeps whatever it already held. */
     CHECK(loss_count(operation_ctx) == 1);
-    check_loss_at(operation_ctx, 0, "time_slice/global_quantities/psi_axis",
+    check_loss_at(operation_ctx, 0, "time_slice/global_quantities/psi_magnetic_axis",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+    check_no_write_lossy_verdict(operation_ctx);
 }
 
 static void scenario_child_write_candidate_retains_complete_path_at_root(void) {
@@ -286,22 +279,17 @@ static void scenario_child_write_candidate_retains_complete_path_at_root(void) {
     CHECK(write_field(child_ctx, "profiles_2d/b_field_phi", "time", &value, size).code == 0);
     CHECK(loss_count(operation_ctx) == 2);
     CHECK(loss_count(child_ctx) == 2);
-    check_loss_at(child_ctx, 0, "time_slice/profiles_2d/b_field_phi",
+    /* The caller's argument was relative to the `time_slice` anchor, and the
+     * stored candidate spellings are still reported as complete DD paths from
+     * the IDS root — the anchor-stripped fragment IMAS-Core received would
+     * not tell a draining caller where to look. */
+    check_loss_at(child_ctx, 0, "time_slice/profiles_2d/b_field_tor",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
-    check_loss_at(child_ctx, 1, "time_slice/profiles_2d/b_field_phi",
+    check_loss_at(child_ctx, 1, "time_slice/profiles_2d/b_tor",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
 
-    for (int index = 0; index < loss_count(operation_ctx); ++index) {
-        char path[256] = {0};
-        int verdict = -1;
-        CHECK(imas_mvdd_context_loss_at(operation_ctx, index, path, sizeof(path), &verdict).code ==
-              0);
-        if (verdict == IMAS_MVDD_FIDELITY_LOSSY) {
-            fprintf(stderr,
-                    "a write-side LOSSY verdict needs real coverage before it is allowed\n");
-            abort();
-        }
-    }
+    check_no_write_lossy_verdict(operation_ctx);
+    check_no_write_lossy_verdict(child_ctx);
 }
 
 static void scenario_write_uses_the_primary_candidate_without_fanout(void) {
@@ -639,8 +627,8 @@ static void scenario_delete_fans_out_over_candidates_in_declared_order(void) {
     CHECK(strcmp(delete_path_at(deletes_before + 2), "time_slice/profiles_2d/b_tor") == 0);
     CHECK(int_from_stub("recording_stub_data_event_count") == events_before + 6);
     for (int index = 0; index < 3; ++index) {
-        CHECK(data_event_kind_at(events_before + 2 * index) == 1 /* READ */);
-        CHECK(data_event_kind_at(events_before + 2 * index + 1) == 2 /* DELETE */);
+        CHECK(data_event_kind_at(events_before + 2 * index) == IMAS_MVDD_STUB_DATA_EVENT_READ);
+        CHECK(data_event_kind_at(events_before + 2 * index + 1) == IMAS_MVDD_STUB_DATA_EVENT_DELETE);
         CHECK(strcmp(data_event_path_at(events_before + 2 * index),
                      delete_path_at(deletes_before + index)) == 0);
         CHECK(strcmp(data_event_path_at(events_before + 2 * index + 1),

@@ -18,7 +18,7 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 
 | Path | What lives there |
 |---|---|
-| `support/` | `shim_test_support.h` — the one shared C harness: `CHECK`/`CHECK_OK`/`CHECK_REFUSAL_MESSAGE`, IMAS-Core's four data-type codes, `open_recording_stub` plus the `{string,int,double,double_at,pointer}_from_stub` accessors, `open_mismatched_occurrence`, and the `{name, function}` scenario table `RUN_NAMED_SCENARIO` dispatches `argv[1]` through. Include this instead of writing a prologue. |
+| `support/` | `shim_test_support.h` — the one shared C harness: `CHECK`/`CHECK_OK`/`CHECK_REFUSAL_MESSAGE`, IMAS-Core's four data-type codes, the recording stub's two data-event kinds, the loss-log helpers (`loss_count`, `check_no_loss_entry`, `check_loss_at`, `check_no_write_lossy_verdict`), `open_recording_stub` plus the `{string,int,double,double_at,pointer}_from_stub` accessors, `open_mismatched_occurrence`, and the `{name, function}` scenario table `RUN_NAMED_SCENARIO` dispatches `argv[1]` through. Include this instead of writing a prologue. |
 | `stub/` | `recording_stub.c` — a fake `libal` exporting the whole runtime-bound surface and recording what it received, including snapshots of write payloads whose shim-owned buffers are freed on return, so assertions are made on what crossed the boundary rather than inferred from a data round trip. ~23 `RECORDING_STUB_*` env knobs drive fixtures and failures (stamp version, not-found, sign-flip values, per-seam `*_FAIL` knobs, filled-paths CSV, reentrant reads and writes). |
 | `shim/` | 11 C suites driving the public ABI against that stub — 182 tests. |
 | `real_core/` | 4 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core and the checked-in equilibrium HDF5 fixture pair. |
@@ -138,7 +138,12 @@ skipped candidate as a `POTENTIALLY_LOSSY` `WRITE` loss after Core succeeds
 (apart from ADR 0018's unset rank-zero scalar, which stores no value and earns
 no loss), and refuses a non-primary source in either direction, even where its
 artifact entry is not deprecated; a child keeps those losses at its root under
-the complete HLI path. The DD-version stamp still refuses before Core; the
+the complete DD path. Each such entry names the **stored** spelling that was
+left unwritten — `b_field_tor`/`b_tor` beside a written `b_field_phi`,
+`psi_magnetic_axis` beside a written `psi_axis` — because the risk the entry
+exists to report is that another reader of the occurrence finds a stale value
+under one of those names; naming the caller's own path instead answered that
+question with nothing (review finding P1). The DD-version stamp still refuses before Core; the
 stamp's access-layer siblings still forward. Matching, unstamped, unknown and
 conversion-disabled contexts forward unchanged.
 

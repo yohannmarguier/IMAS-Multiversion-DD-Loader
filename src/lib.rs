@@ -34,20 +34,28 @@
 //! resolving it again would translate twice, flip a sign twice, and log a loss
 //! the caller never earned (ADR 0014).
 //!
-//! On a live conversion record, `al_write_data` and
-//! `al_plugin_write_data` independently resolve identity, `renamed`, and
-//! `moved` field/timebase paths to one stored spelling before IMAS-Core is
-//! called. Candidate plans, declared value transformations, and a write to
-//! the DD-version stamp refuse; matching, unknown, unstamped and
-//! conversion-disabled contexts forward unchanged. `al_delete_data` resolves
-//! a safe identity, renamed, or moved leaf to its stored spelling; an empty
-//! path forwards as the caller's whole-DATAOBJECT migration route, while
-//! structures refuse. A candidate plan probes each stored spelling and
-//! deletes every candidate that is present.
+//! On a live conversion record, `al_write_data` and `al_plugin_write_data`
+//! independently resolve `field` and `timebase` to one stored spelling before
+//! IMAS-Core is called. A declared value transformation is inverted and
+//! executed on a shim-owned copy, so caller storage is never touched (ADR
+//! 0018); a candidate plan writes only its precedence-1 slot and records the
+//! remaining stored spellings as potential losses once that write succeeds
+//! (ADR 0016). A write refuses before IMAS-Core when the path has no stored
+//! slot, when it is a non-primary source of a shared slot, when its
+//! transformation cannot be inverted, and when it targets the DD-version
+//! stamp. `al_delete_data` resolves a safe identity, renamed, or moved leaf
+//! to its stored spelling and fans a candidate plan out over every present
+//! stored spelling, because a delete asserts an absence rather than a value
+//! (ADR 0017); an empty path forwards as the caller's whole-DATAOBJECT
+//! migration route, a trivial structure delete resolves, and one with a rule
+//! escaping the requested subtree refuses. Matching, unknown, unstamped and
+//! conversion-disabled contexts forward unchanged at both seams.
 //!
-//! Each entry point below documents its own seam behaviour, but the policy
-//! itself lives beside its implementation in `src/interpose.rs` — go there for
-//! the per-seam detail rather than restating it here.
+//! Each entry point below documents its own seam behaviour. The decisions
+//! themselves live in `src/conversion/seam_policy.rs` and
+//! `src/conversion/path_conversion.rs`, with `src/interpose.rs` holding only
+//! the C-facing adaptation around them (ADR 0015) — go there for the per-seam
+//! detail rather than restating it here.
 
 // The mirrored ABI dictates the names; matching IMAS-Core exactly is the point.
 #![allow(non_camel_case_types)]
@@ -299,7 +307,7 @@ pub extern "C" fn getDDVersion() -> *const c_char {
 /// Shim-owned export (ADR 0005) — the `imas_mvdd_` prefix marks it as a
 /// symbol this project defines rather than mirrors from IMAS-Core, and it is
 /// listed explicitly on the export-drift check's owned-exports manifest
-/// (`tests/owned_exports.def`). Reports the calling HLI's process-wide DD
+/// (`tests/abi/owned_exports.def`). Reports the calling HLI's process-wide DD
 /// version once, before any open. The value latches on first use for the
 /// life of the process: an identical repeat is accepted, a conflicting
 /// repeat is refused naming both versions, and the call is safe from any
@@ -315,7 +323,7 @@ pub unsafe extern "C" fn imas_mvdd_set_hli_dd_version(version: *const c_char) ->
     unsafe { version::hli_version::set_from_c(version) }
 }
 
-/// Shim-owned export (ADR 0012) — listed on `tests/owned_exports.def`
+/// Shim-owned export (ADR 0012) — listed on `tests/abi/owned_exports.def`
 /// alongside `imas_mvdd_set_hli_dd_version`. Reports, without allocating,
 /// the number of non-exact read outcomes retained on `ctxID`'s root
 /// conversion context (a query on a child context resolves to the same
@@ -334,7 +342,7 @@ pub unsafe extern "C" fn imas_mvdd_context_loss_count(
     unsafe { resolve::context_loss_count(ctx_id, count) }
 }
 
-/// Shim-owned export (ADR 0012) — listed on `tests/owned_exports.def`
+/// Shim-owned export (ADR 0012) — listed on `tests/abi/owned_exports.def`
 /// alongside `imas_mvdd_set_hli_dd_version`. Copies the `index`-th loss-log
 /// entry retained on `ctxID`'s root conversion context into caller-owned
 /// storage: the DD path exactly as the HLI requested it, NUL-terminated in
@@ -363,7 +371,7 @@ pub unsafe extern "C" fn imas_mvdd_context_loss_at(
     unsafe { resolve::context_loss_at(ctx_id, index, path_buf, buf_len, verdict) }
 }
 
-/// Shim-owned export (ADR 0012) — listed on `tests/owned_exports.def`
+/// Shim-owned export (ADR 0012) — listed on `tests/abi/owned_exports.def`
 /// alongside the other loss-query exports. Writes the operation that produced
 /// the `index`-th entry in `ctxID`'s root loss log to caller-owned storage:
 /// `IMAS_MVDD_LOSS_OPERATION_READ` or `IMAS_MVDD_LOSS_OPERATION_WRITE`.
