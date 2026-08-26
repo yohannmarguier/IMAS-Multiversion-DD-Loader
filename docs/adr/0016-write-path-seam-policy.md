@@ -1,6 +1,6 @@
 # Write-path seam policy: best effort, and refuse rather than lie
 
-ADR 0002 put writes out of scope with one line — *"if known versions differ, return failure without calling IMAS-Core"* — implemented as a blanket context-keyed refusal. This ADR replaces that line. It is a decision record only: no code implements it yet.
+ADR 0002 put writes out of scope with one line — *"if known versions differ, return failure without calling IMAS-Core"* — implemented as a blanket context-keyed refusal. This ADR replaces that line. It was a decision record only when written; issues #123–#131 and #136 implement it, and the correction to decision 11 below records the one mechanism that had to change on the way.
 
 The governing rule is the caller's, stated as three cases:
 
