@@ -18,12 +18,6 @@ static al_status_t write_field(int ctx_id, const char *field, const char *timeba
     return al_write_data(ctx_id, field, timebase, data, 52 /* DOUBLE_DATA */, 1, size);
 }
 
-static int loss_count(int ctx_id) {
-    int count = -1;
-    CHECK(imas_mvdd_context_loss_count(ctx_id, &count).code == 0);
-    return count;
-}
-
 typedef const char *(*delete_path_at_fn)(int);
 typedef int (*data_event_kind_at_fn)(int);
 typedef const char *(*data_event_path_at_fn)(int);
@@ -53,18 +47,6 @@ static void disable_probe_allocations(void) {
 static void arm_reentrant_read(read_data_fn callback, const char *field) {
     ((set_reentrant_read_fn)stub_symbol_or_die("recording_stub_set_reentrant_read"))(callback,
                                                                                        field);
-}
-
-static void check_loss_at(int ctx_id, int index, const char *expected_path, int expected_verdict,
-                          int expected_operation) {
-    char path[256] = {0};
-    int verdict = -1;
-    int operation = -1;
-    CHECK(imas_mvdd_context_loss_at(ctx_id, index, path, sizeof(path), &verdict).code == 0);
-    CHECK(strcmp(path, expected_path) == 0);
-    CHECK(verdict == expected_verdict);
-    CHECK(imas_mvdd_context_loss_operation_at(ctx_id, index, &operation).code == 0);
-    CHECK(operation == expected_operation);
 }
 
 static void check_write_lands(int ctx_id, const char *field, const char *timebase,

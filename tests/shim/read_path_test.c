@@ -37,33 +37,6 @@ static void check_stub_paths(const char *field, const char *timebase) {
     CHECK(strcmp(string_from_stub("recording_stub_read_timebase"), timebase) == 0);
 }
 
-static int loss_count(int ctx_id) {
-    int count = -1;
-    al_status_t status = imas_mvdd_context_loss_count(ctx_id, &count);
-    CHECK(status.code == 0);
-    return count;
-}
-
-static void check_no_loss_entry(int ctx_id) {
-    CHECK(loss_count(ctx_id) == 0);
-}
-
-static void check_loss_at(int ctx_id, int index, const char *expected_path, int expected_verdict) {
-    char path_buf[256] = {0};
-    int verdict = -1;
-    al_status_t status = imas_mvdd_context_loss_at(ctx_id, index, path_buf, sizeof(path_buf), &verdict);
-    CHECK(status.code == 0);
-    CHECK(strcmp(path_buf, expected_path) == 0);
-    CHECK(verdict == expected_verdict);
-}
-
-static void check_loss_operation_at(int ctx_id, int index, int expected_operation) {
-    int operation = -1;
-    al_status_t status = imas_mvdd_context_loss_operation_at(ctx_id, index, &operation);
-    CHECK(status.code == 0);
-    CHECK(operation == expected_operation);
-}
-
 static void check_read_refusal(int operation_ctx, const char *field, int datatype,
                                const char *expected_message) {
     int reads_before = int_from_stub("recording_stub_read_call_count");
@@ -79,7 +52,7 @@ static void check_read_refusal(int operation_ctx, const char *field, int datatyp
     CHECK(size[0] == 73);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
     CHECK(loss_count(operation_ctx) == losses_before + 1);
-    check_loss_at(operation_ctx, losses_before, field, IMAS_MVDD_FIDELITY_UNMAPPABLE);
+    check_loss_at(operation_ctx, losses_before, field, IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_READ);
 }
 
 static void scenario_translates_field_and_timebase_independently(void) {
@@ -111,7 +84,7 @@ static void scenario_forward_direction_translates_and_reports_no_source(void) {
     CHECK(data == NULL);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
     CHECK(loss_count(operation_ctx) == 1);
-    check_loss_at(operation_ctx, 0, "time_slice/boundary/lcfs", IMAS_MVDD_FIDELITY_LOSSY);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary/lcfs", IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("read_path_test forward-direction-translates-and-reports-no-source: 3.39.0 HLI "
            "paths used 4.1.1 spellings or returned not found\n");
@@ -143,8 +116,7 @@ static void scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log(void) {
 
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/ggd/b_field_phi",
-                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY);
-    check_loss_operation_at(operation_ctx, 0, IMAS_MVDD_LOSS_OPERATION_READ);
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("read_path_test merged-read-retains-a-lossy-verdict-in-the-loss-log: a merged "
            "rule's lossy verdict and read operation reached the queryable loss log\n");
@@ -174,7 +146,7 @@ static void scenario_reentrant_read_is_forwarded_unchanged(void) {
     check_stub_paths("time_slice/boundary/gap/r", "");
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r",
-                  IMAS_MVDD_FIDELITY_LOSSY);
+                  IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     /* The reentrant one reached IMAS-Core exactly as the stub sent it. */
     CHECK(int_from_stub("recording_stub_reentrant_call_count") == 1);
@@ -229,7 +201,7 @@ static void scenario_plugin_reentrant_read_is_forwarded_across_the_ordinary_fami
               .code == 0);
     CHECK(data != NULL);
     CHECK(loss_count(operation_ctx) == 1);
-    check_loss_at(operation_ctx, 0, field, IMAS_MVDD_FIDELITY_LOSSY);
+    check_loss_at(operation_ctx, 0, field, IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
     CHECK(int_from_stub("recording_stub_reentrant_call_count") == 1);
     CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_field"), field) == 0);
     CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_timebase"), "") == 0);
@@ -251,7 +223,7 @@ static void scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log(void) {
     check_stub_paths("time_slice/boundary/gap/r", "");
 
     CHECK(loss_count(operation_ctx) == 1);
-    check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r", IMAS_MVDD_FIDELITY_LOSSY);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r", IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("read_path_test moved-read-retains-a-lossy-verdict-in-the-loss-log: a plain "
            "moved rule's lossy verdict reached the queryable loss log\n");
@@ -499,7 +471,7 @@ static void scenario_no_source_returns_null_without_core_call(void) {
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/contour_tree/critical_point",
-                  IMAS_MVDD_FIDELITY_LOSSY);
+                  IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("read_path_test no-source-returns-null-without-core-call: no stored path was read\n");
 }

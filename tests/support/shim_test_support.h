@@ -134,6 +134,38 @@ static inline int run_named_scenario(int argc, char **argv, const shim_test_scen
 #define IMAS_DOUBLE_DATA 52
 #define IMAS_COMPLEX_DATA 53
 
+/* The loss log a caller drains through the shim's four owned exports
+ * (ADR 0012). These four helpers were copied into five suites — `loss_count`
+ * five times, `check_loss_at` four, and the newest copy of `check_loss_at`
+ * with a fifth parameter the other three lacked, which is precisely the
+ * divergence this header exists to stop. The five-parameter form is the one
+ * that survives: issue #124 put the operation on every entry, so there is no
+ * such thing as an entry whose operation is not worth asserting, and a read
+ * site passing IMAS_MVDD_LOSS_OPERATION_READ says so where it used to say
+ * nothing. That also retires the separate `check_loss_operation_at` two suites
+ * carried: its three call sites each sat directly beneath a `check_loss_at` on
+ * the same context and index, so folding the parameter in covers them without
+ * losing an assertion. */
+static inline int loss_count(int ctx_id) {
+    int count = -1;
+    CHECK(imas_mvdd_context_loss_count(ctx_id, &count).code == 0);
+    return count;
+}
+
+static inline void check_no_loss_entry(int ctx_id) { CHECK(loss_count(ctx_id) == 0); }
+
+static inline void check_loss_at(int ctx_id, int index, const char *expected_path,
+                                 int expected_verdict, int expected_operation) {
+    char path[256] = {0};
+    int verdict = -1;
+    int operation = -1;
+    CHECK(imas_mvdd_context_loss_at(ctx_id, index, path, sizeof(path), &verdict).code == 0);
+    CHECK(strcmp(path, expected_path) == 0);
+    CHECK(verdict == expected_verdict);
+    CHECK(imas_mvdd_context_loss_operation_at(ctx_id, index, &operation).code == 0);
+    CHECK(operation == expected_operation);
+}
+
 #ifdef RECORDING_STUB_PATH
 
 #include <dlfcn.h>

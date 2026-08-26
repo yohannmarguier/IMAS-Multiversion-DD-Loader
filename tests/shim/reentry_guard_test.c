@@ -23,12 +23,6 @@ static void arm_reentrant_data(const char *setter_name, data_fn callback, int ct
     arm(callback, ctx_id, REENTRANT_FIELD, REENTRANT_TIMEBASE);
 }
 
-static int loss_count(int ctx_id) {
-    int count = -1;
-    CHECK(imas_mvdd_context_loss_count(ctx_id, &count).code == 0);
-    return count;
-}
-
 static void check_reentrant_write_forwarded(int mismatched_ctx) {
     CHECK(int_from_stub("recording_stub_reentrant_data_call_count") == 1);
     CHECK(int_from_stub("recording_stub_reentrant_data_status_code") == 0);
