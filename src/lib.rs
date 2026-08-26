@@ -34,20 +34,28 @@
 //! resolving it again would translate twice, flip a sign twice, and log a loss
 //! the caller never earned (ADR 0014).
 //!
-//! On a live conversion record, `al_write_data` and
-//! `al_plugin_write_data` independently resolve identity, `renamed`, and
-//! `moved` field/timebase paths to one stored spelling before IMAS-Core is
-//! called. Candidate plans, declared value transformations, and a write to
-//! the DD-version stamp refuse; matching, unknown, unstamped and
-//! conversion-disabled contexts forward unchanged. `al_delete_data` resolves
-//! a safe identity, renamed, or moved leaf to its stored spelling; an empty
-//! path forwards as the caller's whole-DATAOBJECT migration route, while
-//! structures refuse. A candidate plan probes each stored spelling and
-//! deletes every candidate that is present.
+//! On a live conversion record, `al_write_data` and `al_plugin_write_data`
+//! independently resolve `field` and `timebase` to one stored spelling before
+//! IMAS-Core is called. A declared value transformation is inverted and
+//! executed on a shim-owned copy, so caller storage is never touched (ADR
+//! 0018); a candidate plan writes only its precedence-1 slot and records the
+//! remaining stored spellings as potential losses once that write succeeds
+//! (ADR 0016). A write refuses before IMAS-Core when the path has no stored
+//! slot, when it is a non-primary source of a shared slot, when its
+//! transformation cannot be inverted, and when it targets the DD-version
+//! stamp. `al_delete_data` resolves a safe identity, renamed, or moved leaf
+//! to its stored spelling and fans a candidate plan out over every present
+//! stored spelling, because a delete asserts an absence rather than a value
+//! (ADR 0017); an empty path forwards as the caller's whole-DATAOBJECT
+//! migration route, a trivial structure delete resolves, and one with a rule
+//! escaping the requested subtree refuses. Matching, unknown, unstamped and
+//! conversion-disabled contexts forward unchanged at both seams.
 //!
-//! Each entry point below documents its own seam behaviour, but the policy
-//! itself lives beside its implementation in `src/interpose.rs` — go there for
-//! the per-seam detail rather than restating it here.
+//! Each entry point below documents its own seam behaviour. The decisions
+//! themselves live in `src/conversion/seam_policy.rs` and
+//! `src/conversion/path_conversion.rs`, with `src/interpose.rs` holding only
+//! the C-facing adaptation around them (ADR 0015) — go there for the per-seam
+//! detail rather than restating it here.
 
 // The mirrored ABI dictates the names; matching IMAS-Core exactly is the point.
 #![allow(non_camel_case_types)]
