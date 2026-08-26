@@ -21,8 +21,6 @@ static al_status_t write_field(int ctx_id, const char *field, const char *timeba
 typedef const char *(*delete_path_at_fn)(int);
 typedef int (*data_event_kind_at_fn)(int);
 typedef const char *(*data_event_path_at_fn)(int);
-typedef al_status_t (*read_data_fn)(int, const char *, const char *, void **, int, int, int *);
-typedef void (*set_reentrant_read_fn)(read_data_fn, const char *);
 
 static const char *delete_path_at(int index) {
     return ((delete_path_at_fn)stub_symbol_or_die("recording_stub_delete_path_at"))(index);
@@ -34,19 +32,6 @@ static int data_event_kind_at(int index) {
 
 static const char *data_event_path_at(int index) {
     return ((data_event_path_at_fn)stub_symbol_or_die("recording_stub_data_event_path_at"))(index);
-}
-
-static void enable_probe_allocations(void) {
-    CHECK(setenv("RECORDING_STUB_READ_ALLOCATE", "1", 1) == 0);
-}
-
-static void disable_probe_allocations(void) {
-    unsetenv("RECORDING_STUB_READ_ALLOCATE");
-}
-
-static void arm_reentrant_read(read_data_fn callback, const char *field) {
-    ((set_reentrant_read_fn)stub_symbol_or_die("recording_stub_set_reentrant_read"))(callback,
-                                                                                       field);
 }
 
 static void check_write_lands(int ctx_id, const char *field, const char *timebase,
@@ -616,79 +601,33 @@ static void scenario_delete_fans_out_over_candidates_in_declared_order(void) {
     int deletes_before = int_from_stub("recording_stub_delete_call_count");
     int events_before = int_from_stub("recording_stub_data_event_count");
 
-    enable_probe_allocations();
     CHECK(al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi").code == 0);
-    disable_probe_allocations();
-    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 3);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 3);
     CHECK(strcmp(delete_path_at(deletes_before), "time_slice/profiles_2d/b_field_phi") == 0);
     CHECK(strcmp(delete_path_at(deletes_before + 1), "time_slice/profiles_2d/b_field_tor") ==
           0);
     CHECK(strcmp(delete_path_at(deletes_before + 2), "time_slice/profiles_2d/b_tor") == 0);
-    CHECK(int_from_stub("recording_stub_data_event_count") == events_before + 6);
+    CHECK(int_from_stub("recording_stub_data_event_count") == events_before + 3);
     for (int index = 0; index < 3; ++index) {
-        CHECK(data_event_kind_at(events_before + 2 * index) == IMAS_MVDD_STUB_DATA_EVENT_READ);
-        CHECK(data_event_kind_at(events_before + 2 * index + 1) == IMAS_MVDD_STUB_DATA_EVENT_DELETE);
-        CHECK(strcmp(data_event_path_at(events_before + 2 * index),
-                     delete_path_at(deletes_before + index)) == 0);
-        CHECK(strcmp(data_event_path_at(events_before + 2 * index + 1),
+        CHECK(data_event_kind_at(events_before + index) == IMAS_MVDD_STUB_DATA_EVENT_DELETE);
+        CHECK(strcmp(data_event_path_at(events_before + index),
                      delete_path_at(deletes_before + index)) == 0);
     }
     CHECK(loss_count(operation_ctx) == 0);
 }
 
-static void scenario_delete_skips_not_found_candidates(void) {
+static void scenario_delete_fans_out_without_a_presence_probe(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int reads_before = int_from_stub("recording_stub_read_call_count");
     int deletes_before = int_from_stub("recording_stub_delete_call_count");
 
-    enable_probe_allocations();
     CHECK(setenv("RECORDING_STUB_READ_NOT_FOUND_FIELD", "time_slice/profiles_2d/b_field_tor", 1) ==
           0);
     CHECK(al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi").code == 0);
     unsetenv("RECORDING_STUB_READ_NOT_FOUND_FIELD");
-    disable_probe_allocations();
 
-    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 3);
-    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 2);
-    CHECK(strcmp(delete_path_at(deletes_before), "time_slice/profiles_2d/b_field_phi") == 0);
-    CHECK(strcmp(delete_path_at(deletes_before + 1), "time_slice/profiles_2d/b_tor") == 0);
-    CHECK(loss_count(operation_ctx) == 0);
-}
-
-static void scenario_delete_reports_probe_and_delete_failures_distinctly(void) {
-    int operation_ctx = open_mismatched_equilibrium();
-    int reads_before = int_from_stub("recording_stub_read_call_count");
-    int deletes_before = int_from_stub("recording_stub_delete_call_count");
-
-    enable_probe_allocations();
-    CHECK(setenv("RECORDING_STUB_READ_FAIL_FIELD", "time_slice/profiles_2d/b_field_tor", 1) == 0);
-    al_status_t probe_failure = al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi");
-    unsetenv("RECORDING_STUB_READ_FAIL_FIELD");
-    disable_probe_allocations();
-    CHECK(probe_failure.code == -23);
-    CHECK(strcmp(probe_failure.message,
-                 "IMAS-MVDD: probe failed for stored candidate time_slice/profiles_2d/b_field_tor") ==
-          0);
-    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 3);
-    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 2);
-    CHECK(strcmp(delete_path_at(deletes_before), "time_slice/profiles_2d/b_field_phi") == 0);
-    CHECK(strcmp(delete_path_at(deletes_before + 1), "time_slice/profiles_2d/b_tor") == 0);
-
-    reads_before = int_from_stub("recording_stub_read_call_count");
-    deletes_before = int_from_stub("recording_stub_delete_call_count");
-    enable_probe_allocations();
-    CHECK(setenv("RECORDING_STUB_DELETE_FAIL_FIELD", "time_slice/profiles_2d/b_field_tor", 1) ==
-          0);
-    al_status_t delete_failure =
-        al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi");
-    unsetenv("RECORDING_STUB_DELETE_FAIL_FIELD");
-    disable_probe_allocations();
-    CHECK(delete_failure.code == -24);
-    CHECK(strcmp(delete_failure.message,
-                 "IMAS-MVDD: delete failed for stored candidate time_slice/profiles_2d/b_field_tor") ==
-          0);
-    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 3);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 3);
     CHECK(strcmp(delete_path_at(deletes_before), "time_slice/profiles_2d/b_field_phi") == 0);
     CHECK(strcmp(delete_path_at(deletes_before + 1), "time_slice/profiles_2d/b_field_tor") ==
@@ -697,18 +636,26 @@ static void scenario_delete_reports_probe_and_delete_failures_distinctly(void) {
     CHECK(loss_count(operation_ctx) == 0);
 }
 
-static void scenario_delete_probes_enter_the_read_reentry_guard(void) {
+static void scenario_delete_reports_a_failure_and_continues(void) {
     int operation_ctx = open_mismatched_equilibrium();
-    int reentrant_before = int_from_stub("recording_stub_reentrant_call_count");
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    int deletes_before = int_from_stub("recording_stub_delete_call_count");
 
-    arm_reentrant_read(al_read_data, "time_slice/profiles_2d/b_field_tor");
-    enable_probe_allocations();
-    CHECK(al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi").code == 0);
-    disable_probe_allocations();
-
-    CHECK(int_from_stub("recording_stub_reentrant_call_count") == reentrant_before + 3);
-    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_field"),
-                 "time_slice/profiles_2d/b_field_tor") == 0);
+    CHECK(setenv("RECORDING_STUB_DELETE_FAIL_FIELD", "time_slice/profiles_2d/b_field_tor", 1) ==
+          0);
+    al_status_t delete_failure =
+        al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi");
+    unsetenv("RECORDING_STUB_DELETE_FAIL_FIELD");
+    CHECK(delete_failure.code == -24);
+    CHECK(strcmp(delete_failure.message,
+                 "IMAS-MVDD: delete failed for stored candidate time_slice/profiles_2d/b_field_tor") ==
+          0);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 3);
+    CHECK(strcmp(delete_path_at(deletes_before), "time_slice/profiles_2d/b_field_phi") == 0);
+    CHECK(strcmp(delete_path_at(deletes_before + 1), "time_slice/profiles_2d/b_field_tor") ==
+          0);
+    CHECK(strcmp(delete_path_at(deletes_before + 2), "time_slice/profiles_2d/b_tor") == 0);
     CHECK(loss_count(operation_ctx) == 0);
 }
 
@@ -884,9 +831,9 @@ int main(int argc, char **argv) {
         {"delete-admits-trivial-structure-deletes", scenario_delete_admits_trivial_structure_deletes},
         {"delete-refuses-boundary-separatrix-reverse-direction", scenario_delete_refuses_boundary_separatrix_reverse_direction},
         {"delete-fans-out-over-candidates-in-declared-order", scenario_delete_fans_out_over_candidates_in_declared_order},
-        {"delete-skips-not-found-candidates", scenario_delete_skips_not_found_candidates},
-        {"delete-reports-probe-and-delete-failures-distinctly", scenario_delete_reports_probe_and_delete_failures_distinctly},
-        {"delete-probes-enter-the-read-reentry-guard", scenario_delete_probes_enter_the_read_reentry_guard},
+        {"delete-fans-out-without-a-presence-probe",
+         scenario_delete_fans_out_without_a_presence_probe},
+        {"delete-reports-a-failure-and-continues", scenario_delete_reports_a_failure_and_continues},
         {"delete-refuses-non-primary-source-before-core-call", scenario_delete_refuses_non_primary_source_before_core_call},
         {"write-refuses-non-primary-source-before-core-call", scenario_write_refuses_non_primary_source_before_core_call},
         {"write-matching-context-forwards-unchanged", scenario_write_matching_context_forwards_unchanged},
