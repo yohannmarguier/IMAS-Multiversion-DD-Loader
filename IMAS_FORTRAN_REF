@@ -1,4 +1,4 @@
-e469b9f72d3fe6446ac950438708a28e10376dd1
+eb35d9339275851bef8184f5d41f4703a3d76f7b
 
 The commit of the IMAS-Fortran HLI that .github/workflows/hli-validation.yml
 builds against the installed shim. First line only is the value, the way
@@ -18,5 +18,7 @@ AL_USE_MULTIVERSION_SHIM option, so the fork is not a convenience.
 
 To move the pin: check that the fork commit still builds with
 AL_USE_MULTIVERSION_SHIM=ON and DD_VERSION=4.1.1, then update the first line.
-Bumping this invalidates the build cache by design, so expect the next run to
-take the full cold-build time rather than the warm one.
+Bumping this misses the build cache's primary key by design. It no longer costs
+a full cold build: the workflow's restore-keys ladder falls back to any tree
+built for the same Data Dictionary, so the next run rebuilds the HLI sources
+that actually changed rather than the whole tree.
