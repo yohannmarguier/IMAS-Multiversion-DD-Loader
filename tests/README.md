@@ -155,9 +155,10 @@ child-context refusal reaches its root under the complete joined DD path.
 Issue #129 translates identity, `renamed`, and `moved` leaf deletes to one
 stored spelling in both directions; it refuses the DD-version stamp and
 containing subtrees, non-primary aliases, no-source and unservable paths. Issue
-#130 fans a candidate plan out in declared order: it probes each stored path,
-skips not-found candidates, and returns a distinguishable probe/delete failure
-only after attempting the rest. An empty delete forwards as the caller's
+#130 fans a candidate plan out in declared order. Issue #138 removed its
+presence probe: a write-mode context cannot read it reliably, and the artifact
+has no type or rank for a sound replacement. Every candidate is deleted; the
+first failure returns only after the rest are attempted. An empty delete forwards as the caller's
 explicit whole-DATAOBJECT migration route, and delete never retains a loss-log
 entry.
 
@@ -262,10 +263,10 @@ ADR 0020's probe can never learn anything from, a brand-new occurrence with no
 stamp: the probe's own open fails, the caller's succeeds, and the value reaches
 disk spelled the HLI's own way, as ADR 0007 requires.
 
-Claim 4's other half — the precedence-2 candidate *removed* by a delete — is
-not observable on this backend, for two independent reasons (issues #138 and
-#139) that `reverse-delete-fan-out-does-not-reach-disk` pins and explains. It
-starts failing when either is fixed.
+The real-Core `reverse-delete-fan-out-reaches-disk` scenario proves that a
+write-mode fan-out reaches the backend rather than returning a successful
+no-op. IMAS-Core's HDF5 backend still ignores the delete path and removes the
+whole occurrence (issue #139), so it cannot prove per-candidate deletion.
 
 ### `runtime-binding-real-core-forwarding` — 1, `real-core` · `real_core/real_core_forwarding_test.c`
 
