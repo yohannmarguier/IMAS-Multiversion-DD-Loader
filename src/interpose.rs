@@ -1913,6 +1913,11 @@ unsafe fn delete_candidates(ctx: c_int, paths: &[CString]) -> al_status_t {
     let mut first_failure = None;
 
     for path in paths {
+        // One fixed probe shape for every candidate, whatever its real DD type
+        // and rank are. That is a known unsoundness, not an assumption that
+        // every candidate is a scalar: ADR 0017 decision 2 records why it
+        // cannot be fixed or verified before issue #138, and issue #138 owns
+        // it.
         let mut probed = 0.0f64;
         let mut data: *mut c_void = (&raw mut probed).cast();
         let probe = unsafe {
