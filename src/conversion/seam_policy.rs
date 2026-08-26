@@ -1,5 +1,19 @@
-//! The `al_read_data`/`al_plugin_read_data` read loop and the
-//! `al_write_data`/`al_plugin_write_data` write decision (see ADR 0015).
+//! The `al_read_data`/`al_plugin_read_data` read loop, the
+//! `al_write_data`/`al_plugin_write_data` write decision, and the
+//! `al_delete_data` delete verdict (see ADR 0015).
+//!
+//! The three are deliberately not equal in weight. [`run_read`] owns the
+//! candidate loop and its fidelity bookkeeping; [`run_write`] owns the
+//! sentinel skip, transformation inversion, shape validation, the shim-owned
+//! copy and the unwritten-candidate list. [`run_delete`] owns *no* decision
+//! at all — every delete rule is settled one layer down, in
+//! [`path_conversion::resolve_delete_path`], because a delete carries no
+//! value and so has nothing left to decide once its stored spellings are
+//! known. It stays here anyway, thin, so all three data-path seams present
+//! the adapter with the same argument-in/verdict-out shape; a reader who
+//! finds the read and write policy here should not have to learn that delete
+//! is reached differently. Review finding S-J5 called it a Middle Man, which
+//! it is; the uniform seam shape is what it buys.
 //!
 //! Before this module existed, `read_data_impl` (`src/interpose.rs`) mixed
 //! raw-pointer marshalling with the read-loop decisions ADR 0010, ADR 0012
@@ -14,7 +28,8 @@
 //! This module owns those decisions and nothing else: the read loop takes an
 //! already-resolved [`path_conversion::ReadPath`] per argument, a buffer's
 //! shape, and a reader closure; the write decision takes one
-//! [`path_conversion::WritePath`] per argument. Their verdicts tell the
+//! [`path_conversion::WritePath`] per argument, and the delete verdict one
+//! [`path_conversion::DeletePath`]. Their verdicts tell the
 //! adapter what to forward or refuse. This module contains no `unsafe`, never
 //! touches [`crate::registry::context_registry::REGISTRY`] or the HLI version
 //! latch, and never calls into [`crate::core::dl`] — every raw pointer, every
