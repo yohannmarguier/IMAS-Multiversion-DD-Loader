@@ -1,7 +1,7 @@
 # tests/ — what is covered, and where
 
-**224 ctest tests** (29 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
-stub-only profile registers 191). None of the C sources here is registered by
+**227 ctest tests** (29 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
+stub-only profile registers 194). None of the C sources here is registered by
 itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
 (ADR 0005) and the context registry (ADR 0003) are process-wide state that
@@ -176,7 +176,7 @@ retention-on-failure for plugin end action, and the full read policy for
 `al_plugin_read_data` (translation, refusal, no-source, merged fallthrough,
 sign flip, loss retention through a child context).
 
-### `scoped-passthrough-*` — 4 · `shim/scoped_passthrough_test.c`
+### `scoped-passthrough-*` — 7 · `shim/scoped_passthrough_test.c`
 
 The outside edge of the seam list (issue #69). With a mismatched occurrence open
 and demonstrably converting, `al_get_occurrences`, `al_list_filled_paths` (both
@@ -185,6 +185,16 @@ unchanged, as must every remaining non-seam export. Their arguments are
 deliberately the two spellings of a real rename rule, so a shim that started
 rewriting them would produce a visibly different string rather than pass by
 coincidence. Also pins `getDDVersion()`'s `"!!DEPRECATED!!"` sentinel.
+
+Issue #134 repeats the three path-bearing seams under a converting **write**,
+since the write path is a policy of its own (ADR 0016) rather than the read
+path reversed, and a rewrite grown on the write side alone would have passed
+every scenario above. Those three open `WRITE_OP` (31) — the mode a writing
+caller really uses, and the one that makes discovery probe through a
+shim-owned read-mode context (ADR 0020) — and each proves the write translates
+before claiming anything about a passthrough. The remaining non-seam exports
+are not re-run: they carry no DD path, so there is no spelling for a
+write-side rewrite to reach.
 
 ### `equilibrium-read-*` — 17, `real-core` · `real_core/equilibrium_read_test.c`
 

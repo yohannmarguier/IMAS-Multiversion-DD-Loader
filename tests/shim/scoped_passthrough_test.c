@@ -1,4 +1,10 @@
-/* Issue #69: conversion is scoped, and the scope has an outside edge.
+/* Issues #69 and #134: conversion is scoped, and the scope has an outside edge.
+ *
+ * #69 asserted that edge while a *read* converts; #134 asserts the same edge
+ * while a *write* does, once the write path became a translating seam of its
+ * own (ADR 0016) rather than a blanket refusal. The two halves live in one file
+ * because they are one claim about one seam list; the write half starts at the
+ * "Issue #134" banner below.
  *
  * Every other C-ABI test in this suite asserts what the conversion seams
  * *do*. This one asserts what the rest of the ABI must keep *not* doing while
@@ -335,12 +341,164 @@ static void scenario_remaining_non_seam_exports_forward_unchanged(void) {
            "conversion\n");
 }
 
+/* --- Issue #134: the same edge, made while a *write* converts ------------- */
+
+/* Everything above is asserted while a *read* is demonstrably converting.
+ * That is only half the claim: ADR 0002 leaves `al_get_occurrences`,
+ * `al_list_filled_paths` and the plugin bind/unbind family untranslated
+ * whichever direction data is moving, so the passthrough edge must also hold
+ * while the write path — a separate policy, ADR 0016, reached through separate
+ * code — is actively rewriting spellings. A shim that grew a path rewrite on
+ * one of these three seams could have grown it on the write side alone, and
+ * nothing above would have noticed.
+ *
+ * WRITE_OP (31, al_const.h) rather than the READ_OP the helper above uses,
+ * because that is the mode a writing caller actually opens with and, since
+ * ADR 0020, the mode that makes stored-version discovery run through a
+ * shim-owned probe context. Proving the passthrough edge under the mode a
+ * writer really uses is stronger than proving it under a write issued through
+ * a read-mode context, which `write_delete_conversion_test.c` already covers.
+ *
+ * The remaining non-seam exports are deliberately not re-run under a write:
+ * the plugin registration/metadata family, the three parameter setters and the
+ * utility/version accessors carry no DD path at all, so there is no spelling
+ * for a write-side rewrite to reach. The three seams below are the ones that
+ * do carry one. */
+static int open_writing_equilibrium(int *operation_ctx) {
+    int pulse_ctx = -1;
+    CHECK(al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, &pulse_ctx).code == 0);
+    CHECK(al_begin_global_action(pulse_ctx, "equilibrium", "", 31, operation_ctx).code == 0);
+
+    /* The same three the read-side helper above asserts, so the two twins can
+     * be compared line for line rather than leaving a reader to wonder which
+     * differences are deliberate. */
+    CHECK(int_from_stub("recording_stub_dataentry_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_dataentry_uri"),
+                 "imas:hdf5?path=/tmp/pulse")
+          == 0);
+    CHECK(int_from_stub("recording_stub_dataentry_mode") == 7);
+
+    /* One assertion the read-side twin has no need for: the mode IMAS-Core saw
+     * on the caller's own open must be the caller's, not the probe's. ADR 0020
+     * has the shim open a READ_OP global action of its own before this one, so
+     * a 30 here would mean the two got crossed. It reads 31 because the probe
+     * goes through the `al_plugin_*` family and lands in a different recorder
+     * (ADR 0020 decision 3). */
+    CHECK(int_from_stub("recording_stub_global_rwmode") == 31);
+
+    /* The proving write: the same `rename-beta-normal` rule whose two
+     * spellings every assertion below uses must reach IMAS-Core as the stored
+     * one. Without this a passthrough assertion could pass simply because the
+     * write-mode open never registered a mismatch at all — exactly the state
+     * issue #136 fixed, and exactly what would silently make every scenario
+     * here vacuous if it regressed. */
+    double sentinel = 42.0;
+    int size[1] = {1};
+    CHECK(al_write_data(*operation_ctx, HLI_SPELLING, "time", &sentinel, IMAS_DOUBLE_DATA, 1, size)
+              .code
+          == 0);
+    CHECK(int_from_stub("recording_stub_write_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_write_field"), STORED_SPELLING) == 0);
+
+    return pulse_ctx;
+}
+
+static void scenario_writing_get_occurrences_forwards_ids_name_unchanged(void) {
+    int operation_ctx = -1;
+    int pulse_ctx = open_writing_equilibrium(&operation_ctx);
+
+    int *occurrences = NULL;
+    int size = -1;
+    al_status_t status = al_get_occurrences(pulse_ctx, "equilibrium", &occurrences, &size);
+
+    CHECK(status.code == 0);
+    CHECK(int_from_stub("recording_stub_occurrences_call_count") == 1);
+    CHECK(int_from_stub("recording_stub_occurrences_pctx_id") == pulse_ctx);
+    /* Weaker than its two siblings below, and deliberately so: this seam's only
+     * path-bearing argument is the IDS *name*, and IDS names are stable across
+     * this version pair — ADR 0002 forwards it unchanged for exactly that
+     * reason. So there is no pair of spellings to seed here the way
+     * `al_list_filled_paths` and the bind/unbind family get one, and
+     * "forwarded unchanged" and "correctly translated" agree. What this pins
+     * is only that the shim does not *invent* a difference; it cannot catch a
+     * translation that happens to be the identity. Stated rather than left for
+     * a reader to assume the assertion is stronger than it is. */
+    CHECK(strcmp(string_from_stub("recording_stub_occurrences_ids_name"), "equilibrium") == 0);
+    CHECK(size == 3);
+    CHECK(occurrences != NULL);
+    CHECK(occurrences[0] == 11 && occurrences[1] == 22 && occurrences[2] == 33);
+
+    printf("scoped_passthrough_test writing-get-occurrences-forwards-ids-name-unchanged: an "
+           "actively converting write did not change how the IDS name reached IMAS-Core\n");
+}
+
+static void scenario_writing_list_filled_paths_forwards_name_and_returns_stored_paths_unchanged(
+    void) {
+    int operation_ctx = -1;
+    int pulse_ctx = open_writing_equilibrium(&operation_ctx);
+
+    char **paths = NULL;
+    int size = -1;
+    al_status_t status = al_list_filled_paths(pulse_ctx, "equilibrium", &paths, &size);
+
+    CHECK(status.code == 0);
+    CHECK(int_from_stub("recording_stub_filled_paths_call_count") == 1);
+    CHECK(int_from_stub("recording_stub_filled_paths_pctx_id") == pulse_ctx);
+    CHECK(strcmp(string_from_stub("recording_stub_filled_paths_dataobjectname"), "equilibrium")
+          == 0);
+
+    /* Same seeding as the read-active scenario: the list IMAS-Core hands back
+     * holds the *stored* 3.39.0 spelling, so an up-conversion the shim has not
+     * implemented would show up as the 4.1.1 spelling rather than pass against
+     * a string no rule could have touched either way. */
+    CHECK(size == 2);
+    CHECK(paths != NULL);
+    CHECK(strcmp(paths[0], STORED_SPELLING) == 0);
+    CHECK(strcmp(paths[1], "time_slice/global_quantities/ip") == 0);
+
+    for (int i = 0; i < size; ++i) {
+        free(paths[i]);
+    }
+    free(paths);
+
+    printf("scoped_passthrough_test writing-list-filled-paths-forwards-name-and-returns-stored-"
+           "paths-unchanged: an actively converting write rewrote neither the IDS name down nor "
+           "the path list up\n");
+}
+
+static void scenario_writing_bind_and_unbind_plugin_forward_field_path_unchanged(void) {
+    int operation_ctx = -1;
+    (void)open_writing_equilibrium(&operation_ctx);
+
+    /* Snapshotted rather than assumed to be zero: the write-mode open above
+     * spends two plugin calls of its own on ADR 0020's stamp probe. */
+    int calls_before = int_from_stub("recording_stub_plugin_call_count");
+
+    CHECK(al_bind_plugin(HLI_SPELLING, "recording-plugin").code == 0);
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == calls_before + 1);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_last_symbol"), "al_bind_plugin") == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"), HLI_SPELLING) == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_second_string"), "recording-plugin") == 0);
+
+    CHECK(al_unbind_plugin(HLI_SPELLING, "recording-plugin").code == 0);
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == calls_before + 2);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_last_symbol"), "al_unbind_plugin") == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"), HLI_SPELLING) == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_second_string"), "recording-plugin") == 0);
+
+    printf("scoped_passthrough_test writing-bind-and-unbind-plugin-forward-field-path-unchanged: "
+           "the HLI's own DD spelling reached IMAS-Core untranslated while a write converted\n");
+}
+
 int main(int argc, char **argv) {
     static const shim_test_scenario scenarios[] = {
         {"get-occurrences-forwards-ids-name-unchanged", scenario_get_occurrences_forwards_ids_name_unchanged},
         {"list-filled-paths-forwards-name-and-returns-stored-paths-unchanged", scenario_list_filled_paths_forwards_name_and_returns_stored_paths_unchanged},
         {"bind-and-unbind-plugin-forward-field-path-unchanged", scenario_bind_and_unbind_plugin_forward_field_path_unchanged},
         {"remaining-non-seam-exports-forward-unchanged", scenario_remaining_non_seam_exports_forward_unchanged},
+        {"writing-get-occurrences-forwards-ids-name-unchanged", scenario_writing_get_occurrences_forwards_ids_name_unchanged},
+        {"writing-list-filled-paths-forwards-name-and-returns-stored-paths-unchanged", scenario_writing_list_filled_paths_forwards_name_and_returns_stored_paths_unchanged},
+        {"writing-bind-and-unbind-plugin-forward-field-path-unchanged", scenario_writing_bind_and_unbind_plugin_forward_field_path_unchanged},
     };
     return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }
