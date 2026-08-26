@@ -84,82 +84,25 @@
 #define TIME_SLICE_AOS_SHAPE_DATASET "/equilibrium/time_slice[]&AOS_SHAPE"
 #define PSI_MAGNETIC_AXIS_DATASET "/equilibrium/time_slice[]&global_quantities&psi_magnetic_axis"
 
-/* --- copied-fixture management (issue #132 harness, reproduced per-file --- */
-/* --- the same way equilibrium_read_test.c's own copy already is)      --- */
+/* --- copied-fixture management (issue #132 shared harness) -------------- */
 
-typedef struct {
-    char temp_dir[1024];
-    char pulse_dir[1024];
-    int is_live;
-} fixture_copy;
-
-static fixture_copy copied_fixture;
+static real_core_fixture_copy copied_fixture;
 
 static void remove_fixture_pair(void) {
-    if (!copied_fixture.is_live) {
-        return;
-    }
-    if (copied_fixture.pulse_dir[0] != '\0') {
-        remove_fixture_file(copied_fixture.pulse_dir, "equilibrium.h5");
-        remove_fixture_file(copied_fixture.pulse_dir, "master.h5");
-        CHECK(rmdir(copied_fixture.pulse_dir) == 0 || errno == ENOENT);
-    }
-    CHECK(rmdir(copied_fixture.temp_dir) == 0 || errno == ENOENT);
-    copied_fixture.is_live = 0;
+    remove_real_core_fixture_copy(&copied_fixture);
 }
 
 static void copy_fixture_pair(const char *dd_version) {
-    int temp_length = snprintf(copied_fixture.temp_dir, sizeof copied_fixture.temp_dir,
-                               "/tmp/imas-mvdd-write-delete-oracle-XXXXXX");
-    CHECK(temp_length > 0 && (size_t)temp_length < sizeof copied_fixture.temp_dir);
-    CHECK(mkdtemp(copied_fixture.temp_dir) != NULL);
-    copied_fixture.is_live = 1;
+    create_real_core_fixture_copy(&copied_fixture, EQUILIBRIUM_FIXTURE_DIR, dd_version,
+                                  "/tmp/imas-mvdd-write-delete-oracle-XXXXXX");
     CHECK(atexit(remove_fixture_pair) == 0);
-    int pulse_length = snprintf(copied_fixture.pulse_dir, sizeof copied_fixture.pulse_dir,
-                                "%s/dd-%s", copied_fixture.temp_dir, dd_version);
-    CHECK(pulse_length > 0 && (size_t)pulse_length < sizeof copied_fixture.pulse_dir);
-    CHECK(mkdir(copied_fixture.pulse_dir, 0700) == 0);
-    static const char *const files[] = {"equilibrium.h5", "master.h5"};
-    for (size_t i = 0; i < sizeof files / sizeof files[0]; ++i) {
-        char source[1024];
-        char copy[1024];
-        int source_length = snprintf(source, sizeof source, "%s/dd-%s/%s", EQUILIBRIUM_FIXTURE_DIR,
-                                     dd_version, files[i]);
-        int copy_length = snprintf(copy, sizeof copy, "%s/%s", copied_fixture.pulse_dir, files[i]);
-        CHECK(source_length > 0 && (size_t)source_length < sizeof source);
-        CHECK(copy_length > 0 && (size_t)copy_length < sizeof copy);
-        copy_fixture_file(source, copy);
-    }
 }
 
 static void equilibrium_file_path(char *path, size_t path_size) {
-    int length = snprintf(path, path_size, "%s/equilibrium.h5", copied_fixture.pulse_dir);
-    CHECK(length > 0 && (size_t)length < path_size);
+    real_core_fixture_ids_file(&copied_fixture, path, path_size);
 }
 
 /* --- raw HDF5 access to the copied fixture, never through the shim ------ */
-
-static void read_dd_version_stamp_from_disk(const char *ids_file, char *version,
-                                            size_t version_size) {
-    hid_t file = H5Fopen(ids_file, H5F_ACC_RDONLY, H5P_DEFAULT);
-    CHECK(file >= 0);
-    hid_t dataset = H5Dopen2(file, "/equilibrium/ids_properties&version_put&data_dictionary",
-                             H5P_DEFAULT);
-    CHECK(dataset >= 0);
-    hid_t datatype = H5Dget_type(dataset);
-    CHECK(datatype >= 0);
-    CHECK(H5Tget_class(datatype) == H5T_STRING);
-    CHECK(H5Tis_variable_str(datatype) > 0);
-    char *stored = NULL;
-    CHECK(H5Dread(dataset, datatype, H5S_ALL, H5S_ALL, H5P_DEFAULT, &stored) >= 0);
-    CHECK(stored != NULL);
-    int length = snprintf(version, version_size, "%s", stored);
-    CHECK(length >= 0 && (size_t)length < version_size);
-    CHECK(H5free_memory(stored) >= 0);
-    CHECK(H5Tclose(datatype) >= 0);
-    CHECK(H5Dclose(dataset) >= 0);
-    CHECK(H5Fclose(file) >= 0);
-}
 
 static int dataset_exists_on_disk(const char *ids_file, const char *dataset_path) {
     hid_t file = H5Fopen(ids_file, H5F_ACC_RDONLY, H5P_DEFAULT);
@@ -263,7 +206,7 @@ static void check_stamp_still_reads(const char *fixture_version) {
     char equilibrium_file[1024];
     equilibrium_file_path(equilibrium_file, sizeof equilibrium_file);
     char stamp[64];
-    read_dd_version_stamp_from_disk(equilibrium_file, stamp, sizeof stamp);
+    read_fixture_dd_version_stamp(equilibrium_file, stamp, sizeof stamp);
     CHECK(strcmp(stamp, fixture_version) == 0);
 }
 

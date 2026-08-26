@@ -196,73 +196,16 @@ static double read_time_slice_double_from_disk(const char *ids_file, const char 
     return value;
 }
 
-/* The DD-version stamp is a scalar UTF-8 variable-length string. The caller
- * owns only its fixed output buffer; HDF5 allocates and releases `stored`. */
-static void read_dd_version_stamp_from_disk(const char *ids_file, char *version,
-                                            size_t version_size) {
-    hid_t file = H5Fopen(ids_file, H5F_ACC_RDONLY, H5P_DEFAULT);
-    CHECK(file >= 0);
-    hid_t dataset = H5Dopen2(file, "/equilibrium/ids_properties&version_put&data_dictionary",
-                             H5P_DEFAULT);
-    CHECK(dataset >= 0);
-    hid_t datatype = H5Dget_type(dataset);
-    CHECK(datatype >= 0);
-    CHECK(H5Tget_class(datatype) == H5T_STRING);
-    CHECK(H5Tis_variable_str(datatype) > 0);
-    char *stored = NULL;
-    CHECK(H5Dread(dataset, datatype, H5S_ALL, H5S_ALL, H5P_DEFAULT, &stored) >= 0);
-    CHECK(stored != NULL);
-    int length = snprintf(version, version_size, "%s", stored);
-    CHECK(length >= 0 && (size_t)length < version_size);
-    CHECK(H5free_memory(stored) >= 0);
-    CHECK(H5Tclose(datatype) >= 0);
-    CHECK(H5Dclose(dataset) >= 0);
-    CHECK(H5Fclose(file) >= 0);
-}
-
-typedef struct {
-    char temp_dir[1024];
-    char pulse_dir[1024];
-    int is_live;
-} fixture_copy;
-
-static fixture_copy copied_fixture;
+static real_core_fixture_copy copied_fixture;
 
 static void remove_fixture_pair(void) {
-    if (!copied_fixture.is_live) {
-        return;
-    }
-    if (copied_fixture.pulse_dir[0] != '\0') {
-        remove_fixture_file(copied_fixture.pulse_dir, "equilibrium.h5");
-        remove_fixture_file(copied_fixture.pulse_dir, "master.h5");
-        CHECK(rmdir(copied_fixture.pulse_dir) == 0 || errno == ENOENT);
-    }
-    CHECK(rmdir(copied_fixture.temp_dir) == 0 || errno == ENOENT);
-    copied_fixture.is_live = 0;
+    remove_real_core_fixture_copy(&copied_fixture);
 }
 
 static void copy_fixture_pair(const char *dd_version) {
-    int temp_length = snprintf(copied_fixture.temp_dir, sizeof copied_fixture.temp_dir,
-                               "/tmp/imas-mvdd-equilibrium-XXXXXX");
-    CHECK(temp_length > 0 && (size_t)temp_length < sizeof copied_fixture.temp_dir);
-    CHECK(mkdtemp(copied_fixture.temp_dir) != NULL);
-    copied_fixture.is_live = 1;
+    create_real_core_fixture_copy(&copied_fixture, EQUILIBRIUM_FIXTURE_DIR, dd_version,
+                                  "/tmp/imas-mvdd-equilibrium-XXXXXX");
     CHECK(atexit(remove_fixture_pair) == 0);
-    int pulse_length = snprintf(copied_fixture.pulse_dir, sizeof copied_fixture.pulse_dir,
-                                "%s/dd-%s", copied_fixture.temp_dir, dd_version);
-    CHECK(pulse_length > 0 && (size_t)pulse_length < sizeof copied_fixture.pulse_dir);
-    CHECK(mkdir(copied_fixture.pulse_dir, 0700) == 0);
-    static const char *const files[] = {"equilibrium.h5", "master.h5"};
-    for (size_t i = 0; i < sizeof files / sizeof files[0]; ++i) {
-        char source[1024];
-        char copy[1024];
-        int source_length = snprintf(source, sizeof source, "%s/dd-%s/%s", EQUILIBRIUM_FIXTURE_DIR,
-                                     dd_version, files[i]);
-        int copy_length = snprintf(copy, sizeof copy, "%s/%s", copied_fixture.pulse_dir, files[i]);
-        CHECK(source_length > 0 && (size_t)source_length < sizeof source);
-        CHECK(copy_length > 0 && (size_t)copy_length < sizeof copy);
-        copy_fixture_file(source, copy);
-    }
 }
 
 /* Issue #132: prove the mutable-fixture harness against an existing read
@@ -271,11 +214,9 @@ static void copy_fixture_pair(const char *dd_version) {
 static void scenario_copied_fixture_harness_reproves_renamed_read(void) {
     copy_fixture_pair("3.39.0");
     char equilibrium_file[1024];
-    int file_length = snprintf(equilibrium_file, sizeof equilibrium_file, "%s/equilibrium.h5",
-                               copied_fixture.pulse_dir);
-    CHECK(file_length > 0 && (size_t)file_length < sizeof equilibrium_file);
+    real_core_fixture_ids_file(&copied_fixture, equilibrium_file, sizeof equilibrium_file);
     char stamp[64];
-    read_dd_version_stamp_from_disk(equilibrium_file, stamp, sizeof stamp);
+    read_fixture_dd_version_stamp(equilibrium_file, stamp, sizeof stamp);
     CHECK(strcmp(stamp, "3.39.0") == 0);
     CHECK(read_time_slice_double_from_disk(equilibrium_file, "global_quantities/beta_normal", 0)
           == 1.8);
