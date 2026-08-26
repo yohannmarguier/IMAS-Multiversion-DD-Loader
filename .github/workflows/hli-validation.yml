@@ -147,6 +147,22 @@ jobs:
           ref: ${{ steps.hli_pin.outputs.ref }}
           path: hli
 
+      # actions/checkout writes every file with the checkout's own timestamp, so
+      # against a restored build tree every source is newer than every object in
+      # it and make rebuilds the lot. That is not hypothetical: the first warm
+      # run of this cache regenerated the XSLT sources (5m31s) and recompiled all
+      # of libal-fortran (12m08s) off a clean cache hit, keeping only IMAS-Core.
+      #
+      # One fixed timestamp for the whole checkout, rather than each file's
+      # commit time, because the HLI is pinned to a single commit and the cache
+      # key names that commit -- see the restore-keys below, which deliberately
+      # never reach a tree built from different HLI sources. Whenever a tree is
+      # restored at all, it was built from exactly these bytes, so a constant is
+      # both stable across runs and safe. .git is left alone: nothing in the
+      # build reads it, and rewriting index timestamps only confuses git.
+      - name: Stamp the HLI checkout with a fixed mtime
+        run: find hli -path hli/.git -prune -o -exec touch -h -d '2001-01-01T00:00:00Z' {} +
+
       # The cache key has to be known before the build, so the IMAS-Core commit
       # the HLI *will* acquire is predicted here rather than read back from the
       # configure log. The prediction reads the HLI's own declared default
@@ -198,12 +214,15 @@ jobs:
         with:
           path: hli/build
           key: hli-${{ runner.os }}-dd${{ env.HLI_DD_VERSION }}-fortran${{ steps.hli_pin.outputs.ref }}-core${{ steps.core.outputs.sha }}
-          # Falling back first to any tree built for this HLI commit (Core
-          # moved), then to any tree built for this Data Dictionary (the HLI pin
-          # moved). Both rebuild far less than they reuse.
+          # One rung, and it keeps the HLI commit. Core moving is the common
+          # miss and is worth reusing a tree for -- it rebuilds in about thirty
+          # seconds. Crossing HLI commits is deliberately not reachable: the
+          # fixed-mtime stamp above makes every source older than any object in
+          # a restored tree, which is correct for a tree built from these bytes
+          # and would silently skip rebuilding changed ones otherwise. A moved
+          # pin is a deliberate one-line commit, so it pays the cold build.
           restore-keys: |
             hli-${{ runner.os }}-dd${{ env.HLI_DD_VERSION }}-fortran${{ steps.hli_pin.outputs.ref }}-
-            hli-${{ runner.os }}-dd${{ env.HLI_DD_VERSION }}-
 
       # IMAS_MVDD_REAL_CORE_TESTS=OFF because this job needs the shim built and
       # installed, not the shim's own suite -- ci.yml's fast and full jobs own
