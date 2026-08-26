@@ -6,7 +6,7 @@
 //! candidate loop and its fidelity bookkeeping; [`run_write`] owns the
 //! sentinel skip, transformation inversion, shape validation, the shim-owned
 //! copy and the unwritten-candidate list. [`run_delete`] owns candidate
-//! iteration, probe/delete branching, continuation after a failure, and
+//! iteration, continuation after a failure, and
 //! retention of the first failure. The adapter injects the two Core-facing
 //! operations and formats that retained failure after the loop returns.
 //!
@@ -24,7 +24,7 @@
 //! already-resolved [`path_conversion::ReadPath`] per argument, a buffer's
 //! shape, and a reader closure; the write decision takes one
 //! [`path_conversion::WritePath`] per argument, and the delete loop one
-//! [`path_conversion::DeletePath`] plus injected probe/delete operations.
+//! [`path_conversion::DeletePath`] plus an injected delete operation.
 //! Their verdicts tell the
 //! adapter what to forward or refuse. This module contains no `unsafe`, never
 //! touches [`crate::registry::context_registry::REGISTRY`] or the HLI version
@@ -423,29 +423,15 @@ fn copy_value_transformation(
     }
 }
 
-/// One candidate probe's already-classified result. The adapter turns the raw
-/// IMAS-Core status and scalar sentinel into this enum before policy sees it.
-// `al_status_t` is carried by value throughout the seam policy; keep this
-// attempt consistent with the read loop's `Attempt::Failure` rather than
-// allocating only for the uncommon failure branch.
-#[allow(clippy::large_enum_variant)]
-pub(crate) enum DeleteProbe {
-    Failure(al_status_t),
-    NotFound,
-    Data,
-}
-
 /// Which operation failed for one candidate in the delete loop.
 #[derive(Clone, Copy)]
 pub(crate) enum DeleteFailureOperation {
-    Probe,
     Delete,
 }
 
 impl DeleteFailureOperation {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::Probe => "probe",
             Self::Delete => "delete",
         }
     }
@@ -473,12 +459,11 @@ pub(crate) enum DeleteVerdict<'a> {
 /// Runs one delete decision. An empty path deliberately forwards: it is
 /// IMAS-Core's explicit whole-DATAOBJECT delete, the only legitimate route to
 /// discard a mismatched occurrence before recreating it in the HLI DD. A
-/// candidate plan probes every path and deletes only paths that hold data;
-/// failures do not stop later candidates, because no rollback exists and
-/// continuing leaves the least stale data behind.
+/// candidate plan deletes every path. Failures do not stop later candidates,
+/// because no rollback exists and continuing leaves the least stale data
+/// behind.
 pub(crate) fn run_delete<'a>(
     argument: &'a DeleteArgument<'a>,
-    mut probe: impl FnMut(&CStr) -> DeleteProbe,
     mut delete: impl FnMut(&CStr) -> al_status_t,
 ) -> DeleteVerdict<'a> {
     match &argument.resolution {
@@ -491,25 +476,13 @@ pub(crate) fn run_delete<'a>(
         DeletePath::Candidates(paths) => {
             let mut first_failure = None;
             for path in paths {
-                match probe(path) {
-                    DeleteProbe::Failure(status) => {
-                        first_failure.get_or_insert(DeleteFailure {
-                            status,
-                            operation: DeleteFailureOperation::Probe,
-                            path,
-                        });
-                    }
-                    DeleteProbe::NotFound => {}
-                    DeleteProbe::Data => {
-                        let status = delete(path);
-                        if status.code != 0 {
-                            first_failure.get_or_insert(DeleteFailure {
-                                status,
-                                operation: DeleteFailureOperation::Delete,
-                                path,
-                            });
-                        }
-                    }
+                let status = delete(path);
+                if status.code != 0 {
+                    first_failure.get_or_insert(DeleteFailure {
+                        status,
+                        operation: DeleteFailureOperation::Delete,
+                        path,
+                    });
                 }
             }
             DeleteVerdict::Complete {

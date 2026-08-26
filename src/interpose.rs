@@ -1876,9 +1876,8 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
         // NUL-terminated C string, or null.
         forward: unsafe { c_str_ref(path) },
     };
-    let probe = |path: &CStr| unsafe { probe_delete_candidate(ctx, path) };
     let delete = |path: &CStr| forward_status!(delete_data(ctx, path.as_ptr()));
-    match seam_policy::run_delete(&argument, probe, delete) {
+    match seam_policy::run_delete(&argument, delete) {
         seam_policy::DeleteVerdict::Forward { path } => {
             forward_status!(delete_data(
                 ctx,
@@ -1895,52 +1894,8 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
     }
 }
 
-/// Probes one stored candidate because `al_delete_data` cannot represent
-/// not-found. The seam-policy loop decides whether to delete it, which failure
-/// to retain, and whether to continue to later candidates.
-///
-/// The probe is a `DOUBLE_DATA` scalar read, and both halves of IMAS-Core's
-/// scalar ABI apply to it: the buffer is the *caller's* — IMAS-Core
-/// dereferences `*data` unconditionally for `dim == 0`, so passing a null
-/// pointer crashes it rather than returning not-found — and absence comes
-/// back as the `EMPTY_DOUBLE` sentinel written into that buffer, never as a
-/// null pointer. `probed` is therefore stack-owned and never freed, and the
-/// outcome is classified with
-/// [`read_outcome::classify_scalar_double`](crate::conversion::read_outcome::classify_scalar_double)
-/// rather than the pointer-based classifier every non-scalar read uses.
-///
-/// A layer below IMAS-Core that ignored the scalar contract and returned an
-/// allocation of its own would leak it here. That is the right way round:
-/// freeing a pointer that under the contract is the caller's own stack slot is
-/// a crash, and a leak in a layer that broke the contract is not.
-unsafe fn probe_delete_candidate(ctx: c_int, path: &CStr) -> seam_policy::DeleteProbe {
-    // One fixed probe shape for every candidate, whatever its real DD type
-    // and rank are. That is a known unsoundness, not an assumption that every
-    // candidate is a scalar: ADR 0017 decision 2 records why it cannot be
-    // fixed or verified before issue #138, and issue #138 owns it.
-    let mut probed = 0.0f64;
-    let mut data: *mut c_void = (&raw mut probed).cast();
-    let status = unsafe {
-        read_data_unconverted(
-            ctx,
-            path.as_ptr(),
-            c"".as_ptr(),
-            &mut data,
-            DOUBLE_DATA_ID,
-            0,
-            std::ptr::null_mut(),
-        )
-    };
-    match read_outcome::classify_scalar_double(&status, data.cast_const(), probed) {
-        ReadOutcome::Failure => seam_policy::DeleteProbe::Failure(status),
-        ReadOutcome::NotFound => seam_policy::DeleteProbe::NotFound,
-        ReadOutcome::Data => seam_policy::DeleteProbe::Data,
-    }
-}
-
 /// Keeps IMAS-Core's failure code while saying which half of the delete
-/// fan-out failed. A failed probe and a failed deletion point callers at
-/// different backend operations, so their messages must stay distinct.
+/// fan-out failed.
 fn candidate_failure(mut status: al_status_t, operation: &str, path: &CStr) -> al_status_t {
     status.message = [0; crate::MAX_ERR_MSG_LEN];
     write_truncated(
