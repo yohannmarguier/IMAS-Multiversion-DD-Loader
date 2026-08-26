@@ -1,19 +1,14 @@
 //! The `al_read_data`/`al_plugin_read_data` read loop, the
 //! `al_write_data`/`al_plugin_write_data` write decision, and the
-//! `al_delete_data` delete verdict (see ADR 0015).
+//! `al_delete_data` delete loop (see ADR 0015).
 //!
 //! The three are deliberately not equal in weight. [`run_read`] owns the
 //! candidate loop and its fidelity bookkeeping; [`run_write`] owns the
 //! sentinel skip, transformation inversion, shape validation, the shim-owned
-//! copy and the unwritten-candidate list. [`run_delete`] owns *no* decision
-//! at all — every delete rule is settled one layer down, in
-//! [`path_conversion::resolve_delete_path`], because a delete carries no
-//! value and so has nothing left to decide once its stored spellings are
-//! known. It stays here anyway, thin, so all three data-path seams present
-//! the adapter with the same argument-in/verdict-out shape; a reader who
-//! finds the read and write policy here should not have to learn that delete
-//! is reached differently. Review finding S-J5 called it a Middle Man, which
-//! it is; the uniform seam shape is what it buys.
+//! copy and the unwritten-candidate list. [`run_delete`] owns candidate
+//! iteration, probe/delete branching, continuation after a failure, and
+//! retention of the first failure. The adapter injects the two Core-facing
+//! operations and formats that retained failure after the loop returns.
 //!
 //! Before this module existed, `read_data_impl` (`src/interpose.rs`) mixed
 //! raw-pointer marshalling with the read-loop decisions ADR 0010, ADR 0012
@@ -28,8 +23,9 @@
 //! This module owns those decisions and nothing else: the read loop takes an
 //! already-resolved [`path_conversion::ReadPath`] per argument, a buffer's
 //! shape, and a reader closure; the write decision takes one
-//! [`path_conversion::WritePath`] per argument, and the delete verdict one
-//! [`path_conversion::DeletePath`]. Their verdicts tell the
+//! [`path_conversion::WritePath`] per argument, and the delete loop one
+//! [`path_conversion::DeletePath`] plus injected probe/delete operations.
+//! Their verdicts tell the
 //! adapter what to forward or refuse. This module contains no `unsafe`, never
 //! touches [`crate::registry::context_registry::REGISTRY`] or the HLI version
 //! latch, and never calls into [`crate::core::dl`] — every raw pointer, every
@@ -45,7 +41,7 @@
 //! single mechanical write after `run_read` returns — that ever writes to
 //! the loss log.
 
-use std::ffi::{CStr, CString, c_int};
+use std::ffi::{CStr, c_int};
 
 use crate::al_status_t;
 use crate::conversion::conversion_map::{Fidelity, TransformationDirection, ValueTransformation};
@@ -427,19 +423,64 @@ fn copy_value_transformation(
     }
 }
 
-/// The delete policy's complete answer. The adapter alone performs the
-/// IMAS-Core calls and probes, so this layer remains free of raw pointers and
-/// state.
+/// One candidate probe's already-classified result. The adapter turns the raw
+/// IMAS-Core status and scalar sentinel into this enum before policy sees it.
+// `al_status_t` is carried by value throughout the seam policy; keep this
+// attempt consistent with the read loop's `Attempt::Failure` rather than
+// allocating only for the uncommon failure branch.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum DeleteProbe {
+    Failure(al_status_t),
+    NotFound,
+    Data,
+}
+
+/// Which operation failed for one candidate in the delete loop.
+#[derive(Clone, Copy)]
+pub(crate) enum DeleteFailureOperation {
+    Probe,
+    Delete,
+}
+
+impl DeleteFailureOperation {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Probe => "probe",
+            Self::Delete => "delete",
+        }
+    }
+}
+
+/// The first candidate failure retained while later candidates are still
+/// attempted. The adapter owns the eventual ABI-message formatting.
+pub(crate) struct DeleteFailure<'a> {
+    pub(crate) status: al_status_t,
+    pub(crate) operation: DeleteFailureOperation,
+    pub(crate) path: &'a CStr,
+}
+
+/// The delete policy's complete answer. The injected closures alone perform
+/// IMAS-Core calls, so this layer remains free of raw pointers and state.
+// As with `SeamOutcome`, carrying IMAS-Core's fixed-size status by value keeps
+// the verdict consistent with every other status path in this crate.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum DeleteVerdict<'a> {
     Forward { path: Option<&'a CStr> },
-    FanOut { paths: &'a [CString] },
+    Complete { failure: Option<DeleteFailure<'a>> },
     Refusal { reason: String, dd_path: String },
 }
 
-/// Resolves one delete argument. An empty path deliberately forwards: it is
+/// Runs one delete decision. An empty path deliberately forwards: it is
 /// IMAS-Core's explicit whole-DATAOBJECT delete, the only legitimate route to
-/// discard a mismatched occurrence before recreating it in the HLI DD.
-pub(crate) fn run_delete<'a>(argument: &'a DeleteArgument<'a>) -> DeleteVerdict<'a> {
+/// discard a mismatched occurrence before recreating it in the HLI DD. A
+/// candidate plan probes every path and deletes only paths that hold data;
+/// failures do not stop later candidates, because no rollback exists and
+/// continuing leaves the least stale data behind.
+pub(crate) fn run_delete<'a>(
+    argument: &'a DeleteArgument<'a>,
+    mut probe: impl FnMut(&CStr) -> DeleteProbe,
+    mut delete: impl FnMut(&CStr) -> al_status_t,
+) -> DeleteVerdict<'a> {
     match &argument.resolution {
         DeletePath::Forward => DeleteVerdict::Forward {
             path: argument.forward,
@@ -447,7 +488,34 @@ pub(crate) fn run_delete<'a>(argument: &'a DeleteArgument<'a>) -> DeleteVerdict<
         DeletePath::Translated(path) => DeleteVerdict::Forward {
             path: Some(path.as_c_str()),
         },
-        DeletePath::Candidates(paths) => DeleteVerdict::FanOut { paths },
+        DeletePath::Candidates(paths) => {
+            let mut first_failure = None;
+            for path in paths {
+                match probe(path) {
+                    DeleteProbe::Failure(status) => {
+                        first_failure.get_or_insert(DeleteFailure {
+                            status,
+                            operation: DeleteFailureOperation::Probe,
+                            path,
+                        });
+                    }
+                    DeleteProbe::NotFound => {}
+                    DeleteProbe::Data => {
+                        let status = delete(path);
+                        if status.code != 0 {
+                            first_failure.get_or_insert(DeleteFailure {
+                                status,
+                                operation: DeleteFailureOperation::Delete,
+                                path,
+                            });
+                        }
+                    }
+                }
+            }
+            DeleteVerdict::Complete {
+                failure: first_failure,
+            }
+        }
         DeletePath::Refusal { reason, dd_path } => DeleteVerdict::Refusal {
             reason: reason.to_string(),
             dd_path: dd_path.to_string(),

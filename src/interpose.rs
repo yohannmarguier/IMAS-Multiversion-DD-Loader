@@ -1876,24 +1876,28 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
         // NUL-terminated C string, or null.
         forward: unsafe { c_str_ref(path) },
     };
-    match seam_policy::run_delete(&argument) {
+    let probe = |path: &CStr| unsafe { probe_delete_candidate(ctx, path) };
+    let delete = |path: &CStr| forward_status!(delete_data(ctx, path.as_ptr()));
+    match seam_policy::run_delete(&argument, probe, delete) {
         seam_policy::DeleteVerdict::Forward { path } => {
             forward_status!(delete_data(
                 ctx,
                 path.map_or(std::ptr::null(), CStr::as_ptr)
             ))
         }
-        seam_policy::DeleteVerdict::FanOut { paths } => unsafe { delete_candidates(ctx, paths) },
+        seam_policy::DeleteVerdict::Complete { failure } => failure
+            .map_or_else(al_status_t::default, |failure| {
+                candidate_failure(failure.status, failure.operation.as_str(), failure.path)
+            }),
         seam_policy::DeleteVerdict::Refusal { reason, dd_path } => {
             context_path_refusal(&record, &reason, &dd_path)
         }
     }
 }
 
-/// Deletes every stored candidate a multi-source HLI path can resolve to.
-/// Each candidate is probed first because `al_delete_data` cannot represent
-/// not-found. A failure does not stop later candidates: without a rollback,
-/// continuing leaves the least stale data behind.
+/// Probes one stored candidate because `al_delete_data` cannot represent
+/// not-found. The seam-policy loop decides whether to delete it, which failure
+/// to retain, and whether to continue to later candidates.
 ///
 /// The probe is a `DOUBLE_DATA` scalar read, and both halves of IMAS-Core's
 /// scalar ABI apply to it: the buffer is the *caller's* — IMAS-Core
@@ -1909,44 +1913,29 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
 /// allocation of its own would leak it here. That is the right way round:
 /// freeing a pointer that under the contract is the caller's own stack slot is
 /// a crash, and a leak in a layer that broke the contract is not.
-unsafe fn delete_candidates(ctx: c_int, paths: &[CString]) -> al_status_t {
-    let mut first_failure = None;
-
-    for path in paths {
-        // One fixed probe shape for every candidate, whatever its real DD type
-        // and rank are. That is a known unsoundness, not an assumption that
-        // every candidate is a scalar: ADR 0017 decision 2 records why it
-        // cannot be fixed or verified before issue #138, and issue #138 owns
-        // it.
-        let mut probed = 0.0f64;
-        let mut data: *mut c_void = (&raw mut probed).cast();
-        let probe = unsafe {
-            read_data_unconverted(
-                ctx,
-                path.as_ptr(),
-                c"".as_ptr(),
-                &mut data,
-                DOUBLE_DATA_ID,
-                0,
-                std::ptr::null_mut(),
-            )
-        };
-        match read_outcome::classify_scalar_double(&probe, data.cast_const(), probed) {
-            ReadOutcome::Failure => {
-                first_failure.get_or_insert_with(|| candidate_failure(probe, "probe", path));
-            }
-            ReadOutcome::NotFound => {}
-            ReadOutcome::Data => {
-                let deletion = forward_status!(delete_data(ctx, path.as_ptr()));
-                if deletion.code != 0 {
-                    first_failure
-                        .get_or_insert_with(|| candidate_failure(deletion, "delete", path));
-                }
-            }
-        }
+unsafe fn probe_delete_candidate(ctx: c_int, path: &CStr) -> seam_policy::DeleteProbe {
+    // One fixed probe shape for every candidate, whatever its real DD type
+    // and rank are. That is a known unsoundness, not an assumption that every
+    // candidate is a scalar: ADR 0017 decision 2 records why it cannot be
+    // fixed or verified before issue #138, and issue #138 owns it.
+    let mut probed = 0.0f64;
+    let mut data: *mut c_void = (&raw mut probed).cast();
+    let status = unsafe {
+        read_data_unconverted(
+            ctx,
+            path.as_ptr(),
+            c"".as_ptr(),
+            &mut data,
+            DOUBLE_DATA_ID,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    match read_outcome::classify_scalar_double(&status, data.cast_const(), probed) {
+        ReadOutcome::Failure => seam_policy::DeleteProbe::Failure(status),
+        ReadOutcome::NotFound => seam_policy::DeleteProbe::NotFound,
+        ReadOutcome::Data => seam_policy::DeleteProbe::Data,
     }
-
-    first_failure.unwrap_or_default()
 }
 
 /// Keeps IMAS-Core's failure code while saying which half of the delete
