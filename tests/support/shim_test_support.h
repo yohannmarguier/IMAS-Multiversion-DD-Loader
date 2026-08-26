@@ -154,6 +154,30 @@ static inline int loss_count(int ctx_id) {
 
 static inline void check_no_loss_entry(int ctx_id) { CHECK(loss_count(ctx_id) == 0); }
 
+/* ADR 0016 decision 12: a write produces no certainly-lossy verdict. Drains
+ * the whole log rather than one index, because the claim is about every entry
+ * a write can put there. The reachability half of it is pinned in Rust, at the
+ * site that chooses the fidelity
+ * (`interpose::tests::a_declared_lossy_candidate_plan_still_retains_a_potential_loss`);
+ * this is the observable half, and if it ever fires the answer is to go add
+ * real coverage for the certain bucket, not to relax it (ADR 0011). */
+static inline void check_no_write_lossy_verdict(int ctx_id) {
+    int count = -1;
+    CHECK(imas_mvdd_context_loss_count(ctx_id, &count).code == 0);
+    for (int index = 0; index < count; ++index) {
+        char path[256] = {0};
+        int verdict = -1;
+        CHECK(imas_mvdd_context_loss_at(ctx_id, index, path, sizeof(path), &verdict).code == 0);
+        if (verdict == IMAS_MVDD_FIDELITY_LOSSY) {
+            fprintf(stderr,
+                    "a write-side LOSSY verdict needs real coverage before it is allowed: "
+                    "entry %d is %s\n",
+                    index, path);
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
 static inline void check_loss_at(int ctx_id, int index, const char *expected_path,
                                  int expected_verdict, int expected_operation) {
     char path[256] = {0};

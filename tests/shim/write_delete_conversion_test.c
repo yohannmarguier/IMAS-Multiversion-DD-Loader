@@ -204,6 +204,7 @@ static void scenario_write_candidate_lands_at_primary_and_retains_unwritten_cand
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
     check_loss_at(operation_ctx, 1, "time_slice/profiles_2d/b_tor",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+    check_no_write_lossy_verdict(operation_ctx);
 
     /* A CONSISTENCY CHECK, not a proof of what reached storage — issue #133's
      * acceptance criteria ask for that label to be here, so nobody later reads
@@ -263,6 +264,7 @@ static void scenario_write_split_candidate_lands_at_primary(void) {
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/global_quantities/psi_magnetic_axis",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+    check_no_write_lossy_verdict(operation_ctx);
 }
 
 static void scenario_child_write_candidate_retains_complete_path_at_root(void) {
@@ -286,17 +288,8 @@ static void scenario_child_write_candidate_retains_complete_path_at_root(void) {
     check_loss_at(child_ctx, 1, "time_slice/profiles_2d/b_tor",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
 
-    for (int index = 0; index < loss_count(operation_ctx); ++index) {
-        char path[256] = {0};
-        int verdict = -1;
-        CHECK(imas_mvdd_context_loss_at(operation_ctx, index, path, sizeof(path), &verdict).code ==
-              0);
-        if (verdict == IMAS_MVDD_FIDELITY_LOSSY) {
-            fprintf(stderr,
-                    "a write-side LOSSY verdict needs real coverage before it is allowed\n");
-            abort();
-        }
-    }
+    check_no_write_lossy_verdict(operation_ctx);
+    check_no_write_lossy_verdict(child_ctx);
 }
 
 static void scenario_write_uses_the_primary_candidate_without_fanout(void) {
