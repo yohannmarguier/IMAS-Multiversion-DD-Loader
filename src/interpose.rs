@@ -1588,10 +1588,9 @@ fn context_path_refusal(
     crate::path_conversion_refusal(reason, dd_path, &record.hli_version, &record.stored_version)
 }
 
-/// A refusal from a seam that holds a live conversion record but has not
-/// resolved a path through the map — the delete seam, whose refusal remains a
-/// blanket context-keyed check, and arraystruct opens, whose own resolution
-/// already failed.
+/// A refusal from a seam that holds a live conversion record but has no
+/// resolved path to name — today the two arraystruct-open arguments, whose
+/// own resolution already failed and so produced no stored spelling.
 ///
 /// Issue #58 AC3 asks that *every* refusal message name the reason, the DD
 /// path and both DD versions, and these seams used to emit the reason alone.
@@ -1599,10 +1598,13 @@ fn context_path_refusal(
 /// that triggered the refusal carries both versions, and `raw_path` is the
 /// caller's own argument, which is the spelling AC3 asks to see anyway.
 ///
-/// A seam whose path argument is null or empty — `al_delete_data` where
-/// IMAS-Core's contract allows it — falls back to the context's own resolved
-/// path, and says so plainly when there is no path at either place rather
-/// than inventing one.
+/// A seam whose path argument is null or empty falls back to the context's
+/// own resolved path, and says so plainly when there is no path at either
+/// place rather than inventing one. That fallback outlives the delete seam
+/// that motivated it: issue #64's blanket context-keyed delete refusal was
+/// this function's original caller, and #129/#131 replaced it with real path
+/// resolution, so `delete_data` now refuses through `context_path_refusal`
+/// with a resolved spelling in hand.
 fn contextual_refusal(
     record: &crate::registry::context_registry::ConversionRecord,
     reason: &str,
