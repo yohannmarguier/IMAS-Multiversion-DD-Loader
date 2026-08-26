@@ -98,7 +98,7 @@ A conversion rule whose HLI-side selector falls at or under a requested DD path,
 _Avoid_: crossing rule, leaking rule, straddling rule.
 
 **loss log**:
-The list of non-exact reads and writes recorded on a root context record: for each, the DD path as the HLI asked for it, its fidelity verdict, and which operation produced it. It is the only channel by which loss reaches the caller when the operation *succeeded*, because a success is forced to `al_status_t.code == 0`. The HLI drains it before `al_end_action` ends the context; it does not outlive the context. See `docs/adr/0012-loss-reaches-the-caller-by-a-context-log.md`.
+The list of non-exact reads and writes recorded on a root context record: for each, the relevant complete DD path, its fidelity verdict, and which operation produced it. A read loss or refused write names the HLI-DD path as the HLI asked for it. A successful ambiguous write instead names each stored-DD candidate it deliberately left unwritten, because those are the paths where stale data may remain. It is the only channel by which loss reaches the caller when the operation *succeeded*, because a success is forced to `al_status_t.code == 0`. The HLI drains it before `al_end_action` ends the context; it does not outlive the context. See `docs/adr/0012-loss-reaches-the-caller-by-a-context-log.md`.
 _Avoid_: report, journal, accumulator, diagnostics — and never call it an error channel; the reads and writes it records succeeded.
 
 **operation** (of a loss log entry):

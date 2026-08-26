@@ -148,7 +148,7 @@ pub(crate) enum LossOperation {
 /// and operation through separate allocation-free accessors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LossEntry {
-    hli_path: String,
+    dd_path: String,
     fidelity: Fidelity,
     operation: LossOperation,
 }
@@ -362,10 +362,10 @@ impl ContextRegistry {
     pub(crate) fn record_read_loss_at_root(
         &self,
         root_id: ContextId,
-        hli_path: String,
+        dd_path: String,
         fidelity: Fidelity,
     ) {
-        self.record_loss_at_root(root_id, hli_path, fidelity, LossOperation::Read);
+        self.record_loss_at_root(root_id, dd_path, fidelity, LossOperation::Read);
     }
 
     /// Appends a non-exact write outcome directly to the loss log belonging
@@ -379,16 +379,16 @@ impl ContextRegistry {
     pub(crate) fn record_write_loss_at_root(
         &self,
         root_id: ContextId,
-        hli_path: String,
+        dd_path: String,
         fidelity: Fidelity,
     ) {
-        self.record_loss_at_root(root_id, hli_path, fidelity, LossOperation::Write);
+        self.record_loss_at_root(root_id, dd_path, fidelity, LossOperation::Write);
     }
 
     fn record_loss_at_root(
         &self,
         root_id: ContextId,
-        hli_path: String,
+        dd_path: String,
         fidelity: Fidelity,
         operation: LossOperation,
     ) {
@@ -398,7 +398,7 @@ impl ContextRegistry {
         let mut state = self.state.lock().unwrap();
         if let Some(losses) = state.loss_logs.get_mut(&root_id) {
             losses.push(LossEntry {
-                hli_path,
+                dd_path,
                 fidelity,
                 operation,
             });
@@ -438,7 +438,7 @@ impl ContextRegistry {
             return None;
         };
         let loss = state.loss_logs.get(&record.root_id)?.get(index)?;
-        Some(read(&loss.hli_path, loss.fidelity, loss.operation))
+        Some(read(&loss.dd_path, loss.fidelity, loss.operation))
     }
 
     /// Removes exactly the record at `ctx_id`, if any (mirrors a successful

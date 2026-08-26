@@ -134,7 +134,7 @@ fn a_non_exact_read_from_a_child_is_retained_by_its_root_context() {
     assert_eq!(
         state.loss_logs.get(&5),
         Some(&vec![LossEntry {
-            hli_path: "field".to_string(),
+            dd_path: "field".to_string(),
             fidelity: Fidelity::Lossy,
             operation: LossOperation::Read,
         }])
@@ -159,7 +159,7 @@ fn a_refused_write_from_a_child_is_retained_by_its_root_context() {
     assert_eq!(
         state.loss_logs.get(&5),
         Some(&vec![LossEntry {
-            hli_path: "root/path/field".to_string(),
+            dd_path: "root/path/field".to_string(),
             fidelity: Fidelity::Unmappable,
             operation: LossOperation::Write,
         }])
