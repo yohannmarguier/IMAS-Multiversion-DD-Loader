@@ -381,6 +381,10 @@ enum { RECORDING_STUB_MAXDIM = 7 };
 static double g_read_double_values[RECORDING_STUB_CSV_CAPACITY];
 static int g_read_size_override[RECORDING_STUB_CSV_CAPACITY];
 
+/* The two kind values are duplicated as IMAS_MVDD_STUB_DATA_EVENT_READ and
+ * IMAS_MVDD_STUB_DATA_EVENT_DELETE in tests/support/shim_test_support.h. They
+ * have to be: a suite reads them back through dlsym, and this directory ships
+ * no header for it to include. Change one and change the other. */
 enum {
     RECORDING_STUB_DATA_EVENT_READ = 1,
     RECORDING_STUB_DATA_EVENT_DELETE = 2,

@@ -15,7 +15,7 @@
 
 static al_status_t write_field(int ctx_id, const char *field, const char *timebase, void *data,
                                int *size) {
-    return al_write_data(ctx_id, field, timebase, data, 52 /* DOUBLE_DATA */, 1, size);
+    return al_write_data(ctx_id, field, timebase, data, IMAS_DOUBLE_DATA, 1, size);
 }
 
 typedef const char *(*delete_path_at_fn)(int);
@@ -132,7 +132,7 @@ static void scenario_plugin_write_renamed_field_lands_at_stored_spelling(void) {
     int size[1] = {73};
     al_status_t status = al_plugin_write_data(
         operation_ctx, "time_slice/global_quantities/beta_tor_norm", "time", &sentinel,
-        52 /* DOUBLE_DATA */, 1, size);
+        IMAS_DOUBLE_DATA, 1, size);
 
     CHECK(status.code == 0);
     CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"),
@@ -153,7 +153,7 @@ static void scenario_plugin_write_matching_context_forwards_unchanged(void) {
 
     al_status_t status = al_plugin_write_data(
         operation_ctx, "time_slice/global_quantities/beta_tor_norm", "time", &sentinel,
-        52 /* DOUBLE_DATA */, 1, size);
+        IMAS_DOUBLE_DATA, 1, size);
 
     CHECK(status.code == 0);
     CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"),
@@ -627,8 +627,8 @@ static void scenario_delete_fans_out_over_candidates_in_declared_order(void) {
     CHECK(strcmp(delete_path_at(deletes_before + 2), "time_slice/profiles_2d/b_tor") == 0);
     CHECK(int_from_stub("recording_stub_data_event_count") == events_before + 6);
     for (int index = 0; index < 3; ++index) {
-        CHECK(data_event_kind_at(events_before + 2 * index) == 1 /* READ */);
-        CHECK(data_event_kind_at(events_before + 2 * index + 1) == 2 /* DELETE */);
+        CHECK(data_event_kind_at(events_before + 2 * index) == IMAS_MVDD_STUB_DATA_EVENT_READ);
+        CHECK(data_event_kind_at(events_before + 2 * index + 1) == IMAS_MVDD_STUB_DATA_EVENT_DELETE);
         CHECK(strcmp(data_event_path_at(events_before + 2 * index),
                      delete_path_at(deletes_before + index)) == 0);
         CHECK(strcmp(data_event_path_at(events_before + 2 * index + 1),

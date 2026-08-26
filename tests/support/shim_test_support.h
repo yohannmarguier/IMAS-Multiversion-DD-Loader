@@ -134,6 +134,16 @@ static inline int run_named_scenario(int argc, char **argv, const shim_test_scen
 #define IMAS_DOUBLE_DATA 52
 #define IMAS_COMPLEX_DATA 53
 
+/* The recording stub's own data-event kinds, drained through
+ * `recording_stub_data_event_kind_at`. The stub declares them in a
+ * file-private enum (`tests/stub/recording_stub.c`, RECORDING_STUB_DATA_EVENT_*)
+ * and `tests/stub/` ships no header, so a suite reaching them across the
+ * dlopen boundary has no way to link against the definition. Naming them once
+ * here is the closest thing to that link, and it keeps a bare `1` from
+ * standing in a comparison under a comment claiming to be a constant. */
+#define IMAS_MVDD_STUB_DATA_EVENT_READ 1
+#define IMAS_MVDD_STUB_DATA_EVENT_DELETE 2
+
 /* The loss log a caller drains through the shim's four owned exports
  * (ADR 0012). These four helpers were copied into five suites — `loss_count`
  * five times, `check_loss_at` four, and the newest copy of `check_loss_at`
