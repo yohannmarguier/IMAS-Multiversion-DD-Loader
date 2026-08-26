@@ -1,7 +1,7 @@
 # tests/ — what is covered, and where
 
-**228 ctest tests** (30 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
-stub-only profile registers 194). None of the C sources here is registered by
+**227 ctest tests** (30 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
+stub-only profile registers 193). None of the C sources here is registered by
 itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
 (ADR 0005) and the context registry (ADR 0003) are process-wide state that
@@ -123,7 +123,7 @@ record intact, a recycled context ID never exposes a stale record, and the
 latter two seams forward unchanged without touching the registry. Observed
 indirectly, via whether a later read still translates.
 
-### `write-delete-*` — 42 · `shim/write_delete_conversion_test.c`
+### `write-delete-*` — 41 · `shim/write_delete_conversion_test.c`
 
 Issue #125's safe write slice: `al_write_data` and `al_plugin_write_data`
 independently resolve identity, `renamed`, and `moved` field/timebase paths to
