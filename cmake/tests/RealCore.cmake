@@ -213,10 +213,8 @@ set_tests_properties(equilibrium-read-copied-fixture-harness-reproves-renamed-re
 # Issue #136 (ADR 0020) is what made these reachable: before it, a WRITE_OP
 # open never registered a conversion record against real Core's HDF5 backend,
 # so only claim 5 could be proven and the rest were pinned as a known gap.
-# Four of #133's five claims are now proven here. Claim 4's delete half is
-# still not observable on this backend — see
-# scenario_reverse_delete_fan_out_does_not_reach_disk in the test file for the
-# two independent reasons and for the marker that fails when either is fixed.
+# Four of #133's five claims are proven here. Issue #138 additionally proves
+# the delete half reaches IMAS-Core rather than becoming a successful no-op.
 add_executable(write_delete_oracle_test
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/write_delete_oracle_test.c")
 target_include_directories(write_delete_oracle_test PRIVATE
@@ -285,10 +283,10 @@ add_test(NAME write-delete-oracle-forward-write-through-a-non-primary-source-ref
 set_tests_properties(write-delete-oracle-forward-write-through-a-non-primary-source-refuses PROPERTIES
     LABELS real-core)
 
-add_test(NAME write-delete-oracle-reverse-delete-fan-out-does-not-reach-disk
+add_test(NAME write-delete-oracle-reverse-delete-fan-out-reaches-disk
     COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:write_delete_oracle_test> reverse-delete-fan-out-does-not-reach-disk)
-set_tests_properties(write-delete-oracle-reverse-delete-fan-out-does-not-reach-disk PROPERTIES
+        $<TARGET_FILE:write_delete_oracle_test> reverse-delete-fan-out-reaches-disk)
+set_tests_properties(write-delete-oracle-reverse-delete-fan-out-reaches-disk PROPERTIES
     LABELS real-core)
 
 add_test(NAME write-delete-oracle-forward-write-with-no-stored-slot-refuses

@@ -482,72 +482,34 @@ static void scenario_forward_write_with_no_stored_slot_refuses(void) {
            "3.39.0 fixture\n");
 }
 
-/* --- claim 4's delete half: pinned as unreachable on this backend -------- */
+/* --- claim 4's delete half: a fan-out never reports a silent success ------ */
 
-/* ADR 0017's delete fan-out removes *every* candidate a multi-source HLI path
- * resolves to, which is the opposite answer to decision 4's write. It is not
- * observable on disk against this real IMAS-Core version, for two independent
- * reasons found while writing this file, and both are pinned here rather than
- * asserted away:
- *
- *   1. `HDF5Writer::deleteData` ignores its `path` argument entirely (issue
- *      #139). It
- *      deletes the IDS occurrence's whole pulse file and its link in the
- *      master file — there is no per-path delete on the HDF5 backend at all,
- *      so "the precedence-2 candidate was removed" has nothing to observe. It
- *      is `datapath`-on-`al_begin_global_action` all over again: an argument
- *      the ABI carries and this backend drops.
- *   2. The fan-out probes each candidate with an `al_read_data` through the
- *      caller's *own* context (`delete_candidates`, `src/interpose.rs`, issue
- *      #138). Under
- *      a `WRITE_OP` open that read finds nothing — the same reader-group gap
- *      issue #136 fixed for stamp discovery, still present for this probe — so
- *      every candidate is classified not-found, no delete is forwarded at all,
- *      and the fan-out reports success having done nothing.
- *
- * So this scenario asserts what actually happens today: a fan-out delete
- * through a WRITE_OP context succeeds and leaves the disk untouched. If either
- * cause above is fixed, this scenario starts failing, which is the signal to
- * replace it with the real on-disk claim.
- *
- * That "untouched" is not the same as "no delete happened at all", and the
- * difference is worth the assertion. Take the conversion record away -- run
- * this scenario against a shim without ADR 0020's probe -- and the delete is
- * forwarded verbatim instead, at which point cause 1 destroys the *entire*
- * equilibrium occurrence: equilibrium.h5 is gone and this scenario fails on
- * `H5Fopen`. So the fan-out is what is currently keeping a converted delete
- * from taking the whole IDS with it, by never reaching Core. Reporting
- * `code == 0` for that is still a defect -- ADR 0016 decision 1 forbids
- * exactly it -- but it is a different defect from the one it is hiding. */
-static void scenario_reverse_delete_fan_out_does_not_reach_disk(void) {
+/* A delete fan-out cannot use a presence probe through its WRITE_OP context:
+ * real IMAS-Core only prepares that context for writing, so every probe looks
+ * absent and the old shim returned success without forwarding a delete. The
+ * fan-out now attempts every candidate directly. This backend's deleteData
+ * ignores the path and removes the whole occurrence (issue #139). A zero
+ * result is therefore valid only with that observable deletion: it proves at
+ * least one candidate reached Core rather than becoming a successful no-op. */
+static void scenario_reverse_delete_fan_out_reaches_disk(void) {
     copy_fixture_pair("4.1.1");
     CHECK_OK(imas_mvdd_set_hli_dd_version("3.39.0"));
     int pulse_ctx = open_copied_fixture_pulse();
 
     int op_ctx = -1;
     CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", WRITE_OP, &op_ctx));
-    /* Deliberately not CHECK_OK: this success is the defect, not the contract.
-     * ADR 0016 decision 1 forbids returning `code == 0` for an operation the
-     * shim did not perform, and issue #138 is that. Asserting it explicitly
-     * keeps the scenario from reading as an endorsement. */
     al_status_t deletion = al_delete_data(op_ctx, "time_slice/global_quantities/psi_axis");
-    CHECK(deletion.code == 0);
+    CHECK_OK(deletion);
     CHECK_OK(al_end_action(op_ctx));
     close_fixture_pulse(pulse_ctx);
 
     char equilibrium_file[1024];
     equilibrium_file_path(equilibrium_file, sizeof equilibrium_file);
-    double primary[FIXTURE_SLICE_CAPACITY];
-    CHECK(read_double_slices_from_disk(equilibrium_file, PSI_AXIS_DATASET, primary,
-                                       FIXTURE_SLICE_CAPACITY) == FIXTURE_SLICES);
-    double secondary[FIXTURE_SLICE_CAPACITY];
-    CHECK(read_double_slices_from_disk(equilibrium_file, PSI_MAGNETIC_AXIS_DATASET, secondary,
-                                       FIXTURE_SLICE_CAPACITY) == FIXTURE_SLICES);
-    check_stamp_still_reads("4.1.1");
+    CHECK(access(equilibrium_file, F_OK) != 0);
 
     remove_fixture_pair();
-    printf("write_delete_oracle_test reverse-delete-fan-out-does-not-reach-disk: pinned known gap "
-           "— the fan-out reported success and neither split candidate changed on disk\n");
+    printf("write_delete_oracle_test reverse-delete-fan-out-reaches-disk: a fan-out reached "
+           "IMAS-Core instead of reporting a successful no-op\n");
 }
 
 /* --- claim 5: a refused write leaves no trace on disk -------------------- */
@@ -674,8 +636,7 @@ int main(int argc, char **argv) {
          scenario_forward_write_through_a_non_primary_source_refuses},
         {"forward-write-with-no-stored-slot-refuses",
          scenario_forward_write_with_no_stored_slot_refuses},
-        {"reverse-delete-fan-out-does-not-reach-disk",
-         scenario_reverse_delete_fan_out_does_not_reach_disk},
+        {"reverse-delete-fan-out-reaches-disk", scenario_reverse_delete_fan_out_reaches_disk},
         {"fresh-occurrence-write-is-untranslated",
          scenario_fresh_occurrence_write_is_untranslated},
     };
