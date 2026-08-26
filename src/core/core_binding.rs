@@ -139,8 +139,8 @@ type SetvalueDoubleScalarParameterPluginFn =
 // struct literal — so adding one export meant three coordinated edits in
 // lockstep and a missed one was a compile error at best, a field bound to the
 // wrong symbol at worst. The C side of the project already resolves this with
-// a single X-macro manifest (`tests/abi_symbols.def`, and now
-// `tests/abi_fallback_constants.def`); this is that idiom's Rust counterpart.
+// a single X-macro manifest (`tests/abi/abi_symbols.def`, and now
+// `tests/abi/abi_fallback_constants.def`); this is that idiom's Rust counterpart.
 //
 // `bootstrap` holds symbols resolved before the manifest runs. `getALVersion`
 // is the only one: the ADR requires its version report to be checked before

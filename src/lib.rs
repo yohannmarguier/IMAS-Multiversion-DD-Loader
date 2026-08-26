@@ -299,7 +299,7 @@ pub extern "C" fn getDDVersion() -> *const c_char {
 /// Shim-owned export (ADR 0005) — the `imas_mvdd_` prefix marks it as a
 /// symbol this project defines rather than mirrors from IMAS-Core, and it is
 /// listed explicitly on the export-drift check's owned-exports manifest
-/// (`tests/owned_exports.def`). Reports the calling HLI's process-wide DD
+/// (`tests/abi/owned_exports.def`). Reports the calling HLI's process-wide DD
 /// version once, before any open. The value latches on first use for the
 /// life of the process: an identical repeat is accepted, a conflicting
 /// repeat is refused naming both versions, and the call is safe from any
@@ -315,7 +315,7 @@ pub unsafe extern "C" fn imas_mvdd_set_hli_dd_version(version: *const c_char) ->
     unsafe { version::hli_version::set_from_c(version) }
 }
 
-/// Shim-owned export (ADR 0012) — listed on `tests/owned_exports.def`
+/// Shim-owned export (ADR 0012) — listed on `tests/abi/owned_exports.def`
 /// alongside `imas_mvdd_set_hli_dd_version`. Reports, without allocating,
 /// the number of non-exact read outcomes retained on `ctxID`'s root
 /// conversion context (a query on a child context resolves to the same
@@ -334,7 +334,7 @@ pub unsafe extern "C" fn imas_mvdd_context_loss_count(
     unsafe { resolve::context_loss_count(ctx_id, count) }
 }
 
-/// Shim-owned export (ADR 0012) — listed on `tests/owned_exports.def`
+/// Shim-owned export (ADR 0012) — listed on `tests/abi/owned_exports.def`
 /// alongside `imas_mvdd_set_hli_dd_version`. Copies the `index`-th loss-log
 /// entry retained on `ctxID`'s root conversion context into caller-owned
 /// storage: the DD path exactly as the HLI requested it, NUL-terminated in
@@ -363,7 +363,7 @@ pub unsafe extern "C" fn imas_mvdd_context_loss_at(
     unsafe { resolve::context_loss_at(ctx_id, index, path_buf, buf_len, verdict) }
 }
 
-/// Shim-owned export (ADR 0012) — listed on `tests/owned_exports.def`
+/// Shim-owned export (ADR 0012) — listed on `tests/abi/owned_exports.def`
 /// alongside the other loss-query exports. Writes the operation that produced
 /// the `index`-th entry in `ctxID`'s root loss log to caller-owned storage:
 /// `IMAS_MVDD_LOSS_OPERATION_READ` or `IMAS_MVDD_LOSS_OPERATION_WRITE`.
