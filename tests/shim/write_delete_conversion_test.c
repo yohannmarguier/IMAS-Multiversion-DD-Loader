@@ -211,10 +211,16 @@ static void scenario_write_candidate_lands_at_primary_and_retains_unwritten_cand
     CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 1);
     CHECK(strcmp(string_from_stub("recording_stub_write_field"),
                  "time_slice/profiles_2d/b_field_phi") == 0);
+    /* The entries name the two candidates left unwritten, by their own stored
+     * 3.39.0 spellings — not the caller's `b_field_phi`, which is where the
+     * value did land. Story 22 asks the log to say where a stale value may now
+     * be found, so a repeated copy of the caller's own path would answer the
+     * one question it exists to answer with nothing. `fold-p2d-bphi` declares
+     * b_field_phi at precedence 1, b_field_tor at 2, b_tor at 3. */
     CHECK(loss_count(operation_ctx) == 2);
-    check_loss_at(operation_ctx, 0, "time_slice/profiles_2d/b_field_phi",
+    check_loss_at(operation_ctx, 0, "time_slice/profiles_2d/b_field_tor",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
-    check_loss_at(operation_ctx, 1, "time_slice/profiles_2d/b_field_phi",
+    check_loss_at(operation_ctx, 1, "time_slice/profiles_2d/b_tor",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
 
     /* A CONSISTENCY CHECK, not a proof of what reached storage — issue #133's
@@ -269,8 +275,11 @@ static void scenario_write_split_candidate_lands_at_primary(void) {
     CHECK(pointer_from_stub("recording_stub_write_data") != &value);
     CHECK(double_at_from_stub("recording_stub_write_double_at", 0) == -value);
     CHECK(value == 42.0);
+    /* `split-psi-axis` feeds the 3.39.0 psi_axis into two 4.1.1 slots. Only
+     * precedence 1 is written, and the entry names the precedence-2 stored
+     * spelling that keeps whatever it already held. */
     CHECK(loss_count(operation_ctx) == 1);
-    check_loss_at(operation_ctx, 0, "time_slice/global_quantities/psi_axis",
+    check_loss_at(operation_ctx, 0, "time_slice/global_quantities/psi_magnetic_axis",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
 }
 
@@ -286,9 +295,13 @@ static void scenario_child_write_candidate_retains_complete_path_at_root(void) {
     CHECK(write_field(child_ctx, "profiles_2d/b_field_phi", "time", &value, size).code == 0);
     CHECK(loss_count(operation_ctx) == 2);
     CHECK(loss_count(child_ctx) == 2);
-    check_loss_at(child_ctx, 0, "time_slice/profiles_2d/b_field_phi",
+    /* The caller's argument was relative to the `time_slice` anchor, and the
+     * stored candidate spellings are still reported as complete DD paths from
+     * the IDS root — the anchor-stripped fragment IMAS-Core received would
+     * not tell a draining caller where to look. */
+    check_loss_at(child_ctx, 0, "time_slice/profiles_2d/b_field_tor",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
-    check_loss_at(child_ctx, 1, "time_slice/profiles_2d/b_field_phi",
+    check_loss_at(child_ctx, 1, "time_slice/profiles_2d/b_tor",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
 
     for (int index = 0; index < loss_count(operation_ctx); ++index) {

@@ -210,9 +210,11 @@ pub(crate) enum WriteVerdict<'a> {
         /// `Some` is a transformed shim-owned copy, borrowed by the adapter
         /// for exactly one IMAS-Core call. `None` forwards caller storage.
         data: Option<Vec<f64>>,
-        /// Every stored candidate that deliberately remains unwritten. These
-        /// are retained as potentially lossy only after IMAS-Core accepts the
-        /// one precedence-1 write.
+        /// Every stored candidate that deliberately remains unwritten, named
+        /// by its own complete stored-DD spelling rather than by the caller's
+        /// path — the point of the entry is to say where a stale value may
+        /// now be found. These are retained as potentially lossy only after
+        /// IMAS-Core accepts the one precedence-1 write.
         unwritten_candidates: Vec<&'a str>,
     },
     Refusal {
@@ -300,16 +302,21 @@ struct ResolvedWriteArgument<'a> {
     path: Option<&'a CStr>,
     value_transformation: ValueTransformation,
     dd_path: &'a str,
-    unwritten_candidates: usize,
+    /// The complete stored-DD spelling of every candidate this write
+    /// deliberately leaves alone — never the caller's own `dd_path`, because
+    /// the stale value a reader of the stored occurrence may find lives under
+    /// one of *these* names (ADR 0016 decision 4).
+    unwritten_candidates: Vec<&'a str>,
 }
 
 fn unwritten_candidate_paths<'a>(
     field: &ResolvedWriteArgument<'a>,
     timebase: &ResolvedWriteArgument<'a>,
 ) -> Vec<&'a str> {
-    let mut paths = Vec::with_capacity(field.unwritten_candidates + timebase.unwritten_candidates);
-    paths.extend((0..field.unwritten_candidates).map(|_| field.dd_path));
-    paths.extend((0..timebase.unwritten_candidates).map(|_| timebase.dd_path));
+    let mut paths =
+        Vec::with_capacity(field.unwritten_candidates.len() + timebase.unwritten_candidates.len());
+    paths.extend(field.unwritten_candidates.iter().copied());
+    paths.extend(timebase.unwritten_candidates.iter().copied());
     paths
 }
 
@@ -321,7 +328,7 @@ fn write_argument_path<'a>(
             path: argument.forward,
             value_transformation: ValueTransformation::None,
             dd_path: &argument.dd_path,
-            unwritten_candidates: 0,
+            unwritten_candidates: Vec::new(),
         }),
         WritePath::Translated {
             path,
@@ -330,12 +337,12 @@ fn write_argument_path<'a>(
             path: Some(path.as_c_str()),
             value_transformation: value_transformation.clone(),
             dd_path: &argument.dd_path,
-            unwritten_candidates: 0,
+            unwritten_candidates: Vec::new(),
         }),
         WritePath::Candidates(candidates) => {
             let Some(primary) = candidates
                 .iter()
-                .find(|candidate| candidate.precedence == 1)
+                .position(|candidate| candidate.precedence == 1)
             else {
                 return Err((
                     "this candidate plan has no precedence-1 source for a write",
@@ -343,10 +350,19 @@ fn write_argument_path<'a>(
                 ));
             };
             Ok(ResolvedWriteArgument {
-                path: Some(primary.path.as_c_str()),
-                value_transformation: primary.value_transformation.clone(),
+                path: Some(candidates[primary].path.as_c_str()),
+                value_transformation: candidates[primary].value_transformation.clone(),
                 dd_path: &argument.dd_path,
-                unwritten_candidates: candidates.len() - 1,
+                // Every candidate but the one being written, named by its own
+                // stored spelling. Indexing past the primary rather than
+                // filtering on `precedence != 1` keeps this exactly the
+                // complement of the slot chosen above.
+                unwritten_candidates: candidates
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != primary)
+                    .map(|(_, candidate)| candidate.stored_dd_path.as_str())
+                    .collect(),
             })
         }
         WritePath::Refusal { reason, dd_path } => Err((reason, dd_path)),

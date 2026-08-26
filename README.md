@@ -225,8 +225,9 @@ forbid it," not as a supported deployment recipe.
 
 ### Draining the loss log
 
-A non-exact read is logged, not silently accepted. Three shim-owned exports
-let a caller inspect it without allocating:
+A non-exact read, and every write that could not be served exactly, is logged
+rather than silently accepted. Four shim-owned exports let a caller inspect it
+without allocating:
 
 ```c
 int count = 0;
@@ -246,6 +247,17 @@ for (int i = 0; i < count; ++i) {
 A query on a child context (e.g. one opened by `al_begin_arraystruct_action`)
 resolves to the same log as its root; an untracked context reports `0`
 rather than a refusal.
+
+**Which spelling an entry names depends on what it is warning about.** A read
+loss and a refused write name the path *you* asked for, complete from the IDS
+root even where you addressed it relative to a live child context — that is the
+argument whose fidelity was in question. The `POTENTIALLY_LOSSY` entries a
+*successful* write leaves behind name something else: the **stored** spellings
+the write deliberately did not touch. Where one HLI path folds onto several
+stored slots, only the primary is written (ADR 0016), so what those entries
+report is where some other reader of the occurrence may still find a stale
+value — your own path is the one place that is now correct, and naming it would
+tell you nothing.
 
 ### Environment variables at a glance
 

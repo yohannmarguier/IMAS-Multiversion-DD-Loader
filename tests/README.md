@@ -138,7 +138,12 @@ skipped candidate as a `POTENTIALLY_LOSSY` `WRITE` loss after Core succeeds
 (apart from ADR 0018's unset rank-zero scalar, which stores no value and earns
 no loss), and refuses a non-primary source in either direction, even where its
 artifact entry is not deprecated; a child keeps those losses at its root under
-the complete HLI path. The DD-version stamp still refuses before Core; the
+the complete DD path. Each such entry names the **stored** spelling that was
+left unwritten — `b_field_tor`/`b_tor` beside a written `b_field_phi`,
+`psi_magnetic_axis` beside a written `psi_axis` — because the risk the entry
+exists to report is that another reader of the occurrence finds a stale value
+under one of those names; naming the caller's own path instead answered that
+question with nothing (review finding P1). The DD-version stamp still refuses before Core; the
 stamp's access-layer siblings still forward. Matching, unstamped, unknown and
 conversion-disabled contexts forward unchanged.
 

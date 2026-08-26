@@ -100,7 +100,15 @@ pub(crate) enum WritePath {
 }
 
 pub(crate) struct WriteCandidate {
+    /// The spelling IMAS-Core receives: anchor-stripped when the caller's own
+    /// argument was relative to a live context.
     pub(crate) path: CString,
+    /// The same candidate as one complete DD path from the IDS root, which is
+    /// what a loss-log entry must name — a caller draining the log is looking
+    /// for the stored spelling that now holds a stale value, and an
+    /// anchor-relative fragment does not tell them where to find it (ADR 0016
+    /// decision 4).
+    pub(crate) stored_dd_path: String,
     pub(crate) precedence: u32,
     pub(crate) value_transformation: ValueTransformation,
 }
@@ -376,6 +384,7 @@ pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) 
             .map(|candidate| {
                 stored_c_path(record, &candidate.path, is_absolute).map(|path| WriteCandidate {
                     path,
+                    stored_dd_path: candidate.path,
                     precedence: candidate.precedence,
                     value_transformation: candidate.value_transformation,
                 })
