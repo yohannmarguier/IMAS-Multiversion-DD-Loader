@@ -171,7 +171,7 @@ in landing order, under `docs/history/`:
 
 Each entry describes the tree as it was when it was written and several name
 paths that have since moved; "Current path map" above is the authority on where
-code lives today. The decisions of record are `docs/adr/0001`–`0020`.
+code lives today. The decisions of record are `docs/adr/0001`–`0021`.
 
 ## Build, toolchain and tests
 
