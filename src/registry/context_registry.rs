@@ -110,18 +110,12 @@ pub(crate) struct ConversionRecord {
     /// The context ID of this record's direct parent, or `None` for a root
     /// record.
     ///
-    /// Nothing outside this module's tests reads it: conversion resolves a
-    /// child to its root in one lookup through `root_id` (issue #65), never by
-    /// walking ancestry. It is retained because those tests are the only place
-    /// the registry's parentage rules are pinned — that a child records the
-    /// parent it was actually opened under, that a root has none, and that a
-    /// recycled parent ID does not retroactively re-parent an existing child.
-    /// Dropping the field would mean dropping those assertions.
-    #[allow(
-        dead_code,
-        reason = "read by this module's tests, which pin the parentage rules"
-    )]
-    parent_id: Option<ContextId>,
+    /// Kept crate-visible so resolver unit tests can construct a complete
+    /// record without entering the process-global registry. Conversion itself
+    /// still resolves a child to its root in one lookup through `root_id`,
+    /// never by walking ancestry.
+    #[allow(dead_code, reason = "read by registry tests that pin parentage rules")]
+    pub(crate) parent_id: Option<ContextId>,
 }
 
 /// One entry in the registry's shared context-ID namespace.

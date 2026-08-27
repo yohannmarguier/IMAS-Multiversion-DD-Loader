@@ -707,9 +707,24 @@ fn refusal_reason_message(reason: RefusalReason) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversion::conversion_map::ConversionMap;
-    use crate::registry::context_registry::{MapCacheKey, REGISTRY};
-    use std::ffi::c_int;
+    use crate::conversion::conversion_map::{ConversionMap, Direction};
+    use std::sync::Arc;
+
+    /// Builds the resolver seam directly. Path resolution has no registry
+    /// policy of its own, so tests for it must not coordinate through the
+    /// process-global registry or invent an IDS cache key.
+    fn record(artifact: &str, resolved_path: &str) -> ConversionRecord {
+        ConversionRecord {
+            resolved_path: resolved_path.to_string(),
+            pulse_ctx_id: 0,
+            map: Arc::new(ConversionMap::load(artifact).expect("fixture artifact must load")),
+            root_id: 0,
+            direction_to_stored: Direction::Forward,
+            stored_version: "4.1.1".parse().expect("known release"),
+            hli_version: "3.39.0".parse().expect("known release"),
+            parent_id: None,
+        }
+    }
 
     /// User story 47: "As an HLI reading through a known version mismatch, I
     /// want a path that no rule claims a source for to return not-found
@@ -724,21 +739,6 @@ mod tests {
     /// the seam that admits one.
     #[test]
     fn an_unclaimed_read_path_returns_not_found_rather_than_forwarding() {
-        // Far from the small IDs every other registry test uses, so this one
-        // cannot collide with a concurrently running test in the same process.
-        const CTX_ID: c_int = 0x5D01;
-        // A distinct context ID is not enough. `record_root` obtains its map
-        // through the registry's `(ids, stored, hli)` cache, so while any other
-        // record on the real `("equilibrium", 3.39.0, 4.1.1)` pair is live —
-        // `a_data_path_seam_answers_before_the_registry_when_conversion_is_disabled`
-        // (`src/interpose.rs`) registers exactly that — the closure below never
-        // runs and this test resolves through the *approved* map instead. That
-        // map carries `<default rel="identical"/>`, which claims every path,
-        // so the unclaimed branch this test exists to reach vanishes and the
-        // test fails on whichever interleaving wins. The IDS half of the key
-        // is what keeps the fixture map unshareable; it deliberately names no
-        // real IDS.
-        const FIXTURE_IDS: &str = "equilibrium-no-document-default-fixture";
         // No <default>: a path no rule claims is genuinely unclaimed here.
         const NO_DEFAULT_ARTIFACT: &str = r#"
             <ids-map ids="equilibrium" format-version="1">
@@ -751,20 +751,7 @@ mod tests {
               </rules>
             </ids-map>
         "#;
-        let stored: crate::version::dd_version::DdVersion =
-            "3.39.0".parse().expect("known release");
-        let hli: crate::version::dd_version::DdVersion = "4.1.1".parse().expect("known release");
-        assert!(REGISTRY.record_root(
-            CTX_ID,
-            String::new(),
-            CTX_ID,
-            MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
-            crate::conversion::conversion_map::Direction::Forward,
-            || ConversionMap::load(NO_DEFAULT_ARTIFACT).expect("fixture artifact must load"),
-        ));
-        let record = REGISTRY
-            .lookup(CTX_ID)
-            .expect("the root record was just registered");
+        let record = record(NO_DEFAULT_ARTIFACT, "");
 
         // The rule the fixture does carry still resolves, so an unclaimed
         // verdict below cannot be the whole map failing to match anything.
@@ -821,8 +808,6 @@ mod tests {
             ),
             "a null argument is absent, not unclaimed"
         );
-
-        REGISTRY.remove(CTX_ID);
     }
 
     /// Issue #126 pins the map-derived write refusals with an isolated
@@ -831,8 +816,6 @@ mod tests {
     /// another test can keep that map live while this one runs.
     #[test]
     fn write_pre_resolution_refusals_keep_the_shared_guard_ahead_of_rule_specific_ones() {
-        const CTX_ID: c_int = 0x5D02;
-        const FIXTURE_IDS: &str = "equilibrium-write-refusal-order-fixture";
         const ARTIFACT: &str = r#"
             <ids-map ids="equilibrium" format-version="1">
               <side id="left" dd="3.39.0" cocos="11"/>
@@ -855,19 +838,7 @@ mod tests {
               </rules>
             </ids-map>
         "#;
-        let stored = "4.1.1".parse().expect("known release");
-        let hli = "3.39.0".parse().expect("known release");
-        assert!(REGISTRY.record_root(
-            CTX_ID,
-            String::new(),
-            CTX_ID,
-            MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
-            crate::conversion::conversion_map::Direction::Forward,
-            || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
-        ));
-        let record = REGISTRY
-            .lookup(CTX_ID)
-            .expect("the root record was just registered");
+        let record = record(ARTIFACT, "");
 
         let assert_refusal = |path: &str, expected_reason: &str| {
             let path = CString::new(path).expect("fixture paths contain no NUL");
@@ -903,8 +874,6 @@ mod tests {
             "secondary",
             "this path has no safe conversion between DD versions",
         );
-
-        REGISTRY.remove(CTX_ID);
     }
 
     /// Issue #126 / review finding S-J3: `resolve_delete_path` carries the
@@ -920,8 +889,6 @@ mod tests {
     /// resolution has produced one, and a delete carries no value at all.
     #[test]
     fn delete_pre_resolution_refusals_keep_the_shared_guard_ahead_of_rule_specific_ones() {
-        const CTX_ID: c_int = 0x5D04;
-        const FIXTURE_IDS: &str = "equilibrium-delete-refusal-order-fixture";
         const ARTIFACT: &str = r#"
             <ids-map ids="equilibrium" format-version="1">
               <side id="left" dd="3.39.0" cocos="11"/>
@@ -940,19 +907,7 @@ mod tests {
               </rules>
             </ids-map>
         "#;
-        let stored = "4.1.1".parse().expect("known release");
-        let hli = "3.39.0".parse().expect("known release");
-        assert!(REGISTRY.record_root(
-            CTX_ID,
-            String::new(),
-            CTX_ID,
-            MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
-            crate::conversion::conversion_map::Direction::Forward,
-            || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
-        ));
-        let record = REGISTRY
-            .lookup(CTX_ID)
-            .expect("the root record was just registered");
+        let record = record(ARTIFACT, "");
 
         let assert_refusal = |path: &str, expected_reason: &str| {
             let path = CString::new(path).expect("fixture paths contain no NUL");
@@ -980,8 +935,6 @@ mod tests {
             "other_secondary",
             "this path is a non-primary source and cannot delete a shared stored slot",
         );
-
-        REGISTRY.remove(CTX_ID);
     }
 
     /// Issue #131 / ADR 0017 decision 4: a structure delete resolves and
@@ -994,8 +947,6 @@ mod tests {
     /// all without needing a real DD leaf name.
     #[test]
     fn resolve_delete_path_admits_a_trivial_structure_and_refuses_an_escaping_one() {
-        const CTX_ID: c_int = 0x5D03;
-        const FIXTURE_IDS: &str = "equilibrium-escaping-rule-fixture";
         const ARTIFACT: &str = r#"
             <ids-map ids="equilibrium" format-version="1">
               <side id="left" dd="3.39.0" cocos="11"/>
@@ -1013,19 +964,7 @@ mod tests {
               </rules>
             </ids-map>
         "#;
-        let stored = "4.1.1".parse().expect("known release");
-        let hli = "3.39.0".parse().expect("known release");
-        assert!(REGISTRY.record_root(
-            CTX_ID,
-            String::new(),
-            CTX_ID,
-            MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
-            crate::conversion::conversion_map::Direction::Forward,
-            || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
-        ));
-        let record = REGISTRY
-            .lookup(CTX_ID)
-            .expect("the root record was just registered");
+        let record = record(ARTIFACT, "");
 
         let trivial = CString::new("trivial_root").expect("no interior NUL");
         match resolve_delete_path(&record, trivial.as_ptr()) {
@@ -1052,8 +991,6 @@ mod tests {
             }
             _ => panic!("an escaping-rule subtree delete must refuse before IMAS-Core"),
         }
-
-        REGISTRY.remove(CTX_ID);
     }
 
     #[test]
