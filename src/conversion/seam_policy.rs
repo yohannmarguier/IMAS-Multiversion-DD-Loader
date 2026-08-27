@@ -693,7 +693,7 @@ pub(crate) fn run_read<'a>(
 
     let field_translated = match field.resolution {
         ReadPath::Forward => None,
-        ReadPath::Translated(path) | ReadPath::Candidates(path) => Some(path),
+        ReadPath::Translated(path) => Some(path),
         ReadPath::Refusal {
             reason,
             dd_path,
@@ -728,7 +728,7 @@ pub(crate) fn run_read<'a>(
 
     let timebase_translated = match timebase.resolution {
         ReadPath::Forward => None,
-        ReadPath::Translated(path) | ReadPath::Candidates(path) => Some(path),
+        ReadPath::Translated(path) => Some(path),
         ReadPath::Refusal {
             reason,
             dd_path,
@@ -1073,7 +1073,7 @@ mod tests {
             ],
         };
         let field = ReadArgument {
-            resolution: ReadPath::Candidates(candidates),
+            resolution: ReadPath::Translated(candidates),
             forward: None,
             dd_path: "profiles_2d/b_tor".to_string(),
         };
@@ -1190,7 +1190,7 @@ mod tests {
             dd_path: "field".to_string(),
         };
         let timebase = ReadArgument {
-            resolution: ReadPath::Candidates(TranslatedReadPath {
+            resolution: ReadPath::Translated(TranslatedReadPath {
                 paths: vec![
                     resolved(
                         "first_timebase",

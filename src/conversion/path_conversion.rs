@@ -6,15 +6,13 @@
 //! or nothing, the read seam derived a [`ReadPath`] with fidelity and
 //! candidates, and the context-opening seams derived one concrete spelling,
 //! no-source, or a refusal. This module is the one place that answers the
-//! question instead, so no consumer re-derives the enum.
+//! question instead, so no consumer re-derives the enum. [`resolve`] answers
+//! it once; each ABI seam applies its own named narrowing.
 //!
 //! It knows nothing about seams, attempts, loops or IMAS-Core: it takes a
 //! live [`ConversionRecord`] and a raw HLI argument, and answers either "what
-//! stored path does this mean" ([`resolve_context_path`] for a context-open,
-//! [`resolve_write_path`] for one safe write spelling), or "what stored read
-//! plan does this mean" ([`resolve_read_path`], for the one seam —
-//! `al_read_data` — that can try several candidates and apply a value
-//! transformation).
+//! stored path does this mean", then lets a context open, read, write, or
+//! delete narrowing state what that particular seam can safely enact.
 //!
 //! Issue #101 (part B); see ADR 0015 for the layering this belongs to.
 
@@ -71,13 +69,48 @@ pub(crate) enum ContextPathResolution {
 pub(crate) enum ReadPath {
     Forward,
     Translated(TranslatedReadPath),
-    Candidates(TranslatedReadPath),
     NoSource(Fidelity),
     Refusal {
         reason: String,
         dd_path: String,
         fidelity: Fidelity,
     },
+}
+
+/// The one complete answer path conversion gives every seam.  `Single` and
+/// `Plan` mirror the rule declaration: renamed/moved/identity rules produce a
+/// single source, while merged/split rules produce a plan, even if a future
+/// artifact declares only one candidate in that plan.
+pub(crate) enum Resolved {
+    Forward,
+    Single(Candidate),
+    Plan(Vec<Candidate>),
+    NoSource(Fidelity),
+    Unclaimed,
+    Refusal {
+        reason: String,
+        dd_path: String,
+        fidelity: Fidelity,
+    },
+}
+
+/// A stored source with the metadata each narrowing needs.  `precedence`
+/// belongs to a source inside a declared plan; `requested_precedence` belongs
+/// to the HLI spelling which selected the rule, and is deliberately separate.
+pub(crate) struct Candidate {
+    path: CString,
+    stored_dd_path: String,
+    dd_path: String,
+    fidelity: Fidelity,
+    value_transformation: ValueTransformation,
+    precedence: Option<u32>,
+    requested_precedence: Option<u32>,
+}
+
+struct ResolutionMetadata {
+    dd_path: String,
+    fidelity: Fidelity,
+    requested_precedence: Option<u32>,
 }
 
 /// The one stored-DD spelling a write may safely hand to IMAS-Core, plus the
@@ -156,18 +189,6 @@ pub(crate) fn translated_read_fidelity(path: Option<&TranslatedReadPath>) -> Fid
         .map_or(Fidelity::Exact, |path| path.fidelity)
 }
 
-/// A conversion-map outcome narrowed to what a structure-path ABI argument can
-/// pass to IMAS-Core: one concrete stored spelling, no source, or a refusal.
-/// A merged/split plan and a value transformation are both things only a data
-/// read can carry out — a candidate plan needs somewhere to try each candidate
-/// in turn, and a transformation needs a buffer to apply itself to. Neither
-/// reduces to the single stored spelling these seams must hand IMAS-Core.
-enum ConcreteStoredPath {
-    Path(String),
-    NoSource,
-    Refusal(String),
-}
-
 /// One path-bearing ABI argument that the conversion map claims, in the form
 /// both path resolvers need before they can differ: whether the caller spelled
 /// it absolutely, its absolute HLI-DD spelling, and the rule that explains it.
@@ -204,9 +225,7 @@ enum WriteCheck {
     InvertibleTransformation,
 }
 
-/// The complete write refusal order. The role tag is part of the policy:
-/// a value transformation is forbidden on a timebase, while a field may
-/// carry one only when it can be inverted towards stored data.
+/// The complete write refusal order. The role tag is part of the policy.
 const WRITE_CHECKS: &[(ArgumentRole, WriteCheck)] = &[
     (ArgumentRole::Any, WriteCheck::Unclaimed),
     (ArgumentRole::Any, WriteCheck::ImmutableStamp),
@@ -227,9 +246,7 @@ enum DeleteCheck {
     EscapingSubtree,
 }
 
-/// The complete delete refusal order. Deletes have only one `path` argument,
-/// but its role remains explicit so every ordered check list records the
-/// argument it serves.
+/// The complete delete refusal order.
 const DELETE_CHECKS: &[(ArgumentRole, DeleteCheck)] = &[
     (ArgumentRole::Path, DeleteCheck::Unclaimed),
     (ArgumentRole::Path, DeleteCheck::ImmutableStamp),
@@ -239,16 +256,34 @@ const DELETE_CHECKS: &[(ArgumentRole, DeleteCheck)] = &[
     (ArgumentRole::Path, DeleteCheck::EscapingSubtree),
 ];
 
+fn write_check_index(check: WriteCheck) -> usize {
+    WRITE_CHECKS
+        .iter()
+        .position(|(role, candidate)| {
+            role.serves(*role)
+                && std::mem::discriminant(candidate) == std::mem::discriminant(&check)
+        })
+        .expect("write check is listed")
+}
+
+fn delete_check_is_listed(check: DeleteCheck) {
+    debug_assert!(
+        DELETE_CHECKS
+            .iter()
+            .any(|(_, candidate)| std::mem::discriminant(candidate)
+                == std::mem::discriminant(&check))
+    );
+}
+
 /// What one path-bearing ABI argument amounts to, before
-/// [`resolve_context_path`] and [`resolve_read_path`] differ on what to do
-/// with it.
+/// a seam-specific narrowing differs on what to do with it.
 ///
 /// The two reasons an argument yields no rule are kept apart here on purpose.
 /// They used to share one `None`, which forced every caller to re-derive the
 /// distinction from `raw` after the fact — the arraystruct seam did, and the
 /// read seam did not, which is how an unclaimed read path came to be
 /// forwarded to IMAS-Core.
-enum ReadArgument {
+enum RawArgument {
     /// No usable path to translate: null, or empty as `timebase` routinely
     /// is. There is nothing to resolve, so the argument is forwarded exactly
     /// as received.
@@ -262,10 +297,10 @@ enum ReadArgument {
     Claimed(ClaimedArgument),
 }
 
-/// The preamble [`resolve_context_path`] and [`resolve_read_path`] share.
-fn claimed_argument(record: &ConversionRecord, raw: *const c_char) -> ReadArgument {
+/// The one resolver's preamble.
+fn claimed_argument(record: &ConversionRecord, raw: *const c_char) -> RawArgument {
     let Some(raw) = c_str_or_none(raw).filter(|path| !path.is_empty()) else {
-        return ReadArgument::Absent;
+        return RawArgument::Absent;
     };
     let is_absolute = raw.starts_with('/');
     let hli_absolute = join_hli_path(&record.resolved_path, raw);
@@ -273,432 +308,391 @@ fn claimed_argument(record: &ConversionRecord, raw: *const c_char) -> ReadArgume
         .map
         .resolve(&hli_absolute, record.direction_to_stored)
     else {
-        return ReadArgument::Unclaimed;
+        return RawArgument::Unclaimed;
     };
-    ReadArgument::Claimed(ClaimedArgument {
+    RawArgument::Claimed(ClaimedArgument {
         is_absolute,
         hli_absolute,
         explanation,
     })
 }
 
-/// Resolves one path-bearing context argument independently, preserving the
-/// caller's relative-vs-absolute spelling after conversion has selected the
-/// stored-DD path. `al_read_data` and `al_begin_arraystruct_action` share this
-/// policy.
-pub(crate) fn resolve_context_path(
-    record: &ConversionRecord,
-    raw: *const c_char,
-) -> ContextPathResolution {
+/// Resolves one HLI path exactly once.  The operation-specific narrowings
+/// below apply their ADR policy after this mechanical answer is available.
+pub(crate) fn resolve(record: &ConversionRecord, raw: *const c_char) -> Resolved {
     let argument = match claimed_argument(record, raw) {
-        ReadArgument::Absent => return ContextPathResolution::Forward,
-        ReadArgument::Unclaimed => return ContextPathResolution::Unclaimed,
-        ReadArgument::Claimed(argument) => argument,
-    };
-    let ClaimedArgument {
-        is_absolute,
-        explanation,
-        ..
-    } = argument;
-
-    match concrete_stored_path(explanation.outcome) {
-        ConcreteStoredPath::NoSource => ContextPathResolution::NoSource,
-        ConcreteStoredPath::Refusal(reason) => ContextPathResolution::Refusal(reason),
-        ConcreteStoredPath::Path(resolved_path) => {
-            match stored_c_path(record, &resolved_path, is_absolute) {
-                Ok(path) => ContextPathResolution::Translated(path),
-                Err(reason) => ContextPathResolution::Refusal(reason),
-            }
-        }
-    }
-}
-
-/// Resolves one read argument. Unlike `resolve_context_path`, this preserves
-/// merged/split candidates and their transformations so the read seam can
-/// execute the plan without making them appear as one concrete AOS path.
-pub(crate) fn resolve_read_path(record: &ConversionRecord, raw: *const c_char) -> ReadPath {
-    let argument = match claimed_argument(record, raw) {
-        ReadArgument::Absent => return ReadPath::Forward,
-        // User story 47: "a path that no rule claims a source for [must]
-        // return not-found (code == 0, null data), so that an unclaimed path
-        // is never silently forwarded under the wrong DD spelling". Forwarding
-        // it would hand IMAS-Core an HLI-DD spelling against stored data of a
-        // different DD version, on the one code path that knows no rule
-        // vouches for it. The verdict is retained as unmappable, so a caller
-        // draining the loss log sees why the read came back empty.
-        ReadArgument::Unclaimed => return ReadPath::NoSource(Fidelity::Unmappable),
-        ReadArgument::Claimed(argument) => argument,
+        RawArgument::Absent => return Resolved::Forward,
+        RawArgument::Unclaimed => return Resolved::Unclaimed,
+        RawArgument::Claimed(argument) => argument,
     };
     let ClaimedArgument {
         is_absolute,
         hli_absolute,
         explanation,
     } = argument;
+    let metadata = ResolutionMetadata {
+        dd_path: hli_absolute.clone(),
+        fidelity: read_fidelity(explanation.fidelity, explanation.rel),
+        requested_precedence: explanation.precedence,
+    };
 
-    let fidelity = read_fidelity(explanation.fidelity, explanation.rel);
+    let dd_path_for_refusal = hli_absolute.clone();
+    let refusal = move |reason| Resolved::Refusal {
+        reason,
+        dd_path: dd_path_for_refusal.clone(),
+        fidelity: Fidelity::Unmappable,
+    };
     match explanation.outcome {
-        Outcome::Refusal(reason) => ReadPath::Refusal {
-            reason: refusal_reason_message(reason),
-            dd_path: hli_absolute,
-            fidelity: Fidelity::Unmappable,
-        },
-        Outcome::NoSource => ReadPath::NoSource(fidelity),
+        Outcome::Refusal(reason) => refusal(refusal_reason_message(reason)),
+        Outcome::NoSource => Resolved::NoSource(metadata.fidelity),
         Outcome::Path {
             resolved_path,
             value_transformation,
             candidates,
-        } if candidates.is_empty() => translated_read_component(
-            record,
-            &resolved_path,
-            is_absolute,
-            fidelity,
-            value_transformation,
-        )
-        .map(|path| ReadPath::Translated(TranslatedReadPath { paths: vec![path] }))
-        .unwrap_or_else(|reason| ReadPath::Refusal {
-            reason,
-            dd_path: hli_absolute,
-            fidelity: Fidelity::Unmappable,
-        }),
-        Outcome::Path { candidates, .. } => candidates
-            .into_iter()
-            .map(|candidate| {
-                translated_read_component(
-                    record,
-                    &candidate.path,
-                    is_absolute,
-                    fidelity,
-                    candidate.value_transformation,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(|paths| ReadPath::Candidates(TranslatedReadPath { paths }))
-            .unwrap_or_else(|reason| ReadPath::Refusal {
-                reason,
-                dd_path: hli_absolute,
-                fidelity: Fidelity::Unmappable,
-            }),
-    }
-}
-
-/// Resolves one write argument to the stored-DD spelling the write policy may
-/// safely change, or to the ordered plan whose primary source it may change.
-/// Its value transformation already points from HLI data towards stored data,
-/// so the write policy only has to validate and copy the caller's buffer.
-pub(crate) fn resolve_write_path(
-    record: &ConversionRecord,
-    raw: *const c_char,
-    role: ArgumentRole,
-) -> WritePath {
-    let argument = claimed_argument(record, raw);
-    if let Some(refusal) = write_refusal_before_resolution(role, record, raw, &argument) {
-        return refusal;
-    }
-    let ReadArgument::Claimed(argument) = argument else {
-        return WritePath::Forward;
-    };
-    let ClaimedArgument {
-        is_absolute,
-        hli_absolute,
-        explanation,
-    } = argument;
-
-    let Outcome::Path {
-        resolved_path,
-        value_transformation,
-        candidates,
-    } = explanation.outcome
-    else {
-        unreachable!("the write check list refuses these outcomes");
-    };
-    if !candidates.is_empty() {
-        candidates
-            .into_iter()
-            .map(|candidate| {
-                stored_c_path(record, &candidate.path, is_absolute).map(|path| WriteCandidate {
-                    path,
-                    stored_dd_path: candidate.path,
-                    precedence: candidate.precedence,
-                    value_transformation: inverted_for_write(candidate.value_transformation),
+        } if matches!(explanation.rel, Some(Rel::Merged | Rel::Split)) => {
+            let candidates = if candidates.is_empty() {
+                // The rule still declared a merged/split plan even when this
+                // direction names its sole result through `resolved_path`.
+                // This chooses the plan from `rel`, never from its length.
+                vec![crate::conversion::conversion_map::CandidatePath {
+                    path: resolved_path,
+                    precedence: metadata.requested_precedence.unwrap_or(1),
+                    value_transformation,
+                }]
+            } else {
+                candidates
+            };
+            candidates
+                .into_iter()
+                .map(|candidate| {
+                    candidate_from_path(
+                        record,
+                        candidate.path,
+                        is_absolute,
+                        &metadata,
+                        candidate.value_transformation,
+                        Some(candidate.precedence),
+                    )
                 })
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(WritePath::Candidates)
-            .unwrap_or_else(|reason| WritePath::Refusal {
-                reason,
-                dd_path: hli_absolute,
-                check_index: None,
-            })
-    } else {
-        match stored_c_path(record, &resolved_path, is_absolute) {
-            Ok(path) => WritePath::Translated {
-                path,
-                value_transformation: inverted_for_write(value_transformation),
-            },
-            Err(reason) => WritePath::Refusal {
-                reason,
-                dd_path: hli_absolute,
-                check_index: None,
-            },
+                .collect::<Result<Vec<_>, _>>()
+                .map(Resolved::Plan)
+                .unwrap_or_else(refusal)
         }
+        Outcome::Path {
+            resolved_path,
+            value_transformation,
+            ..
+        } => candidate_from_path(
+            record,
+            resolved_path,
+            is_absolute,
+            &metadata,
+            value_transformation,
+            None,
+        )
+        .map(Resolved::Single)
+        .unwrap_or_else(refusal),
     }
 }
 
-/// Resolves one delete path to the stored-DD spelling or candidate plan it
-/// can safely remove. A delete does not carry data, so an otherwise-safe
-/// value transformation is irrelevant; it removes each resolved stored field
-/// directly.
-pub(crate) fn resolve_delete_path(
+fn candidate_from_path(
     record: &ConversionRecord,
-    raw: *const c_char,
-    role: ArgumentRole,
-) -> DeletePath {
-    let Some(raw_path) = c_str_or_none(raw) else {
-        return DeletePath::Forward;
-    };
-    if raw_path.is_empty() {
-        return DeletePath::Forward;
-    }
+    stored_dd_path: String,
+    is_absolute: bool,
+    metadata: &ResolutionMetadata,
+    value_transformation: ValueTransformation,
+    precedence: Option<u32>,
+) -> Result<Candidate, String> {
+    stored_c_path(record, &stored_dd_path, is_absolute).map(|path| Candidate {
+        path,
+        stored_dd_path,
+        dd_path: metadata.dd_path.clone(),
+        fidelity: metadata.fidelity,
+        value_transformation,
+        precedence,
+        requested_precedence: metadata.requested_precedence,
+    })
+}
 
-    let argument = claimed_argument(record, raw);
-    if let Some(refusal) = delete_refusal_before_resolution(role, record, raw_path, &argument) {
-        return refusal;
-    }
-    let ReadArgument::Claimed(argument) = argument else {
-        unreachable!("a nonempty path is claimed or refused by the delete check list");
-    };
-    let ClaimedArgument {
-        is_absolute,
-        hli_absolute,
-        explanation,
-    } = argument;
-
-    let Outcome::Path {
-        resolved_path,
-        candidates,
-        ..
-    } = explanation.outcome
-    else {
-        unreachable!("the delete check list refuses these outcomes");
-    };
-    if !candidates.is_empty() {
-        candidates
-            .into_iter()
-            .map(|candidate| stored_c_path(record, &candidate.path, is_absolute))
-            .collect::<Result<Vec<_>, _>>()
-            .map(DeletePath::Candidates)
-            .unwrap_or_else(|reason| DeletePath::Refusal {
-                reason,
-                dd_path: hli_absolute,
-            })
-    } else {
-        match stored_c_path(record, &resolved_path, is_absolute) {
-            Ok(path) => DeletePath::Translated(path),
-            Err(reason) => DeletePath::Refusal {
-                reason,
-                dd_path: hli_absolute,
-            },
-        }
+/// ADR 0016 decision 3 / user story 47: each seam receives only the answers
+/// it can enact.  Context opens cannot execute transformations or plans.
+pub(crate) fn narrow_context_path(resolved: Resolved) -> ContextPathResolution {
+    match resolved {
+        Resolved::Forward => ContextPathResolution::Forward,
+        Resolved::Unclaimed => ContextPathResolution::Unclaimed,
+        Resolved::NoSource(_) => ContextPathResolution::NoSource,
+        Resolved::Refusal { reason, .. } => ContextPathResolution::Refusal(reason),
+        Resolved::Single(candidate) if candidate.value_transformation == ValueTransformation::None =>
+            ContextPathResolution::Translated(candidate.path),
+        Resolved::Single(_) => ContextPathResolution::Refusal(
+            "this path needs a value transformation, which only a data read can apply".to_string(),
+        ),
+        Resolved::Plan(_) => ContextPathResolution::Refusal(
+            "this path is served by several stored candidates, and only a data read can try them in turn".to_string(),
+        ),
     }
 }
 
-fn write_refusal_before_resolution(
-    role: ArgumentRole,
-    record: &ConversionRecord,
-    raw: *const c_char,
-    argument: &ReadArgument,
-) -> Option<WritePath> {
-    for (check_index, (check_role, check)) in WRITE_CHECKS.iter().enumerate() {
-        if !check_role.serves(role) {
-            continue;
-        }
-        let (reason, dd_path) = match check {
-            WriteCheck::Unclaimed => match argument {
-                ReadArgument::Unclaimed => (
-                    "this path is unclaimed by the conversion map".to_string(),
-                    c_str_or_none(raw)
-                        .filter(|path| !path.is_empty())
-                        .map(|path| join_hli_path(&record.resolved_path, path))
-                        .unwrap_or_else(|| record.resolved_path.clone()),
-                ),
-                _ => continue,
-            },
-            _ => {
-                let ReadArgument::Claimed(argument) = argument else {
-                    continue;
-                };
-                let reason = match check {
-                    WriteCheck::ImmutableStamp
-                        if argument.hli_absolute == "ids_properties/version_put/data_dictionary" =>
-                    {
-                        Some("the DD-version stamp is immutable under a version mismatch".to_string())
-                    }
-                    WriteCheck::SharedRefusal => match &argument.explanation.outcome {
-                        Outcome::Refusal(reason) => Some(refusal_reason_message(*reason)),
-                        _ => None,
-                    },
-                    WriteCheck::NonPrimarySource
-                        if argument
-                            .explanation
-                            .precedence
-                            .is_some_and(|precedence| precedence != 1) =>
-                    {
-                        Some(
-                            "this path is a non-primary source and cannot write a shared stored slot"
-                                .to_string(),
-                        )
-                    }
-                    WriteCheck::NoStoredSource
-                        if matches!(argument.explanation.outcome, Outcome::NoSource) =>
-                    {
-                        Some("this path has no stored source".to_string())
-                    }
-                    WriteCheck::TimebaseTransformation
-                        if primary_value_transformation(&argument.explanation.outcome)
-                            .is_some_and(|transformation| {
-                                transformation != &ValueTransformation::None
-                            }) =>
-                    {
-                        Some(
-                            "this timebase needs a value transformation, which al_write_data cannot apply"
-                                .to_string(),
-                        )
-                    }
-                    WriteCheck::InvertibleTransformation
-                        if primary_value_transformation(&argument.explanation.outcome)
-                            .is_some_and(|transformation| transformation.inverse().is_none()) =>
-                    {
-                        Some(
-                            "this path needs a value transformation that cannot be inverted for a write"
-                                .to_string(),
-                        )
-                    }
-                    _ => None,
-                };
-                let Some(reason) = reason else {
-                    continue;
-                };
-                (reason, argument.hli_absolute.clone())
-            }
-        };
-        return Some(WritePath::Refusal {
+/// User story 47: an unclaimed read returns not-found rather than forwarding
+/// an HLI spelling to stored data.  Single and Plan share one read shape.
+pub(crate) fn narrow_read_path(resolved: Resolved) -> ReadPath {
+    match resolved {
+        Resolved::Forward => ReadPath::Forward,
+        Resolved::Unclaimed => ReadPath::NoSource(Fidelity::Unmappable),
+        Resolved::NoSource(fidelity) => ReadPath::NoSource(fidelity),
+        Resolved::Refusal {
             reason,
             dd_path,
-            check_index: Some(check_index),
-        });
+            fidelity,
+        } => ReadPath::Refusal {
+            reason,
+            dd_path,
+            fidelity,
+        },
+        Resolved::Single(candidate) => ReadPath::Translated(TranslatedReadPath {
+            paths: vec![resolved_read_path(candidate)],
+        }),
+        Resolved::Plan(candidates) => ReadPath::Translated(TranslatedReadPath {
+            paths: candidates.into_iter().map(resolved_read_path).collect(),
+        }),
     }
-    None
 }
 
-fn delete_refusal_before_resolution(
-    role: ArgumentRole,
-    record: &ConversionRecord,
-    raw_path: &str,
-    argument: &ReadArgument,
-) -> Option<DeletePath> {
-    for (check_role, check) in DELETE_CHECKS {
-        if !check_role.serves(role) {
-            continue;
-        }
-        let (reason, dd_path) = match check {
-            DeleteCheck::Unclaimed => match argument {
-                ReadArgument::Unclaimed => (
-                    "this path is unclaimed by the conversion map".to_string(),
-                    join_hli_path(&record.resolved_path, raw_path),
-                ),
-                _ => continue,
-            },
-            _ => {
-                let ReadArgument::Claimed(argument) = argument else {
-                    continue;
-                };
-                let reason = match check {
-                    DeleteCheck::ImmutableStamp
-                        if matches!(
-                            argument.hli_absolute.as_str(),
-                            "ids_properties"
-                                | "ids_properties/version_put"
-                                | "ids_properties/version_put/data_dictionary"
-                        ) =>
-                    {
-                        Some(
-                            "this delete would remove the DD-version stamp while stored data remains"
-                                .to_string(),
-                        )
-                    }
-                    DeleteCheck::SharedRefusal => match &argument.explanation.outcome {
-                        Outcome::Refusal(reason) => Some(refusal_reason_message(*reason)),
-                        _ => None,
-                    },
-                    DeleteCheck::NonPrimarySource
-                        if argument
-                            .explanation
-                            .precedence
-                            .is_some_and(|precedence| precedence != 1) =>
-                    {
-                        Some(
-                            "this path is a non-primary source and cannot delete a shared stored slot"
-                                .to_string(),
-                        )
-                    }
-                    DeleteCheck::NoStoredSource
-                        if matches!(argument.explanation.outcome, Outcome::NoSource) =>
-                    {
-                        Some("this path has no stored source".to_string())
-                    }
-                    DeleteCheck::EscapingSubtree
-                        if delete_escapes_stored_subtree(record, argument) =>
-                    {
-                        Some(
-                            "this subtree delete would leave data at a stored path outside the \
-                             requested subtree"
-                                .to_string(),
-                        )
-                    }
-                    _ => None,
-                };
-                let Some(reason) = reason else {
-                    continue;
-                };
-                (reason, argument.hli_absolute.clone())
-            }
-        };
-        return Some(DeletePath::Refusal { reason, dd_path });
-    }
-    None
-}
-
-fn primary_value_transformation(outcome: &Outcome) -> Option<&ValueTransformation> {
-    match outcome {
-        Outcome::Path {
-            value_transformation,
-            candidates,
-            ..
-        } if candidates.is_empty() => Some(value_transformation),
-        Outcome::Path { candidates, .. } => candidates
-            .iter()
-            .find(|candidate| candidate.precedence == 1)
-            .map(|candidate| &candidate.value_transformation),
-        Outcome::NoSource | Outcome::Refusal(_) => None,
+fn resolved_read_path(candidate: Candidate) -> ResolvedReadPath {
+    ResolvedReadPath {
+        path: candidate.path,
+        fidelity: candidate.fidelity,
+        value_transformation: candidate.value_transformation,
     }
 }
 
 fn inverted_for_write(transformation: ValueTransformation) -> ValueTransformation {
     transformation
         .inverse()
-        .expect("the write check list rejects non-invertible transformations")
+        .expect("the write narrowing rejects non-invertible transformations")
 }
 
-fn delete_escapes_stored_subtree(record: &ConversionRecord, argument: &ClaimedArgument) -> bool {
-    let Outcome::Path { resolved_path, .. } = &argument.explanation.outcome else {
-        return false;
+/// ADR 0016 decision 3: write-specific policy narrows one shared answer.
+pub(crate) fn narrow_write_path(
+    record: &ConversionRecord,
+    raw: *const c_char,
+    role: ArgumentRole,
+    resolved: Resolved,
+) -> WritePath {
+    let refusal = |reason, dd_path, check_index| WritePath::Refusal {
+        reason,
+        dd_path,
+        check_index,
     };
-    !is_equilibrium_leaf(record, &argument.hli_absolute)
+    match resolved {
+        Resolved::Forward => WritePath::Forward,
+        Resolved::Unclaimed => refusal(
+            "this path is unclaimed by the conversion map".to_string(),
+            caller_dd_path(record, raw),
+            Some(write_check_index(WriteCheck::Unclaimed)),
+        ),
+        Resolved::NoSource(_) => refusal(
+            "this path has no stored source".to_string(),
+            caller_dd_path(record, raw),
+            Some(write_check_index(WriteCheck::NoStoredSource)),
+        ),
+        Resolved::Refusal {
+            reason, dd_path, ..
+        } => refusal(
+            reason,
+            dd_path,
+            Some(write_check_index(WriteCheck::SharedRefusal)),
+        ),
+        Resolved::Single(candidate) => narrow_single_write(role, candidate, refusal),
+        Resolved::Plan(candidates) => {
+            if let Some(candidate) = candidates.first() {
+                if candidate.dd_path == "ids_properties/version_put/data_dictionary" {
+                    return refusal(
+                        "the DD-version stamp is immutable under a version mismatch".to_string(),
+                        candidate.dd_path.clone(),
+                        Some(write_check_index(WriteCheck::ImmutableStamp)),
+                    );
+                }
+                if candidate
+                    .requested_precedence
+                    .is_some_and(|precedence| precedence != 1)
+                {
+                    return refusal(
+                        "this path is a non-primary source and cannot write a shared stored slot"
+                            .to_string(),
+                        candidate.dd_path.clone(),
+                        Some(write_check_index(WriteCheck::NonPrimarySource)),
+                    );
+                }
+            }
+            let Some(primary) = candidates
+                .iter()
+                .find(|candidate| candidate.precedence == Some(1))
+            else {
+                return refusal(
+                    "this candidate plan has no precedence-1 source for a write".to_string(),
+                    caller_dd_path(record, raw),
+                    None,
+                );
+            };
+            if let Some(path) = write_candidate_refusal(role, primary) {
+                return refusal(path.0, path.1, path.2);
+            }
+            WritePath::Candidates(candidates.into_iter().map(write_candidate).collect())
+        }
+    }
+}
+
+fn narrow_single_write(
+    role: ArgumentRole,
+    candidate: Candidate,
+    refusal: impl FnOnce(String, String, Option<usize>) -> WritePath,
+) -> WritePath {
+    if let Some((reason, dd_path, check_index)) = write_candidate_refusal(role, &candidate) {
+        return refusal(reason, dd_path, check_index);
+    }
+    WritePath::Translated {
+        path: candidate.path,
+        value_transformation: inverted_for_write(candidate.value_transformation),
+    }
+}
+
+fn write_candidate_refusal(
+    role: ArgumentRole,
+    candidate: &Candidate,
+) -> Option<(String, String, Option<usize>)> {
+    if candidate.dd_path == "ids_properties/version_put/data_dictionary" {
+        Some((
+            "the DD-version stamp is immutable under a version mismatch".to_string(),
+            candidate.dd_path.clone(),
+            Some(write_check_index(WriteCheck::ImmutableStamp)),
+        ))
+    } else if candidate
+        .requested_precedence
+        .is_some_and(|precedence| precedence != 1)
+    {
+        Some((
+            "this path is a non-primary source and cannot write a shared stored slot".to_string(),
+            candidate.dd_path.clone(),
+            Some(write_check_index(WriteCheck::NonPrimarySource)),
+        ))
+    } else if role == ArgumentRole::Timebase
+        && candidate.value_transformation != ValueTransformation::None
+    {
+        Some((
+            "this timebase needs a value transformation, which al_write_data cannot apply"
+                .to_string(),
+            candidate.dd_path.clone(),
+            Some(write_check_index(WriteCheck::TimebaseTransformation)),
+        ))
+    } else if role == ArgumentRole::Field && candidate.value_transformation.inverse().is_none() {
+        Some((
+            "this path needs a value transformation that cannot be inverted for a write"
+                .to_string(),
+            candidate.dd_path.clone(),
+            Some(write_check_index(WriteCheck::InvertibleTransformation)),
+        ))
+    } else {
+        None
+    }
+}
+
+fn write_candidate(candidate: Candidate) -> WriteCandidate {
+    WriteCandidate {
+        path: candidate.path,
+        stored_dd_path: candidate.stored_dd_path,
+        precedence: candidate
+            .precedence
+            .expect("a plan candidate declares precedence"),
+        value_transformation: inverted_for_write(candidate.value_transformation),
+    }
+}
+
+/// ADR 0017 decision 4: delete-specific policy narrows the same answer, but
+/// retains a plan because the seam policy itself must call Core for each path.
+pub(crate) fn narrow_delete_path(
+    record: &ConversionRecord,
+    raw: *const c_char,
+    resolved: Resolved,
+) -> DeletePath {
+    match resolved {
+        Resolved::Forward => DeletePath::Forward,
+        Resolved::Unclaimed => DeletePath::Refusal {
+            reason: "this path is unclaimed by the conversion map".to_string(),
+            dd_path: caller_dd_path(record, raw),
+        },
+        Resolved::NoSource(_) => DeletePath::Refusal {
+            reason: "this path has no stored source".to_string(),
+            dd_path: caller_dd_path(record, raw),
+        },
+        Resolved::Refusal {
+            reason, dd_path, ..
+        } => DeletePath::Refusal { reason, dd_path },
+        Resolved::Single(candidate) => narrow_single_delete(record, candidate),
+        Resolved::Plan(candidates) => {
+            for candidate in &candidates {
+                if let Some(refusal) = delete_candidate_refusal(record, candidate) {
+                    return refusal;
+                }
+            }
+            DeletePath::Candidates(
+                candidates
+                    .into_iter()
+                    .map(|candidate| candidate.path)
+                    .collect(),
+            )
+        }
+    }
+}
+
+fn narrow_single_delete(record: &ConversionRecord, candidate: Candidate) -> DeletePath {
+    if let Some(refusal) = delete_candidate_refusal(record, &candidate) {
+        return refusal;
+    }
+    DeletePath::Translated(candidate.path)
+}
+
+fn delete_candidate_refusal(
+    record: &ConversionRecord,
+    candidate: &Candidate,
+) -> Option<DeletePath> {
+    let reason = if matches!(
+        candidate.dd_path.as_str(),
+        "ids_properties"
+            | "ids_properties/version_put"
+            | "ids_properties/version_put/data_dictionary"
+    ) {
+        delete_check_is_listed(DeleteCheck::ImmutableStamp);
+        Some("this delete would remove the DD-version stamp while stored data remains")
+    } else if candidate
+        .requested_precedence
+        .is_some_and(|precedence| precedence != 1)
+    {
+        delete_check_is_listed(DeleteCheck::NonPrimarySource);
+        Some("this path is a non-primary source and cannot delete a shared stored slot")
+    } else if !is_equilibrium_leaf(record, &candidate.dd_path)
         && !record.map.subtree_delete_is_trivial(
-            &argument.hli_absolute,
-            resolved_path,
+            &candidate.dd_path,
+            &candidate.stored_dd_path,
             record.direction_to_stored,
         )
+    {
+        delete_check_is_listed(DeleteCheck::EscapingSubtree);
+        Some("this subtree delete would leave data at a stored path outside the requested subtree")
+    } else {
+        None
+    };
+    reason.map(|reason| DeletePath::Refusal {
+        reason: reason.to_string(),
+        dd_path: candidate.dd_path.clone(),
+    })
+}
+
+fn caller_dd_path(record: &ConversionRecord, raw: *const c_char) -> String {
+    c_str_or_none(raw)
+        .filter(|path| !path.is_empty())
+        .map(|path| join_hli_path(&record.resolved_path, path))
+        .unwrap_or_else(|| record.resolved_path.clone())
 }
 
 /// `al_delete_data` gives the shim a path string but no datatype or other
@@ -732,27 +726,11 @@ fn read_fidelity(fidelity: Fidelity, rel: Option<Rel>) -> Fidelity {
     }
 }
 
-fn translated_read_component(
-    record: &ConversionRecord,
-    resolved_path: &str,
-    is_absolute: bool,
-    fidelity: Fidelity,
-    value_transformation: ValueTransformation,
-) -> Result<ResolvedReadPath, String> {
-    stored_c_path(record, resolved_path, is_absolute).map(|path| ResolvedReadPath {
-        path,
-        fidelity,
-        value_transformation,
-    })
-}
-
 /// Turns a resolved stored-DD path into the exact spelling IMAS-Core must
 /// receive: absolute when the caller spelled its argument absolutely,
 /// otherwise stripped back to this context's own stored anchor. Both
-/// path-bearing seams — [`resolve_context_path`] for an arraystruct open and
-/// [`translated_read_component`] for a read — decide that spelling here, so
-/// the two cannot drift apart and the two refusals it can produce are worded
-/// once rather than twice.
+/// path-bearing seam resolves this spelling through the shared resolver, so
+/// its relative-anchor behavior and failures are worded once.
 fn stored_c_path(
     record: &ConversionRecord,
     resolved_path: &str,
@@ -783,54 +761,17 @@ fn stored_anchor(record: &ConversionRecord) -> Result<String, String> {
     else {
         return Err("context anchor has no stored-DD conversion rule".to_string());
     };
-    match concrete_stored_path(explanation.outcome) {
-        ConcreteStoredPath::Path(path) => Ok(path),
-        ConcreteStoredPath::NoSource => Err("context anchor has no stored source".to_string()),
-        ConcreteStoredPath::Refusal(message) => Err(message),
-    }
-}
-
-/// Narrows a resolved rule to the one stored spelling a structure-path
-/// argument can carry, stated here as the two rules a structure path obeys
-/// that [`crate::conversion_map`] itself does not state:
-///
-/// 1. A structure path may not carry an ordered candidate plan — only a data
-///    read resolves both cases (it tries a candidate plan in order and flips
-///    signs in the returned buffer), but an AOS container path and a context
-///    anchor are resolved *before* any data exists, so serving either here
-///    would mean picking one candidate arbitrarily.
-/// 2. A structure path may not carry a value transformation — a
-///    transformation needs a buffer to apply itself to, and none exists yet
-///    at open time, so serving it here would mean dropping the transformation
-///    silently.
-///
-/// Neither is a property of the conversion data itself — the same `merged`
-/// rule serves a read (which can try candidates) and would refuse an
-/// arraystruct open on the identical resolved path — so `conversion_map.rs`
-/// cannot state them: they depend on what the *consumer* can do with the
-/// outcome, not on what the rule declares. This function is where that
-/// consumer-side narrowing lives instead.
-fn concrete_stored_path(outcome: Outcome) -> ConcreteStoredPath {
-    match outcome {
-        Outcome::Refusal(reason) => ConcreteStoredPath::Refusal(refusal_reason_message(reason)),
-        Outcome::NoSource => ConcreteStoredPath::NoSource,
-        Outcome::Path {
-            resolved_path: _,
-            value_transformation: _,
-            candidates,
-        } if !candidates.is_empty() => ConcreteStoredPath::Refusal(
-            "this path is served by several stored candidates, and only a data read can try them \
-             in turn"
-                .to_string(),
+    match explanation.outcome {
+        Outcome::Refusal(reason) => Err(refusal_reason_message(reason)),
+        Outcome::NoSource => Err("context anchor has no stored source".to_string()),
+        Outcome::Path { .. } if matches!(explanation.rel, Some(Rel::Merged | Rel::Split)) => Err(
+            "this path is served by several stored candidates, and only a data read can try them in turn".to_string(),
         ),
-        Outcome::Path {
-            resolved_path: _,
-            value_transformation,
-            candidates: _,
-        } if value_transformation != ValueTransformation::None => ConcreteStoredPath::Refusal(
-            "this path needs a value transformation, which only a data read can apply".to_string(),
-        ),
-        Outcome::Path { resolved_path, .. } => ConcreteStoredPath::Path(resolved_path),
+        Outcome::Path { value_transformation, .. }
+            if value_transformation != ValueTransformation::None => Err(
+                "this path needs a value transformation, which only a data read can apply".to_string(),
+            ),
+        Outcome::Path { resolved_path, .. } => Ok(resolved_path),
     }
 }
 
@@ -934,7 +875,7 @@ mod tests {
         // approved map would rename nothing and hand back `claimed` itself
         // through its identity default.
         let claimed = CString::new("claimed").expect("no interior NUL");
-        match resolve_read_path(&record, claimed.as_ptr()) {
+        match narrow_read_path(resolve(&record, claimed.as_ptr())) {
             ReadPath::Translated(translated) => assert_eq!(
                 translated
                     .paths
@@ -951,7 +892,7 @@ mod tests {
         }
 
         let unclaimed = CString::new("nothing/claims/this").expect("no interior NUL");
-        match resolve_read_path(&record, unclaimed.as_ptr()) {
+        match narrow_read_path(resolve(&record, unclaimed.as_ptr())) {
             ReadPath::NoSource(fidelity) => assert_eq!(
                 fidelity,
                 Fidelity::Unmappable,
@@ -970,14 +911,14 @@ mod tests {
         let empty = CString::new("").expect("no interior NUL");
         assert!(
             matches!(
-                resolve_read_path(&record, empty.as_ptr()),
+                narrow_read_path(resolve(&record, empty.as_ptr())),
                 ReadPath::Forward
             ),
             "an empty argument is absent, not unclaimed"
         );
         assert!(
             matches!(
-                resolve_read_path(&record, std::ptr::null()),
+                narrow_read_path(resolve(&record, std::ptr::null())),
                 ReadPath::Forward
             ),
             "a null argument is absent, not unclaimed"
@@ -1016,7 +957,12 @@ mod tests {
 
         let assert_refusal = |path: &str, expected_reason: &str| {
             let path = CString::new(path).expect("fixture paths contain no NUL");
-            match resolve_write_path(&record, path.as_ptr(), ArgumentRole::Field) {
+            match narrow_write_path(
+                &record,
+                path.as_ptr(),
+                ArgumentRole::Field,
+                resolve(&record, path.as_ptr()),
+            ) {
                 WritePath::Refusal {
                     reason, dd_path, ..
                 } => {
@@ -1052,7 +998,7 @@ mod tests {
         );
     }
 
-    /// Issue #126 / review finding S-J3: `resolve_delete_path` carries the
+    /// Issue #126 / review finding S-J3: the delete narrowing carries the
     /// same two guards in the same order, so one rule earns one reason at
     /// both seams. The write's own order is pinned by
     /// `write_pre_resolution_refusals_keep_the_shared_guard_ahead_of_rule_specific_ones`
@@ -1087,7 +1033,7 @@ mod tests {
 
         let assert_refusal = |path: &str, expected_reason: &str| {
             let path = CString::new(path).expect("fixture paths contain no NUL");
-            match resolve_delete_path(&record, path.as_ptr(), ArgumentRole::Path) {
+            match narrow_delete_path(&record, path.as_ptr(), resolve(&record, path.as_ptr())) {
                 DeletePath::Refusal { reason, dd_path } => {
                     assert_eq!(reason, expected_reason);
                     assert_eq!(dd_path, path.to_str().expect("fixture paths are ASCII"));
@@ -1115,14 +1061,14 @@ mod tests {
 
     /// Issue #131 / ADR 0017 decision 4: a structure delete resolves and
     /// deletes when it is trivial, and refuses before IMAS-Core when it is
-    /// not. `resolve_delete_path`'s own leaf/structure classification runs
+    /// not. The delete narrowing's leaf/structure classification runs
     /// against the real embedded equilibrium inventories regardless of this
     /// fixture map, so both paths below — invented names that appear in
     /// neither inventory — are classified as structures by construction,
     /// which is what lets this fixture exercise the escaping-rule check at
     /// all without needing a real DD leaf name.
     #[test]
-    fn resolve_delete_path_admits_a_trivial_structure_and_refuses_an_escaping_one() {
+    fn delete_narrowing_admits_a_trivial_structure_and_refuses_an_escaping_one() {
         const ARTIFACT: &str = r#"
             <ids-map ids="equilibrium" format-version="1">
               <side id="left" dd="3.39.0" cocos="11"/>
@@ -1143,7 +1089,11 @@ mod tests {
         let record = record(ARTIFACT, "");
 
         let trivial = CString::new("trivial_root").expect("no interior NUL");
-        match resolve_delete_path(&record, trivial.as_ptr(), ArgumentRole::Path) {
+        match narrow_delete_path(
+            &record,
+            trivial.as_ptr(),
+            resolve(&record, trivial.as_ptr()),
+        ) {
             DeletePath::Translated(path) => {
                 assert_eq!(path.to_str().expect("ASCII"), "trivial_root");
             }
@@ -1156,7 +1106,11 @@ mod tests {
         }
 
         let escaping = CString::new("escaping_root").expect("no interior NUL");
-        match resolve_delete_path(&record, escaping.as_ptr(), ArgumentRole::Path) {
+        match narrow_delete_path(
+            &record,
+            escaping.as_ptr(),
+            resolve(&record, escaping.as_ptr()),
+        ) {
             DeletePath::Refusal { reason, dd_path } => {
                 assert_eq!(
                     reason,
@@ -1167,6 +1121,42 @@ mod tests {
             }
             _ => panic!("an escaping-rule subtree delete must refuse before IMAS-Core"),
         }
+    }
+
+    #[test]
+    fn a_one_source_merged_rule_remains_a_plan_at_every_narrowing() {
+        const ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="fold-one" rel="merged" right="folded">
+                  <from left="source" precedence="1"/>
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let record = record(ARTIFACT, "");
+        let source = CString::new("source").expect("no interior NUL");
+
+        assert!(matches!(
+            resolve(&record, source.as_ptr()),
+            Resolved::Plan(_)
+        ));
+        assert!(matches!(
+            narrow_write_path(
+                &record,
+                source.as_ptr(),
+                ArgumentRole::Field,
+                resolve(&record, source.as_ptr()),
+            ),
+            WritePath::Candidates(_)
+        ));
+        assert!(matches!(
+            narrow_delete_path(&record, source.as_ptr(), resolve(&record, source.as_ptr())),
+            DeletePath::Candidates(_)
+        ));
     }
 
     #[test]
