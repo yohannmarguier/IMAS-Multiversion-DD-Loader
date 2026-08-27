@@ -80,6 +80,23 @@ function(add_stub_test name executable)
 
     add_test(NAME "${name}" COMMAND ${executable} ${ARG_UNPARSED_ARGUMENTS})
     set_tests_properties("${name}" PROPERTIES ENVIRONMENT "${environment}")
+    if(NOT DEFINED ARG_HLI_DD_VERSION)
+        set_property(TEST "${name}" APPEND PROPERTY ENVIRONMENT_MODIFICATION
+            "IMAS_MVDD_HLI_DD_VERSION=unset:")
+    endif()
+endfunction()
+
+# Registers one real-IMAS-Core scenario. The shim must resolve IMAS-Core through
+# its build RPATH, rather than the recording-stub override used by stub suites.
+function(add_real_core_test name executable)
+    cmake_parse_arguments(PARSE_ARGV 2 ARG "" "RESOURCE_LOCK" "")
+
+    add_test(NAME "${name}"
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            ${executable} ${ARG_UNPARSED_ARGUMENTS})
+    if(DEFINED ARG_RESOURCE_LOCK)
+        set_tests_properties("${name}" PROPERTIES RESOURCE_LOCK "${ARG_RESOURCE_LOCK}")
+    endif()
 endfunction()
 
 if(IMAS_MVDD_REAL_CORE_TESTS)

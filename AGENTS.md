@@ -152,12 +152,6 @@ and limitations".
   whose earlier passes each claimed to be complete; verify by grep before
   claiming it again.
 
-### Counts
-
-`cargo test` 185 unit tests; real-Core ctest profile 226 tests, 30 of them
-`real_core`-labelled; stub-only profile 192. Take these from `ctest -N` and
-`cargo test`, never from a previous prose statement of them.
-
 ### History
 
 The per-issue narrative that used to live in this section is preserved verbatim,

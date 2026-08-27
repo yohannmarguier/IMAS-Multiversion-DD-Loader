@@ -81,6 +81,8 @@ add_dependencies(hli_dd_version_test imas_mvdd_capi recording_stub)
 set_target_properties(hli_dd_version_test PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
+# These setter-only scenarios never open a context and deliberately need no
+# recording stub, so an ambient latch variable is inert; keep them environment-free.
 add_test(NAME hli-dd-version-setter-accepts-valid-version
     COMMAND hli_dd_version_test setter-accepts-valid-version)
 add_test(NAME hli-dd-version-setter-accepts-identical-repeat
@@ -106,11 +108,8 @@ add_stub_test(hli-dd-version-invalid-environment-fails-first-open
     hli_dd_version_test invalid-environment-fails-first-open
     HLI_DD_VERSION not-a-version)
 
-add_test(NAME hli-dd-version-unset-first-open-then-setter-refused
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:hli_dd_version_test> unset-first-open-then-setter-refused)
-set_tests_properties(hli-dd-version-unset-first-open-then-setter-refused PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(hli-dd-version-unset-first-open-then-setter-refused
+    hli_dd_version_test unset-first-open-then-setter-refused)
 
 # --- DD-version stamp discovery test: the al_begin_global_action seam
 # and al_begin_dataentry_action's registration (issue #53, ADR 0002,
@@ -135,11 +134,8 @@ add_stub_test(version-discovery-dataentry-failure-forwards-status-unchanged
     version_discovery_test dataentry-failure-forwards-status-unchanged
     ENV "RECORDING_STUB_DATAENTRY_FAIL=1")
 
-add_test(NAME version-discovery-hli-unset-global-action-is-plain-forward
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:version_discovery_test> hli-unset-global-action-is-plain-forward)
-set_tests_properties(version-discovery-hli-unset-global-action-is-plain-forward PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(version-discovery-hli-unset-global-action-is-plain-forward
+    version_discovery_test hli-unset-global-action-is-plain-forward)
 
 add_stub_test(version-discovery-unstamped-occurrence-forwards-datapath-unchanged
     version_discovery_test unstamped-occurrence-forwards-datapath-unchanged
@@ -215,11 +211,8 @@ add_stub_test(version-discovery-reentrant-read-beneath-stamp-discovery-forwards-
 # --- al_begin_slice_action / al_begin_timerange_action apply the same
 # rule as global action (issue #55) ---
 
-add_test(NAME version-discovery-slice-action-hli-unset-is-plain-forward
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:version_discovery_test> slice-action-hli-unset-is-plain-forward)
-set_tests_properties(version-discovery-slice-action-hli-unset-is-plain-forward PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(version-discovery-slice-action-hli-unset-is-plain-forward
+    version_discovery_test slice-action-hli-unset-is-plain-forward)
 
 add_stub_test(version-discovery-slice-action-unstamped-forwards-ids-name-unchanged
     version_discovery_test slice-action-unstamped-forwards-ids-name-unchanged
@@ -245,11 +238,8 @@ add_stub_test(version-discovery-slice-action-failure-forwards-status-unchanged
     HLI_DD_VERSION 4.1.1
     ENV "RECORDING_STUB_SLICE_FAIL=1")
 
-add_test(NAME version-discovery-timerange-action-hli-unset-is-plain-forward
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:version_discovery_test> timerange-action-hli-unset-is-plain-forward)
-set_tests_properties(version-discovery-timerange-action-hli-unset-is-plain-forward PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(version-discovery-timerange-action-hli-unset-is-plain-forward
+    version_discovery_test timerange-action-hli-unset-is-plain-forward)
 
 add_stub_test(version-discovery-timerange-action-unstamped-forwards-ids-name-unchanged
     version_discovery_test timerange-action-unstamped-forwards-ids-name-unchanged
@@ -410,11 +400,8 @@ add_stub_test(read-path-unstamped-context-bypasses-conversion
     read_path_test unstamped-context-bypasses-conversion
     HLI_DD_VERSION 4.1.1)
 
-add_test(NAME read-path-conversion-disabled-bypasses-conversion
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:read_path_test> conversion-disabled-bypasses-conversion)
-set_tests_properties(read-path-conversion-disabled-bypasses-conversion PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(read-path-conversion-disabled-bypasses-conversion
+    read_path_test conversion-disabled-bypasses-conversion)
 
 add_stub_test(read-path-core-failure-propagates-unchanged
     read_path_test core-failure-propagates-unchanged
@@ -585,18 +572,14 @@ add_write_delete_test(delete-path-unknown-context-forwards-unchanged)
 add_write_delete_test(delete-path-unstamped-context-forwards-unchanged
     HLI_DD_VERSION 4.1.1)
 
-# add_stub_test always sets a DD version; these two need it absent, so the
-# latch never fires and conversion is impossible. Raw add_test, guarded by the
-# same naming rule as everything above.
+# With no HLI_DD_VERSION, add_stub_test unsets the latch environment variable,
+# so conversion is impossible. The scenarios remain guarded by the same naming
+# rule as everything above.
 foreach(scenario IN ITEMS
         write-path-conversion-disabled-forwards-unchanged
         delete-path-conversion-disabled-forwards-unchanged)
     check_write_delete_seam_prefix("${scenario}")
-    add_test(NAME "${scenario}"
-        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-            $<TARGET_FILE:write_delete_conversion_test> "${scenario}")
-    set_tests_properties("${scenario}" PROPERTIES
-        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+    add_stub_test("${scenario}" write_delete_conversion_test "${scenario}")
 endforeach()
 
 # --- Issue #123: one reentry guard for every seam IMAS-Core calls beneath ---
@@ -673,11 +656,8 @@ add_stub_test(arraystruct-path-unknown-parent-forwards-unchanged
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
 
-add_test(NAME arraystruct-path-conversion-disabled-parent-forwards-unchanged
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:arraystruct_path_test> plain-parent-forwards-unchanged)
-set_tests_properties(arraystruct-path-conversion-disabled-parent-forwards-unchanged PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(arraystruct-path-conversion-disabled-parent-forwards-unchanged
+    arraystruct_path_test plain-parent-forwards-unchanged)
 
 # --- Issue #62: al_read_data through a live arraystruct context -------
 add_executable(nested_context_read_test
@@ -787,11 +767,8 @@ add_dependencies(plugin_reentry_policy_test imas_mvdd_capi recording_stub)
 set_target_properties(plugin_reentry_policy_test PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
-add_test(NAME plugin-reentry-policy-plugin-global-hli-unset-is-plain-forward
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:plugin_reentry_policy_test> plugin-global-hli-unset-is-plain-forward)
-set_tests_properties(plugin-reentry-policy-plugin-global-hli-unset-is-plain-forward PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(plugin-reentry-policy-plugin-global-hli-unset-is-plain-forward
+    plugin_reentry_policy_test plugin-global-hli-unset-is-plain-forward)
 
 add_stub_test(plugin-reentry-policy-plugin-global-unstamped-forwards-datapath-unchanged
     plugin_reentry_policy_test plugin-global-unstamped-forwards-datapath-unchanged
@@ -817,11 +794,8 @@ add_stub_test(plugin-reentry-policy-plugin-global-failure-forwards-status-unchan
     HLI_DD_VERSION 4.1.1
     ENV "RECORDING_STUB_PLUGIN_GLOBAL_FAIL=1")
 
-add_test(NAME plugin-reentry-policy-plugin-slice-hli-unset-is-plain-forward
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:plugin_reentry_policy_test> plugin-slice-hli-unset-is-plain-forward)
-set_tests_properties(plugin-reentry-policy-plugin-slice-hli-unset-is-plain-forward PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(plugin-reentry-policy-plugin-slice-hli-unset-is-plain-forward
+    plugin_reentry_policy_test plugin-slice-hli-unset-is-plain-forward)
 
 add_stub_test(plugin-reentry-policy-plugin-slice-mismatch-registers-occurrence-for-plugin-global-action
     plugin_reentry_policy_test plugin-slice-mismatch-registers-occurrence-for-plugin-global-action
