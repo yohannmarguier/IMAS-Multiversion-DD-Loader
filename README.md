@@ -371,6 +371,26 @@ is itself worth knowing when reading a green suite.
   plugin manager would be `abort()`, not a returned failure, which is why the
   reentry guard keeps IMAS-Core's internal traffic out of the conversion path
   entirely (`docs/adr/0014-reentrant-reads-forward-untouched.md`).
+- **A converted delete destroys the whole occurrence on the HDF5 backend.**
+  This is the most destructive limitation on the list, and it is IMAS-Core's
+  behaviour rather than the shim's: `HDF5Writer::deleteData` ignores its `path`
+  argument entirely and removes the IDS pulse file plus its master-file link,
+  and HDF5 is the only backend that implements delete at all. So a candidate-plan
+  delete that the shim fans out per stored path has no per-path effect — the
+  first call takes the occurrence with it, and the remaining candidates find
+  nothing. Until this is fixed upstream, **treat any `al_delete_data` through a
+  mismatched occurrence as a whole-occurrence delete**, whatever path you named.
+  Nothing in the shim masked this until recently: the delete fan-out used to
+  probe each candidate for presence through the caller's own context, and under
+  a write-mode open every probe reported absent, so no delete was forwarded and
+  the call returned success having done nothing. That silence was itself a
+  defect — the shim reporting `code == 0` for work it never did — and removing
+  it (issue #138, `docs/adr/0017-a-write-asserts-a-value-a-delete-asserts-an-absence.md`
+  decision 2) made this hazard reachable. Tracked at
+  [#139](https://github.com/yohannmarguier/IMAS-Multiversion-DD-Loader/issues/139),
+  and pinned as today's behaviour by the
+  `write-delete-oracle-reverse-delete-fan-out-reaches-disk` test, which asserts
+  the occurrence is gone rather than asserting that it should be.
 
 ## Layout
 
