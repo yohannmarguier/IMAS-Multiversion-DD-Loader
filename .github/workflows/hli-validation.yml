@@ -66,11 +66,20 @@ env:
   # here, and the number is a standing statement about a gap in this job's
   # coverage rather than an incidental total.
   #
-  # CALIBRATION: these three came from a macOS Debug build. Linux registration
-  # can differ and a green macOS run proves nothing about Linux. Expect the
-  # first run on this workflow to fail the assertion, read the numbers it
-  # reports, and correct these once, deliberately.
-  HLI_TOTAL_TESTS: 115
+  # CALIBRATION: these were first guessed from a macOS Debug build, then
+  # corrected against what this job actually registers on Linux. They are no
+  # longer a guess, so a mismatch is now a report about the pinned HLI rather
+  # than about the calibration -- read it that way before editing these.
+  #
+  # 114, not the 115 a Linux run confirmed under the previous pin, because
+  # IMAS_FORTRAN_REF moved to eb35d93, which drops the
+  # playground-play_eq_two_dd-self test (the same-version control that read one
+  # pulse down both columns). That is the *only* enabled test the bump removed:
+  # the run that caught this reported enabled 95 -> 94 with disabled unchanged
+  # at 20, which is what makes the drop attributable rather than a suite that
+  # quietly shrank. Any future move of this number must come with the same
+  # accounting.
+  HLI_TOTAL_TESTS: 114
   HLI_DISABLED_TESTS: 20
 
 jobs:
@@ -252,15 +261,17 @@ jobs:
               echo "  enabled:    $enabled (expected $expected_enabled)"
               echo "  disabled:   $disabled (expected $HLI_DISABLED_TESTS)"
               echo
-              echo "If this is the first run of this workflow, the expected"
-              echo "values were calibrated on macOS and this is the deliberate"
-              echo "one-time correction: set HLI_TOTAL_TESTS and"
-              echo "HLI_DISABLED_TESTS to the values above."
+              echo "If IMAS_FORTRAN_REF was just moved, the pinned HLI"
+              echo "changed what it registers and this is the deliberate"
+              echo "recalibration: confirm the difference against that pin's"
+              echo "diff, then set HLI_TOTAL_TESTS and HLI_DISABLED_TESTS to"
+              echo "the values above and say in the comment which commit"
+              echo "accounts for them."
               echo
-              echo "Otherwise something stopped registering. A drop in the"
-              echo "enabled count means the per-IDS sweep or the playground"
-              echo "conversion tests are gone, and this job is no longer"
-              echo "proving what it claims."
+              echo "If the pin did not move, something stopped registering."
+              echo "A drop in the enabled count means the per-IDS sweep or"
+              echo "the playground conversion tests are gone, and this job is"
+              echo "no longer proving what it claims."
             } >&2
             exit 1
           fi
