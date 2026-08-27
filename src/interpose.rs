@@ -1886,7 +1886,7 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
         }
         seam_policy::DeleteVerdict::Complete { failure } => failure
             .map_or_else(al_status_t::default, |failure| {
-                candidate_failure(failure.status, failure.operation.as_str(), failure.path)
+                candidate_failure(failure.status, failure.path)
             }),
         seam_policy::DeleteVerdict::Refusal { reason, dd_path } => {
             context_path_refusal(&record, &reason, &dd_path)
@@ -1894,14 +1894,15 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
     }
 }
 
-/// Keeps IMAS-Core's failure code while saying which half of the delete
-/// fan-out failed.
-fn candidate_failure(mut status: al_status_t, operation: &str, path: &CStr) -> al_status_t {
+/// Keeps IMAS-Core's failure code while naming the stored candidate whose
+/// delete failed, which the caller's own path does not identify: one HLI path
+/// fans out over several stored ones.
+fn candidate_failure(mut status: al_status_t, path: &CStr) -> al_status_t {
     status.message = [0; crate::MAX_ERR_MSG_LEN];
     write_truncated(
         &mut status.message,
         &format!(
-            "IMAS-MVDD: {operation} failed for stored candidate {}",
+            "IMAS-MVDD: delete failed for stored candidate {}",
             path.to_string_lossy()
         ),
     );

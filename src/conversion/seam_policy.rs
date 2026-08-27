@@ -423,25 +423,15 @@ fn copy_value_transformation(
     }
 }
 
-/// Which operation failed for one candidate in the delete loop.
-#[derive(Clone, Copy)]
-pub(crate) enum DeleteFailureOperation {
-    Delete,
-}
-
-impl DeleteFailureOperation {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Delete => "delete",
-        }
-    }
-}
-
 /// The first candidate failure retained while later candidates are still
 /// attempted. The adapter owns the eventual ABI-message formatting.
+///
+/// A candidate has one operation now, so this names no operation. It used to
+/// carry a `DeleteFailureOperation` because a candidate was probed and then
+/// deleted, and a refusal had to say which of the two failed; ADR 0017
+/// decision 2 retired the probe and that distinction with it.
 pub(crate) struct DeleteFailure<'a> {
     pub(crate) status: al_status_t,
-    pub(crate) operation: DeleteFailureOperation,
     pub(crate) path: &'a CStr,
 }
 
@@ -478,11 +468,7 @@ pub(crate) fn run_delete<'a>(
             for path in paths {
                 let status = delete(path);
                 if status.code != 0 {
-                    first_failure.get_or_insert(DeleteFailure {
-                        status,
-                        operation: DeleteFailureOperation::Delete,
-                        path,
-                    });
+                    first_failure.get_or_insert(DeleteFailure { status, path });
                 }
             }
             DeleteVerdict::Complete {
