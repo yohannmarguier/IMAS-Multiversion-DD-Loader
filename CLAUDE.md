@@ -202,6 +202,19 @@ IMAS-Core build before the drift and real-Core seams. It is the only thing
 keeping the CMake path honest — `cargo test` alone never re-runs cargo-c, never
 regenerates the header, and never compiles the C smoke test.
 
+A third workflow, `.github/workflows/hli-validation.yml`, is the only place a
+real HLI calls the shim: it builds the IMAS-Fortran fork pinned in
+`IMAS_FORTRAN_REF` with `AL_USE_MULTIVERSION_SHIM=ON` against the *installed*
+shim and runs that HLI's own suite — 83 per-IDS round-trips over memory, ASCII
+and HDF5 for passthrough, plus `play_eq_two_dd-cross` for conversion. It runs on
+pull requests based on `develop`/`main` (fail-safe `paths-ignore`) and on
+`workflow_dispatch`. Two facts about it are easy to get wrong: IMAS-Core
+deliberately **floats** (the HLI picks it; the shim's gate is major-only) while
+`DD_VERSION` is **pinned to 4.1.1** because `src/known_artifacts.rs` embeds one
+artifact, and 20 of the HLI's `examples/` tests can *never* run in a shim build,
+so the workflow asserts the disabled count as well as the total. See
+`docs/adr/0020-hli-validation-floats-core-and-pins-the-dd.md`.
+
 `README.md` carries the build options and layout. The *why* behind the build
 lives in comments next to what it explains — `CMakeLists.txt` for the staging
 tree, the install path, the multi-config refusal and the IMAS-Core

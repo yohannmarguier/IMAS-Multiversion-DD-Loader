@@ -1,0 +1,329 @@
+name: HLI validation
+
+# Builds a real HLI against the installed shim and runs that HLI's own suite.
+#
+# ci.yml proves the shim's C ABI against a recording stub and against genuine
+# IMAS-Core. Neither of those is a client: both call the ABI directly, with
+# arguments a test author chose. This job puts the IMAS-Fortran HLI in front of
+# the shim instead, so the calls are the ones a real HLI makes, in the order it
+# makes them, and the assertions are the HLI's own.
+#
+# It is a separate workflow rather than a job in ci.yml for one mechanical
+# reason: GitHub Actions has no job-level paths filter, so a paths-filtered job
+# has to be a paths-filtered workflow.
+#
+# Which versions float and which are pinned is the whole design, and it is
+# recorded in docs/adr/0020-hli-validation-floats-core-and-pins-the-dd.md.
+# In short: IMAS-Core floats because the shim's version gate is major-only, the
+# Data Dictionary is pinned because the shim ships exactly one conversion-map
+# artifact, and the HLI commit is pinned so a red run is attributable.
+
+on:
+  pull_request:
+    branches: [develop, main]
+    # An ignore-list, not an allow-list, so the filter fails safe. A second
+    # conversion-map artifact (docs/4.1.1--4.2.0.xml, once a generator exists)
+    # is picked up without anyone remembering to add it; an allow-list would
+    # silently stop running this job exactly when conversion changed.
+    paths-ignore:
+      - '**.md'
+      - 'docs/adr/**'
+      - 'graphify-out/**'
+      - 'tests/**'
+      - 'scripts/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Its own group: a 40-minute job must not be cancelled by, or cancel, ci.yml.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_VERSION: 1.88.0
+  CARGO_C_VERSION: 0.10.15
+  CARGO_TERM_COLOR: always
+
+  # Pinned, and the pin moves only when a new conversion-map artifact justifies
+  # it. src/known_artifacts.rs embeds one artifact, for equilibrium
+  # 3.39.0 <-> 4.1.1, and the HLI's committed fixtures are pulses written under
+  # exactly those two versions. Under a different DD version the cross-version
+  # test does not weaken, it stops meaning anything: no artifact serves the
+  # pair, so nothing registers and nothing converts.
+  HLI_DD_VERSION: 4.1.1
+
+  # What the HLI suite is expected to register. These are assertions, not
+  # documentation: without them a fork change that silently stops registering
+  # the 83-IDS sweep still reports green.
+  #
+  # HLI_DISABLED_TESTS is the load-bearing one. Those tests are gated on
+  # (NOT AL_BACKEND_MDSPLUS OR NOT AL_BACKEND_HDF5) -- both backends, not
+  # either -- and the HLI's common/cmake/ALCore.cmake raises FATAL_ERROR if
+  # MDSplus is requested alongside the shim, because the tests need an
+  # al-mdsplus-model target only a non-shim build creates. So they can never run
+  # here, and the number is a standing statement about a gap in this job's
+  # coverage rather than an incidental total.
+  #
+  # CALIBRATION: these three came from a macOS Debug build. Linux registration
+  # can differ and a green macOS run proves nothing about Linux. Expect the
+  # first run on this workflow to fail the assertion, read the numbers it
+  # reports, and correct these once, deliberately.
+  HLI_TOTAL_TESTS: 115
+  HLI_DISABLED_TESTS: 20
+
+jobs:
+  hli:
+    # Pinned rather than ubuntu-latest, unlike ci.yml. The test counts above are
+    # sensitive to what registers, and a runner image bump can move that; the
+    # HLI's own CI is also proven on 24.04.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out the shim
+        uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-toolchain
+
+      # Boost and HDF5 are IMAS-Core's dependencies, not the HLI's -- the HLI
+      # looks for neither and links only the `al` target. These are the same apt
+      # packages ci.yml's full job already builds IMAS-Core 5.7.1 against, and
+      # that job reads the same fixture family through IMAS-Core's HDF5 backend
+      # (tests/real_core/real_core_forwarding_test.c), so apt HDF5 is proven
+      # against this data rather than assumed. The fixtures are superblock
+      # version 2, which dates from HDF5 1.8, so 24.04's 1.10 reads them.
+      - name: Install IMAS-Core build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libboost-filesystem-dev libhdf5-dev gfortran-14 g++-14 gcc-14
+
+      # CMake builds its own venv and installs saxonche into it
+      # (common/cmake/ALBuildDataDictionary.cmake); all this needs to supply is
+      # an interpreter with the venv module.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Resolve the pinned HLI commit
+        id: hli_pin
+        run: |
+          set -euo pipefail
+          # First line only, the way CMakeLists.txt reads IMAS_CORE_VERSION with
+          # LIMIT_COUNT 1. Everything below it in the file is commentary.
+          ref=$(head -n1 IMAS_FORTRAN_REF | tr -d '[:space:]')
+          if ! printf '%s' "$ref" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "IMAS_FORTRAN_REF must hold a full 40-character commit SHA on" \
+                 "its first line; found '$ref'." >&2
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the pinned IMAS-Fortran HLI
+        uses: actions/checkout@v4
+        with:
+          # Upstream IMAS-Fortran carries no AL_USE_MULTIVERSION_SHIM option, so
+          # the fork is not a convenience. The repository name lives here rather
+          # than in IMAS_FORTRAN_REF because it is not the part that moves.
+          repository: yohannmarguier/IMAS-Fortran
+          ref: ${{ steps.hli_pin.outputs.ref }}
+          path: hli
+
+      # The cache key has to be known before the build, so the IMAS-Core commit
+      # the HLI *will* acquire is predicted here rather than read back from the
+      # configure log. The prediction reads the HLI's own declared default
+      # instead of hardcoding a ref, so a fork that changes its default does not
+      # silently keep serving a stale cache.
+      - name: Resolve the IMAS-Core the HLI will acquire
+        id: core
+        working-directory: hli
+        run: |
+          set -euo pipefail
+          declared() {
+            sed -n "s/^ *set( *$1 *\"\([^\"]*\)\".*/\1/p" CMakeLists.txt | head -n1
+          }
+          repo=$(declared AL_CORE_GIT_REPOSITORY)
+          ref=$(declared AL_CORE_VERSION)
+          test -n "$repo" && test -n "$ref"
+          sha=$(git ls-remote "$repo" "$ref" | cut -f1)
+          if [ -z "$sha" ]; then
+            # Not a branch or tag: the HLI declared a raw commit, which is
+            # already the identity the cache key needs.
+            sha="$ref"
+          fi
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "IMAS-Core: $repo @ $ref ($sha)"
+
+      # Exact key, no restore-keys. A miss must produce a clean full build
+      # rather than a tree half-built against different sources, which is the
+      # one failure mode here that is genuinely hard to read.
+      #
+      # Keyed on the resolved commit rather than hashFiles('IMAS_FORTRAN_REF'),
+      # so editing that file's commentary does not throw the cache away. The
+      # IMAS-Core commit is in the key because that dependency floats: the cache
+      # then invalidates exactly when upstream Core moves, which is when the
+      # Core half of this job's claim needs re-establishing.
+      #
+      # Restore and save are split so that a failing *test* run keeps the warm
+      # tree. That is the common case for a regression gate: ctest goes red, a
+      # fix is pushed, and the next run should not pay 40 minutes again.
+      - name: Restore the HLI build tree
+        id: hli_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: hli/build
+          key: hli-${{ runner.os }}-dd${{ env.HLI_DD_VERSION }}-fortran${{ steps.hli_pin.outputs.ref }}-core${{ steps.core.outputs.sha }}
+
+      # IMAS_MVDD_REAL_CORE_TESTS=OFF because this job needs the shim built and
+      # installed, not the shim's own suite -- ci.yml's fast and full jobs own
+      # that. The option also feeds IMAS_CORE_BUILD_RPATH into build.rs, but the
+      # install rule unsets it and relinks (CMakeLists.txt), so the *installed*
+      # package is identical either way. Installing, rather than pointing the
+      # HLI at a build tree, is deliberate: find_package(imas-mvdd-loader CONFIG)
+      # is how a downstream consumer reaches the shim, so that is what gets
+      # tested.
+      - name: Build and install the shim
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-shim \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DIMAS_MVDD_REAL_CORE_TESTS=OFF
+          cmake --build build-shim
+          cmake --install build-shim --prefix "$PWD/dist"
+
+      # AL_CORE_VERSION is deliberately absent: the HLI picks its own IMAS-Core,
+      # which is the floating half of ADR 0020. AL_DOWNLOAD_DEPENDENCIES is the
+      # HLI's default and governs both the Data Dictionary and the IMAS-Core
+      # that common/cmake/ALCoreRuntime.cmake builds for the shim to dlopen.
+      #
+      # AL_EXAMPLES stays ON even though 20 of its tests can never run in a shim
+      # build, because HLI_DISABLED_TESTS asserts on that count.
+      - name: Configure the HLI against the shim
+        working-directory: hli
+        run: |
+          set -euo pipefail
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-14 \
+            -DCMAKE_CXX_COMPILER=g++-14 \
+            -DCMAKE_Fortran_COMPILER=gfortran-14 \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DAL_USE_MULTIVERSION_SHIM=ON \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/dist" \
+            -DDD_VERSION="${HLI_DD_VERSION}" \
+            -DAL_BACKEND_HDF5=ON \
+            -DAL_BACKEND_MDSPLUS=OFF \
+            -DAL_BACKEND_UDA=OFF \
+            -DAL_BUILD_MDSPLUS_MODELS=OFF \
+            -DAL_TESTS=ON \
+            -DAL_EXAMPLES=ON \
+            -DAL_PLAYGROUND=ON \
+            -DAL_PLUGINS=OFF \
+            -DAL_HLI_DOCS=OFF
+
+      - name: Build the HLI
+        id: build_hli
+        working-directory: hli
+        run: cmake --build build -j"$(nproc)"
+
+      # Asserted before ctest runs, so a suite that shrank is reported as a
+      # shrunken suite rather than as a pass.
+      - name: Check the registered test counts
+        working-directory: hli/build
+        run: |
+          set -euo pipefail
+          listing=$(ctest -N)
+          total=$(printf '%s\n' "$listing" | sed -n 's/^Total Tests: *//p')
+          disabled=$(printf '%s\n' "$listing" | grep -c '(Disabled)' || true)
+          enabled=$(( total - disabled ))
+          expected_enabled=$(( HLI_TOTAL_TESTS - HLI_DISABLED_TESTS ))
+
+          echo "registered=$total enabled=$enabled disabled=$disabled"
+
+          if [ "$total" != "$HLI_TOTAL_TESTS" ] || \
+             [ "$disabled" != "$HLI_DISABLED_TESTS" ]; then
+            {
+              echo "The HLI suite did not register what this workflow expects."
+              echo "  registered: $total (expected $HLI_TOTAL_TESTS)"
+              echo "  enabled:    $enabled (expected $expected_enabled)"
+              echo "  disabled:   $disabled (expected $HLI_DISABLED_TESTS)"
+              echo
+              echo "If this is the first run of this workflow, the expected"
+              echo "values were calibrated on macOS and this is the deliberate"
+              echo "one-time correction: set HLI_TOTAL_TESTS and"
+              echo "HLI_DISABLED_TESTS to the values above."
+              echo
+              echo "Otherwise something stopped registering. A drop in the"
+              echo "enabled count means the per-IDS sweep or the playground"
+              echo "conversion tests are gone, and this job is no longer"
+              echo "proving what it claims."
+            } >&2
+            exit 1
+          fi
+
+      # USER is overridden to a directory because IMAS-Core's legacy pulse paths
+      # interpolate it; the HLI's own CI does the same. ctest is given
+      # IMAS_CORE_LIBRARY per test by ALCore.cmake, so nothing else is needed
+      # here for the shim to find the IMAS-Core it opens.
+      - name: Run the HLI suite through the shim
+        working-directory: hli/build
+        run: |
+          set -euo pipefail
+          mkdir -p "$PWD/testdb"
+          export USER="$PWD/testdb"
+          ctest --output-on-failure --no-tests=error
+
+      # The drift verdict only reaches stderr (VersionDrift::record in
+      # src/core/core_binding.rs), and --output-on-failure hides it on a passing
+      # run. One verbose single test is enough to harvest it.
+      - name: Report which IMAS-Core this ran against
+        if: always() && steps.build_hli.outcome == 'success'
+        working-directory: hli/build
+        run: |
+          set -uo pipefail
+          mkdir -p "$PWD/testdb"
+          export USER="$PWD/testdb"
+          probe=$(ctest -R '^example-fortran-test_version$' -V 2>&1 || true)
+          drift=$(printf '%s\n' "$probe" | grep 'imas-mvdd-loader:' || true)
+          {
+            echo "### IMAS-Core this run opened"
+            echo
+            echo "The HLI chooses this, not the shim: it is the floating half of"
+            echo "ADR 0020. The shim's gate is major-only, so any 5.x is"
+            echo "admissible and a minor difference is tolerated drift."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Repository | \`${{ steps.core.outputs.repo }}\` |"
+            echo "| Ref the HLI declared | \`${{ steps.core.outputs.ref }}\` |"
+            echo "| Commit | \`${{ steps.core.outputs.sha }}\` |"
+            echo "| Shim built against | \`$(head -n1 "$GITHUB_WORKSPACE/IMAS_CORE_VERSION")\` |"
+            echo
+            if [ -n "$drift" ]; then
+              echo "Drift verdict:"
+              echo
+              echo '```'
+              printf '%s\n' "$drift"
+              echo '```'
+            else
+              echo "No drift reported: the IMAS-Core opened matches the version"
+              echo "the shim was built against."
+            fi
+            echo
+            echo "A future \`major version mismatch\` failure here is upstream"
+            echo "cutting IMAS-Core 6.x, not this job collapsing."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Gated on the build rather than on the job, so a red suite keeps the warm
+      # tree for the next attempt. A failed *build* saves nothing, because a
+      # half-built tree is what the exact-key policy above exists to avoid.
+      - name: Save the HLI build tree
+        if: always() && steps.build_hli.outcome == 'success' && steps.hli_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: hli/build
+          key: ${{ steps.hli_cache.outputs.cache-primary-key }}
