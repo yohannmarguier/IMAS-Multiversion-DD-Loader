@@ -6,9 +6,10 @@
 //! candidate loop and its fidelity bookkeeping; [`run_write`] owns the
 //! sentinel skip, transformation inversion, shape validation, the shim-owned
 //! copy and the unwritten-candidate list. [`run_delete`] owns candidate
-//! iteration, continuation after a failure, and
-//! retention of the first failure. The adapter injects the two Core-facing
-//! operations and formats that retained failure after the loop returns.
+//! iteration, continuation after a failure, and retention of the first
+//! failure. The adapter injects the one Core-facing operation each loop
+//! calls — the delete loop took two until ADR 0017 decision 2 retired its
+//! presence probe — and formats that retained failure after the loop returns.
 //!
 //! Before this module existed, `read_data_impl` (`src/interpose.rs`) mixed
 //! raw-pointer marshalling with the read-loop decisions ADR 0010, ADR 0012
