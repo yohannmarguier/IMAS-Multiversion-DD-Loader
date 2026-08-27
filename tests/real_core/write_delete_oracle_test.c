@@ -45,7 +45,7 @@
  * dropping the presence probe, so a fan-out now reaches IMAS-Core at all; the
  * second stands, because this backend's `deleteData` ignores its path and
  * removes the whole occurrence (issue #139), leaving no per-candidate effect
- * to observe. `scenario_reverse_delete_fan_out_reaches_disk` asserts what is
+ * to observe. `scenario_delete_reverse_fan_out_reaches_disk` asserts what is
  * observable today: the fan-out is no longer a silent successful no-op.
  *
  * Direction labels follow equilibrium_read_test.c's convention, which names
@@ -247,19 +247,19 @@ static void check_write_lands_on_the_stored_spelling(const char *hli_version,
     remove_fixture_pair();
 }
 
-static void scenario_forward_write_lands_on_the_stored_spelling(void) {
+static void scenario_write_forward_lands_on_the_stored_spelling(void) {
     check_write_lands_on_the_stored_spelling(
         "4.1.1", "3.39.0", "global_quantities/beta_tor_norm", BETA_NORMAL_DATASET,
         BETA_TOR_NORM_DATASET);
-    printf("write_delete_oracle_test forward-write-lands-on-the-stored-spelling: a 4.1.1 write of "
+    printf("write_delete_oracle_test write-oracle-forward-lands-on-the-stored-spelling: a 4.1.1 write of "
            "beta_tor_norm reached the 3.39.0 fixture's beta_normal, and beta_tor_norm was never "
            "created\n");
 }
 
-static void scenario_reverse_write_lands_on_the_stored_spelling(void) {
+static void scenario_write_reverse_lands_on_the_stored_spelling(void) {
     check_write_lands_on_the_stored_spelling("3.39.0", "4.1.1", "global_quantities/beta_normal",
                                              BETA_TOR_NORM_DATASET, BETA_NORMAL_DATASET);
-    printf("write_delete_oracle_test reverse-write-lands-on-the-stored-spelling: a 3.39.0 write of "
+    printf("write_delete_oracle_test write-oracle-reverse-lands-on-the-stored-spelling: a 3.39.0 write of "
            "beta_normal reached the 4.1.1 fixture's beta_tor_norm, and beta_normal was never "
            "created\n");
 }
@@ -289,15 +289,15 @@ static void check_write_flips_the_sign_on_disk(const char *hli_version,
     remove_fixture_pair();
 }
 
-static void scenario_forward_write_flips_the_sign_on_disk(void) {
+static void scenario_write_forward_flips_the_sign_on_disk(void) {
     check_write_flips_the_sign_on_disk("4.1.1", "3.39.0");
-    printf("write_delete_oracle_test forward-write-flips-the-sign-on-disk: a 4.1.1 write of "
+    printf("write_delete_oracle_test write-oracle-forward-flips-the-sign-on-disk: a 4.1.1 write of "
            "ip=7.5 reached the 3.39.0 fixture as -7.5\n");
 }
 
-static void scenario_reverse_write_flips_the_sign_on_disk(void) {
+static void scenario_write_reverse_flips_the_sign_on_disk(void) {
     check_write_flips_the_sign_on_disk("3.39.0", "4.1.1");
-    printf("write_delete_oracle_test reverse-write-flips-the-sign-on-disk: a 3.39.0 write of "
+    printf("write_delete_oracle_test write-oracle-reverse-flips-the-sign-on-disk: a 3.39.0 write of "
            "ip=7.5 reached the 4.1.1 fixture as -7.5\n");
 }
 
@@ -313,7 +313,7 @@ static void scenario_reverse_write_flips_the_sign_on_disk(void) {
  * the fan-out is on the artifact's right-hand (4.1.1) side, so only a 3.39.0
  * HLI writing into a 4.1.1 store has more than one stored slot to choose
  * between. */
-static void scenario_reverse_write_leaves_the_precedence_two_candidate_alone(void) {
+static void scenario_write_reverse_leaves_the_precedence_two_candidate_alone(void) {
     copy_fixture_pair("4.1.1");
     CHECK_OK(imas_mvdd_set_hli_dd_version("3.39.0"));
     int pulse_ctx = open_copied_fixture_pulse();
@@ -335,7 +335,7 @@ static void scenario_reverse_write_leaves_the_precedence_two_candidate_alone(voi
     check_stamp_still_reads("4.1.1");
 
     remove_fixture_pair();
-    printf("write_delete_oracle_test reverse-write-leaves-the-precedence-two-candidate-alone: the "
+    printf("write_delete_oracle_test write-oracle-reverse-leaves-the-precedence-two-candidate-alone: the "
            "3.39.0 psi_axis write extended the 4.1.1 fixture's psi_axis to -7.5 and left "
            "psi_magnetic_axis at its original %d slices\n",
            FIXTURE_SLICES);
@@ -348,7 +348,7 @@ static void scenario_reverse_write_leaves_the_precedence_two_candidate_alone(voi
  * directional hole in the on-disk oracle: the reverse scenario above proves
  * primary-only writes for a `split`; this one proves them for a forward
  * `merged` plan. */
-static void scenario_forward_write_leaves_the_precedence_two_candidate_alone(void) {
+static void scenario_write_forward_leaves_the_precedence_two_candidate_alone(void) {
     copy_fixture_pair("3.39.0");
     CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
     int pulse_ctx = open_copied_fixture_pulse();
@@ -370,7 +370,7 @@ static void scenario_forward_write_leaves_the_precedence_two_candidate_alone(voi
     check_stamp_still_reads("3.39.0");
 
     remove_fixture_pair();
-    printf("write_delete_oracle_test forward-write-leaves-the-precedence-two-candidate-alone: "
+    printf("write_delete_oracle_test write-oracle-forward-leaves-the-precedence-two-candidate-alone: "
            "the 4.1.1 energy_mhd write extended the 3.39.0 fixture's energy_mhd to 7.5 and "
            "left w_mhd at its original %d slices\n",
            FIXTURE_SLICES);
@@ -393,7 +393,7 @@ static void scenario_forward_write_leaves_the_precedence_two_candidate_alone(voi
  * on a write aborts the put where it stands, with no rollback, so what the HLI
  * had already committed to the traversal stays committed. Reading it off the
  * disk is the point of this file. */
-static void scenario_forward_write_through_a_non_primary_source_refuses(void) {
+static void scenario_write_forward_non_primary_source_refuses(void) {
     copy_fixture_pair("3.39.0");
     CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
     int pulse_ctx = open_copied_fixture_pulse();
@@ -431,7 +431,7 @@ static void scenario_forward_write_through_a_non_primary_source_refuses(void) {
     CHECK(aos_shape[0] == (double)(FIXTURE_SLICES + 1));
 
     remove_fixture_pair();
-    printf("write_delete_oracle_test forward-write-through-a-non-primary-source-refuses: the "
+    printf("write_delete_oracle_test write-oracle-forward-non-primary-source-refuses: the "
            "4.1.1 psi_magnetic_axis write was refused before IMAS-Core, the 3.39.0 fixture's "
            "psi_axis kept its original %d slices, and the refusal left one empty appended slice "
            "behind\n",
@@ -445,7 +445,7 @@ static void scenario_forward_write_through_a_non_primary_source_refuses(void) {
  * rather than reporting success for data that went nowhere. The on-disk
  * assertion is that the path really is absent afterwards — a refusal that
  * quietly created the dataset would be worse than one that reported failure. */
-static void scenario_forward_write_with_no_stored_slot_refuses(void) {
+static void scenario_write_forward_no_stored_slot_refuses(void) {
     copy_fixture_pair("3.39.0");
     CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
     int pulse_ctx = open_copied_fixture_pulse();
@@ -481,7 +481,7 @@ static void scenario_forward_write_with_no_stored_slot_refuses(void) {
     check_stamp_still_reads("3.39.0");
 
     remove_fixture_pair();
-    printf("write_delete_oracle_test forward-write-with-no-stored-slot-refuses: the 4.1.1 "
+    printf("write_delete_oracle_test write-oracle-forward-no-stored-slot-refuses: the 4.1.1 "
            "q_min/psi write was refused before IMAS-Core and no such dataset exists in the "
            "3.39.0 fixture\n");
 }
@@ -495,7 +495,7 @@ static void scenario_forward_write_with_no_stored_slot_refuses(void) {
  * ignores the path and removes the whole occurrence (issue #139). A zero
  * result is therefore valid only with that observable deletion: it proves at
  * least one candidate reached Core rather than becoming a successful no-op. */
-static void scenario_reverse_delete_fan_out_reaches_disk(void) {
+static void scenario_delete_reverse_fan_out_reaches_disk(void) {
     copy_fixture_pair("4.1.1");
     CHECK_OK(imas_mvdd_set_hli_dd_version("3.39.0"));
     int pulse_ctx = open_copied_fixture_pulse();
@@ -512,7 +512,7 @@ static void scenario_reverse_delete_fan_out_reaches_disk(void) {
     CHECK(access(equilibrium_file, F_OK) != 0);
 
     remove_fixture_pair();
-    printf("write_delete_oracle_test reverse-delete-fan-out-reaches-disk: a fan-out reached "
+    printf("write_delete_oracle_test delete-oracle-reverse-fan-out-reaches-disk: a fan-out reached "
            "IMAS-Core instead of reporting a successful no-op\n");
 }
 
@@ -551,15 +551,15 @@ static void check_refused_write_leaves_stamp_untouched(const char *hli_version,
     remove_fixture_pair();
 }
 
-static void scenario_forward_refused_write_leaves_stamp_untouched(void) {
+static void scenario_write_forward_refusal_leaves_the_stamp_untouched(void) {
     check_refused_write_leaves_stamp_untouched("4.1.1", "3.39.0");
-    printf("write_delete_oracle_test forward-refused-write-leaves-stamp-untouched: a refused "
+    printf("write_delete_oracle_test write-oracle-forward-refusal-leaves-the-stamp-untouched: a refused "
            "4.1.1 stamp write left the 3.39.0 fixture's stamp exactly as it was\n");
 }
 
-static void scenario_reverse_refused_write_leaves_stamp_untouched(void) {
+static void scenario_write_reverse_refusal_leaves_the_stamp_untouched(void) {
     check_refused_write_leaves_stamp_untouched("3.39.0", "4.1.1");
-    printf("write_delete_oracle_test reverse-refused-write-leaves-stamp-untouched: a refused "
+    printf("write_delete_oracle_test write-oracle-reverse-refusal-leaves-the-stamp-untouched: a refused "
            "3.39.0 stamp write left the 4.1.1 fixture's stamp exactly as it was\n");
 }
 
@@ -577,7 +577,7 @@ static void scenario_reverse_refused_write_leaves_stamp_untouched(void) {
  * `beta_tor_norm`, and the 3.39.0 spelling must not appear. If the probe ever
  * started registering a record for an occurrence it could not read, this is
  * the scenario that would catch it. */
-static void scenario_fresh_occurrence_write_is_untranslated(void) {
+static void scenario_write_fresh_occurrence_is_untranslated(void) {
     char temp_dir[1024];
     int temp_length = snprintf(temp_dir, sizeof temp_dir, "/tmp/imas-mvdd-fresh-occurrence-XXXXXX");
     CHECK(temp_length > 0 && (size_t)temp_length < sizeof temp_dir);
@@ -616,33 +616,33 @@ static void scenario_fresh_occurrence_write_is_untranslated(void) {
     remove_fixture_file(temp_dir, "equilibrium.h5");
     remove_fixture_file(temp_dir, "master.h5");
     CHECK(rmdir(temp_dir) == 0 || errno == ENOENT);
-    printf("write_delete_oracle_test fresh-occurrence-write-is-untranslated: a 4.1.1 put into a "
+    printf("write_delete_oracle_test write-oracle-fresh-occurrence-is-untranslated: a 4.1.1 put into a "
            "brand-new occurrence survived the stamp probe and reached disk spelled its own way\n");
 }
 
 int main(int argc, char **argv) {
     static const shim_test_scenario scenarios[] = {
-        {"forward-refused-write-leaves-stamp-untouched",
-         scenario_forward_refused_write_leaves_stamp_untouched},
-        {"reverse-refused-write-leaves-stamp-untouched",
-         scenario_reverse_refused_write_leaves_stamp_untouched},
-        {"forward-write-lands-on-the-stored-spelling",
-         scenario_forward_write_lands_on_the_stored_spelling},
-        {"reverse-write-lands-on-the-stored-spelling",
-         scenario_reverse_write_lands_on_the_stored_spelling},
-        {"forward-write-flips-the-sign-on-disk", scenario_forward_write_flips_the_sign_on_disk},
-        {"reverse-write-flips-the-sign-on-disk", scenario_reverse_write_flips_the_sign_on_disk},
-        {"reverse-write-leaves-the-precedence-two-candidate-alone",
-         scenario_reverse_write_leaves_the_precedence_two_candidate_alone},
-        {"forward-write-leaves-the-precedence-two-candidate-alone",
-         scenario_forward_write_leaves_the_precedence_two_candidate_alone},
-        {"forward-write-through-a-non-primary-source-refuses",
-         scenario_forward_write_through_a_non_primary_source_refuses},
-        {"forward-write-with-no-stored-slot-refuses",
-         scenario_forward_write_with_no_stored_slot_refuses},
-        {"reverse-delete-fan-out-reaches-disk", scenario_reverse_delete_fan_out_reaches_disk},
-        {"fresh-occurrence-write-is-untranslated",
-         scenario_fresh_occurrence_write_is_untranslated},
+        {"write-oracle-forward-refusal-leaves-the-stamp-untouched",
+         scenario_write_forward_refusal_leaves_the_stamp_untouched},
+        {"write-oracle-reverse-refusal-leaves-the-stamp-untouched",
+         scenario_write_reverse_refusal_leaves_the_stamp_untouched},
+        {"write-oracle-forward-lands-on-the-stored-spelling",
+         scenario_write_forward_lands_on_the_stored_spelling},
+        {"write-oracle-reverse-lands-on-the-stored-spelling",
+         scenario_write_reverse_lands_on_the_stored_spelling},
+        {"write-oracle-forward-flips-the-sign-on-disk", scenario_write_forward_flips_the_sign_on_disk},
+        {"write-oracle-reverse-flips-the-sign-on-disk", scenario_write_reverse_flips_the_sign_on_disk},
+        {"write-oracle-reverse-leaves-the-precedence-two-candidate-alone",
+         scenario_write_reverse_leaves_the_precedence_two_candidate_alone},
+        {"write-oracle-forward-leaves-the-precedence-two-candidate-alone",
+         scenario_write_forward_leaves_the_precedence_two_candidate_alone},
+        {"write-oracle-forward-non-primary-source-refuses",
+         scenario_write_forward_non_primary_source_refuses},
+        {"write-oracle-forward-no-stored-slot-refuses",
+         scenario_write_forward_no_stored_slot_refuses},
+        {"delete-oracle-reverse-fan-out-reaches-disk", scenario_delete_reverse_fan_out_reaches_disk},
+        {"write-oracle-fresh-occurrence-is-untranslated",
+         scenario_write_fresh_occurrence_is_untranslated},
     };
     return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

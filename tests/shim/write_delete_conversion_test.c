@@ -62,7 +62,7 @@ static void scenario_write_renamed_field_lands_at_stored_spelling(void) {
     check_write_lands(operation_ctx, "time_slice/global_quantities/beta_tor_norm", "time",
                       "time_slice/global_quantities/beta_normal", "time");
 
-    printf("write_delete_conversion_test write-renamed-field-lands-at-stored-spelling: a DD4 "
+    printf("write_delete_conversion_test write-path-renamed-field-lands-at-stored-spelling: a DD4 "
            "field landed at its DD3 spelling without mutating caller storage\n");
 }
 
@@ -73,7 +73,7 @@ static void scenario_write_identity_and_moved_fields_land_at_stored_spelling(voi
     check_write_lands(operation_ctx, "time_slice/boundary/closest_wall_point", "time",
                       "time_slice/boundary_separatrix/closest_wall_point", "time");
 
-    printf("write_delete_conversion_test write-identity-and-moved-fields-land-at-stored-spelling: "
+    printf("write_delete_conversion_test write-path-identity-and-moved-fields-land-at-stored-spelling: "
            "identity and moved DD4 fields landed at their DD3 spellings\n");
 }
 
@@ -86,7 +86,7 @@ static void scenario_write_reverse_identity_renamed_and_moved_fields_land_at_sto
     check_write_lands(operation_ctx, "time_slice/boundary_separatrix/closest_wall_point", "time",
                       "time_slice/boundary/closest_wall_point", "time");
 
-    printf("write_delete_conversion_test write-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling: "
+    printf("write_delete_conversion_test write-path-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling: "
            "identity, renamed and moved DD3 fields landed at their DD4 spellings\n");
 }
 
@@ -127,7 +127,7 @@ static void scenario_plugin_write_renamed_field_lands_at_stored_spelling(void) {
     CHECK(sentinel == 42.0);
     CHECK(size[0] == 73);
 
-    printf("write_delete_conversion_test plugin-write-renamed-field-lands-at-stored-spelling: "
+    printf("write_delete_conversion_test write-path-plugin-renamed-field-lands-at-stored-spelling: "
            "the plugin reentry seam applied the ordinary write policy\n");
 }
 
@@ -146,7 +146,7 @@ static void scenario_plugin_write_matching_context_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_plugin_second_string"), "time") == 0);
     CHECK(pointer_from_stub("recording_stub_plugin_pointer") == &sentinel);
 
-    printf("write_delete_conversion_test plugin-write-matching-context-forwards-unchanged: a "
+    printf("write_delete_conversion_test write-path-plugin-matching-context-forwards-unchanged: a "
            "matching stamp was forwarded verbatim through the plugin reentry seam\n");
 }
 
@@ -162,7 +162,7 @@ static void scenario_write_nested_child_context_resolves_relative_and_absolute_f
     check_write_lands(arraystruct_ctx, "/time_slice/global_quantities/beta_tor_norm", "",
                       "/time_slice/global_quantities/beta_normal", "");
 
-    printf("write_delete_conversion_test write-nested-child-context-resolves-relative-and-absolute-fields: "
+    printf("write_delete_conversion_test write-path-nested-child-context-resolves-relative-and-absolute-fields: "
            "a child write used its own anchor for relative paths and the IDS root for absolute paths\n");
 }
 
@@ -207,7 +207,7 @@ static void scenario_write_candidate_lands_at_primary_and_retains_unwritten_cand
     CHECK(read_data != NULL);
     CHECK(*(double *)read_data == value);
 
-    printf("write_delete_conversion_test write-candidate-lands-at-primary-and-retains-unwritten-candidates: "
+    printf("write_delete_conversion_test write-path-candidate-lands-at-primary-and-retains-unwritten-candidates: "
            "only precedence 1 was written, the other candidates were retained as potential write losses, and the round trip is consistent (a consistency check, not an on-disk claim)\n");
 }
 
@@ -252,7 +252,7 @@ static void scenario_write_split_candidate_lands_at_primary(void) {
     check_no_write_lossy_verdict(operation_ctx);
 }
 
-static void scenario_child_write_candidate_retains_complete_path_at_root(void) {
+static void scenario_write_child_candidate_retains_complete_path_at_root(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int child_size = -1;
     int child_ctx = -1;
@@ -282,7 +282,7 @@ static void scenario_write_uses_the_primary_candidate_without_fanout(void) {
     check_write_lands(operation_ctx, "time_slice/profiles_2d/b_field_phi", "time",
                       "time_slice/profiles_2d/b_field_phi", "time");
 
-    printf("write_delete_conversion_test write-uses-the-primary-candidate-without-fanout: "
+    printf("write_delete_conversion_test write-path-uses-the-primary-candidate-without-fanout: "
            "a write chose only precedence one while the paired delete fan-out removes all sources\n");
 }
 
@@ -319,7 +319,7 @@ static void scenario_write_cocos_sign_flip_uses_a_shim_owned_rank_seven_copy(voi
         CHECK(size[index] == 2);
     }
 
-    printf("write_delete_conversion_test write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy: "
+    printf("write_delete_conversion_test write-path-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy: "
            "Core received every negated value while caller storage stayed unchanged\n");
 }
 
@@ -339,7 +339,7 @@ static void scenario_plugin_write_cocos_sign_flip_uses_a_shim_owned_copy(void) {
     CHECK(values[1] == -2.5);
     CHECK(size[0] == 2);
 
-    printf("write_delete_conversion_test plugin-write-cocos-sign-flip-uses-a-shim-owned-copy: "
+    printf("write_delete_conversion_test write-path-plugin-cocos-sign-flip-uses-a-shim-owned-copy: "
            "the plugin reentry seam used the same copy policy\n");
 }
 
@@ -373,7 +373,7 @@ static void scenario_write_cocos_sentinel_forwards_unchanged_without_loss(void) 
     CHECK_OK(imas_mvdd_context_loss_count(operation_ctx, &loss_count));
     CHECK(loss_count == 0);
 
-    printf("write_delete_conversion_test write-cocos-sentinel-forwards-unchanged-without-loss: "
+    printf("write_delete_conversion_test write-path-cocos-sentinel-forwards-unchanged-without-loss: "
            "an unset scalar kept IMAS-Core's own skip sentinel\n");
 }
 
@@ -395,7 +395,7 @@ static void scenario_write_cocos_invalid_shape_or_type_refuses_before_core(void)
         CHECK(oversized_shape[index] == 1);
     }
 
-    printf("write_delete_conversion_test write-cocos-invalid-shape-or-type-refuses-before-core: "
+    printf("write_delete_conversion_test write-path-cocos-invalid-shape-or-type-refuses-before-core: "
            "the ADR-0010 gate rejected both unsupported declarations\n");
 }
 
@@ -414,7 +414,7 @@ static void scenario_write_refuses_dd_version_stamp_but_forwards_its_siblings(vo
     check_write_lands(operation_ctx, "ids_properties/version_put/access_layer_language", "",
                       "ids_properties/version_put/access_layer_language", "");
 
-    printf("write_delete_conversion_test write-refuses-dd-version-stamp-but-forwards-its-siblings: "
+    printf("write_delete_conversion_test write-path-refuses-dd-version-stamp-but-forwards-its-siblings: "
            "the immutable stamp was protected while access-layer metadata remained plain writes\n");
 }
 
@@ -435,7 +435,7 @@ static void scenario_write_without_stored_slot_refuses_and_retains_a_write_loss(
     check_loss_at(operation_ctx, 0, "time_slice/boundary/phi", IMAS_MVDD_FIDELITY_UNMAPPABLE,
                   IMAS_MVDD_LOSS_OPERATION_WRITE);
 
-    printf("write_delete_conversion_test write-without-stored-slot-refuses-and-retains-a-write-loss: "
+    printf("write_delete_conversion_test write-path-without-stored-slot-refuses-and-retains-a-write-loss: "
            "a DD4-only field was refused before Core and retained as a write loss\n");
 }
 
@@ -457,7 +457,7 @@ static void scenario_write_reverse_without_stored_slot_refuses_and_retains_a_wri
     check_loss_at(operation_ctx, 0, "time_slice/boundary_secondary_separatrix/gap/r",
                   IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_WRITE);
 
-    printf("write_delete_conversion_test write-reverse-without-stored-slot-refuses-and-retains-a-write-loss: "
+    printf("write_delete_conversion_test write-path-reverse-without-stored-slot-refuses-and-retains-a-write-loss: "
            "a DD3-only field was refused before Core and retained as a write loss\n");
 }
 
@@ -479,11 +479,11 @@ static void scenario_write_retyped_path_refuses_and_retains_a_write_loss(void) {
     check_loss_at(operation_ctx, 0, "grids_ggd/grid/space/coordinates_type",
                   IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_WRITE);
 
-    printf("write_delete_conversion_test write-retyped-path-refuses-and-retains-a-write-loss: a "
+    printf("write_delete_conversion_test write-path-retyped-path-refuses-and-retains-a-write-loss: a "
            "shape-changing path was refused before Core and retained as a write loss\n");
 }
 
-static void scenario_child_write_refusal_is_retained_on_its_root_with_a_complete_path(void) {
+static void scenario_write_child_refusal_is_retained_on_its_root_with_a_complete_path(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int size = -1;
     int arraystruct_ctx = -1;
@@ -505,7 +505,7 @@ static void scenario_child_write_refusal_is_retained_on_its_root_with_a_complete
     check_loss_at(operation_ctx, 0, "time_slice/boundary/phi", IMAS_MVDD_FIDELITY_UNMAPPABLE,
                   IMAS_MVDD_LOSS_OPERATION_WRITE);
 
-    printf("write_delete_conversion_test child-write-refusal-is-retained-on-its-root-with-a-complete-path: "
+    printf("write_delete_conversion_test write-path-child-refusal-is-retained-on-its-root-with-a-complete-path: "
            "a child refusal reached the root log under its joined DD path\n");
 }
 
@@ -700,7 +700,7 @@ static void scenario_write_matching_context_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_write_timebase"), "time") == 0);
     CHECK(pointer_from_stub("recording_stub_write_data") == &sentinel);
 
-    printf("write_delete_conversion_test write-matching-context-forwards-unchanged: a matching "
+    printf("write_delete_conversion_test write-path-matching-context-forwards-unchanged: a matching "
            "stamp was forwarded verbatim\n");
 }
 
@@ -717,7 +717,7 @@ static void scenario_write_unknown_context_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_write_field"), "profiles_1d/electrons/density") ==
           0);
 
-    printf("write_delete_conversion_test write-unknown-context-forwards-unchanged: an unavailable "
+    printf("write_delete_conversion_test write-path-unknown-context-forwards-unchanged: an unavailable "
            "artifact was forwarded\n");
 }
 
@@ -731,7 +731,7 @@ static void scenario_write_unstamped_context_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_write_field"),
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
-    printf("write_delete_conversion_test write-unstamped-context-forwards-unchanged: an unstamped "
+    printf("write_delete_conversion_test write-path-unstamped-context-forwards-unchanged: an unstamped "
            "occurrence was forwarded\n");
 }
 
@@ -745,7 +745,7 @@ static void scenario_write_conversion_disabled_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_write_field"),
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
-    printf("write_delete_conversion_test write-conversion-disabled-forwards-unchanged: an unset "
+    printf("write_delete_conversion_test write-path-conversion-disabled-forwards-unchanged: an unset "
            "HLI version was forwarded\n");
 }
 
@@ -758,7 +758,7 @@ static void scenario_delete_matching_context_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_delete_path"),
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
-    printf("write_delete_conversion_test delete-matching-context-forwards-unchanged: a matching "
+    printf("write_delete_conversion_test delete-path-matching-context-forwards-unchanged: a matching "
            "stamp was forwarded verbatim\n");
 }
 
@@ -772,7 +772,7 @@ static void scenario_delete_unknown_context_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_delete_path"), "profiles_1d/electrons/density") ==
           0);
 
-    printf("write_delete_conversion_test delete-unknown-context-forwards-unchanged: an unavailable "
+    printf("write_delete_conversion_test delete-path-unknown-context-forwards-unchanged: an unavailable "
            "artifact was forwarded\n");
 }
 
@@ -783,7 +783,7 @@ static void scenario_delete_unstamped_context_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_delete_path"),
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
-    printf("write_delete_conversion_test delete-unstamped-context-forwards-unchanged: an unstamped "
+    printf("write_delete_conversion_test delete-path-unstamped-context-forwards-unchanged: an unstamped "
            "occurrence was forwarded\n");
 }
 
@@ -794,52 +794,52 @@ static void scenario_delete_conversion_disabled_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_delete_path"),
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
-    printf("write_delete_conversion_test delete-conversion-disabled-forwards-unchanged: an unset "
+    printf("write_delete_conversion_test delete-path-conversion-disabled-forwards-unchanged: an unset "
            "HLI version was forwarded\n");
 }
 
 int main(int argc, char **argv) {
     static const shim_test_scenario scenarios[] = {
-        {"write-renamed-field-lands-at-stored-spelling", scenario_write_renamed_field_lands_at_stored_spelling},
-        {"write-identity-and-moved-fields-land-at-stored-spelling", scenario_write_identity_and_moved_fields_land_at_stored_spelling},
-        {"write-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling", scenario_write_reverse_identity_renamed_and_moved_fields_land_at_stored_spelling},
-        {"delete-identity-renamed-and-moved-fields-land-at-stored-spelling", scenario_delete_identity_renamed_and_moved_fields_land_at_stored_spelling},
-        {"delete-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling", scenario_delete_reverse_identity_renamed_and_moved_fields_land_at_stored_spelling},
-        {"plugin-write-renamed-field-lands-at-stored-spelling", scenario_plugin_write_renamed_field_lands_at_stored_spelling},
-        {"plugin-write-matching-context-forwards-unchanged", scenario_plugin_write_matching_context_forwards_unchanged},
-        {"write-nested-child-context-resolves-relative-and-absolute-fields", scenario_write_nested_child_context_resolves_relative_and_absolute_fields},
-        {"write-candidate-lands-at-primary-and-retains-unwritten-candidates", scenario_write_candidate_lands_at_primary_and_retains_unwritten_candidates},
-        {"write-non-primary-source-refuses-by-precedence", scenario_write_non_primary_source_refuses_by_precedence},
-        {"write-split-candidate-lands-at-primary", scenario_write_split_candidate_lands_at_primary},
-        {"child-write-candidate-retains-complete-path-at-root", scenario_child_write_candidate_retains_complete_path_at_root},
-        {"write-uses-the-primary-candidate-without-fanout", scenario_write_uses_the_primary_candidate_without_fanout},
-        {"write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy", scenario_write_cocos_sign_flip_uses_a_shim_owned_rank_seven_copy},
-        {"plugin-write-cocos-sign-flip-uses-a-shim-owned-copy", scenario_plugin_write_cocos_sign_flip_uses_a_shim_owned_copy},
-        {"write-cocos-sentinel-forwards-unchanged-without-loss", scenario_write_cocos_sentinel_forwards_unchanged_without_loss},
-        {"write-cocos-invalid-shape-or-type-refuses-before-core", scenario_write_cocos_invalid_shape_or_type_refuses_before_core},
-        {"write-refuses-dd-version-stamp-but-forwards-its-siblings", scenario_write_refuses_dd_version_stamp_but_forwards_its_siblings},
-        {"write-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_without_stored_slot_refuses_and_retains_a_write_loss},
-        {"write-reverse-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_reverse_without_stored_slot_refuses_and_retains_a_write_loss},
-        {"write-retyped-path-refuses-and-retains-a-write-loss", scenario_write_retyped_path_refuses_and_retains_a_write_loss},
-        {"child-write-refusal-is-retained-on-its-root-with-a-complete-path", scenario_child_write_refusal_is_retained_on_its_root_with_a_complete_path},
-        {"delete-nested-child-context-translates-relative-path", scenario_delete_nested_child_context_translates_relative_path},
-        {"delete-refuses-stamp-subtrees-before-core-call", scenario_delete_refuses_stamp_subtrees_before_core_call},
-        {"delete-empty-path-forwards-as-explicit-migration-route", scenario_delete_empty_path_forwards_as_explicit_migration_route},
-        {"delete-refuses-no-source-unservable-and-structures", scenario_delete_refuses_no_source_unservable_and_structures},
-        {"delete-admits-trivial-structure-deletes", scenario_delete_admits_trivial_structure_deletes},
-        {"delete-refuses-boundary-separatrix-reverse-direction", scenario_delete_refuses_boundary_separatrix_reverse_direction},
-        {"delete-fans-out-over-candidates-in-declared-order", scenario_delete_fans_out_over_candidates_in_declared_order},
-        {"delete-reports-a-failure-and-continues", scenario_delete_reports_a_failure_and_continues},
-        {"delete-refuses-non-primary-source-before-core-call", scenario_delete_refuses_non_primary_source_before_core_call},
-        {"write-refuses-non-primary-source-before-core-call", scenario_write_refuses_non_primary_source_before_core_call},
-        {"write-matching-context-forwards-unchanged", scenario_write_matching_context_forwards_unchanged},
-        {"write-unknown-context-forwards-unchanged", scenario_write_unknown_context_forwards_unchanged},
-        {"write-unstamped-context-forwards-unchanged", scenario_write_unstamped_context_forwards_unchanged},
-        {"write-conversion-disabled-forwards-unchanged", scenario_write_conversion_disabled_forwards_unchanged},
-        {"delete-matching-context-forwards-unchanged", scenario_delete_matching_context_forwards_unchanged},
-        {"delete-unknown-context-forwards-unchanged", scenario_delete_unknown_context_forwards_unchanged},
-        {"delete-unstamped-context-forwards-unchanged", scenario_delete_unstamped_context_forwards_unchanged},
-        {"delete-conversion-disabled-forwards-unchanged", scenario_delete_conversion_disabled_forwards_unchanged},
+        {"write-path-renamed-field-lands-at-stored-spelling", scenario_write_renamed_field_lands_at_stored_spelling},
+        {"write-path-identity-and-moved-fields-land-at-stored-spelling", scenario_write_identity_and_moved_fields_land_at_stored_spelling},
+        {"write-path-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling", scenario_write_reverse_identity_renamed_and_moved_fields_land_at_stored_spelling},
+        {"delete-path-identity-renamed-and-moved-fields-land-at-stored-spelling", scenario_delete_identity_renamed_and_moved_fields_land_at_stored_spelling},
+        {"delete-path-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling", scenario_delete_reverse_identity_renamed_and_moved_fields_land_at_stored_spelling},
+        {"write-path-plugin-renamed-field-lands-at-stored-spelling", scenario_plugin_write_renamed_field_lands_at_stored_spelling},
+        {"write-path-plugin-matching-context-forwards-unchanged", scenario_plugin_write_matching_context_forwards_unchanged},
+        {"write-path-nested-child-context-resolves-relative-and-absolute-fields", scenario_write_nested_child_context_resolves_relative_and_absolute_fields},
+        {"write-path-candidate-lands-at-primary-and-retains-unwritten-candidates", scenario_write_candidate_lands_at_primary_and_retains_unwritten_candidates},
+        {"write-path-non-primary-source-refuses-by-precedence", scenario_write_non_primary_source_refuses_by_precedence},
+        {"write-path-split-candidate-lands-at-primary", scenario_write_split_candidate_lands_at_primary},
+        {"write-path-child-candidate-retains-complete-path-at-root", scenario_write_child_candidate_retains_complete_path_at_root},
+        {"write-path-uses-the-primary-candidate-without-fanout", scenario_write_uses_the_primary_candidate_without_fanout},
+        {"write-path-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy", scenario_write_cocos_sign_flip_uses_a_shim_owned_rank_seven_copy},
+        {"write-path-plugin-cocos-sign-flip-uses-a-shim-owned-copy", scenario_plugin_write_cocos_sign_flip_uses_a_shim_owned_copy},
+        {"write-path-cocos-sentinel-forwards-unchanged-without-loss", scenario_write_cocos_sentinel_forwards_unchanged_without_loss},
+        {"write-path-cocos-invalid-shape-or-type-refuses-before-core", scenario_write_cocos_invalid_shape_or_type_refuses_before_core},
+        {"write-path-refuses-dd-version-stamp-but-forwards-its-siblings", scenario_write_refuses_dd_version_stamp_but_forwards_its_siblings},
+        {"write-path-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_without_stored_slot_refuses_and_retains_a_write_loss},
+        {"write-path-reverse-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_reverse_without_stored_slot_refuses_and_retains_a_write_loss},
+        {"write-path-retyped-path-refuses-and-retains-a-write-loss", scenario_write_retyped_path_refuses_and_retains_a_write_loss},
+        {"write-path-child-refusal-is-retained-on-its-root-with-a-complete-path", scenario_write_child_refusal_is_retained_on_its_root_with_a_complete_path},
+        {"delete-path-nested-child-context-translates-relative-path", scenario_delete_nested_child_context_translates_relative_path},
+        {"delete-path-refuses-stamp-subtrees-before-core-call", scenario_delete_refuses_stamp_subtrees_before_core_call},
+        {"delete-path-empty-path-forwards-as-explicit-migration-route", scenario_delete_empty_path_forwards_as_explicit_migration_route},
+        {"delete-path-refuses-no-source-unservable-and-structures", scenario_delete_refuses_no_source_unservable_and_structures},
+        {"delete-path-admits-trivial-structure-deletes", scenario_delete_admits_trivial_structure_deletes},
+        {"delete-path-refuses-boundary-separatrix-reverse-direction", scenario_delete_refuses_boundary_separatrix_reverse_direction},
+        {"delete-path-fans-out-over-candidates-in-declared-order", scenario_delete_fans_out_over_candidates_in_declared_order},
+        {"delete-path-reports-a-failure-and-continues", scenario_delete_reports_a_failure_and_continues},
+        {"delete-path-refuses-non-primary-source-before-core-call", scenario_delete_refuses_non_primary_source_before_core_call},
+        {"write-path-refuses-non-primary-source-before-core-call", scenario_write_refuses_non_primary_source_before_core_call},
+        {"write-path-matching-context-forwards-unchanged", scenario_write_matching_context_forwards_unchanged},
+        {"write-path-unknown-context-forwards-unchanged", scenario_write_unknown_context_forwards_unchanged},
+        {"write-path-unstamped-context-forwards-unchanged", scenario_write_unstamped_context_forwards_unchanged},
+        {"write-path-conversion-disabled-forwards-unchanged", scenario_write_conversion_disabled_forwards_unchanged},
+        {"delete-path-matching-context-forwards-unchanged", scenario_delete_matching_context_forwards_unchanged},
+        {"delete-path-unknown-context-forwards-unchanged", scenario_delete_unknown_context_forwards_unchanged},
+        {"delete-path-unstamped-context-forwards-unchanged", scenario_delete_unstamped_context_forwards_unchanged},
+        {"delete-path-conversion-disabled-forwards-unchanged", scenario_delete_conversion_disabled_forwards_unchanged},
     };
     return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

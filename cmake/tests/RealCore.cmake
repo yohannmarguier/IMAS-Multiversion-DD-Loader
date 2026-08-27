@@ -229,76 +229,38 @@ add_dependencies(write_delete_oracle_test imas_mvdd_capi)
 set_target_properties(write_delete_oracle_test PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
-add_test(NAME write-delete-oracle-forward-refused-write-leaves-stamp-untouched
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:write_delete_oracle_test> forward-refused-write-leaves-stamp-untouched)
-set_tests_properties(write-delete-oracle-forward-refused-write-leaves-stamp-untouched PROPERTIES
-    LABELS real-core)
-
-add_test(NAME write-delete-oracle-reverse-refused-write-leaves-stamp-untouched
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:write_delete_oracle_test> reverse-refused-write-leaves-stamp-untouched)
-set_tests_properties(write-delete-oracle-reverse-refused-write-leaves-stamp-untouched PROPERTIES
-    LABELS real-core)
-
-add_test(NAME write-delete-oracle-forward-write-lands-on-the-stored-spelling
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:write_delete_oracle_test> forward-write-lands-on-the-stored-spelling)
-set_tests_properties(write-delete-oracle-forward-write-lands-on-the-stored-spelling PROPERTIES
-    LABELS real-core)
-
-add_test(NAME write-delete-oracle-reverse-write-lands-on-the-stored-spelling
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:write_delete_oracle_test> reverse-write-lands-on-the-stored-spelling)
-set_tests_properties(write-delete-oracle-reverse-write-lands-on-the-stored-spelling PROPERTIES
-    LABELS real-core)
-
-add_test(NAME write-delete-oracle-forward-write-flips-the-sign-on-disk
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:write_delete_oracle_test> forward-write-flips-the-sign-on-disk)
-set_tests_properties(write-delete-oracle-forward-write-flips-the-sign-on-disk PROPERTIES
-    LABELS real-core)
-
-add_test(NAME write-delete-oracle-reverse-write-flips-the-sign-on-disk
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:write_delete_oracle_test> reverse-write-flips-the-sign-on-disk)
-set_tests_properties(write-delete-oracle-reverse-write-flips-the-sign-on-disk PROPERTIES
-    LABELS real-core)
-
-add_test(NAME write-delete-oracle-reverse-write-leaves-the-precedence-two-candidate-alone
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:write_delete_oracle_test> reverse-write-leaves-the-precedence-two-candidate-alone)
-set_tests_properties(write-delete-oracle-reverse-write-leaves-the-precedence-two-candidate-alone PROPERTIES
-    LABELS real-core)
-
-add_test(NAME write-delete-oracle-forward-write-leaves-the-precedence-two-candidate-alone
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:write_delete_oracle_test> forward-write-leaves-the-precedence-two-candidate-alone)
-set_tests_properties(write-delete-oracle-forward-write-leaves-the-precedence-two-candidate-alone PROPERTIES
-    LABELS real-core)
-
-add_test(NAME write-delete-oracle-forward-write-through-a-non-primary-source-refuses
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:write_delete_oracle_test> forward-write-through-a-non-primary-source-refuses)
-set_tests_properties(write-delete-oracle-forward-write-through-a-non-primary-source-refuses PROPERTIES
-    LABELS real-core)
-
-add_test(NAME write-delete-oracle-reverse-delete-fan-out-reaches-disk
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:write_delete_oracle_test> reverse-delete-fan-out-reaches-disk)
-set_tests_properties(write-delete-oracle-reverse-delete-fan-out-reaches-disk PROPERTIES
-    LABELS real-core)
-
-add_test(NAME write-delete-oracle-forward-write-with-no-stored-slot-refuses
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:write_delete_oracle_test> forward-write-with-no-stored-slot-refuses)
-set_tests_properties(write-delete-oracle-forward-write-with-no-stored-slot-refuses PROPERTIES
-    LABELS real-core)
-
-add_test(NAME write-delete-oracle-fresh-occurrence-write-is-untranslated
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:write_delete_oracle_test> fresh-occurrence-write-is-untranslated)
-set_tests_properties(write-delete-oracle-fresh-occurrence-write-is-untranslated PROPERTIES
-    LABELS real-core)
+# The prefix names the seam each scenario drives -- `write-oracle-*` for
+# al_write_data, `delete-oracle-*` for al_delete_data -- so `ctest -R
+# "^delete-oracle-"` selects the delete half, which is one scenario because
+# this backend's deleteData ignores its path (issue #139). The ctest name is
+# the scenario argument verbatim; every scenario is registered identically, so
+# it is registered once here rather than twelve times.
+#
+# IMAS_CORE_LIBRARY is unset so the shim binds genuine IMAS-Core rather than
+# the recording stub.
+foreach(scenario IN ITEMS
+        write-oracle-forward-refusal-leaves-the-stamp-untouched
+        write-oracle-reverse-refusal-leaves-the-stamp-untouched
+        write-oracle-forward-lands-on-the-stored-spelling
+        write-oracle-reverse-lands-on-the-stored-spelling
+        write-oracle-forward-flips-the-sign-on-disk
+        write-oracle-reverse-flips-the-sign-on-disk
+        write-oracle-reverse-leaves-the-precedence-two-candidate-alone
+        write-oracle-forward-leaves-the-precedence-two-candidate-alone
+        write-oracle-forward-non-primary-source-refuses
+        delete-oracle-reverse-fan-out-reaches-disk
+        write-oracle-forward-no-stored-slot-refuses
+        write-oracle-fresh-occurrence-is-untranslated)
+    if(NOT "${scenario}" MATCHES "^(write-oracle-|delete-oracle-|write-delete-oracle-)")
+        message(FATAL_ERROR
+            "oracle scenario '${scenario}' must lead with write-oracle-, "
+            "delete-oracle- or write-delete-oracle- so its ctest name names "
+            "the seam it drives")
+    endif()
+    add_test(NAME "${scenario}"
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            $<TARGET_FILE:write_delete_oracle_test> "${scenario}")
+    set_tests_properties("${scenario}" PROPERTIES LABELS real-core)
+endforeach()
 
 endif()

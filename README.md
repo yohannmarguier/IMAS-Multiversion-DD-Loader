@@ -389,7 +389,7 @@ is itself worth knowing when reading a green suite.
   decision 2) made this hazard reachable. Tracked at
   [#139](https://github.com/yohannmarguier/IMAS-Multiversion-DD-Loader/issues/139),
   and pinned as today's behaviour by the
-  `write-delete-oracle-reverse-delete-fan-out-reaches-disk` test, which asserts
+  `delete-oracle-reverse-fan-out-reaches-disk` test, which asserts
   the occurrence is gone rather than asserting that it should be.
 
 ## Layout
@@ -496,7 +496,7 @@ next to the equivalent `pkg-config` check.
   temporary HDF5 lifecycle against a real IMAS-Core. Its loadable fixture
   verifies plugin registration, binding and parameter values end to end.
 - `hli-dd-version-*`, `version-discovery-*`, `read-path-*`,
-  `write-delete-*`, `arraystruct-path-*`, `nested-context-read-*`,
+  `write-path-*`, `delete-path-*`, `arraystruct-path-*`, `nested-context-read-*`,
   `context-lifecycle-*` and `plugin-reentry-policy-*` — the conversion seams
   against the recording stub, one CTest process per scenario because both the
   HLI DD version latch and the context registry are process-wide.

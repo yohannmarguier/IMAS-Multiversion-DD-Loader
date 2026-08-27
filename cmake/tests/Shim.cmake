@@ -481,138 +481,123 @@ add_dependencies(write_delete_conversion_test imas_mvdd_capi recording_stub)
 set_target_properties(write_delete_conversion_test PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
-# All scenarios below need the same known mismatched equilibrium
-# occurrence. Keep that shared seam setup in one place.
-function(add_write_delete_mismatched_test name scenario)
-    add_stub_test("${name}" write_delete_conversion_test "${scenario}"
-        HLI_DD_VERSION 4.1.1
-        STAMP_VERSION 3.39.0)
+# One executable drives three ABI seams -- al_write_data, al_plugin_write_data
+# and al_delete_data -- so a ctest name in this suite has to say which one its
+# scenario is about. It is the scenario argument verbatim, and the scenario
+# argument leads with its seam:
+#
+#   write-path-*         al_write_data
+#   write-path-plugin-*  al_plugin_write_data
+#   delete-path-*        al_delete_data
+#   write-delete-path-*  one scenario driving both write and delete
+#
+# so `ctest -R "^write-path-"` selects the write seam alone and
+# `ctest -R "^delete-path-"` the delete seam alone. Neither was selectable
+# while all 40 names began `write-delete-`, which additionally spelled the
+# delete scenarios `write-delete-delete-...` -- read as two deletes when it is
+# one. `-path-` is the read seam's own prefix (`read-path-*`) and the wording
+# the ADRs use. The `write-delete-path-` group is empty today: no scenario
+# drives both seams, which is why no name should have claimed to.
+function(check_write_delete_seam_prefix scenario)
+    if(NOT "${scenario}" MATCHES "^(write-path-|delete-path-|write-delete-path-)")
+        message(FATAL_ERROR
+            "write/delete scenario '${scenario}' must lead with write-path-, "
+            "delete-path- or write-delete-path- so its ctest name names the "
+            "seam it drives")
+    endif()
 endfunction()
 
-add_write_delete_mismatched_test(write-delete-write-renamed-field-lands-at-stored-spelling
-    write-renamed-field-lands-at-stored-spelling)
-add_write_delete_mismatched_test(write-delete-write-identity-and-moved-fields-land-at-stored-spelling
-    write-identity-and-moved-fields-land-at-stored-spelling)
-add_stub_test(write-delete-write-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling
-    write_delete_conversion_test write-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling
+# Registers one scenario under its own name. Without an explicit version pair
+# it gets the known mismatched forward equilibrium occurrence that most
+# scenarios need; anything else passes add_stub_test's own keywords through.
+function(add_write_delete_test scenario)
+    check_write_delete_seam_prefix("${scenario}")
+    if(ARGN)
+        add_stub_test("${scenario}" write_delete_conversion_test "${scenario}" ${ARGN})
+    else()
+        add_stub_test("${scenario}" write_delete_conversion_test "${scenario}"
+            HLI_DD_VERSION 4.1.1
+            STAMP_VERSION 3.39.0)
+    endif()
+endfunction()
+
+add_write_delete_test(write-path-renamed-field-lands-at-stored-spelling)
+add_write_delete_test(write-path-identity-and-moved-fields-land-at-stored-spelling)
+add_write_delete_test(write-path-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
-add_write_delete_mismatched_test(write-delete-delete-identity-renamed-and-moved-fields-land-at-stored-spelling
-    delete-identity-renamed-and-moved-fields-land-at-stored-spelling)
-add_stub_test(write-delete-delete-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling
-    write_delete_conversion_test delete-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling
+add_write_delete_test(delete-path-identity-renamed-and-moved-fields-land-at-stored-spelling)
+add_write_delete_test(delete-path-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
-add_write_delete_mismatched_test(write-delete-plugin-write-renamed-field-lands-at-stored-spelling
-    plugin-write-renamed-field-lands-at-stored-spelling)
-add_write_delete_mismatched_test(write-delete-write-nested-child-context-resolves-relative-and-absolute-fields
-    write-nested-child-context-resolves-relative-and-absolute-fields)
-add_stub_test(write-delete-write-candidate-lands-at-primary-and-retains-unwritten-candidates
-    write_delete_conversion_test write-candidate-lands-at-primary-and-retains-unwritten-candidates
+add_write_delete_test(write-path-plugin-renamed-field-lands-at-stored-spelling)
+add_write_delete_test(write-path-nested-child-context-resolves-relative-and-absolute-fields)
+add_write_delete_test(write-path-candidate-lands-at-primary-and-retains-unwritten-candidates
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0
     ENV "RECORDING_STUB_READ_LAST_WRITE=1")
-add_write_delete_mismatched_test(write-delete-write-non-primary-source-refuses-by-precedence
-    write-non-primary-source-refuses-by-precedence)
-add_stub_test(write-delete-write-split-candidate-lands-at-primary
-    write_delete_conversion_test write-split-candidate-lands-at-primary
+add_write_delete_test(write-path-non-primary-source-refuses-by-precedence)
+add_write_delete_test(write-path-split-candidate-lands-at-primary
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
-add_write_delete_mismatched_test(write-delete-child-write-candidate-retains-complete-path-at-root
-    child-write-candidate-retains-complete-path-at-root)
-add_write_delete_mismatched_test(write-delete-write-uses-the-primary-candidate-without-fanout
-    write-uses-the-primary-candidate-without-fanout)
-add_write_delete_mismatched_test(write-delete-write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy
-    write-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy)
-add_write_delete_mismatched_test(write-delete-plugin-write-cocos-sign-flip-uses-a-shim-owned-copy
-    plugin-write-cocos-sign-flip-uses-a-shim-owned-copy)
-add_write_delete_mismatched_test(write-delete-write-cocos-sentinel-forwards-unchanged-without-loss
-    write-cocos-sentinel-forwards-unchanged-without-loss)
-add_write_delete_mismatched_test(write-delete-write-cocos-invalid-shape-or-type-refuses-before-core
-    write-cocos-invalid-shape-or-type-refuses-before-core)
-add_write_delete_mismatched_test(write-delete-write-refuses-dd-version-stamp-but-forwards-its-siblings
-    write-refuses-dd-version-stamp-but-forwards-its-siblings)
-add_write_delete_mismatched_test(write-delete-write-without-stored-slot-refuses-and-retains-a-write-loss
-    write-without-stored-slot-refuses-and-retains-a-write-loss)
-add_stub_test(write-delete-write-reverse-without-stored-slot-refuses-and-retains-a-write-loss
-    write_delete_conversion_test write-reverse-without-stored-slot-refuses-and-retains-a-write-loss
+add_write_delete_test(write-path-child-candidate-retains-complete-path-at-root)
+add_write_delete_test(write-path-uses-the-primary-candidate-without-fanout)
+add_write_delete_test(write-path-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy)
+add_write_delete_test(write-path-plugin-cocos-sign-flip-uses-a-shim-owned-copy)
+add_write_delete_test(write-path-cocos-sentinel-forwards-unchanged-without-loss)
+add_write_delete_test(write-path-cocos-invalid-shape-or-type-refuses-before-core)
+add_write_delete_test(write-path-refuses-dd-version-stamp-but-forwards-its-siblings)
+add_write_delete_test(write-path-without-stored-slot-refuses-and-retains-a-write-loss)
+add_write_delete_test(write-path-reverse-without-stored-slot-refuses-and-retains-a-write-loss
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
-add_write_delete_mismatched_test(write-delete-write-retyped-path-refuses-and-retains-a-write-loss
-    write-retyped-path-refuses-and-retains-a-write-loss)
-add_write_delete_mismatched_test(write-delete-child-write-refusal-is-retained-on-its-root-with-a-complete-path
-    child-write-refusal-is-retained-on-its-root-with-a-complete-path)
-add_write_delete_mismatched_test(write-delete-delete-nested-child-context-translates-relative-path
-    delete-nested-child-context-translates-relative-path)
-add_write_delete_mismatched_test(write-delete-delete-refuses-stamp-subtrees-before-core-call
-    delete-refuses-stamp-subtrees-before-core-call)
-add_write_delete_mismatched_test(write-delete-delete-empty-path-forwards-as-explicit-migration-route
-    delete-empty-path-forwards-as-explicit-migration-route)
-add_write_delete_mismatched_test(write-delete-delete-refuses-no-source-unservable-and-structures
-    delete-refuses-no-source-unservable-and-structures)
-add_write_delete_mismatched_test(write-delete-delete-admits-trivial-structure-deletes
-    delete-admits-trivial-structure-deletes)
-add_stub_test(write-delete-delete-refuses-boundary-separatrix-reverse-direction
-    write_delete_conversion_test delete-refuses-boundary-separatrix-reverse-direction
+add_write_delete_test(write-path-retyped-path-refuses-and-retains-a-write-loss)
+add_write_delete_test(write-path-child-refusal-is-retained-on-its-root-with-a-complete-path)
+add_write_delete_test(delete-path-nested-child-context-translates-relative-path)
+add_write_delete_test(delete-path-refuses-stamp-subtrees-before-core-call)
+add_write_delete_test(delete-path-empty-path-forwards-as-explicit-migration-route)
+add_write_delete_test(delete-path-refuses-no-source-unservable-and-structures)
+add_write_delete_test(delete-path-admits-trivial-structure-deletes)
+add_write_delete_test(delete-path-refuses-boundary-separatrix-reverse-direction
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
-add_write_delete_mismatched_test(write-delete-delete-fans-out-over-candidates-in-declared-order
-    delete-fans-out-over-candidates-in-declared-order)
-add_write_delete_mismatched_test(write-delete-delete-reports-a-failure-and-continues
-    delete-reports-a-failure-and-continues)
-add_stub_test(write-delete-delete-refuses-non-primary-source-before-core-call
-    write_delete_conversion_test delete-refuses-non-primary-source-before-core-call
+add_write_delete_test(delete-path-fans-out-over-candidates-in-declared-order)
+add_write_delete_test(delete-path-reports-a-failure-and-continues)
+add_write_delete_test(delete-path-refuses-non-primary-source-before-core-call
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
-add_stub_test(write-delete-write-refuses-non-primary-source-before-core-call
-    write_delete_conversion_test write-refuses-non-primary-source-before-core-call
+add_write_delete_test(write-path-refuses-non-primary-source-before-core-call
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
-
-add_stub_test(write-delete-write-unstamped-context-forwards-unchanged
-    write_delete_conversion_test write-unstamped-context-forwards-unchanged
+add_write_delete_test(write-path-unstamped-context-forwards-unchanged
+    HLI_DD_VERSION 4.1.1)
+add_write_delete_test(write-path-matching-context-forwards-unchanged
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 4.1.1)
+add_write_delete_test(write-path-plugin-matching-context-forwards-unchanged
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 4.1.1)
+add_write_delete_test(delete-path-matching-context-forwards-unchanged
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 4.1.1)
+add_write_delete_test(write-path-unknown-context-forwards-unchanged)
+add_write_delete_test(delete-path-unknown-context-forwards-unchanged)
+add_write_delete_test(delete-path-unstamped-context-forwards-unchanged
     HLI_DD_VERSION 4.1.1)
 
-add_stub_test(write-delete-write-matching-context-forwards-unchanged
-    write_delete_conversion_test write-matching-context-forwards-unchanged
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 4.1.1)
-
-add_stub_test(write-delete-plugin-write-matching-context-forwards-unchanged
-    write_delete_conversion_test plugin-write-matching-context-forwards-unchanged
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 4.1.1)
-
-add_stub_test(write-delete-delete-matching-context-forwards-unchanged
-    write_delete_conversion_test delete-matching-context-forwards-unchanged
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 4.1.1)
-
-add_stub_test(write-delete-write-unknown-context-forwards-unchanged
-    write_delete_conversion_test write-unknown-context-forwards-unchanged
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-
-add_test(NAME write-delete-write-conversion-disabled-forwards-unchanged
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:write_delete_conversion_test> write-conversion-disabled-forwards-unchanged)
-set_tests_properties(write-delete-write-conversion-disabled-forwards-unchanged PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
-
-add_stub_test(write-delete-delete-unknown-context-forwards-unchanged
-    write_delete_conversion_test delete-unknown-context-forwards-unchanged
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-
-add_stub_test(write-delete-delete-unstamped-context-forwards-unchanged
-    write_delete_conversion_test delete-unstamped-context-forwards-unchanged
-    HLI_DD_VERSION 4.1.1)
-
-add_test(NAME write-delete-delete-conversion-disabled-forwards-unchanged
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:write_delete_conversion_test> delete-conversion-disabled-forwards-unchanged)
-set_tests_properties(write-delete-delete-conversion-disabled-forwards-unchanged PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+# add_stub_test always sets a DD version; these two need it absent, so the
+# latch never fires and conversion is impossible. Raw add_test, guarded by the
+# same naming rule as everything above.
+foreach(scenario IN ITEMS
+        write-path-conversion-disabled-forwards-unchanged
+        delete-path-conversion-disabled-forwards-unchanged)
+    check_write_delete_seam_prefix("${scenario}")
+    add_test(NAME "${scenario}"
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
+            $<TARGET_FILE:write_delete_conversion_test> "${scenario}")
+    set_tests_properties("${scenario}" PROPERTIES
+        ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+endforeach()
 
 # --- Issue #123: one reentry guard for every seam IMAS-Core calls beneath ---
 add_executable(reentry_guard_test

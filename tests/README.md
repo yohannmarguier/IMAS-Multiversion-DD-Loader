@@ -5,7 +5,10 @@ stub-only profile registers 192). None of the C sources here is registered by
 itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
 (ADR 0005) and the context registry (ADR 0003) are process-wide state that
-settles once. A scenario name maps to `<executable> <scenario-argument>`.
+settles once. A scenario name maps to `<executable> <scenario-argument>`, and
+a group prefix names the seam under test — so where one executable drives more
+than one seam, its prefixes split accordingly rather than naming the file
+(`write-path-*` and `delete-path-*` are both `write_delete_conversion_test`).
 
 ```console
 $ ctest --test-dir build --output-on-failure    # everything
@@ -123,7 +126,13 @@ record intact, a recycled context ID never exposes a stale record, and the
 latter two seams forward unchanged without touching the registry. Observed
 indirectly, via whether a later read still translates.
 
-### `write-delete-*` — 40 · `shim/write_delete_conversion_test.c`
+### `write-path-*` — 25 · `shim/write_delete_conversion_test.c`
+
+`al_write_data` and its plugin reentry twin `al_plugin_write_data`, whose three
+scenarios are spelled `write-path-plugin-*`. The delete half of the same
+executable is the next group: one binary serves both seams because they share
+the fixture helpers, but a ctest name says which seam it drives, so
+`ctest -R "^write-path-"` selects the write seam alone.
 
 Issue #125's safe write slice: `al_write_data` and `al_plugin_write_data`
 independently resolve identity, `renamed`, and `moved` field/timebase paths to
@@ -151,6 +160,10 @@ Issue #126 adds the impossible-write proof: both fixture directions refuse a
 field with no stored slot, and a retyped field refuses before Core. Each refusal
 keeps caller storage untouched, records an `UNMAPPABLE` `WRITE` loss, and a
 child-context refusal reaches its root under the complete joined DD path.
+
+### `delete-path-*` — 15 · `shim/write_delete_conversion_test.c`
+
+`al_delete_data`, from the same executable as `write-path-*` above.
 
 Issue #129 translates identity, `renamed`, and `moved` leaf deletes to one
 stored spelling in both directions; it refuses the DD-version stamp and
@@ -219,7 +232,7 @@ an isolated temporary copy instead: it reads the copied DD-version stamp and a
 numeric dataset through raw HDF5, then re-proves a translated read against that
 copy, leaving the checked-in pair untouched.
 
-### `write-delete-oracle-*` — 12, `real-core` · `real_core/write_delete_oracle_test.c`
+### `write-oracle-*` / `delete-oracle-*` — 11 + 1, `real-core` · `real_core/write_delete_oracle_test.c`
 
 The on-disk oracle for the write and delete seams (issue #133): every
 scenario mutates its own private temp-directory copy of the equilibrium
