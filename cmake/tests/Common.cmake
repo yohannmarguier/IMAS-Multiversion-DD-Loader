@@ -82,6 +82,19 @@ function(add_stub_test name executable)
     set_tests_properties("${name}" PROPERTIES ENVIRONMENT "${environment}")
 endfunction()
 
+# Registers one real-IMAS-Core scenario. The shim must resolve IMAS-Core through
+# its build RPATH, rather than the recording-stub override used by stub suites.
+function(add_real_core_test name executable)
+    cmake_parse_arguments(PARSE_ARGV 2 ARG "" "RESOURCE_LOCK" "")
+
+    add_test(NAME "${name}"
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            ${executable} ${ARG_UNPARSED_ARGUMENTS})
+    if(DEFINED ARG_RESOURCE_LOCK)
+        set_tests_properties("${name}" PROPERTIES RESOURCE_LOCK "${ARG_RESOURCE_LOCK}")
+    endif()
+endfunction()
+
 if(IMAS_MVDD_REAL_CORE_TESTS)
     get_target_property(_imas_core_include_dirs ${IMAS_CORE_AL_TARGET}
         INTERFACE_INCLUDE_DIRECTORIES)

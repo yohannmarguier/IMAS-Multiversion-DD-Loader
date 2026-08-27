@@ -6,9 +6,41 @@
 include_guard(GLOBAL)
 
 include("${CMAKE_CURRENT_LIST_DIR}/tests/Common.cmake")
+
+# `real-core` denotes profile membership: every test registered inside this
+# bracket exists only when IMAS_MVDD_REAL_CORE_TESTS is on. Label the directory
+# property's difference so a bare add_test cannot escape that invariant.
+function(imas_mvdd_begin_real_core_tests)
+    get_property(_tests_before DIRECTORY PROPERTY TESTS)
+    set_property(DIRECTORY PROPERTY IMAS_MVDD_REAL_CORE_TESTS_BEFORE "${_tests_before}")
+endfunction()
+
+function(imas_mvdd_end_real_core_tests)
+    get_property(_tests_before DIRECTORY PROPERTY IMAS_MVDD_REAL_CORE_TESTS_BEFORE)
+    get_property(_tests_after DIRECTORY PROPERTY TESTS)
+    set(_real_core_tests "${_tests_after}")
+    foreach(test IN LISTS _tests_before)
+        list(REMOVE_ITEM _real_core_tests "${test}")
+    endforeach()
+    foreach(test IN LISTS _real_core_tests)
+        set_property(TEST "${test}" APPEND PROPERTY LABELS real-core)
+    endforeach()
+endfunction()
+
 include("${CMAKE_CURRENT_LIST_DIR}/tests/Abi.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/tests/Shim.cmake")
 
 if(IMAS_MVDD_REAL_CORE_TESTS)
     include("${CMAKE_CURRENT_LIST_DIR}/tests/RealCore.cmake")
 endif()
+
+get_property(_imas_mvdd_tests DIRECTORY PROPERTY TESTS)
+list(LENGTH _imas_mvdd_tests _imas_mvdd_test_count)
+set(_imas_mvdd_real_core_test_count 0)
+foreach(test IN LISTS _imas_mvdd_tests)
+    get_property(_labels TEST "${test}" PROPERTY LABELS)
+    if("real-core" IN_LIST _labels)
+        math(EXPR _imas_mvdd_real_core_test_count "${_imas_mvdd_real_core_test_count} + 1")
+    endif()
+endforeach()
+message(STATUS "IMAS-MVDD: ${_imas_mvdd_test_count} tests registered, ${_imas_mvdd_real_core_test_count} of them real-core-gated and labelled")

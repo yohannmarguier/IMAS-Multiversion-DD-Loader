@@ -2,8 +2,9 @@
 
 include_guard(GLOBAL)
 
-if(IMAS_MVDD_REAL_CORE_TESTS)
-    # --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
+imas_mvdd_begin_real_core_tests()
+
+# --- Real IMAS-Core test: the tracer against the genuine article (issue #4) ---
 #
 # The same shim call as scenario_success, but against the IMAS-Core
 # acquired above instead of the recording stub: al_context_info must
@@ -13,9 +14,7 @@ if(IMAS_MVDD_REAL_CORE_TESTS)
 # branch), which is what makes this runnable with no fixture beyond the
 # acquired library itself. Explicitly remove the override so this test
 # proves the shim's build-only RPATH finds Core by bare soname.
-add_test(NAME runtime-binding-real-core
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:runtime_binding_test> real-core)
+add_real_core_test(runtime-binding-real-core $<TARGET_FILE:runtime_binding_test> real-core)
 if(IMAS_CORE_BUILT_FROM_SOURCE)
     # Built from source, EXCLUDE_FROM_ALL: nothing else pulls it into the
     # default build target, so the test binary that needs it must.
@@ -61,11 +60,8 @@ endif()
 set_target_properties(real_core_forwarding_test PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
-add_test(NAME runtime-binding-real-core-forwarding
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:real_core_forwarding_test>)
-set_tests_properties(runtime-binding-real-core-forwarding PROPERTIES
-    LABELS real-core)
+add_real_core_test(runtime-binding-real-core-forwarding
+    $<TARGET_FILE:real_core_forwarding_test>)
 
 # --- Issue #54: the first bidirectional translated read, against the
 # checked-in equilibrium HDF5 fixture pair rather than a throwaway pulse.
@@ -88,121 +84,81 @@ set_target_properties(equilibrium_read_test PROPERTIES
 # same fixture directory share a resource lock: HDF5's own file locking
 # makes two concurrent opens of the same pulse unreliable, and ctest may
 # otherwise run tests in parallel.
-add_test(NAME equilibrium-read-reverse-reads-renamed-value
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> reverse-reads-renamed-value-through-own-spelling)
-set_tests_properties(equilibrium-read-reverse-reads-renamed-value PROPERTIES
-    LABELS real-core
+add_real_core_test(equilibrium-read-reverse-reads-renamed-value
+    $<TARGET_FILE:equilibrium_read_test> reverse-reads-renamed-value-through-own-spelling
     RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
 
-add_test(NAME equilibrium-read-forward-reads-renamed-value
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> forward-reads-renamed-value-through-own-spelling)
-set_tests_properties(equilibrium-read-forward-reads-renamed-value PROPERTIES
-    LABELS real-core
+add_real_core_test(equilibrium-read-forward-reads-renamed-value
+    $<TARGET_FILE:equilibrium_read_test> forward-reads-renamed-value-through-own-spelling
     RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
 
 # Issue #129 keeps the safe leaf-delete proof at the spelling-observable
 # recording-stub boundary. This real-Core probe retains stamp protection,
 # while a real context lifecycle leaves conversion working through whatever is
 # open.
-add_test(NAME equilibrium-read-forward-delete-refuses-stamp-removal
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> forward-delete-refuses-stamp-removal)
-set_tests_properties(equilibrium-read-forward-delete-refuses-stamp-removal PROPERTIES
-    LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+add_real_core_test(equilibrium-read-forward-delete-refuses-stamp-removal
+    $<TARGET_FILE:equilibrium_read_test> forward-delete-refuses-stamp-removal
+    RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
 
-add_test(NAME equilibrium-read-forward-context-lifecycle-keeps-conversion-live
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> forward-context-lifecycle-keeps-conversion-live)
-set_tests_properties(equilibrium-read-forward-context-lifecycle-keeps-conversion-live PROPERTIES
-    LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+add_real_core_test(equilibrium-read-forward-context-lifecycle-keeps-conversion-live
+    $<TARGET_FILE:equilibrium_read_test> forward-context-lifecycle-keeps-conversion-live
+    RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
 
-add_test(NAME equilibrium-read-forward-merged-read-falls-through-to-stored-alias
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> forward-merged-read-falls-through-to-stored-alias)
-set_tests_properties(equilibrium-read-forward-merged-read-falls-through-to-stored-alias PROPERTIES
-    LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+add_real_core_test(equilibrium-read-forward-merged-read-falls-through-to-stored-alias
+    $<TARGET_FILE:equilibrium_read_test> forward-merged-read-falls-through-to-stored-alias
+    RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
 
-add_test(NAME equilibrium-read-reverse-merged-read-resolves-single-stored-destination
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test>
-        reverse-merged-read-resolves-single-stored-destination)
-set_tests_properties(equilibrium-read-reverse-merged-read-resolves-single-stored-destination
-    PROPERTIES LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
+add_real_core_test(equilibrium-read-reverse-merged-read-resolves-single-stored-destination
+    $<TARGET_FILE:equilibrium_read_test> reverse-merged-read-resolves-single-stored-destination
+    RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
 
 # Issue #69: the refusal half of the matrix. Both scenarios open a real
 # pulse whose contents are never reached — the assertion is that the shim
 # stops before IMAS-Core, in whichever direction the artifact says it must.
-add_test(NAME equilibrium-read-reverse-refuses-unservable-paths
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> reverse-refuses-unservable-paths)
-set_tests_properties(equilibrium-read-reverse-refuses-unservable-paths PROPERTIES
-    LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
-
-add_test(NAME equilibrium-read-forward-refuses-unservable-paths
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> forward-refuses-unservable-paths)
-set_tests_properties(equilibrium-read-forward-refuses-unservable-paths PROPERTIES
-    LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
-
-add_test(NAME equilibrium-read-reverse-split-read-uses-first-destination-and-flips-value
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> reverse-split-read-uses-first-destination-and-flips-value)
-set_tests_properties(equilibrium-read-reverse-split-read-uses-first-destination-and-flips-value PROPERTIES
-    LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
-
-add_test(NAME equilibrium-read-forward-split-read-uses-single-source-and-flips-value
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> forward-split-read-uses-single-source-and-flips-value)
-set_tests_properties(equilibrium-read-forward-split-read-uses-single-source-and-flips-value PROPERTIES
-    LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
-
-add_test(NAME equilibrium-read-reverse-reads-renamed-nested-container-field
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> reverse-reads-renamed-nested-container-field)
-set_tests_properties(equilibrium-read-reverse-reads-renamed-nested-container-field PROPERTIES
-    LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
-
-add_test(NAME equilibrium-read-forward-reads-renamed-nested-container-field
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> forward-reads-renamed-nested-container-field)
-set_tests_properties(equilibrium-read-forward-reads-renamed-nested-container-field PROPERTIES
-    LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
-
-add_test(NAME equilibrium-read-reverse-sign-flip-applies-through-nested-container
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> reverse-sign-flip-applies-through-nested-container)
-set_tests_properties(equilibrium-read-reverse-sign-flip-applies-through-nested-container PROPERTIES
-    LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
-
-add_test(NAME equilibrium-read-forward-sign-flip-applies-through-nested-container
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> forward-sign-flip-applies-through-nested-container)
-set_tests_properties(equilibrium-read-forward-sign-flip-applies-through-nested-container PROPERTIES
-    LABELS real-core RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
-
-add_test(NAME equilibrium-read-same-version-is-unaffected
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> same-version-read-is-unaffected)
-set_tests_properties(equilibrium-read-same-version-is-unaffected PROPERTIES
-    LABELS real-core
+add_real_core_test(equilibrium-read-reverse-refuses-unservable-paths
+    $<TARGET_FILE:equilibrium_read_test> reverse-refuses-unservable-paths
     RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
 
-add_test(NAME equilibrium-read-conversion-disabled-is-unaffected
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> conversion-disabled-read-is-unaffected)
-set_tests_properties(equilibrium-read-conversion-disabled-is-unaffected PROPERTIES
-    LABELS real-core
+add_real_core_test(equilibrium-read-forward-refuses-unservable-paths
+    $<TARGET_FILE:equilibrium_read_test> forward-refuses-unservable-paths
+    RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+
+add_real_core_test(equilibrium-read-reverse-split-read-uses-first-destination-and-flips-value
+    $<TARGET_FILE:equilibrium_read_test> reverse-split-read-uses-first-destination-and-flips-value
+    RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
+
+add_real_core_test(equilibrium-read-forward-split-read-uses-single-source-and-flips-value
+    $<TARGET_FILE:equilibrium_read_test> forward-split-read-uses-single-source-and-flips-value
+    RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+
+add_real_core_test(equilibrium-read-reverse-reads-renamed-nested-container-field
+    $<TARGET_FILE:equilibrium_read_test> reverse-reads-renamed-nested-container-field
+    RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
+
+add_real_core_test(equilibrium-read-forward-reads-renamed-nested-container-field
+    $<TARGET_FILE:equilibrium_read_test> forward-reads-renamed-nested-container-field
+    RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+
+add_real_core_test(equilibrium-read-reverse-sign-flip-applies-through-nested-container
+    $<TARGET_FILE:equilibrium_read_test> reverse-sign-flip-applies-through-nested-container
+    RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
+
+add_real_core_test(equilibrium-read-forward-sign-flip-applies-through-nested-container
+    $<TARGET_FILE:equilibrium_read_test> forward-sign-flip-applies-through-nested-container
+    RESOURCE_LOCK equilibrium-fixture-dd-3.39.0)
+
+add_real_core_test(equilibrium-read-same-version-is-unaffected
+    $<TARGET_FILE:equilibrium_read_test> same-version-read-is-unaffected
+    RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
+
+add_real_core_test(equilibrium-read-conversion-disabled-is-unaffected
+    $<TARGET_FILE:equilibrium_read_test> conversion-disabled-read-is-unaffected
     RESOURCE_LOCK equilibrium-fixture-dd-4.1.1)
 
 # This scenario opens only a unique copied fixture directory, so it cannot
 # race the scenarios above that open a checked-in pulse and need HDF5 locks.
-add_test(NAME equilibrium-read-copied-fixture-harness-reproves-renamed-read
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-        $<TARGET_FILE:equilibrium_read_test> copied-fixture-harness-reproves-renamed-read)
-set_tests_properties(equilibrium-read-copied-fixture-harness-reproves-renamed-read PROPERTIES
-    LABELS real-core)
+add_real_core_test(equilibrium-read-copied-fixture-harness-reproves-renamed-read
+    $<TARGET_FILE:equilibrium_read_test> copied-fixture-harness-reproves-renamed-read)
 
 # --- Issue #133: on-disk oracle proof for the write and delete seams. Each
 # scenario mutates its own private copy of the fixture pair and reads the
@@ -236,8 +192,6 @@ set_target_properties(write_delete_oracle_test PROPERTIES
 # the scenario argument verbatim; every scenario is registered identically, so
 # it is registered once here rather than twelve times.
 #
-# IMAS_CORE_LIBRARY is unset so the shim binds genuine IMAS-Core rather than
-# the recording stub.
 foreach(scenario IN ITEMS
         write-oracle-forward-refusal-leaves-the-stamp-untouched
         write-oracle-reverse-refusal-leaves-the-stamp-untouched
@@ -257,10 +211,7 @@ foreach(scenario IN ITEMS
             "delete-oracle- or write-delete-oracle- so its ctest name names "
             "the seam it drives")
     endif()
-    add_test(NAME "${scenario}"
-        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
-            $<TARGET_FILE:write_delete_oracle_test> "${scenario}")
-    set_tests_properties("${scenario}" PROPERTIES LABELS real-core)
+    add_real_core_test("${scenario}" $<TARGET_FILE:write_delete_oracle_test> "${scenario}")
 endforeach()
 
-endif()
+imas_mvdd_end_real_core_tests()
