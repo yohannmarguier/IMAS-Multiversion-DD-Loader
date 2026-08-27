@@ -59,7 +59,7 @@ and limitations".
 | `al_begin_arraystruct_action` (+ plugin twin) | resolves `path` and `timebase` before Core is called; on success registers the returned context as a child record inheriting the shared map, root identity and stored direction |
 | `al_read_data` / `al_plugin_read_data` | one shared `read_data_impl`: identity, `renamed`, `moved`, and `merged`/`split` candidate plans tried in declared precedence order, COCOS sign flip applied in place, three-way read-outcome classification (ADR 0012), every non-exact success retained in the root's loss log |
 | `al_write_data` / `al_plugin_write_data` | resolves `field` and `timebase` independently to one stored spelling, keeping relative/absolute child-context semantics and the caller's own `data`/`size`. An ambiguous plan writes **only** precedence 1 and records each skipped candidate's *stored* path as `POTENTIALLY_LOSSY` after Core succeeds; a non-primary source, an unservable rule, or a path with no stored slot refuses before Core is called. A value transformation executes on a shim-owned copy (ADR 0018) and leaves an unset rank-0 scalar alone, since `EMPTY_DOUBLE` is negative and flipping it would store a fabricated measurement with `code == 0` |
-| `al_delete_data` | translates identity, `renamed` and `moved` leaves; fans a candidate plan out in declared order, probing each stored path first (ADR 0017 — a write asserts a value, a delete asserts an absence, so where a write must not fan out a delete must); admits a *trivial* structure delete but refuses one with an escaping rule nested underneath it (decision 4); an empty path is the caller's explicit whole-DATAOBJECT migration route; never retains a loss entry |
+| `al_delete_data` | translates identity, `renamed` and `moved` leaves; fans a candidate plan out in declared order and calls Core for **every** candidate, with no presence probe (ADR 0017 — a write asserts a value, a delete asserts an absence, so where a write must not fan out a delete must; decision 2 records why the probe that used to precede each candidate is gone: it read through the *caller's* context, so a write-mode open reported every candidate absent). The first nonzero status is retained while later candidates are still attempted, so an absent candidate can look like a backend failure — the honest limitation of an ABI with no not-found outcome. Admits a *trivial* structure delete but refuses one with an escaping rule nested underneath it (decision 4); an empty path is the caller's explicit whole-DATAOBJECT migration route; never retains a loss entry |
 | `al_end_action` / `al_plugin_end_action` | removes only its own context's record, only on success. Non-LIFO close and recycled context IDs are proven safe |
 | `al_iterate_over_arraystruct`, `al_close_pulse` | plain forwards; neither touches the registry |
 | `al_get_occurrences`, `al_list_filled_paths`, `al_bind_plugin`/`al_unbind_plugin` | deliberately **untranslated** (ADR 0002), proven to hold their passthrough contract while a read *and* a write convert |
@@ -103,27 +103,26 @@ and limitations".
   another module's responsibilities is a claim with a shelf life, and two
   consecutive review rounds produced the same corrective sweep. The cheapest time
   to fix one is the PR that makes it false.
+- **A compaction restates history as the present tense.** This file was condensed
+  from a 93KB chronological `Update (issue #NNN)` log, and summarising that log
+  faithfully reproduced claims the code had already falsified: a buried "left to
+  #138" became a standalone **Open exposures** bullet, and a per-issue count
+  became the **Counts** section, both asserting a world six commits out of date.
+  Summarising is fidelity to the *old text*, not to the code. When a section here
+  is rewritten, re-derive each claim from `src/`, `ctest -N` and the ADRs — the
+  old wording is a draft, not a source.
 
 ### Open exposures
 
-- **#138** — the delete presence probe reads through the *caller's* context, so
-  under a write-mode open every candidate reports not-found, no delete is
-  forwarded, and the fan-out returns `code == 0` having done nothing, which ADR
-  0016 decision 1 forbids. A regression marker in
-  `tests/real_core/write_delete_oracle_test.c` asserts today's silence
-  explicitly, rather than through `CHECK_OK`, and starts failing when this lands
-  — the signal to implement #133's four deferred on-disk delete claims.
 - **#139** — real IMAS-Core's `HDF5Writer::deleteData` ignores its `path`
   argument entirely and deletes the whole IDS pulse file plus its master-file
   link, so ADR 0017's per-path fan-out has no per-path effect on the only backend
-  that implements delete at all. #138's silence is currently the only thing
-  stopping it from destroying an occurrence.
-- **The delete probe's rank** (review finding P8, ADR 0017 decision 2) — it reads
-  every candidate as a rank-0 `DOUBLE_DATA` scalar while 8 of the ~10 fan-out
-  targets the shipped artifact can reach are FLT_1D or FLT_2D. What real Core
-  answers is unrecorded, the recording stub is shape-blind and cannot witness it,
-  and neither the artifact nor ADR 0013's inventories carry a rank to fix it
-  with. Left to #138, which also raises dropping the probe as an option.
+  that implements delete at all. Nothing masks this any more: #138 removed the
+  probe whose silence used to stop the fan-out before Core was reached, so a
+  converted candidate-plan delete now destroys the occurrence, and
+  `reverse-delete-fan-out-reaches-disk` pins that as today's behaviour rather
+  than asserting it is desirable. Stated for users in README.md's "Scope and
+  limitations".
 - **`timebase` inherits the read path wholesale** (ADR 0016 decision 10) — it
   resolves independently of `field`, either one refusing refuses the write, and
   both feed the fidelity verdict. The named hazard — a write whose timebase
@@ -155,8 +154,9 @@ and limitations".
 
 ### Counts
 
-`cargo test` 186 unit tests; real-Core ctest profile 227 tests, 29 of them
-`real_core`-labelled; stub-only profile 194.
+`cargo test` 186 unit tests; real-Core ctest profile 227 tests, 30 of them
+`real_core`-labelled; stub-only profile 193. Take these from `ctest -N` and
+`cargo test`, never from a previous prose statement of them.
 
 ### History
 
