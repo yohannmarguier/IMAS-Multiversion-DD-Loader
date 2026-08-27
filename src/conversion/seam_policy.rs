@@ -4,7 +4,7 @@
 //!
 //! The three are deliberately not equal in weight. [`run_read`] owns the
 //! candidate loop and its fidelity bookkeeping; [`run_write`] owns the
-//! sentinel skip, transformation inversion, shape validation, the shim-owned
+//! sentinel skip, shape validation, the shim-owned
 //! copy and the unwritten-candidate list. [`run_delete`] owns candidate
 //! iteration, continuation after a failure, and retention of the first
 //! failure. The adapter injects the one Core-facing operation each loop
@@ -243,6 +243,9 @@ pub(crate) fn run_write<'a>(
     shape: BufferShape,
     source: SourceView<'a>,
 ) -> WriteVerdict<'a> {
+    if let Some(refusal) = earliest_write_check_refusal(field, timebase) {
+        return write_refusal(refusal);
+    }
     let field = match write_argument_path(field) {
         Ok(path) => path,
         Err(refusal) => return write_refusal(refusal),
@@ -261,25 +264,7 @@ pub(crate) fn run_write<'a>(
             unwritten_candidates: Vec::new(),
         };
     }
-    if timebase.value_transformation != ValueTransformation::None {
-        return WriteVerdict::Refusal {
-            reason: "this timebase needs a value transformation, which al_write_data cannot apply"
-                .to_string(),
-            dd_path: timebase.dd_path.to_string(),
-        };
-    }
-
-    let transformation = match field.value_transformation.inverse() {
-        Some(transformation) => transformation,
-        None => {
-            return WriteVerdict::Refusal {
-                reason:
-                    "this path needs a value transformation that cannot be inverted for a write"
-                        .to_string(),
-                dd_path: field.dd_path.to_string(),
-            };
-        }
-    };
+    let transformation = field.value_transformation.clone();
     if let Err(reason) = validate_value_transformation(&transformation, &shape) {
         return WriteVerdict::Refusal {
             reason: reason.to_string(),
@@ -300,6 +285,27 @@ pub(crate) fn run_write<'a>(
         timebase: timebase.path,
         data,
         unwritten_candidates: unwritten_candidate_paths(&field, &timebase),
+    }
+}
+
+fn earliest_write_check_refusal<'a>(
+    field: &'a WriteArgument<'a>,
+    timebase: &'a WriteArgument<'a>,
+) -> Option<(&'a str, &'a str)> {
+    let ordered_refusal = |argument: &'a WriteArgument<'a>| match &argument.resolution {
+        WritePath::Refusal {
+            reason,
+            dd_path,
+            check_index: Some(check_index),
+        } => Some((*check_index, reason.as_str(), dd_path.as_str())),
+        _ => None,
+    };
+    match (ordered_refusal(field), ordered_refusal(timebase)) {
+        (Some(field), Some(timebase)) if field.0 <= timebase.0 => Some((field.1, field.2)),
+        (Some(_), Some(timebase)) => Some((timebase.1, timebase.2)),
+        (Some(field), None) => Some((field.1, field.2)),
+        (None, Some(timebase)) => Some((timebase.1, timebase.2)),
+        (None, None) => None,
     }
 }
 
@@ -377,7 +383,9 @@ fn write_argument_path<'a>(
                     .collect(),
             })
         }
-        WritePath::Refusal { reason, dd_path } => Err((reason, dd_path)),
+        WritePath::Refusal {
+            reason, dd_path, ..
+        } => Err((reason, dd_path)),
     }
 }
 
@@ -386,16 +394,11 @@ fn write_argument_path<'a>(
 /// an array remains a value and therefore is transformed with its neighbours,
 /// matching the scope of IMAS-Core's own shape gate (ADR 0018).
 ///
-/// This is the one place that reads [`TransformationDirection`], and it is
-/// what makes ADR 0016 decision 7 an enforced invariant rather than a naming
-/// convention. Conversion-map resolution only ever produces `ToHli`, because
-/// it serves reads; a write is correct only because [`run_write`] called
-/// [`ValueTransformation::inverse`] first. Refusing a `ToHli` transformation
-/// here means a future write path that forgets that call fails loudly instead
-/// of storing values with the sign the *caller* handed in — which, for the one
-/// transformation that exists today, is exactly the direction that looks
-/// plausible and is wrong. It cannot be reached from the shipped artifact and
-/// is proven by unit test (ADR 0011).
+/// This is the one place that reads [`TransformationDirection`]. The resolver
+/// inverts the map's read-direction transformation before it reaches this
+/// policy, and this remains its final assertion that only `ToStored` data can
+/// be copied. A future resolver that forgets that inversion therefore fails
+/// loudly instead of storing values with the sign the caller supplied.
 fn copy_value_transformation(
     transformation: &ValueTransformation,
     source: SourceView<'_>,
@@ -890,9 +893,9 @@ mod tests {
     /// out of a loaded artifact exactly as conversion-map resolution produces
     /// it, which is always `ToHli`, because resolution serves reads. Handing
     /// that straight to the write executor is precisely the mistake a future
-    /// write path can make: [`run_write`] cannot reach this state today, since
-    /// it calls [`ValueTransformation::inverse`] first, which is why this is a
-    /// direct unit test rather than a seam scenario.
+    /// write path can make. The resolver is responsible for inversion now, so
+    /// this remains a direct test of the copy-side assertion rather than a
+    /// `run_write` scenario.
     #[test]
     fn a_write_side_transformation_that_was_not_inverted_refuses() {
         const ARTIFACT: &str = r#"
@@ -1294,7 +1297,9 @@ mod tests {
     fn a_write_sign_flip_copies_and_transforms_the_source() {
         let field = write_argument(
             "time_slice/constraints/flux_loop/measured",
-            sign_flip_transformation(),
+            sign_flip_transformation()
+                .inverse()
+                .expect("a flip between differing conventions inverts"),
         );
         let timebase = plain_timebase();
         let caller_values = [1.25, -2.5, 3.75];
@@ -1330,7 +1335,7 @@ mod tests {
     }
 
     #[test]
-    fn an_uninvertible_write_transformation_refuses_before_any_copy() {
+    fn a_write_copy_refuses_a_transformation_that_did_not_point_to_stored_data() {
         use crate::conversion::conversion_map::TransformationDirection;
         let same_convention = match sign_flip_transformation() {
             ValueTransformation::SignFlip { from_cocos, .. } => from_cocos,
@@ -1360,9 +1365,47 @@ mod tests {
         assert!(matches!(
             verdict,
             WriteVerdict::Refusal { ref reason, .. }
-                if reason == "this path needs a value transformation that cannot be inverted for a write"
+                if reason == "this value transformation was not inverted for the write direction"
         ));
         assert_eq!(caller_values, [1.25]);
+    }
+
+    #[test]
+    fn write_refusals_across_argument_roles_follow_the_resolver_check_order() {
+        let field = WriteArgument {
+            resolution: WritePath::Refusal {
+                reason: "field transform is not invertible".to_string(),
+                dd_path: "field".to_string(),
+                check_index: Some(6),
+            },
+            forward: None,
+            dd_path: "field".to_string(),
+        };
+        let timebase = WriteArgument {
+            resolution: WritePath::Refusal {
+                reason: "timebase needs a transformation".to_string(),
+                dd_path: "timebase".to_string(),
+                check_index: Some(5),
+            },
+            forward: None,
+            dd_path: "timebase".to_string(),
+        };
+
+        let verdict = run_write(
+            &field,
+            &timebase,
+            BufferShape {
+                datatype: BufferDataType::Double,
+                rank: 0,
+            },
+            SourceView::Double(&[1.25]),
+        );
+
+        assert!(matches!(
+            verdict,
+            WriteVerdict::Refusal { ref reason, ref dd_path }
+                if reason == "timebase needs a transformation" && dd_path == "timebase"
+        ));
     }
 
     #[test]

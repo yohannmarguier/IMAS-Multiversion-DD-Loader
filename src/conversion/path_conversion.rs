@@ -96,7 +96,14 @@ pub(crate) enum WritePath {
     /// entry only after that one write succeeds.
     Candidates(Vec<WriteCandidate>),
     /// The supplied HLI-DD path cannot safely be written through this seam.
-    Refusal { reason: String, dd_path: String },
+    Refusal {
+        reason: String,
+        dd_path: String,
+        /// The entry in [`WRITE_CHECKS`] that rejected this argument. `None`
+        /// is a later path-construction failure, not one of the ordered
+        /// refusal checks.
+        check_index: Option<usize>,
+    },
 }
 
 pub(crate) struct WriteCandidate {
@@ -169,6 +176,68 @@ struct ClaimedArgument {
     hli_absolute: String,
     explanation: crate::conversion::conversion_map::RuleExplanation,
 }
+
+/// The ABI role of a path argument. A write resolves `field` and `timebase`
+/// through the same map, but their refusal policies deliberately differ.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArgumentRole {
+    Any,
+    Field,
+    Timebase,
+    Path,
+}
+
+impl ArgumentRole {
+    fn serves(self, actual: Self) -> bool {
+        self == Self::Any || self == actual
+    }
+}
+
+#[derive(Clone, Copy)]
+enum WriteCheck {
+    Unclaimed,
+    ImmutableStamp,
+    SharedRefusal,
+    NonPrimarySource,
+    NoStoredSource,
+    TimebaseTransformation,
+    InvertibleTransformation,
+}
+
+/// The complete write refusal order. The role tag is part of the policy:
+/// a value transformation is forbidden on a timebase, while a field may
+/// carry one only when it can be inverted towards stored data.
+const WRITE_CHECKS: &[(ArgumentRole, WriteCheck)] = &[
+    (ArgumentRole::Any, WriteCheck::Unclaimed),
+    (ArgumentRole::Any, WriteCheck::ImmutableStamp),
+    (ArgumentRole::Any, WriteCheck::SharedRefusal),
+    (ArgumentRole::Any, WriteCheck::NonPrimarySource),
+    (ArgumentRole::Any, WriteCheck::NoStoredSource),
+    (ArgumentRole::Timebase, WriteCheck::TimebaseTransformation),
+    (ArgumentRole::Field, WriteCheck::InvertibleTransformation),
+];
+
+#[derive(Clone, Copy)]
+enum DeleteCheck {
+    Unclaimed,
+    ImmutableStamp,
+    SharedRefusal,
+    NonPrimarySource,
+    NoStoredSource,
+    EscapingSubtree,
+}
+
+/// The complete delete refusal order. Deletes have only one `path` argument,
+/// but its role remains explicit so every ordered check list records the
+/// argument it serves.
+const DELETE_CHECKS: &[(ArgumentRole, DeleteCheck)] = &[
+    (ArgumentRole::Path, DeleteCheck::Unclaimed),
+    (ArgumentRole::Path, DeleteCheck::ImmutableStamp),
+    (ArgumentRole::Path, DeleteCheck::SharedRefusal),
+    (ArgumentRole::Path, DeleteCheck::NonPrimarySource),
+    (ArgumentRole::Path, DeleteCheck::NoStoredSource),
+    (ArgumentRole::Path, DeleteCheck::EscapingSubtree),
+];
 
 /// What one path-bearing ABI argument amounts to, before
 /// [`resolve_context_path`] and [`resolve_read_path`] differ on what to do
@@ -313,24 +382,20 @@ pub(crate) fn resolve_read_path(record: &ConversionRecord, raw: *const c_char) -
 }
 
 /// Resolves one write argument to the stored-DD spelling the write policy may
-/// safely change, or to the ordered plan whose primary source it may change;
-/// non-primary HLI spellings refuse before this point. The resolved value
-/// transformation still points from stored data to the HLI (because maps
-/// serve reads); `run_write` inverts it before it copies caller data.
-pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) -> WritePath {
-    let argument = match claimed_argument(record, raw) {
-        ReadArgument::Absent => return WritePath::Forward,
-        ReadArgument::Unclaimed => {
-            let dd_path = c_str_or_none(raw)
-                .filter(|path| !path.is_empty())
-                .map(|path| join_hli_path(&record.resolved_path, path))
-                .unwrap_or_else(|| record.resolved_path.clone());
-            return WritePath::Refusal {
-                reason: "this path is unclaimed by the conversion map".to_string(),
-                dd_path,
-            };
-        }
-        ReadArgument::Claimed(argument) => argument,
+/// safely change, or to the ordered plan whose primary source it may change.
+/// Its value transformation already points from HLI data towards stored data,
+/// so the write policy only has to validate and copy the caller's buffer.
+pub(crate) fn resolve_write_path(
+    record: &ConversionRecord,
+    raw: *const c_char,
+    role: ArgumentRole,
+) -> WritePath {
+    let argument = claimed_argument(record, raw);
+    if let Some(refusal) = write_refusal_before_resolution(role, record, raw, &argument) {
+        return refusal;
+    }
+    let ReadArgument::Claimed(argument) = argument else {
+        return WritePath::Forward;
     };
     let ClaimedArgument {
         is_absolute,
@@ -338,57 +403,23 @@ pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) 
         explanation,
     } = argument;
 
-    // A write through a mismatch must never rewrite the occurrence's DD
-    // version stamp: the rest of this call can only translate one field, not
-    // migrate the whole occurrence into the HLI DD version. The two sibling
-    // `version_put` fields describe the writing library rather than the DD
-    // and therefore continue through ordinary resolution below.
-    if hli_absolute == "ids_properties/version_put/data_dictionary" {
-        return WritePath::Refusal {
-            reason: "the DD-version stamp is immutable under a version mismatch".to_string(),
-            dd_path: hli_absolute,
-        };
-    }
-
-    // Keep the shared guard ahead of the write-specific precedence guard:
-    // a rule that cannot be served at all must not appear to be merely a
-    // collision risk. The `Outcome::Refusal` arm in the `match` below is
-    // reached by nothing once this guard stands; it remains because the match
-    // must be exhaustive over `Outcome`.
-    if let Outcome::Refusal(reason) = &explanation.outcome {
-        return WritePath::Refusal {
-            reason: refusal_reason_message(*reason),
-            dd_path: hli_absolute,
-        };
-    }
-    if explanation
-        .precedence
-        .is_some_and(|precedence| precedence != 1)
-    {
-        return WritePath::Refusal {
-            reason: "this path is a non-primary source and cannot write a shared stored slot"
-                .to_string(),
-            dd_path: hli_absolute,
-        };
-    }
-
-    match explanation.outcome {
-        Outcome::Refusal(reason) => WritePath::Refusal {
-            reason: refusal_reason_message(reason),
-            dd_path: hli_absolute,
-        },
-        Outcome::NoSource => WritePath::Refusal {
-            reason: "this path has no stored source".to_string(),
-            dd_path: hli_absolute,
-        },
-        Outcome::Path { candidates, .. } if !candidates.is_empty() => candidates
+    let Outcome::Path {
+        resolved_path,
+        value_transformation,
+        candidates,
+    } = explanation.outcome
+    else {
+        unreachable!("the write check list refuses these outcomes");
+    };
+    if !candidates.is_empty() {
+        candidates
             .into_iter()
             .map(|candidate| {
                 stored_c_path(record, &candidate.path, is_absolute).map(|path| WriteCandidate {
                     path,
                     stored_dd_path: candidate.path,
                     precedence: candidate.precedence,
-                    value_transformation: candidate.value_transformation,
+                    value_transformation: inverted_for_write(candidate.value_transformation),
                 })
             })
             .collect::<Result<Vec<_>, _>>()
@@ -396,21 +427,20 @@ pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) 
             .unwrap_or_else(|reason| WritePath::Refusal {
                 reason,
                 dd_path: hli_absolute,
-            }),
-        Outcome::Path {
-            resolved_path,
-            value_transformation,
-            ..
-        } => match stored_c_path(record, &resolved_path, is_absolute) {
+                check_index: None,
+            })
+    } else {
+        match stored_c_path(record, &resolved_path, is_absolute) {
             Ok(path) => WritePath::Translated {
                 path,
-                value_transformation,
+                value_transformation: inverted_for_write(value_transformation),
             },
             Err(reason) => WritePath::Refusal {
                 reason,
                 dd_path: hli_absolute,
+                check_index: None,
             },
-        },
+        }
     }
 }
 
@@ -418,7 +448,11 @@ pub(crate) fn resolve_write_path(record: &ConversionRecord, raw: *const c_char) 
 /// can safely remove. A delete does not carry data, so an otherwise-safe
 /// value transformation is irrelevant; it removes each resolved stored field
 /// directly.
-pub(crate) fn resolve_delete_path(record: &ConversionRecord, raw: *const c_char) -> DeletePath {
+pub(crate) fn resolve_delete_path(
+    record: &ConversionRecord,
+    raw: *const c_char,
+    role: ArgumentRole,
+) -> DeletePath {
     let Some(raw_path) = c_str_or_none(raw) else {
         return DeletePath::Forward;
     };
@@ -426,15 +460,12 @@ pub(crate) fn resolve_delete_path(record: &ConversionRecord, raw: *const c_char)
         return DeletePath::Forward;
     }
 
-    let argument = match claimed_argument(record, raw) {
-        ReadArgument::Absent => unreachable!("a nonempty path is claimed or unclaimed"),
-        ReadArgument::Unclaimed => {
-            return DeletePath::Refusal {
-                reason: "this path is unclaimed by the conversion map".to_string(),
-                dd_path: join_hli_path(&record.resolved_path, raw_path),
-            };
-        }
-        ReadArgument::Claimed(argument) => argument,
+    let argument = claimed_argument(record, raw);
+    if let Some(refusal) = delete_refusal_before_resolution(role, record, raw_path, &argument) {
+        return refusal;
+    }
+    let ReadArgument::Claimed(argument) = argument else {
+        unreachable!("a nonempty path is claimed or refused by the delete check list");
     };
     let ClaimedArgument {
         is_absolute,
@@ -442,71 +473,16 @@ pub(crate) fn resolve_delete_path(record: &ConversionRecord, raw: *const c_char)
         explanation,
     } = argument;
 
-    if matches!(
-        hli_absolute.as_str(),
-        "ids_properties"
-            | "ids_properties/version_put"
-            | "ids_properties/version_put/data_dictionary"
-    ) {
-        return DeletePath::Refusal {
-            reason: "this delete would remove the DD-version stamp while stored data remains"
-                .to_string(),
-            dd_path: hli_absolute,
-        };
-    }
-
-    // `Outcome::Refusal` is the shared pre-resolution guard: it is computed
-    // by ConversionMap before any consumer narrows a path. It goes first for
-    // the same reason it does in `resolve_write_path` — a rule that cannot be
-    // served at all must not appear to be merely a collision risk — so one
-    // rule earns one reason at both seams instead of two that disagree. A
-    // non-primary source is the delete-specific guard that follows it. The
-    // `Outcome::Refusal` arm in the `match` below is reached by nothing once
-    // this guard stands; it remains because the match must be exhaustive over
-    // `Outcome`.
-    if let Outcome::Refusal(reason) = &explanation.outcome {
-        return DeletePath::Refusal {
-            reason: refusal_reason_message(*reason),
-            dd_path: hli_absolute,
-        };
-    }
-    if explanation
-        .precedence
-        .is_some_and(|precedence| precedence != 1)
-    {
-        return DeletePath::Refusal {
-            reason: "this path is a non-primary source and cannot delete a shared stored slot"
-                .to_string(),
-            dd_path: hli_absolute,
-        };
-    }
-
-    match explanation.outcome {
-        Outcome::Refusal(reason) => DeletePath::Refusal {
-            reason: refusal_reason_message(reason),
-            dd_path: hli_absolute,
-        },
-        Outcome::NoSource => DeletePath::Refusal {
-            reason: "this path has no stored source".to_string(),
-            dd_path: hli_absolute,
-        },
-        Outcome::Path {
-            ref resolved_path, ..
-        } if !is_equilibrium_leaf(record, &hli_absolute)
-            && !record.map.subtree_delete_is_trivial(
-                &hli_absolute,
-                resolved_path,
-                record.direction_to_stored,
-            ) =>
-        {
-            DeletePath::Refusal {
-                reason: "this subtree delete would leave data at a stored path outside the \
-                         requested subtree"
-                    .to_string(),
-                dd_path: hli_absolute,
-            }
-        }
-        Outcome::Path { candidates, .. } if !candidates.is_empty() => candidates
+    let Outcome::Path {
+        resolved_path,
+        candidates,
+        ..
+    } = explanation.outcome
+    else {
+        unreachable!("the delete check list refuses these outcomes");
+    };
+    if !candidates.is_empty() {
+        candidates
             .into_iter()
             .map(|candidate| stored_c_path(record, &candidate.path, is_absolute))
             .collect::<Result<Vec<_>, _>>()
@@ -514,17 +490,215 @@ pub(crate) fn resolve_delete_path(record: &ConversionRecord, raw: *const c_char)
             .unwrap_or_else(|reason| DeletePath::Refusal {
                 reason,
                 dd_path: hli_absolute,
-            }),
-        Outcome::Path { resolved_path, .. } => {
-            match stored_c_path(record, &resolved_path, is_absolute) {
-                Ok(path) => DeletePath::Translated(path),
-                Err(reason) => DeletePath::Refusal {
-                    reason,
-                    dd_path: hli_absolute,
-                },
-            }
+            })
+    } else {
+        match stored_c_path(record, &resolved_path, is_absolute) {
+            Ok(path) => DeletePath::Translated(path),
+            Err(reason) => DeletePath::Refusal {
+                reason,
+                dd_path: hli_absolute,
+            },
         }
     }
+}
+
+fn write_refusal_before_resolution(
+    role: ArgumentRole,
+    record: &ConversionRecord,
+    raw: *const c_char,
+    argument: &ReadArgument,
+) -> Option<WritePath> {
+    for (check_index, (check_role, check)) in WRITE_CHECKS.iter().enumerate() {
+        if !check_role.serves(role) {
+            continue;
+        }
+        let (reason, dd_path) = match check {
+            WriteCheck::Unclaimed => match argument {
+                ReadArgument::Unclaimed => (
+                    "this path is unclaimed by the conversion map".to_string(),
+                    c_str_or_none(raw)
+                        .filter(|path| !path.is_empty())
+                        .map(|path| join_hli_path(&record.resolved_path, path))
+                        .unwrap_or_else(|| record.resolved_path.clone()),
+                ),
+                _ => continue,
+            },
+            _ => {
+                let ReadArgument::Claimed(argument) = argument else {
+                    continue;
+                };
+                let reason = match check {
+                    WriteCheck::ImmutableStamp
+                        if argument.hli_absolute == "ids_properties/version_put/data_dictionary" =>
+                    {
+                        Some("the DD-version stamp is immutable under a version mismatch".to_string())
+                    }
+                    WriteCheck::SharedRefusal => match &argument.explanation.outcome {
+                        Outcome::Refusal(reason) => Some(refusal_reason_message(*reason)),
+                        _ => None,
+                    },
+                    WriteCheck::NonPrimarySource
+                        if argument
+                            .explanation
+                            .precedence
+                            .is_some_and(|precedence| precedence != 1) =>
+                    {
+                        Some(
+                            "this path is a non-primary source and cannot write a shared stored slot"
+                                .to_string(),
+                        )
+                    }
+                    WriteCheck::NoStoredSource
+                        if matches!(argument.explanation.outcome, Outcome::NoSource) =>
+                    {
+                        Some("this path has no stored source".to_string())
+                    }
+                    WriteCheck::TimebaseTransformation
+                        if primary_value_transformation(&argument.explanation.outcome)
+                            .is_some_and(|transformation| {
+                                transformation != &ValueTransformation::None
+                            }) =>
+                    {
+                        Some(
+                            "this timebase needs a value transformation, which al_write_data cannot apply"
+                                .to_string(),
+                        )
+                    }
+                    WriteCheck::InvertibleTransformation
+                        if primary_value_transformation(&argument.explanation.outcome)
+                            .is_some_and(|transformation| transformation.inverse().is_none()) =>
+                    {
+                        Some(
+                            "this path needs a value transformation that cannot be inverted for a write"
+                                .to_string(),
+                        )
+                    }
+                    _ => None,
+                };
+                let Some(reason) = reason else {
+                    continue;
+                };
+                (reason, argument.hli_absolute.clone())
+            }
+        };
+        return Some(WritePath::Refusal {
+            reason,
+            dd_path,
+            check_index: Some(check_index),
+        });
+    }
+    None
+}
+
+fn delete_refusal_before_resolution(
+    role: ArgumentRole,
+    record: &ConversionRecord,
+    raw_path: &str,
+    argument: &ReadArgument,
+) -> Option<DeletePath> {
+    for (check_role, check) in DELETE_CHECKS {
+        if !check_role.serves(role) {
+            continue;
+        }
+        let (reason, dd_path) = match check {
+            DeleteCheck::Unclaimed => match argument {
+                ReadArgument::Unclaimed => (
+                    "this path is unclaimed by the conversion map".to_string(),
+                    join_hli_path(&record.resolved_path, raw_path),
+                ),
+                _ => continue,
+            },
+            _ => {
+                let ReadArgument::Claimed(argument) = argument else {
+                    continue;
+                };
+                let reason = match check {
+                    DeleteCheck::ImmutableStamp
+                        if matches!(
+                            argument.hli_absolute.as_str(),
+                            "ids_properties"
+                                | "ids_properties/version_put"
+                                | "ids_properties/version_put/data_dictionary"
+                        ) =>
+                    {
+                        Some(
+                            "this delete would remove the DD-version stamp while stored data remains"
+                                .to_string(),
+                        )
+                    }
+                    DeleteCheck::SharedRefusal => match &argument.explanation.outcome {
+                        Outcome::Refusal(reason) => Some(refusal_reason_message(*reason)),
+                        _ => None,
+                    },
+                    DeleteCheck::NonPrimarySource
+                        if argument
+                            .explanation
+                            .precedence
+                            .is_some_and(|precedence| precedence != 1) =>
+                    {
+                        Some(
+                            "this path is a non-primary source and cannot delete a shared stored slot"
+                                .to_string(),
+                        )
+                    }
+                    DeleteCheck::NoStoredSource
+                        if matches!(argument.explanation.outcome, Outcome::NoSource) =>
+                    {
+                        Some("this path has no stored source".to_string())
+                    }
+                    DeleteCheck::EscapingSubtree
+                        if delete_escapes_stored_subtree(record, argument) =>
+                    {
+                        Some(
+                            "this subtree delete would leave data at a stored path outside the \
+                             requested subtree"
+                                .to_string(),
+                        )
+                    }
+                    _ => None,
+                };
+                let Some(reason) = reason else {
+                    continue;
+                };
+                (reason, argument.hli_absolute.clone())
+            }
+        };
+        return Some(DeletePath::Refusal { reason, dd_path });
+    }
+    None
+}
+
+fn primary_value_transformation(outcome: &Outcome) -> Option<&ValueTransformation> {
+    match outcome {
+        Outcome::Path {
+            value_transformation,
+            candidates,
+            ..
+        } if candidates.is_empty() => Some(value_transformation),
+        Outcome::Path { candidates, .. } => candidates
+            .iter()
+            .find(|candidate| candidate.precedence == 1)
+            .map(|candidate| &candidate.value_transformation),
+        Outcome::NoSource | Outcome::Refusal(_) => None,
+    }
+}
+
+fn inverted_for_write(transformation: ValueTransformation) -> ValueTransformation {
+    transformation
+        .inverse()
+        .expect("the write check list rejects non-invertible transformations")
+}
+
+fn delete_escapes_stored_subtree(record: &ConversionRecord, argument: &ClaimedArgument) -> bool {
+    let Outcome::Path { resolved_path, .. } = &argument.explanation.outcome else {
+        return false;
+    };
+    !is_equilibrium_leaf(record, &argument.hli_absolute)
+        && !record.map.subtree_delete_is_trivial(
+            &argument.hli_absolute,
+            resolved_path,
+            record.direction_to_stored,
+        )
 }
 
 /// `al_delete_data` gives the shim a path string but no datatype or other
@@ -842,8 +1016,10 @@ mod tests {
 
         let assert_refusal = |path: &str, expected_reason: &str| {
             let path = CString::new(path).expect("fixture paths contain no NUL");
-            match resolve_write_path(&record, path.as_ptr()) {
-                WritePath::Refusal { reason, dd_path } => {
+            match resolve_write_path(&record, path.as_ptr(), ArgumentRole::Field) {
+                WritePath::Refusal {
+                    reason, dd_path, ..
+                } => {
                     assert_eq!(reason, expected_reason);
                     assert_eq!(dd_path, path.to_str().expect("fixture paths are ASCII"));
                 }
@@ -911,7 +1087,7 @@ mod tests {
 
         let assert_refusal = |path: &str, expected_reason: &str| {
             let path = CString::new(path).expect("fixture paths contain no NUL");
-            match resolve_delete_path(&record, path.as_ptr()) {
+            match resolve_delete_path(&record, path.as_ptr(), ArgumentRole::Path) {
                 DeletePath::Refusal { reason, dd_path } => {
                     assert_eq!(reason, expected_reason);
                     assert_eq!(dd_path, path.to_str().expect("fixture paths are ASCII"));
@@ -967,7 +1143,7 @@ mod tests {
         let record = record(ARTIFACT, "");
 
         let trivial = CString::new("trivial_root").expect("no interior NUL");
-        match resolve_delete_path(&record, trivial.as_ptr()) {
+        match resolve_delete_path(&record, trivial.as_ptr(), ArgumentRole::Path) {
             DeletePath::Translated(path) => {
                 assert_eq!(path.to_str().expect("ASCII"), "trivial_root");
             }
@@ -980,7 +1156,7 @@ mod tests {
         }
 
         let escaping = CString::new("escaping_root").expect("no interior NUL");
-        match resolve_delete_path(&record, escaping.as_ptr()) {
+        match resolve_delete_path(&record, escaping.as_ptr(), ArgumentRole::Path) {
             DeletePath::Refusal { reason, dd_path } => {
                 assert_eq!(
                     reason,

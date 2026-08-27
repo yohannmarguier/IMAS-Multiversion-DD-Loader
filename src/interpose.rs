@@ -1757,14 +1757,22 @@ fn write_data_impl(
     };
 
     let field_argument = seam_policy::WriteArgument {
-        resolution: path_conversion::resolve_write_path(&record, field),
+        resolution: path_conversion::resolve_write_path(
+            &record,
+            field,
+            path_conversion::ArgumentRole::Field,
+        ),
         // SAFETY: this function's contract requires `field` to be a valid,
         // NUL-terminated C string, or null.
         forward: unsafe { c_str_ref(field) },
         dd_path: read_argument_path(&record, field),
     };
     let timebase_argument = seam_policy::WriteArgument {
-        resolution: path_conversion::resolve_write_path(&record, timebase),
+        resolution: path_conversion::resolve_write_path(
+            &record,
+            timebase,
+            path_conversion::ArgumentRole::Timebase,
+        ),
         // SAFETY: this function's contract requires `timebase` to be a valid,
         // NUL-terminated C string, or null.
         forward: unsafe { c_str_ref(timebase) },
@@ -1871,7 +1879,11 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
     };
 
     let argument = seam_policy::DeleteArgument {
-        resolution: path_conversion::resolve_delete_path(&record, path),
+        resolution: path_conversion::resolve_delete_path(
+            &record,
+            path,
+            path_conversion::ArgumentRole::Path,
+        ),
         // SAFETY: this function's contract requires `path` to be a valid,
         // NUL-terminated C string, or null.
         forward: unsafe { c_str_ref(path) },
@@ -2115,8 +2127,14 @@ mod tests {
             .lookup(CTX_ID)
             .expect("the root record was just registered");
         let path = CString::new("impossible").expect("fixture path contains no NUL");
-        let (reason, dd_path) = match path_conversion::resolve_write_path(&record, path.as_ptr()) {
-            WritePath::Refusal { reason, dd_path } => (reason, dd_path),
+        let (reason, dd_path) = match path_conversion::resolve_write_path(
+            &record,
+            path.as_ptr(),
+            path_conversion::ArgumentRole::Field,
+        ) {
+            WritePath::Refusal {
+                reason, dd_path, ..
+            } => (reason, dd_path),
             WritePath::Forward | WritePath::Translated { .. } | WritePath::Candidates(_) => {
                 panic!("a declared-unmappable write must refuse")
             }
@@ -2199,7 +2217,11 @@ mod tests {
             .expect("the root record was just registered");
 
         let field = CString::new("folded").expect("fixture path contains no NUL");
-        let resolution = path_conversion::resolve_write_path(&record, field.as_ptr());
+        let resolution = path_conversion::resolve_write_path(
+            &record,
+            field.as_ptr(),
+            path_conversion::ArgumentRole::Field,
+        );
         assert!(
             matches!(resolution, WritePath::Candidates(_)),
             "the fixture must resolve to a candidate plan, or this proves nothing"
