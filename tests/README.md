@@ -1,8 +1,15 @@
 # tests/ — what is covered, and where
 
-**226 ctest tests** (30 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
-stub-only profile registers 192). None of the C sources here is registered by
-itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
+Every test the stub-only profile skips carries the `real-core` label, and every
+labelled test is skipped by it — the label is applied to the difference by
+construction, so `ctest -L real-core` **is** the gated set. For current totals:
+`ctest -N` / `ctest -N -L real-core`.
+
+**real-Core-gated** means registered only when `IMAS_MVDD_REAL_CORE_TESTS=ON`.
+_Avoid_: real-core suite, real-core profile, real-Core-labelled.
+
+None of the C sources here is registered by itself: every test is declared in
+`cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
 (ADR 0005) and the context registry (ADR 0003) are process-wide state that
 settles once. A scenario name maps to `<executable> <scenario-argument>`, and
@@ -12,7 +19,7 @@ than one seam, its prefixes split accordingly rather than naming the file
 
 ```console
 $ ctest --test-dir build --output-on-failure    # everything
-$ ctest --test-dir build -L real-core           # the 30 real-IMAS-Core ones
+$ ctest --test-dir build -L real-core           # every real-Core-gated test
 $ ctest --test-dir build -R read-path           # one group
 $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 ```
@@ -195,6 +202,12 @@ retention-on-failure for plugin end action, and the full read policy for
 `al_plugin_read_data` (translation, refusal, no-source, merged fallthrough,
 sign flip, loss retention through a child context).
 
+### `reentry-guard-*` — 6 · `shim/reentry_guard_test.c`
+
+The process-wide reentry guard forwards every seam untouched beneath an
+in-flight Core call. This is provable only against the recording stub, which
+can re-enter the shim on command; genuine IMAS-Core offers no such control.
+
 ### `scoped-passthrough-*` — 7 · `shim/scoped_passthrough_test.c`
 
 The outside edge of the seam list (issue #69). With a mismatched occurrence open
@@ -366,8 +379,8 @@ is where the shared harness came from, and one of those copies printed a literal
 Two standing cautions:
 
 1. **A green local run proves less than it looks.** The `cmake -P` scripts
-   behave differently under a local CMake 4.x than under CI's 3.31 pin, and the
-   stub-only profile silently skips 21 tests.
+   behave differently under a local CMake 4.x than under CI's 3.31 pin; compare
+   the two profiles with `ctest -N` and `ctest -N -L real-core`.
 2. **Never pass a small ordinal as a data type.** The stub-only profile has no
    `al_const.h` to include, so `support/shim_test_support.h` defines
    `IMAS_CHAR_DATA` / `IMAS_INTEGER_DATA` / `IMAS_DOUBLE_DATA` /
