@@ -40,9 +40,13 @@
  *
  * Of #133's five claims, four are proven below and one is not. Claim 4 has
  * two halves — the precedence-2 candidate is left alone by a write and removed
- * by a delete — and only the write half is observable on this backend. See
- * `scenario_reverse_delete_fan_out_does_not_reach_disk` for the two
- * independent reasons and for the marker that will fail when either is fixed.
+ * by a delete — and only the write half is observable on this backend. The
+ * delete half had two independent obstacles. Issue #138 removed the first by
+ * dropping the presence probe, so a fan-out now reaches IMAS-Core at all; the
+ * second stands, because this backend's `deleteData` ignores its path and
+ * removes the whole occurrence (issue #139), leaving no per-candidate effect
+ * to observe. `scenario_reverse_delete_fan_out_reaches_disk` asserts what is
+ * observable today: the fan-out is no longer a silent successful no-op.
  *
  * Direction labels follow equilibrium_read_test.c's convention, which names
  * the *fixture* under test rather than `conversion_map::Direction`: `forward`

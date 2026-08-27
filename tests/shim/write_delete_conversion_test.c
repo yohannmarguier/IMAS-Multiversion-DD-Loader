@@ -595,32 +595,24 @@ static void scenario_delete_refuses_boundary_separatrix_reverse_direction(void) 
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
 }
 
+/* Also issue #138's regression guard, which is why the not-found knob is set
+ * for a delete that performs no reads at all.
+ *
+ * `RECORDING_STUB_READ_NOT_FOUND_FIELD` makes a *read* of the precedence-2
+ * candidate report not-found — exactly the fixture the removed presence probe
+ * misread through a write-mode context. It changes nothing today, and that
+ * invariance is the claim. Reintroducing a probe makes this scenario fail
+ * twice over, and both failures were confirmed by mutating `delete_data` to
+ * probe each candidate again: the read count moves off `reads_before`, and
+ * with that assertion suppressed the delete count drops to two, because the
+ * probe skips the candidate the knob hid. The two signals are independent —
+ * the first catches any probe, the second catches a probe that skips — so
+ * they belong in one scenario rather than in a near-identical second one. */
 static void scenario_delete_fans_out_over_candidates_in_declared_order(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int reads_before = int_from_stub("recording_stub_read_call_count");
     int deletes_before = int_from_stub("recording_stub_delete_call_count");
     int events_before = int_from_stub("recording_stub_data_event_count");
-
-    CHECK(al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi").code == 0);
-    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
-    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 3);
-    CHECK(strcmp(delete_path_at(deletes_before), "time_slice/profiles_2d/b_field_phi") == 0);
-    CHECK(strcmp(delete_path_at(deletes_before + 1), "time_slice/profiles_2d/b_field_tor") ==
-          0);
-    CHECK(strcmp(delete_path_at(deletes_before + 2), "time_slice/profiles_2d/b_tor") == 0);
-    CHECK(int_from_stub("recording_stub_data_event_count") == events_before + 3);
-    for (int index = 0; index < 3; ++index) {
-        CHECK(data_event_kind_at(events_before + index) == IMAS_MVDD_STUB_DATA_EVENT_DELETE);
-        CHECK(strcmp(data_event_path_at(events_before + index),
-                     delete_path_at(deletes_before + index)) == 0);
-    }
-    CHECK(loss_count(operation_ctx) == 0);
-}
-
-static void scenario_delete_fans_out_without_a_presence_probe(void) {
-    int operation_ctx = open_mismatched_equilibrium();
-    int reads_before = int_from_stub("recording_stub_read_call_count");
-    int deletes_before = int_from_stub("recording_stub_delete_call_count");
 
     CHECK(setenv("RECORDING_STUB_READ_NOT_FOUND_FIELD", "time_slice/profiles_2d/b_field_tor", 1) ==
           0);
@@ -633,6 +625,12 @@ static void scenario_delete_fans_out_without_a_presence_probe(void) {
     CHECK(strcmp(delete_path_at(deletes_before + 1), "time_slice/profiles_2d/b_field_tor") ==
           0);
     CHECK(strcmp(delete_path_at(deletes_before + 2), "time_slice/profiles_2d/b_tor") == 0);
+    CHECK(int_from_stub("recording_stub_data_event_count") == events_before + 3);
+    for (int index = 0; index < 3; ++index) {
+        CHECK(data_event_kind_at(events_before + index) == IMAS_MVDD_STUB_DATA_EVENT_DELETE);
+        CHECK(strcmp(data_event_path_at(events_before + index),
+                     delete_path_at(deletes_before + index)) == 0);
+    }
     CHECK(loss_count(operation_ctx) == 0);
 }
 
@@ -831,8 +829,6 @@ int main(int argc, char **argv) {
         {"delete-admits-trivial-structure-deletes", scenario_delete_admits_trivial_structure_deletes},
         {"delete-refuses-boundary-separatrix-reverse-direction", scenario_delete_refuses_boundary_separatrix_reverse_direction},
         {"delete-fans-out-over-candidates-in-declared-order", scenario_delete_fans_out_over_candidates_in_declared_order},
-        {"delete-fans-out-without-a-presence-probe",
-         scenario_delete_fans_out_without_a_presence_probe},
         {"delete-reports-a-failure-and-continues", scenario_delete_reports_a_failure_and_continues},
         {"delete-refuses-non-primary-source-before-core-call", scenario_delete_refuses_non_primary_source_before_core_call},
         {"write-refuses-non-primary-source-before-core-call", scenario_write_refuses_non_primary_source_before_core_call},

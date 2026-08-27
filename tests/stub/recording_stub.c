@@ -545,8 +545,6 @@ static al_status_t compute_read_response(const char *field, void **data, int dim
     if (data != NULL) {
         if (double_values_csv != NULL) {
             *data = (void *)g_read_double_values;
-        } else if (getenv("RECORDING_STUB_READ_ALLOCATE") != NULL) {
-            *data = record_str(g_read_buffer);
         } else {
             *data = getenv("RECORDING_STUB_READ_DOUBLE") != NULL ? (void *)&g_read_double_buffer
                                                                   : (void *)g_read_buffer;
@@ -677,9 +675,10 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
         int reentrant_size[RECORDING_STUB_MAXDIM] = {0};
         g_reentrant_read(ctxID, g_reentrant_field, "", &reentrant_data, datatype, dim,
                          reentrant_size);
-        if (getenv("RECORDING_STUB_READ_ALLOCATE") != NULL) {
-            free(reentrant_data);
-        }
+        /* Deliberately not freed: every read response this stub can return
+         * now points at a static buffer it owns. The one caller that received
+         * a per-read allocation was the delete presence probe, removed with
+         * issue #138 along with the knob that produced it. */
         g_reentrant_active = 0;
     }
 
