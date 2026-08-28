@@ -246,6 +246,7 @@ suites' failure messages for months; a new copy starts that over.
 
 
 Reference documents:
+- `docs/ARCHITECTURE.md` — UML class, sequence and state diagrams (Mermaid) of the layering, type model and the read/write/delete pipelines. Generalized on purpose: it draws the shapes, not the 37 individual seams. Start here for orientation; "Where each seam stands" above stays the authority on per-seam policy.
 - `docs/IMAS-CORE_FUNCTIONALITY_INVENTORY.md` — the primary technical reference (938 lines). A per-capability, code-verified inventory of the IMAS-Core surface this project must mirror. Read this before designing anything.
 - `docs/PROTOTYPE_CRITIC.md` — critique of the earlier `dd-maps/` + `middleware/` prototype: which of its choices were load-bearing and which should not be inherited without a decision.
 - `CODE_OF_CONDUCT.md` — ITER's Contributor Covenant; contact `imas-administration@iter.org`.
