@@ -303,6 +303,27 @@ pub enum Fidelity {
     Unmappable,
 }
 
+/// Which way a value transformation carries data across a DD-version boundary.
+///
+/// Conversion-map resolution serves reads, so its transformations always
+/// describe the stored-DD value IMAS-Core returned becoming the HLI-DD value
+/// the caller receives. A write must explicitly request the inverse rather
+/// than assuming a transformation happens to be an involution (ADR 0016).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransformationDirection {
+    ToHli,
+    ToStored,
+}
+
+impl TransformationDirection {
+    fn inverse(self) -> Self {
+        match self {
+            Self::ToHli => Self::ToStored,
+            Self::ToStored => Self::ToHli,
+        }
+    }
+}
+
 /// A required change to data values during conversion (CONTEXT.md's "value
 /// transformation"), looked up by the resolved right-side path regardless of
 /// which rule or default supplied that path.
@@ -312,7 +333,31 @@ pub enum ValueTransformation {
     SignFlip {
         from_cocos: CocosConvention,
         to_cocos: CocosConvention,
+        direction: TransformationDirection,
     },
+}
+
+impl ValueTransformation {
+    /// The same conversion in the opposite data-flow direction, if the
+    /// declared transformation can be safely reversed for a write.
+    pub(crate) fn inverse(&self) -> Option<Self> {
+        match self {
+            Self::None => Some(Self::None),
+            Self::SignFlip {
+                from_cocos,
+                to_cocos,
+                direction,
+            } if from_cocos != to_cocos => Some(Self::SignFlip {
+                from_cocos: to_cocos.clone(),
+                to_cocos: from_cocos.clone(),
+                direction: direction.inverse(),
+            }),
+            // A sign flip between identical conventions is not a meaningful
+            // conversion. Maps normalize it to `None`, but refusing this
+            // malformed constructed value keeps a future write from guessing.
+            Self::SignFlip { .. } => None,
+        }
+    }
 }
 
 /// One `<rule>` element's `rel` attribute.
@@ -944,6 +989,107 @@ impl ConversionMap {
         None
     }
 
+    /// Whether deleting `path` as a whole subtree is trivial: every rule
+    /// whose `direction`-side selector nests at or under `path` must resolve
+    /// its stored-side target(s) at or under `resolved_subtree` — `path`'s
+    /// own resolved stored spelling. A rule that fails this is an **escaping
+    /// rule** (CONTEXT.md, ADR 0017 decision 4): its data would survive a
+    /// delete of `resolved_subtree` at a stored location the caller never
+    /// asked to touch.
+    ///
+    /// Deliberately a property of the rule set alone, not of any one
+    /// resolution: a `merged`/`split` rule with one declared candidate
+    /// outside `resolved_subtree` fails this check even where a fan-out
+    /// delete would in fact have found every candidate inside it. An empty
+    /// rule set nested under `path` is vacuously trivial.
+    pub(crate) fn subtree_delete_is_trivial(
+        &self,
+        path: &str,
+        resolved_subtree: &str,
+        direction: Direction,
+    ) -> bool {
+        let sources = match direction {
+            Direction::Forward => &self.left_sources,
+            Direction::Reverse => &self.right_sources,
+        };
+        sources
+            .iter()
+            .filter(|entry| Self::nests_at_or_under(entry.selector.pattern(), path))
+            .all(|entry| {
+                Self::rule_targets(&self.rules[entry.rule_index], direction)
+                    .into_iter()
+                    .all(|target| Self::nests_at_or_under(target, resolved_subtree))
+            })
+    }
+
+    /// The stored-side location(s) `rule` declares for `direction`'s source
+    /// role. `Renamed`/`Moved`/`Retyped` each declare exactly one;
+    /// `Merged`/`Split` declare one or several depending on which side is
+    /// ambiguous in this direction (the `froms` side); `LeftOnly`/
+    /// `RightOnly` declare none at all, because there is no stored
+    /// counterpart to escape to — which is why those two kinds can never be
+    /// an escaping rule.
+    fn rule_targets(rule: &Rule, direction: Direction) -> Vec<&str> {
+        match (rule.rel, direction) {
+            (Rel::Renamed | Rel::Moved | Rel::Retyped, Direction::Forward) => vec![
+                rule.right
+                    .as_ref()
+                    .expect("renamed, moved or retyped rule always carries both paths")
+                    .pattern(),
+            ],
+            (Rel::Renamed | Rel::Moved | Rel::Retyped, Direction::Reverse) => vec![
+                rule.left
+                    .as_ref()
+                    .expect("renamed, moved or retyped rule always carries both paths")
+                    .pattern(),
+            ],
+            (Rel::LeftOnly, _) | (Rel::RightOnly, _) => Vec::new(),
+            (Rel::Merged, Direction::Forward) => {
+                vec![
+                    rule.right
+                        .as_ref()
+                        .expect("merged rule has a right path")
+                        .pattern(),
+                ]
+            }
+            (Rel::Merged, Direction::Reverse) => rule
+                .froms
+                .iter()
+                .map(|from| from.selector.pattern())
+                .collect(),
+            (Rel::Split, Direction::Forward) => rule
+                .froms
+                .iter()
+                .map(|from| from.selector.pattern())
+                .collect(),
+            (Rel::Split, Direction::Reverse) => {
+                vec![
+                    rule.left
+                        .as_ref()
+                        .expect("split rule has a left path")
+                        .pattern(),
+                ]
+            }
+        }
+    }
+
+    /// True when `pattern` names a location at or under `path`: equal, or
+    /// nested beneath it. Segment-wise so a `Glob` `*` is treated as matching
+    /// whatever concrete segment `path` has there — the escaping-rule
+    /// predicate cares only about a selector's own declared location, not
+    /// about any run-time capture, so this deliberately does not call
+    /// `Selector::try_match`.
+    fn nests_at_or_under(pattern: &str, path: &str) -> bool {
+        let mut pattern_segments = pattern.split('/');
+        for path_segment in path.split('/') {
+            match pattern_segments.next() {
+                Some(segment) if segment == "*" || segment == path_segment => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+
     /// The refusal a matched rule owes before any path is resolved, or
     /// `None` when resolution may proceed.
     ///
@@ -1276,8 +1422,10 @@ impl ConversionMap {
         match self.sign_flips.get(right_side_path) {
             Some((from_cocos, to_cocos)) => {
                 let (from_cocos, to_cocos) = match direction {
-                    Direction::Forward => (from_cocos, to_cocos),
-                    Direction::Reverse => (to_cocos, from_cocos),
+                    // A resolved transformation is applied after IMAS-Core
+                    // reads stored data, so it always points stored -> HLI.
+                    Direction::Forward => (to_cocos, from_cocos),
+                    Direction::Reverse => (from_cocos, to_cocos),
                 };
                 if from_cocos == to_cocos {
                     ValueTransformation::None
@@ -1285,6 +1433,7 @@ impl ConversionMap {
                     ValueTransformation::SignFlip {
                         from_cocos: from_cocos.clone(),
                         to_cocos: to_cocos.clone(),
+                        direction: TransformationDirection::ToHli,
                     }
                 }
             }

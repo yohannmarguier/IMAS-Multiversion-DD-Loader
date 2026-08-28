@@ -689,8 +689,9 @@ fn split_rule_resolves_forward_to_all_candidate_destinations_in_precedence_order
         assert_eq!(
             candidate.value_transformation,
             ValueTransformation::SignFlip {
-                from_cocos: CocosConvention("11".to_string()),
-                to_cocos: CocosConvention("17".to_string()),
+                from_cocos: CocosConvention("17".to_string()),
+                to_cocos: CocosConvention("11".to_string()),
+                direction: TransformationDirection::ToHli,
             }
         );
     }
@@ -717,8 +718,9 @@ fn split_rule_resolves_reverse_to_its_single_source_with_matched_precedence() {
     assert_eq!(
         *value_transformation(&explanation),
         ValueTransformation::SignFlip {
-            from_cocos: CocosConvention("17".to_string()),
-            to_cocos: CocosConvention("11".to_string()),
+            from_cocos: CocosConvention("11".to_string()),
+            to_cocos: CocosConvention("17".to_string()),
+            direction: TransformationDirection::ToHli,
         }
     );
     assert!(candidates(&explanation).is_empty());
@@ -763,8 +765,9 @@ fn default_identity_match_surfaces_its_cocos_sign_flip() {
     assert_eq!(
         *value_transformation(&forward),
         ValueTransformation::SignFlip {
-            from_cocos: CocosConvention("11".to_string()),
-            to_cocos: CocosConvention("17".to_string()),
+            from_cocos: CocosConvention("17".to_string()),
+            to_cocos: CocosConvention("11".to_string()),
+            direction: TransformationDirection::ToHli,
         }
     );
 
@@ -775,9 +778,28 @@ fn default_identity_match_surfaces_its_cocos_sign_flip() {
     assert_eq!(
         *value_transformation(&reverse),
         ValueTransformation::SignFlip {
-            from_cocos: CocosConvention("17".to_string()),
-            to_cocos: CocosConvention("11".to_string()),
+            from_cocos: CocosConvention("11".to_string()),
+            to_cocos: CocosConvention("17".to_string()),
+            direction: TransformationDirection::ToHli,
         }
+    );
+}
+
+#[test]
+fn a_read_transformation_inverts_to_the_stored_write_direction() {
+    let read = ValueTransformation::SignFlip {
+        from_cocos: CocosConvention("17".to_string()),
+        to_cocos: CocosConvention("11".to_string()),
+        direction: TransformationDirection::ToHli,
+    };
+
+    assert_eq!(
+        read.inverse(),
+        Some(ValueTransformation::SignFlip {
+            from_cocos: CocosConvention("11".to_string()),
+            to_cocos: CocosConvention("17".to_string()),
+            direction: TransformationDirection::ToStored,
+        })
     );
 }
 
@@ -1087,6 +1109,242 @@ fn approved_artifact_subtree_rules_claim_their_whole_descendant_paths() {
         .resolve("time_slice/boundary/lcfs/r", Direction::Forward)
         .expect("the subtree rule claims this descendant");
     assert_eq!(explanation.outcome, Outcome::NoSource);
+}
+
+// ADR 0017 decision 4 / CONTEXT.md's "escaping rule": a subtree delete of
+// `path` is trivial iff every rule nested at or under it keeps its stored
+// target(s) at or under `path`'s own resolved stored spelling. These tests
+// exercise `ConversionMap::subtree_delete_is_trivial` directly, against
+// small purpose-built fixtures rather than the approved artifact, so every
+// rule kind's escape behaviour is covered — not only `moved`, which is the
+// only kind that happens to escape in the shipped artifact.
+
+#[test]
+fn the_approved_artifacts_only_escaping_rules_are_its_moved_rules() {
+    let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
+
+    // Forward (a DD3 HLI): the three `moved` rules anchored under
+    // `boundary_separatrix` all target `time_slice/boundary/...`, so a
+    // delete of the whole `boundary_separatrix` subtree would leave that
+    // data behind, unreached, at a path outside it.
+    assert!(!map.subtree_delete_is_trivial(
+        "time_slice/boundary_separatrix",
+        "time_slice/boundary_separatrix",
+        Direction::Forward,
+    ));
+    // Reverse (a DD4 HLI): the mirror image — the same three rules'
+    // right-side selectors sit under `boundary`, targeting
+    // `boundary_separatrix`.
+    assert!(!map.subtree_delete_is_trivial(
+        "time_slice/boundary",
+        "time_slice/boundary",
+        Direction::Reverse,
+    ));
+
+    // Forward `boundary` and both directions of `constraints` and the
+    // `time_slice` root itself carry no rule whose target crosses back out,
+    // so all four remain trivial — the ADR's own allowed examples.
+    assert!(map.subtree_delete_is_trivial(
+        "time_slice/boundary",
+        "time_slice/boundary",
+        Direction::Forward,
+    ));
+    assert!(map.subtree_delete_is_trivial(
+        "time_slice/constraints",
+        "time_slice/constraints",
+        Direction::Forward,
+    ));
+    assert!(map.subtree_delete_is_trivial(
+        "time_slice/constraints",
+        "time_slice/constraints",
+        Direction::Reverse,
+    ));
+    assert!(map.subtree_delete_is_trivial("time_slice", "time_slice", Direction::Forward));
+    assert!(map.subtree_delete_is_trivial("time_slice", "time_slice", Direction::Reverse));
+}
+
+#[test]
+fn a_renamed_rule_escapes_only_when_it_crosses_the_requested_boundary() {
+    let non_crossing = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="11"/>
+              <rules>
+                <rule id="rename-within" rel="renamed"
+                      left="container/old_name" right="container/new_name">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+    let map = ConversionMap::load(non_crossing).expect("fixture artifact must load");
+    assert!(map.subtree_delete_is_trivial("container", "container", Direction::Forward));
+    assert!(map.subtree_delete_is_trivial("container", "container", Direction::Reverse));
+
+    let crossing = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="11"/>
+              <rules>
+                <rule id="rename-cross" rel="renamed"
+                      left="container/child" right="elsewhere/child">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+    let map = ConversionMap::load(crossing).expect("fixture artifact must load");
+    assert!(!map.subtree_delete_is_trivial("container", "container", Direction::Forward));
+    assert!(!map.subtree_delete_is_trivial("elsewhere", "elsewhere", Direction::Reverse));
+}
+
+#[test]
+fn a_moved_rule_always_escapes_its_own_source_subtree() {
+    let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="11"/>
+              <rules>
+                <rule id="move-a" rel="moved"
+                      left="container/sub/a" right="other/a" subtree="yes">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+    let map = ConversionMap::load(xml).expect("fixture artifact must load");
+    assert!(!map.subtree_delete_is_trivial("container/sub", "container/sub", Direction::Forward,));
+    assert!(!map.subtree_delete_is_trivial("container", "container", Direction::Forward));
+    assert!(!map.subtree_delete_is_trivial("other", "other", Direction::Reverse));
+}
+
+#[test]
+fn a_merged_rule_escapes_only_when_a_candidate_lands_outside_the_subtree() {
+    let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="11"/>
+              <rules>
+                <rule id="fold" rel="merged" right="container/canonical">
+                  <from left="container/a" precedence="1"/>
+                  <from left="elsewhere/b" precedence="2"/>
+                  <fidelity forward="lossy" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+    let map = ConversionMap::load(xml).expect("fixture artifact must load");
+
+    // Reverse: the rule's single source role is `right`, so a delete of
+    // `container` sees it and must check every `<from>` candidate —
+    // `elsewhere/b` lands outside `container`.
+    assert!(!map.subtree_delete_is_trivial("container", "container", Direction::Reverse));
+    // Forward: `elsewhere/b` is itself one of the source entries, so a
+    // delete of `elsewhere` sees this rule too, and its one target
+    // (`container/canonical`) lands outside `elsewhere`.
+    assert!(!map.subtree_delete_is_trivial("elsewhere", "elsewhere", Direction::Forward));
+    // A delete of `container` forward only ever sees the `container/a`
+    // source entry, whose target is the in-subtree canonical path.
+    assert!(map.subtree_delete_is_trivial("container", "container", Direction::Forward));
+}
+
+#[test]
+fn a_split_rule_escapes_only_when_a_destination_lands_outside_the_subtree() {
+    let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="11"/>
+              <rules>
+                <rule id="split" rel="split" left="container/canonical">
+                  <from right="container/a" precedence="1"/>
+                  <from right="elsewhere/b" precedence="2"/>
+                  <fidelity forward="exact" reverse="lossy"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+    let map = ConversionMap::load(xml).expect("fixture artifact must load");
+
+    // Forward: the rule's single source role is `left`, so a delete of
+    // `container` sees it and must check every `<from>` destination —
+    // `elsewhere/b` lands outside `container`.
+    assert!(!map.subtree_delete_is_trivial("container", "container", Direction::Forward));
+    // Reverse: `elsewhere/b` is itself one of the source entries, so a
+    // delete of `elsewhere` sees this rule too, and its one target
+    // (`container/canonical`) lands outside `elsewhere`.
+    assert!(!map.subtree_delete_is_trivial("elsewhere", "elsewhere", Direction::Reverse));
+    assert!(map.subtree_delete_is_trivial("container", "container", Direction::Reverse));
+}
+
+#[test]
+fn left_only_and_right_only_rules_never_escape() {
+    let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="11"/>
+              <rules>
+                <rule id="drop-a" rel="left_only" left="container/gone">
+                  <fidelity forward="lossy" reverse="unmappable"/>
+                </rule>
+                <rule id="new-b" rel="right_only" right="container/new">
+                  <fidelity forward="unmappable" reverse="lossy"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+    let map = ConversionMap::load(xml).expect("fixture artifact must load");
+
+    // `left_only`/`right_only` declare no stored counterpart at all, so a
+    // rule nested under the requested subtree — with nothing to escape
+    // to — never breaks triviality.
+    assert!(map.subtree_delete_is_trivial("container", "container", Direction::Forward));
+    assert!(map.subtree_delete_is_trivial("container", "container", Direction::Reverse));
+}
+
+#[test]
+fn a_retyped_rule_nested_under_a_subtree_never_escapes() {
+    // A `retyped` rule's own left and right selectors are the identical
+    // spelling (only the container shape changes), so it can never be an
+    // escaping rule: its one target is always the same location as its
+    // source, which is by construction inside whatever subtree the source
+    // is inside.
+    let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="11"/>
+              <rules>
+                <rule id="retype" rel="retyped"
+                      left="container/shape" right="container/shape" subtree="yes">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+    let map = ConversionMap::load(xml).expect("fixture artifact must load");
+    assert!(map.subtree_delete_is_trivial("container", "container", Direction::Forward));
+    assert!(map.subtree_delete_is_trivial("container", "container", Direction::Reverse));
+}
+
+#[test]
+fn a_subtree_with_no_nested_rules_is_vacuously_trivial() {
+    let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="11"/>
+              <rules>
+                <rule id="rename-elsewhere" rel="renamed"
+                      left="unrelated/old_name" right="somewhere_else/new_name">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+    let map = ConversionMap::load(xml).expect("fixture artifact must load");
+    assert!(map.subtree_delete_is_trivial(
+        "container/untouched",
+        "container/untouched",
+        Direction::Forward,
+    ));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 # The write-side value transformation executes on a copy the policy owns
 
-ADR 0010 settled how a value transformation executes on the read path: in place, on the buffer IMAS-Core returned, which the shim is free to modify because the HLI has not seen it yet. The write path cannot inherit that, because the buffer belongs to the caller. This ADR settles where the transformed bytes live, who owns them, and what happens at IMAS-Core's own shape gate. It is a decision record only: no code implements it yet.
+ADR 0010 settled how a value transformation executes on the read path: in place, on the buffer IMAS-Core returned, which the shim is free to modify because the HLI has not seen it yet. The write path cannot inherit that, because the buffer belongs to the caller. This ADR settles where the transformed bytes live, who owns them, and what happens at IMAS-Core's own shape gate. It was a decision record only when written; issue #127 implements it.
 
 ## Decisions
 

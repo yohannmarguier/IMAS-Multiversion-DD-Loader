@@ -7,7 +7,24 @@
 //! `merged` precedence loop, the value-transform gate, DD-version-stamp
 //! discovery) consumes this result instead of comparing the data pointer to
 //! null itself (CONTEXT.md's "read outcome").
-#![allow(dead_code)]
+//!
+//! A **scalar** read cannot be classified this way at all, and that is a
+//! property of the ABI rather than of this module. For `dim == 0` IMAS-Core
+//! does not own the buffer: `Lowlevel::setValue` copies the stored value
+//! *into* `*data` and frees its own allocation, and
+//! `Lowlevel::setDefaultValue` writes the datatype's EMPTY sentinel into
+//! `*data` when the field is absent — both dereference `*data`
+//! unconditionally, so a caller that passes a null pointer for a scalar read
+//! crashes IMAS-Core rather than being told not-found. A scalar therefore
+//! never returns a null pointer, and absence has to be read off the *value*
+//! against [`EMPTY_DOUBLE`].
+//!
+//! No seam does that today. The one that did was the delete fan-out's
+//! presence probe, removed with issue #138 because it read through the
+//! caller's context (ADR 0017 decision 2), and its classifier went with it
+//! rather than staying behind as an untested-in-production helper. A future
+//! scalar reader needs both channels — the sentinel *and* the status — since
+//! a layer below IMAS-Core may still answer through the pointer.
 
 use std::ffi::c_void;
 
@@ -26,7 +43,9 @@ pub(crate) enum ReadOutcome {
 
 /// Classifies one `al_read_data` outcome from its status and returned data
 /// pointer. Nothing else in the shim may compare a data pointer to null —
-/// see this module's doc comment.
+/// see this module's doc comment. Not valid for a `dim == 0` read, where
+/// absence arrives as a sentinel value instead; this module's doc comment
+/// explains why, and no seam currently performs one.
 pub(crate) fn classify(status: &al_status_t, data: *const c_void) -> ReadOutcome {
     if status.code != 0 {
         ReadOutcome::Failure
@@ -36,6 +55,14 @@ pub(crate) fn classify(status: &al_status_t, data: *const c_void) -> ReadOutcome
         ReadOutcome::Data
     }
 }
+
+/// IMAS-Core's `EMPTY_DOUBLE`: the sentinel it writes where a `DOUBLE_DATA`
+/// value is absent. The write path needs it so a value transformation leaves
+/// the sentinel alone, letting a caller still tell a real zero from a hole in
+/// an array (ADR 0018), and any future scalar read would need it to report
+/// not-found at all — so it is defined once, here, alongside the outcome it
+/// decides.
+pub(crate) const EMPTY_DOUBLE: f64 = -9e40;
 
 #[cfg(test)]
 mod tests {

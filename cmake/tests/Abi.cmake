@@ -9,6 +9,8 @@ set_target_properties(abi_smoke PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
 if(IMAS_MVDD_REAL_CORE_TESTS)
+    # This shared-name smoke test exists in both profiles, so it is deliberately
+    # outside the real-Core bracket and must not carry the real-core label.
     add_test(NAME abi-smoke
         COMMAND "${CMAKE_COMMAND}" -E env
             --unset=IMAS_CORE_LIBRARY -- $<TARGET_FILE:abi_smoke>)
@@ -17,6 +19,7 @@ else()
 endif()
 
 if(IMAS_MVDD_REAL_CORE_TESTS)
+imas_mvdd_begin_real_core_tests()
 # Keep the runtime-bound surface honest mechanically: after filtering to
 # IMAS-Core's public C ABI, the shim and Core must export the same names.
 # This deliberately catches a missing new symbol or any leftover shim-only
@@ -53,4 +56,5 @@ add_test(NAME real-core-abi-rejects-mismatch
         "-DSHIM_INCLUDE_DIR=${IMAS_MVDD_STAGED_INCLUDE_DIR}"
         "-DCORE_INCLUDE_DIRS=${_imas_core_include_dirs}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify_abi_mismatch.cmake")
+imas_mvdd_end_real_core_tests()
 endif()

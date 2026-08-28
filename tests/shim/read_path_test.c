@@ -21,10 +21,10 @@ typedef void (*set_reentrant_read_fn)(read_data_fn, const char *);
  * the shim's read is still on the stack, with `field` as its argument — what
  * real IMAS-Core does on ELF, where its internal call to its own public
  * `al_read_data` binds to the shim's exported definition. */
-static void arm_reentrant_read(const char *field) {
+static void arm_reentrant_read(read_data_fn callback, const char *field) {
     set_reentrant_read_fn arm =
         (set_reentrant_read_fn)stub_symbol_or_die("recording_stub_set_reentrant_read");
-    arm(al_read_data, field);
+    arm(callback, field);
 }
 
 static al_status_t read_data(int ctx_id, const char *field, const char *timebase, void **data) {
@@ -35,26 +35,6 @@ static al_status_t read_data(int ctx_id, const char *field, const char *timebase
 static void check_stub_paths(const char *field, const char *timebase) {
     CHECK(strcmp(string_from_stub("recording_stub_read_field"), field) == 0);
     CHECK(strcmp(string_from_stub("recording_stub_read_timebase"), timebase) == 0);
-}
-
-static int loss_count(int ctx_id) {
-    int count = -1;
-    al_status_t status = imas_mvdd_context_loss_count(ctx_id, &count);
-    CHECK(status.code == 0);
-    return count;
-}
-
-static void check_no_loss_entry(int ctx_id) {
-    CHECK(loss_count(ctx_id) == 0);
-}
-
-static void check_loss_at(int ctx_id, int index, const char *expected_path, int expected_verdict) {
-    char path_buf[256] = {0};
-    int verdict = -1;
-    al_status_t status = imas_mvdd_context_loss_at(ctx_id, index, path_buf, sizeof(path_buf), &verdict);
-    CHECK(status.code == 0);
-    CHECK(strcmp(path_buf, expected_path) == 0);
-    CHECK(verdict == expected_verdict);
 }
 
 static void check_read_refusal(int operation_ctx, const char *field, int datatype,
@@ -72,7 +52,7 @@ static void check_read_refusal(int operation_ctx, const char *field, int datatyp
     CHECK(size[0] == 73);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
     CHECK(loss_count(operation_ctx) == losses_before + 1);
-    check_loss_at(operation_ctx, losses_before, field, IMAS_MVDD_FIDELITY_UNMAPPABLE);
+    check_loss_at(operation_ctx, losses_before, field, IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_READ);
 }
 
 static void scenario_translates_field_and_timebase_independently(void) {
@@ -104,7 +84,7 @@ static void scenario_forward_direction_translates_and_reports_no_source(void) {
     CHECK(data == NULL);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
     CHECK(loss_count(operation_ctx) == 1);
-    check_loss_at(operation_ctx, 0, "time_slice/boundary/lcfs", IMAS_MVDD_FIDELITY_LOSSY);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary/lcfs", IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("read_path_test forward-direction-translates-and-reports-no-source: 3.39.0 HLI "
            "paths used 4.1.1 spellings or returned not found\n");
@@ -136,10 +116,10 @@ static void scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log(void) {
 
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/ggd/b_field_phi",
-                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY);
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("read_path_test merged-read-retains-a-lossy-verdict-in-the-loss-log: a merged "
-           "rule's lossy verdict reached the queryable loss log\n");
+           "rule's lossy verdict and read operation reached the queryable loss log\n");
 }
 
 /* ADR 0014: a read arriving while the shim's own read is in flight was issued
@@ -156,7 +136,7 @@ static void scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log(void) {
  * caller that issued one read. */
 static void scenario_reentrant_read_is_forwarded_unchanged(void) {
     int operation_ctx = open_mismatched_equilibrium();
-    arm_reentrant_read("time_slice/boundary_separatrix/gap/r");
+    arm_reentrant_read(al_read_data, "time_slice/boundary_separatrix/gap/r");
 
     void *data = NULL;
     CHECK(read_data(operation_ctx, "time_slice/boundary_separatrix/gap/r", "", &data).code == 0);
@@ -166,7 +146,7 @@ static void scenario_reentrant_read_is_forwarded_unchanged(void) {
     check_stub_paths("time_slice/boundary/gap/r", "");
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r",
-                  IMAS_MVDD_FIDELITY_LOSSY);
+                  IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     /* The reentrant one reached IMAS-Core exactly as the stub sent it. */
     CHECK(int_from_stub("recording_stub_reentrant_call_count") == 1);
@@ -186,7 +166,7 @@ static void scenario_reentrant_read_is_forwarded_unchanged(void) {
  * was guarding against by a weaker means. */
 static void scenario_reentrant_read_does_not_reapply_a_sign_flip(void) {
     int operation_ctx = open_mismatched_equilibrium();
-    arm_reentrant_read("time_slice/profiles_1d/psi");
+    arm_reentrant_read(al_read_data, "time_slice/profiles_1d/psi");
 
     int size[1] = {0};
     void *data = NULL;
@@ -206,6 +186,30 @@ static void scenario_reentrant_read_does_not_reapply_a_sign_flip(void) {
            "applied exactly once despite a read re-entering mid-flight\n");
 }
 
+/* The plugin-read ABI shares the read policy with its ordinary twin, but it
+ * still needs a public-seam proof of the one counter. The callback crosses
+ * back into ordinary `al_read_data`; without a shared guard it would resolve
+ * the HLI spelling again and retain a second loss entry. */
+static void scenario_plugin_reentrant_read_is_forwarded_across_the_ordinary_family(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    const char *field = "time_slice/boundary_separatrix/gap/r";
+    arm_reentrant_read(al_read_data, field);
+
+    void *data = NULL;
+    int size[1] = {0};
+    CHECK(al_plugin_read_data(operation_ctx, field, "", &data, 52 /* DOUBLE_DATA */, 1, size)
+              .code == 0);
+    CHECK(data != NULL);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, field, IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
+    CHECK(int_from_stub("recording_stub_reentrant_call_count") == 1);
+    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_field"), field) == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_timebase"), "") == 0);
+
+    printf("read_path_test plugin-reentrant-read-is-forwarded-across-the-ordinary-family: a "
+           "read beneath plugin reentry bypassed conversion and loss retention\n");
+}
+
 static void scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log(void) {
     /* move-gap is rel="moved", fidelity forward="lossy" — the "certainly
      * lossy" bucket (ADR 0008): an unconditional single-path rule, not a
@@ -219,7 +223,7 @@ static void scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log(void) {
     check_stub_paths("time_slice/boundary/gap/r", "");
 
     CHECK(loss_count(operation_ctx) == 1);
-    check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r", IMAS_MVDD_FIDELITY_LOSSY);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r", IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("read_path_test moved-read-retains-a-lossy-verdict-in-the-loss-log: a plain "
            "moved rule's lossy verdict reached the queryable loss log\n");
@@ -334,6 +338,65 @@ static void scenario_loss_at_insufficient_buffer_is_refused(void) {
            "rejected without a partial write\n");
 }
 
+static void scenario_loss_operation_at_null_output_is_refused(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+
+    al_status_t status = imas_mvdd_context_loss_operation_at(operation_ctx, 0, NULL);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+
+    printf("read_path_test loss-operation-at-null-output-is-refused: a null operation output "
+           "was rejected without dereferencing it\n");
+}
+
+static void scenario_loss_operation_at_negative_index_is_refused(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    int operation = -1;
+
+    al_status_t status = imas_mvdd_context_loss_operation_at(operation_ctx, -1, &operation);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(operation == -1);
+
+    printf("read_path_test loss-operation-at-negative-index-is-refused: a negative index was "
+           "rejected without writing to operation\n");
+}
+
+static void scenario_loss_operation_at_out_of_range_index_is_refused(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    CHECK(loss_count(operation_ctx) == 1);
+    int operation = -1;
+
+    al_status_t status = imas_mvdd_context_loss_operation_at(operation_ctx, 1, &operation);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(operation == -1);
+
+    printf("read_path_test loss-operation-at-out-of-range-index-is-refused: an index at the "
+           "reported count was rejected without writing to operation\n");
+}
+
+static void scenario_loss_operation_at_untracked_context_is_refused_after_zero_count(void) {
+    int count = -1;
+    CHECK(imas_mvdd_context_loss_count(999, &count).code == 0);
+    CHECK(count == 0);
+    int operation = -1;
+
+    al_status_t status = imas_mvdd_context_loss_operation_at(999, 0, &operation);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(operation == -1);
+
+    printf("read_path_test loss-operation-at-untracked-context-is-refused-after-zero-count: an "
+           "untracked context reported zero entries and refused its out-of-range query safely\n");
+}
+
 static void scenario_merged_read_falls_through_to_next_candidate(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int reads_before = int_from_stub("recording_stub_read_call_count");
@@ -408,7 +471,7 @@ static void scenario_no_source_returns_null_without_core_call(void) {
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/contour_tree/critical_point",
-                  IMAS_MVDD_FIDELITY_LOSSY);
+                  IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("read_path_test no-source-returns-null-without-core-call: no stored path was read\n");
 }
@@ -675,6 +738,8 @@ int main(int argc, char **argv) {
         {"sign-flip-rank-exceeding-maxdim-refuses-without-core-call", scenario_sign_flip_rank_exceeding_maxdim_refuses_without_core_call},
         {"reentrant-read-is-forwarded-unchanged", scenario_reentrant_read_is_forwarded_unchanged},
         {"reentrant-read-does-not-reapply-a-sign-flip", scenario_reentrant_read_does_not_reapply_a_sign_flip},
+        {"plugin-reentrant-read-is-forwarded-across-the-ordinary-family",
+         scenario_plugin_reentrant_read_is_forwarded_across_the_ordinary_family},
         {"sign-flip-invalid-shape-refuses-without-modifying-buffer", scenario_sign_flip_invalid_shape_refuses_without_modifying_buffer},
         {"sign-flip-shape-override-respects-read-rank", scenario_sign_flip_shape_override_respects_read_rank},
         {"sign-flip-not-found-skips-value-transformation", scenario_sign_flip_not_found_skips_value_transformation},
@@ -693,6 +758,10 @@ int main(int argc, char **argv) {
         {"loss-at-negative-index-is-refused", scenario_loss_at_negative_index_is_refused},
         {"loss-at-out-of-range-index-is-refused", scenario_loss_at_out_of_range_index_is_refused},
         {"loss-at-insufficient-buffer-is-refused", scenario_loss_at_insufficient_buffer_is_refused},
+        {"loss-operation-at-null-output-is-refused", scenario_loss_operation_at_null_output_is_refused},
+        {"loss-operation-at-negative-index-is-refused", scenario_loss_operation_at_negative_index_is_refused},
+        {"loss-operation-at-out-of-range-index-is-refused", scenario_loss_operation_at_out_of_range_index_is_refused},
+        {"loss-operation-at-untracked-context-is-refused-after-zero-count", scenario_loss_operation_at_untracked_context_is_refused_after_zero_count},
     };
     return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

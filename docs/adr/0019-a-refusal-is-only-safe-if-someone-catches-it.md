@@ -1,6 +1,6 @@
 # A refusal is only safe if someone catches it
 
-ADR 0016 makes the write path refuse wherever it cannot write safely. A refusal is only a *good* answer if the caller survives it. This ADR records who is expected to catch a refusal, why that expectation is split across two repositories, and the one caller for whom a refusal is not survivable at all. It is a decision record only: no code implements it yet.
+ADR 0016 makes the write path refuse wherever it cannot write safely. A refusal is only a *good* answer if the caller survives it. This ADR records who is expected to catch a refusal, why that expectation is split across two repositories, and the one caller for whom a refusal is not survivable at all. It was a decision record only when written; issue #126 implements its shim-side half, and issue #134 filed its HLI-side half as `yohannmarguier/IMAS-Fortran#61` and stated the residual limitation in README.md rather than coding around it.
 
 ## The problem a refusal creates on the write path
 

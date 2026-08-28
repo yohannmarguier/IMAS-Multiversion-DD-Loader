@@ -43,26 +43,6 @@ static void check_stub_paths(const char *field, const char *timebase) {
     CHECK(strcmp(string_from_stub("recording_stub_read_timebase"), timebase) == 0);
 }
 
-static int loss_count(int ctx_id) {
-    int count = -1;
-    al_status_t status = imas_mvdd_context_loss_count(ctx_id, &count);
-    CHECK(status.code == 0);
-    return count;
-}
-
-static void check_no_loss_entry(int ctx_id) {
-    CHECK(loss_count(ctx_id) == 0);
-}
-
-static void check_loss_at(int ctx_id, int index, const char *expected_path, int expected_verdict) {
-    char path_buf[256] = {0};
-    int verdict = -1;
-    al_status_t status = imas_mvdd_context_loss_at(ctx_id, index, path_buf, sizeof(path_buf), &verdict);
-    CHECK(status.code == 0);
-    CHECK(strcmp(path_buf, expected_path) == 0);
-    CHECK(verdict == expected_verdict);
-}
-
 /* --- the core gap: a relative read beneath a *renamed* AOS anchor -------- */
 
 static void scenario_relative_field_and_timebase_resolve_through_renamed_child(void) {
@@ -170,10 +150,10 @@ static void scenario_refusal_stops_before_core_through_nested_child(void) {
      * child or the root resolves to the same entry (issue #66). */
     CHECK(loss_count(time_slice_ctx) == 1);
     check_loss_at(time_slice_ctx, 0, "time_slice/constraints/strike_point/chi_squared_r",
-                  IMAS_MVDD_FIDELITY_UNMAPPABLE);
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_READ);
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/constraints/strike_point/chi_squared_r",
-                  IMAS_MVDD_FIDELITY_UNMAPPABLE);
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("nested_context_read_test refusal-stops-before-core-through-nested-child: an "
            "unmappable unit redefinition refused before IMAS-Core, addressed relative to a "
@@ -230,13 +210,13 @@ static void scenario_moved_read_through_nested_child_retains_lossy_verdict_on_ro
 
     CHECK(loss_count(time_slice_ctx) == 1);
     check_loss_at(time_slice_ctx, 0, "time_slice/boundary_separatrix/gap/r",
-                  IMAS_MVDD_FIDELITY_LOSSY);
+                  IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/boundary_separatrix/gap/r",
-                  IMAS_MVDD_FIDELITY_LOSSY);
+                  IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("nested_context_read_test moved-read-through-nested-child-retains-lossy-verdict-on-root: "
-           "a certainly-lossy nested read appended the complete DD path to its root's loss log\n");
+           "a certainly-lossy nested read and its operation reached its root's loss log\n");
 }
 
 static void scenario_merged_read_through_nested_child_retains_potentially_lossy_verdict(void) {
@@ -254,10 +234,10 @@ static void scenario_merged_read_through_nested_child_retains_potentially_lossy_
 
     CHECK(loss_count(time_slice_ctx) == 1);
     check_loss_at(time_slice_ctx, 0, "time_slice/ggd/b_field_phi",
-                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY);
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/ggd/b_field_phi",
-                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY);
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("nested_context_read_test "
            "merged-read-through-nested-child-retains-potentially-lossy-verdict: a merged rule's "

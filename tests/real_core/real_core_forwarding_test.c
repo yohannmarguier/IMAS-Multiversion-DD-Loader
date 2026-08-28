@@ -18,7 +18,7 @@
 
 #include <al_const.h>
 #include <hdf5.h>
-#include "../support/shim_test_support.h"
+#include "../support/real_core_fixture_support.h"
 
 #ifndef REAL_CORE_TEST_PLUGIN_DIR
 #error "REAL_CORE_TEST_PLUGIN_DIR must name the directory containing the fixture plugin"
@@ -46,13 +46,6 @@ static int contains_path(char **paths, int size, const char *expected) {
         }
     }
     return 0;
-}
-
-static void remove_temp_file(const char *pulse_dir, const char *name) {
-    char path[1024];
-    int path_length = snprintf(path, sizeof path, "%s/%s", pulse_dir, name);
-    CHECK(path_length > 0 && (size_t)path_length < sizeof path);
-    CHECK(unlink(path) == 0 || errno == ENOENT);
 }
 
 static int file_contains(const char *path, const char *needle) {
@@ -293,21 +286,6 @@ static void check_plugin_read_conversion_against_real_core(void) {
     CHECK_OK(al_close_pulse(pulse_ctx, CLOSE_PULSE));
 }
 
-static void copy_file(const char *from, const char *to) {
-    FILE *in = fopen(from, "rb");
-    CHECK(in != NULL);
-    FILE *out = fopen(to, "wb");
-    CHECK(out != NULL);
-    char buffer[65536];
-    size_t read_bytes;
-    while ((read_bytes = fread(buffer, 1, sizeof buffer, in)) > 0) {
-        CHECK(fwrite(buffer, 1, read_bytes, out) == read_bytes);
-    }
-    CHECK(ferror(in) == 0);
-    CHECK(fclose(out) == 0);
-    CHECK(fclose(in) == 0);
-}
-
 static void remove_dd_version_stamp(const char *ids_file, const char *ids_group) {
     hid_t file = H5Fopen(ids_file, H5F_ACC_RDWR, H5P_DEFAULT);
     CHECK(file >= 0);
@@ -352,7 +330,7 @@ static void check_unstamped_equilibrium_read_forwards_unchanged(const char *temp
         int to_length = snprintf(to, sizeof to, "%s/%s", pulse_dir, files[i]);
         CHECK(from_length > 0 && (size_t)from_length < sizeof from);
         CHECK(to_length > 0 && (size_t)to_length < sizeof to);
-        copy_file(from, to);
+        copy_fixture_file(from, to);
     }
 
     char equilibrium_file[1024];
@@ -402,7 +380,7 @@ static void check_unstamped_equilibrium_read_forwards_unchanged(const char *temp
 
     /* main() ends by rmdir'ing temp_dir, so this copy has to leave nothing. */
     for (size_t i = 0; i < sizeof files / sizeof files[0]; ++i) {
-        remove_temp_file(pulse_dir, files[i]);
+        remove_fixture_file(pulse_dir, files[i]);
     }
     CHECK(rmdir(pulse_dir) == 0);
 }
@@ -550,13 +528,13 @@ int main(void) {
     CHECK_OK(al_end_action(op_ctx));
 
     CHECK_OK(al_close_pulse(pulse_ctx, CLOSE_PULSE));
-    remove_temp_file(pulse_dir, "magnetics.h5");
-    remove_temp_file(pulse_dir, "magnetics_2.h5");
-    remove_temp_file(pulse_dir, "delete_probe.h5");
-    remove_temp_file(pulse_dir, "plugin_probe.h5");
-    remove_temp_file(pulse_dir, "plugin_aos.h5");
-    remove_temp_file(pulse_dir, "plugin_metadata.h5");
-    remove_temp_file(pulse_dir, "master.h5");
+    remove_fixture_file(pulse_dir, "magnetics.h5");
+    remove_fixture_file(pulse_dir, "magnetics_2.h5");
+    remove_fixture_file(pulse_dir, "delete_probe.h5");
+    remove_fixture_file(pulse_dir, "plugin_probe.h5");
+    remove_fixture_file(pulse_dir, "plugin_aos.h5");
+    remove_fixture_file(pulse_dir, "plugin_metadata.h5");
+    remove_fixture_file(pulse_dir, "master.h5");
     CHECK(unlink(plugin_log) == 0);
     CHECK(rmdir(pulse_dir) == 0);
     CHECK(rmdir(temp_dir) == 0);

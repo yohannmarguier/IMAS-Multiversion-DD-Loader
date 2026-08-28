@@ -133,9 +133,35 @@ fn a_non_exact_read_from_a_child_is_retained_by_its_root_context() {
     let state = registry.state.lock().unwrap();
     assert_eq!(
         state.loss_logs.get(&5),
-        Some(&vec![ReadLoss {
-            hli_path: "field".to_string(),
+        Some(&vec![LossEntry {
+            dd_path: "field".to_string(),
             fidelity: Fidelity::Lossy,
+            operation: LossOperation::Read,
+        }])
+    );
+    assert!(!state.loss_logs.contains_key(&6));
+}
+
+#[test]
+fn a_refused_write_from_a_child_is_retained_by_its_root_context() {
+    let registry = ContextRegistry::new();
+    assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
+    assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+
+    let child = registry.lookup(6).expect("the child must be live");
+    registry.record_write_loss_at_root(
+        child.root_id,
+        "root/path/field".to_string(),
+        Fidelity::Unmappable,
+    );
+
+    let state = registry.state.lock().unwrap();
+    assert_eq!(
+        state.loss_logs.get(&5),
+        Some(&vec![LossEntry {
+            dd_path: "root/path/field".to_string(),
+            fidelity: Fidelity::Unmappable,
+            operation: LossOperation::Write,
         }])
     );
     assert!(!state.loss_logs.contains_key(&6));
@@ -678,11 +704,11 @@ fn loss_at_returns_entries_in_the_order_they_were_recorded() {
     registry.record_read_loss_at_root(5, "field/b".to_string(), Fidelity::Unmappable);
 
     assert_eq!(
-        registry.with_loss_at(5, 0, |path, fidelity| (path.to_string(), fidelity)),
+        registry.with_loss_at(5, 0, |path, fidelity, _| (path.to_string(), fidelity)),
         Some(("field/a".to_string(), Fidelity::Lossy))
     );
     assert_eq!(
-        registry.with_loss_at(5, 1, |path, fidelity| (path.to_string(), fidelity)),
+        registry.with_loss_at(5, 1, |path, fidelity, _| (path.to_string(), fidelity)),
         Some(("field/b".to_string(), Fidelity::Unmappable))
     );
 }
@@ -693,7 +719,7 @@ fn loss_at_returns_none_past_the_last_entry() {
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
     registry.record_read_loss_at_root(5, "field/a".to_string(), Fidelity::Lossy);
 
-    assert_eq!(registry.with_loss_at(5, 1, |_, _| ()), None);
+    assert_eq!(registry.with_loss_at(5, 1, |_, _, _| ()), None);
 }
 
 #[test]
@@ -701,8 +727,8 @@ fn loss_at_returns_none_for_any_index_on_an_untracked_context() {
     let registry = ContextRegistry::new();
     registry.record_dataentry(10);
 
-    assert_eq!(registry.with_loss_at(10, 0, |_, _| ()), None);
-    assert_eq!(registry.with_loss_at(999, 0, |_, _| ()), None);
+    assert_eq!(registry.with_loss_at(10, 0, |_, _, _| ()), None);
+    assert_eq!(registry.with_loss_at(999, 0, |_, _, _| ()), None);
 }
 
 #[test]
@@ -715,7 +741,7 @@ fn ending_the_root_context_destroys_its_loss_log() {
     registry.remove(5);
 
     assert_eq!(registry.loss_count(5), 0);
-    assert_eq!(registry.with_loss_at(5, 0, |_, _| ()), None);
+    assert_eq!(registry.with_loss_at(5, 0, |_, _, _| ()), None);
 }
 
 #[test]

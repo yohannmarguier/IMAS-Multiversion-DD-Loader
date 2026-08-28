@@ -6,6 +6,7 @@
  * generated header: a real IMAS-Core defines its own copy independently of
  * this project's header, and this stub should behave the same way. */
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -370,12 +371,37 @@ static int g_read_datatype = 0;
 static int g_read_dim = 0;
 static char g_read_buffer[] = "recording-stub: read data payload";
 static double g_read_double_buffer = 1.5;
+static char *g_last_written_field = NULL;
+static double *g_last_written_values = NULL;
+static size_t g_last_written_count = 0;
 
 #define RECORDING_STUB_CSV_CAPACITY 16
 /* IMAS-Core's MAXDIM is part of the duplicated ABI contract above. */
 enum { RECORDING_STUB_MAXDIM = 7 };
 static double g_read_double_values[RECORDING_STUB_CSV_CAPACITY];
 static int g_read_size_override[RECORDING_STUB_CSV_CAPACITY];
+
+/* The two kind values are duplicated as IMAS_MVDD_STUB_DATA_EVENT_READ and
+ * IMAS_MVDD_STUB_DATA_EVENT_DELETE in tests/support/shim_test_support.h. They
+ * have to be: a suite reads them back through dlsym, and this directory ships
+ * no header for it to include. Change one and change the other. */
+enum {
+    RECORDING_STUB_DATA_EVENT_READ = 1,
+    RECORDING_STUB_DATA_EVENT_DELETE = 2,
+    RECORDING_STUB_DATA_EVENT_CAPACITY = 128,
+};
+static int g_data_event_count = 0;
+static int g_data_event_kinds[RECORDING_STUB_DATA_EVENT_CAPACITY];
+static char *g_data_event_paths[RECORDING_STUB_DATA_EVENT_CAPACITY];
+
+static void record_data_event(int kind, const char *path) {
+    if (g_data_event_count < RECORDING_STUB_DATA_EVENT_CAPACITY) {
+        g_data_event_kinds[g_data_event_count] = kind;
+        free(g_data_event_paths[g_data_event_count]);
+        g_data_event_paths[g_data_event_count] = record_str(path);
+    }
+    g_data_event_count++;
+}
 
 /* RECORDING_STUB_READ_DOUBLE_VALUES and RECORDING_STUB_READ_SIZE_CSV give a
  * test the array shapes value-transform execution (issue #59) actually needs
@@ -487,12 +513,29 @@ static al_status_t compute_read_response(const char *field, void **data, int dim
         return stamp_read_response(data, size);
     }
 
-    if (getenv("RECORDING_STUB_READ_FAIL") != NULL) {
+    const char *failed_field = getenv("RECORDING_STUB_READ_FAIL_FIELD");
+    if (getenv("RECORDING_STUB_READ_FAIL") != NULL ||
+        (failed_field != NULL && field != NULL && strcmp(field, failed_field) == 0)) {
         al_status_t status;
         status.code = -23;
         memset(status.message, 0, sizeof status.message);
         strncpy(status.message, "recording-stub: read refused", sizeof status.message - 1);
         return status;
+    }
+
+    /* Lets a seam test prove a write/read round trip through the public ABI.
+     * This intentionally models only the DOUBLE_DATA payloads that write
+     * tests already snapshot; every ordinary recording-stub read keeps its
+     * existing canned response. */
+    if (getenv("RECORDING_STUB_READ_LAST_WRITE") != NULL && g_last_written_field != NULL &&
+        field != NULL && strcmp(field, g_last_written_field) == 0) {
+        if (data != NULL) {
+            *data = g_last_written_values;
+        }
+        if (size != NULL && dim > 0) {
+            size[0] = (int)g_last_written_count;
+        }
+        return ok_status();
     }
 
     const char *double_values_csv = getenv("RECORDING_STUB_READ_DOUBLE_VALUES");
@@ -624,6 +667,7 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
     g_read_timebase = record_str(timebase);
     g_read_datatype = datatype;
     g_read_dim = dim;
+    record_data_event(RECORDING_STUB_DATA_EVENT_READ, field);
 
     if (g_reentrant_read != NULL && field != NULL) {
         g_reentrant_active = 1;
@@ -631,10 +675,160 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
         int reentrant_size[RECORDING_STUB_MAXDIM] = {0};
         g_reentrant_read(ctxID, g_reentrant_field, "", &reentrant_data, datatype, dim,
                          reentrant_size);
+        /* Deliberately not freed: every read response this stub can return
+         * now points at a static buffer it owns. The one caller that received
+         * a per-read allocation was the delete presence probe, removed with
+         * issue #138 along with the knob that produced it. */
         g_reentrant_active = 0;
     }
 
     return compute_read_response(field, data, dim, size);
+}
+
+/* --- reentrant data-path knobs -------------------------------------------------
+ *
+ * Every setter names one outer seam, but they deliberately share one callback
+ * signature and one active flag. The callback is supplied by the C test so it
+ * reaches the shim rather than this stub's own exported symbol. */
+typedef al_status_t (*recording_stub_data_fn)(int, const char *, const char *, void *, int, int,
+                                              int *);
+
+enum recording_stub_reentrant_outer {
+    RECORDING_STUB_REENTRANT_WRITE_DATA,
+    RECORDING_STUB_REENTRANT_PLUGIN_WRITE_DATA,
+    RECORDING_STUB_REENTRANT_DELETE_DATA,
+    RECORDING_STUB_REENTRANT_WRITE_PLUGINS_METADATA,
+    RECORDING_STUB_REENTRANT_BIND_READBACK_PLUGINS,
+    RECORDING_STUB_REENTRANT_UNBIND_READBACK_PLUGINS,
+};
+
+static recording_stub_data_fn g_reentrant_data = NULL;
+static enum recording_stub_reentrant_outer g_reentrant_data_outer;
+static int g_reentrant_data_ctx = 0;
+static char *g_reentrant_data_field = NULL;
+static char *g_reentrant_data_timebase = NULL;
+static int g_reentrant_data_active = 0;
+static int g_reentrant_data_call_count = 0;
+static int g_reentrant_data_status_code = 0;
+static int g_reentrant_data_seen_ctx = 0;
+static char *g_reentrant_data_seen_field = NULL;
+static char *g_reentrant_data_seen_timebase = NULL;
+static const void *g_reentrant_data_seen_data = NULL;
+static int g_reentrant_data_seen_datatype = 0;
+static int g_reentrant_data_seen_dim = 0;
+static const int *g_reentrant_data_seen_size = NULL;
+static int g_reentrant_data_seen_size_first = 0;
+static double g_reentrant_data_fallback_data = 0.0;
+static int g_reentrant_data_fallback_size[1] = {1};
+static const void *g_reentrant_data_expected_data = NULL;
+static const int *g_reentrant_data_expected_size = NULL;
+
+static void arm_reentrant_data(enum recording_stub_reentrant_outer outer,
+                               recording_stub_data_fn callback, int ctx_id, const char *field,
+                               const char *timebase) {
+    g_reentrant_data_outer = outer;
+    g_reentrant_data = callback;
+    g_reentrant_data_ctx = ctx_id;
+    free(g_reentrant_data_field);
+    g_reentrant_data_field = record_str(field);
+    free(g_reentrant_data_timebase);
+    g_reentrant_data_timebase = record_str(timebase);
+}
+
+void recording_stub_set_reentrant_write_data(recording_stub_data_fn callback, int ctx_id,
+                                             const char *field, const char *timebase) {
+    arm_reentrant_data(RECORDING_STUB_REENTRANT_WRITE_DATA, callback, ctx_id, field, timebase);
+}
+
+void recording_stub_set_reentrant_plugin_write_data(recording_stub_data_fn callback, int ctx_id,
+                                                    const char *field, const char *timebase) {
+    arm_reentrant_data(RECORDING_STUB_REENTRANT_PLUGIN_WRITE_DATA, callback, ctx_id, field,
+                       timebase);
+}
+
+void recording_stub_set_reentrant_delete_data(recording_stub_data_fn callback, int ctx_id,
+                                              const char *field, const char *timebase) {
+    arm_reentrant_data(RECORDING_STUB_REENTRANT_DELETE_DATA, callback, ctx_id, field, timebase);
+}
+
+void recording_stub_set_reentrant_write_plugins_metadata(recording_stub_data_fn callback,
+                                                          int ctx_id, const char *field,
+                                                          const char *timebase) {
+    arm_reentrant_data(RECORDING_STUB_REENTRANT_WRITE_PLUGINS_METADATA, callback, ctx_id, field,
+                       timebase);
+}
+
+void recording_stub_set_reentrant_bind_readback_plugins(recording_stub_data_fn callback,
+                                                        int ctx_id, const char *field,
+                                                        const char *timebase) {
+    arm_reentrant_data(RECORDING_STUB_REENTRANT_BIND_READBACK_PLUGINS, callback, ctx_id, field,
+                       timebase);
+}
+
+void recording_stub_set_reentrant_unbind_readback_plugins(recording_stub_data_fn callback,
+                                                          int ctx_id, const char *field,
+                                                          const char *timebase) {
+    arm_reentrant_data(RECORDING_STUB_REENTRANT_UNBIND_READBACK_PLUGINS, callback, ctx_id, field,
+                       timebase);
+}
+
+static void trigger_reentrant_data(enum recording_stub_reentrant_outer outer, void *data,
+                                   int datatype, int dim, int *size) {
+    if (g_reentrant_data == NULL || g_reentrant_data_active || g_reentrant_data_outer != outer) {
+        return;
+    }
+    void *callback_data = data != NULL ? data : &g_reentrant_data_fallback_data;
+    int *callback_size = data != NULL ? size : g_reentrant_data_fallback_size;
+    g_reentrant_data_active = 1;
+    g_reentrant_data_call_count++;
+    g_reentrant_data_expected_data = callback_data;
+    g_reentrant_data_expected_size = callback_size;
+    al_status_t status = g_reentrant_data(g_reentrant_data_ctx, g_reentrant_data_field,
+                                          g_reentrant_data_timebase, callback_data,
+                                          data != NULL ? datatype : 52 /* DOUBLE_DATA */,
+                                          data != NULL ? dim : 1, callback_size);
+    g_reentrant_data_status_code = status.code;
+    g_reentrant_data_active = 0;
+}
+
+static int reentrant_data_is_active(void) {
+    return g_reentrant_data_active;
+}
+
+static al_status_t record_reentrant_data_call(int ctx_id, const char *field, const char *timebase,
+                                              void *data, int datatype, int dim, int *size) {
+    g_reentrant_data_seen_ctx = ctx_id;
+    free(g_reentrant_data_seen_field);
+    g_reentrant_data_seen_field = record_str(field);
+    free(g_reentrant_data_seen_timebase);
+    g_reentrant_data_seen_timebase = record_str(timebase);
+    g_reentrant_data_seen_data = data;
+    g_reentrant_data_seen_datatype = datatype;
+    g_reentrant_data_seen_dim = dim;
+    g_reentrant_data_seen_size = size;
+    g_reentrant_data_seen_size_first = size != NULL && dim > 0 ? size[0] : 0;
+    return ok_status();
+}
+
+int recording_stub_reentrant_data_call_count(void) { return g_reentrant_data_call_count; }
+int recording_stub_reentrant_data_status_code(void) { return g_reentrant_data_status_code; }
+int recording_stub_reentrant_data_seen_ctx(void) { return g_reentrant_data_seen_ctx; }
+const char *recording_stub_reentrant_data_seen_field(void) { return g_reentrant_data_seen_field; }
+const char *recording_stub_reentrant_data_seen_timebase(void) {
+    return g_reentrant_data_seen_timebase;
+}
+const void *recording_stub_reentrant_data_seen_data(void) { return g_reentrant_data_seen_data; }
+int recording_stub_reentrant_data_seen_datatype(void) { return g_reentrant_data_seen_datatype; }
+int recording_stub_reentrant_data_seen_dim(void) { return g_reentrant_data_seen_dim; }
+const int *recording_stub_reentrant_data_seen_size(void) { return g_reentrant_data_seen_size; }
+int recording_stub_reentrant_data_seen_size_first(void) {
+    return g_reentrant_data_seen_size_first;
+}
+const void *recording_stub_reentrant_data_expected_data(void) {
+    return g_reentrant_data_expected_data;
+}
+const int *recording_stub_reentrant_data_expected_size(void) {
+    return g_reentrant_data_expected_size;
 }
 
 /* --- al_write_data ------------------------------------------------------------ */
@@ -647,9 +841,46 @@ static const void *g_write_data = NULL;
 static int g_write_datatype = 0;
 static int g_write_dim = 0;
 static int g_write_size_first = 0;
+static double *g_write_double_values = NULL;
+static size_t g_write_double_count = 0;
+
+/* A transformed write buffer belongs to the shim and is freed as soon as its
+ * IMAS-Core call returns, so its pointer alone cannot be inspected by a test.
+ * Snapshot DOUBLE_DATA values while the call is in progress instead. */
+static void snapshot_double_payload(double **snapshot, size_t *snapshot_count, void *data,
+                                    int datatype, int dim, int *size) {
+    free(*snapshot);
+    *snapshot = NULL;
+    *snapshot_count = 0;
+    if (datatype != 52 /* DOUBLE_DATA */ || data == NULL || dim < 0 ||
+        dim > RECORDING_STUB_MAXDIM || (dim > 0 && size == NULL)) {
+        return;
+    }
+
+    size_t count = 1;
+    for (int index = 0; index < dim; ++index) {
+        if (size[index] < 0 || count > SIZE_MAX / (size_t)size[index]) {
+            return;
+        }
+        count *= (size_t)size[index];
+    }
+    if (count == 0 || count > SIZE_MAX / sizeof **snapshot) {
+        return;
+    }
+    double *copy = malloc(count * sizeof *copy);
+    if (copy == NULL) {
+        return;
+    }
+    memcpy(copy, data, count * sizeof *copy);
+    *snapshot = copy;
+    *snapshot_count = count;
+}
 
 al_status_t al_write_data(int ctxID, const char *field, const char *timebase, void *data,
                            int datatype, int dim, int *size) {
+    if (reentrant_data_is_active()) {
+        return record_reentrant_data_call(ctxID, field, timebase, data, datatype, dim, size);
+    }
     g_write_call_count++;
     g_write_ctx_id = ctxID;
     free(g_write_field);
@@ -662,6 +893,23 @@ al_status_t al_write_data(int ctxID, const char *field, const char *timebase, vo
     if (size != NULL && dim > 0) {
         g_write_size_first = size[0];
     }
+    snapshot_double_payload(&g_write_double_values, &g_write_double_count, data, datatype, dim,
+                            size);
+    free(g_last_written_field);
+    g_last_written_field = record_str(field);
+    free(g_last_written_values);
+    g_last_written_values = NULL;
+    g_last_written_count = g_write_double_count;
+    if (g_last_written_count > 0) {
+        g_last_written_values = malloc(g_last_written_count * sizeof *g_last_written_values);
+        if (g_last_written_values != NULL) {
+            memcpy(g_last_written_values, g_write_double_values,
+                   g_last_written_count * sizeof *g_last_written_values);
+        } else {
+            g_last_written_count = 0;
+        }
+    }
+    trigger_reentrant_data(RECORDING_STUB_REENTRANT_WRITE_DATA, data, datatype, dim, size);
     return ok_status();
 }
 
@@ -671,11 +919,28 @@ static int g_delete_call_count = 0;
 static int g_delete_ctx = 0;
 static char *g_delete_path = NULL;
 
+enum { RECORDING_STUB_DELETE_LOG_CAPACITY = 64 };
+static char *g_delete_paths[RECORDING_STUB_DELETE_LOG_CAPACITY];
+
 al_status_t al_delete_data(int ctx, const char *path) {
     g_delete_call_count++;
     g_delete_ctx = ctx;
     free(g_delete_path);
     g_delete_path = record_str(path);
+    if (g_delete_call_count <= RECORDING_STUB_DELETE_LOG_CAPACITY) {
+        g_delete_paths[g_delete_call_count - 1] = record_str(path);
+    }
+    record_data_event(RECORDING_STUB_DATA_EVENT_DELETE, path);
+    trigger_reentrant_data(RECORDING_STUB_REENTRANT_DELETE_DATA, NULL, 0, 0, NULL);
+
+    const char *failed_path = getenv("RECORDING_STUB_DELETE_FAIL_FIELD");
+    if (failed_path != NULL && path != NULL && strcmp(path, failed_path) == 0) {
+        al_status_t status;
+        status.code = -24;
+        memset(status.message, 0, sizeof status.message);
+        strncpy(status.message, "recording-stub: delete refused", sizeof status.message - 1);
+        return status;
+    }
     return ok_status();
 }
 
@@ -815,6 +1080,8 @@ static int g_plugin_second_int = 0;
 static double g_plugin_double = 0.0;
 static const void *g_plugin_pointer = NULL;
 static const void *g_plugin_size_pointer = NULL;
+static double *g_plugin_write_double_values = NULL;
+static size_t g_plugin_write_double_count = 0;
 
 /* `first`/`second` are copied rather than retained as raw pointers: a
  * translated argument the shim forwards (issue #67) is a temporary buffer
@@ -865,12 +1132,14 @@ al_status_t al_unbind_plugin(const char *field_path, const char *plugin_name) {
 al_status_t al_bind_readback_plugins(int ctx_id) {
     record_plugin_call("al_bind_readback_plugins", ctx_id, NULL, NULL);
     (void)ctx_id;
+    trigger_reentrant_data(RECORDING_STUB_REENTRANT_BIND_READBACK_PLUGINS, NULL, 0, 0, NULL);
     return ok_status();
 }
 
 al_status_t al_unbind_readback_plugins(int ctx_id) {
     record_plugin_call("al_unbind_readback_plugins", ctx_id, NULL, NULL);
     (void)ctx_id;
+    trigger_reentrant_data(RECORDING_STUB_REENTRANT_UNBIND_READBACK_PLUGINS, NULL, 0, 0, NULL);
     return ok_status();
 }
 
@@ -886,6 +1155,7 @@ al_status_t al_is_plugin_registered(const char *plugin_name, _Bool *is_registere
 al_status_t al_write_plugins_metadata(int ctx_id) {
     record_plugin_call("al_write_plugins_metadata", ctx_id, NULL, NULL);
     (void)ctx_id;
+    trigger_reentrant_data(RECORDING_STUB_REENTRANT_WRITE_PLUGINS_METADATA, NULL, 0, 0, NULL);
     return ok_status();
 }
 
@@ -1039,6 +1309,15 @@ al_status_t al_plugin_end_action(int ctx_id) {
 
 al_status_t al_plugin_read_data(int ctx_id, const char *field, const char *timebase, void **data,
                                 int datatype, int dim, int *size) {
+    if (g_reentrant_active) {
+        g_reentrant_call_count++;
+        free(g_reentrant_seen_field);
+        g_reentrant_seen_field = record_str(field);
+        free(g_reentrant_seen_timebase);
+        g_reentrant_seen_timebase = record_str(timebase);
+        return compute_read_response(field, data, dim, size);
+    }
+
     record_plugin_call("al_plugin_read_data", ctx_id, field, timebase);
     g_plugin_first_int = datatype;
     g_plugin_second_int = dim;
@@ -1046,16 +1325,30 @@ al_status_t al_plugin_read_data(int ctx_id, const char *field, const char *timeb
     (void)ctx_id;
     (void)timebase;
 
+    if (g_reentrant_read != NULL && field != NULL) {
+        g_reentrant_active = 1;
+        void *reentrant_data = NULL;
+        int reentrant_size[RECORDING_STUB_MAXDIM] = {0};
+        g_reentrant_read(ctx_id, g_reentrant_field, "", &reentrant_data, datatype, dim,
+                         reentrant_size);
+        g_reentrant_active = 0;
+    }
+
     return compute_read_response(field, data, dim, size);
 }
 
 al_status_t al_plugin_write_data(int ctx_id, const char *field, const char *timebase, void *data,
                                  int datatype, int dim, int *size) {
+    if (reentrant_data_is_active()) {
+        return record_reentrant_data_call(ctx_id, field, timebase, data, datatype, dim, size);
+    }
     record_plugin_call("al_plugin_write_data", ctx_id, field, timebase);
     g_plugin_first_int = datatype;
     g_plugin_second_int = dim;
     g_plugin_pointer = data;
     g_plugin_size_pointer = size;
+    snapshot_double_payload(&g_plugin_write_double_values, &g_plugin_write_double_count, data,
+                            datatype, dim, size);
     (void)ctx_id;
     (void)field;
     (void)timebase;
@@ -1063,6 +1356,7 @@ al_status_t al_plugin_write_data(int ctx_id, const char *field, const char *time
     (void)datatype;
     (void)dim;
     (void)size;
+    trigger_reentrant_data(RECORDING_STUB_REENTRANT_PLUGIN_WRITE_DATA, data, datatype, dim, size);
     return ok_status();
 }
 
@@ -1078,6 +1372,12 @@ int recording_stub_plugin_second_int(void) { return g_plugin_second_int; }
 double recording_stub_plugin_double(void) { return g_plugin_double; }
 const void *recording_stub_plugin_pointer(void) { return g_plugin_pointer; }
 const void *recording_stub_plugin_size_pointer(void) { return g_plugin_size_pointer; }
+int recording_stub_plugin_write_double_count(void) { return (int)g_plugin_write_double_count; }
+double recording_stub_plugin_write_double_at(int index) {
+    return index >= 0 && (size_t)index < g_plugin_write_double_count
+               ? g_plugin_write_double_values[index]
+               : 0.0;
+}
 
 /* Introspection accessors below: not part of the mirrored IMAS-Core ABI.
  * tests/runtime_binding_test.c dlsym's these directly rather than linking this stub —
@@ -1235,6 +1535,21 @@ int recording_stub_end_action_ctx_id(void) {
 int recording_stub_read_call_count(void) {
     return g_read_call_count;
 }
+int recording_stub_data_event_count(void) {
+    return g_data_event_count;
+}
+int recording_stub_data_event_kind_at(int index) {
+    if (index < 0 || index >= g_data_event_count || index >= RECORDING_STUB_DATA_EVENT_CAPACITY) {
+        return 0;
+    }
+    return g_data_event_kinds[index];
+}
+const char *recording_stub_data_event_path_at(int index) {
+    if (index < 0 || index >= g_data_event_count || index >= RECORDING_STUB_DATA_EVENT_CAPACITY) {
+        return NULL;
+    }
+    return g_data_event_paths[index];
+}
 int recording_stub_read_ctx_id(void) {
     return g_read_ctx_id;
 }
@@ -1278,6 +1593,12 @@ int recording_stub_write_dim(void) {
 int recording_stub_write_size_first(void) {
     return g_write_size_first;
 }
+int recording_stub_write_double_count(void) {
+    return (int)g_write_double_count;
+}
+double recording_stub_write_double_at(int index) {
+    return index >= 0 && (size_t)index < g_write_double_count ? g_write_double_values[index] : 0.0;
+}
 
 int recording_stub_delete_call_count(void) {
     return g_delete_call_count;
@@ -1287,6 +1608,12 @@ int recording_stub_delete_ctx(void) {
 }
 const char *recording_stub_delete_path(void) {
     return g_delete_path;
+}
+const char *recording_stub_delete_path_at(int index) {
+    if (index < 0 || index >= g_delete_call_count || index >= RECORDING_STUB_DELETE_LOG_CAPACITY) {
+        return NULL;
+    }
+    return g_delete_paths[index];
 }
 
 int recording_stub_iterate_call_count(void) {
