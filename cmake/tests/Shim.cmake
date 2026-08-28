@@ -43,6 +43,8 @@ add_stub_test(runtime-binding-version-mismatch runtime_binding_test version-mism
 add_stub_test(runtime-binding-null-version runtime_binding_test null-version
     ENV "RECORDING_STUB_NULL_VERSION=1")
 
+# Bare, and must stay bare: this scenario needs IMAS_CORE_LIBRARY pointing at a
+# path that does not exist, which is the one value add_stub_test hardcodes.
 add_test(NAME runtime-binding-missing-library COMMAND runtime_binding_test missing-library)
 set_tests_properties(runtime-binding-missing-library PROPERTIES ENVIRONMENT
     "IMAS_CORE_LIBRARY=${CMAKE_CURRENT_BINARY_DIR}/does-not-exist.so")
@@ -51,11 +53,16 @@ add_stub_test(runtime-binding-verbatim-forwarding runtime_binding_test verbatim-
 
 add_stub_test(runtime-binding-plugin-forwarding runtime_binding_test plugin-forwarding)
 
+# Bare, and must stay bare: this scenario dlopens the shim to assert one symbol
+# is absent and never binds IMAS-Core, so it needs no stub and no environment.
 add_test(NAME runtime-binding-plugin-timerange-omitted
     COMMAND runtime_binding_test plugin-timerange-omitted)
 
 add_stub_test(runtime-binding-utility-forwarding runtime_binding_test utility-forwarding)
 
+# Bare, and must stay bare: this scenario proves a bare soname resolves through
+# the loader's own search path, so it must leave IMAS_CORE_LIBRARY unset --
+# setting it, as add_stub_test always does, is exactly what it disproves.
 add_test(NAME runtime-binding-bare-soname COMMAND runtime_binding_test bare-soname)
 if(APPLE)
     set(_runtime_binding_search_path_var DYLD_LIBRARY_PATH)
