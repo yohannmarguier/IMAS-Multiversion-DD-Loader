@@ -64,6 +64,14 @@ target_compile_definitions(recording_stub PRIVATE
 #
 # ENV entries are appended to the environment verbatim, in the order given,
 # and are how a scenario reaches the recording stub's own fixture knobs.
+#
+# Omitting HLI_DD_VERSION is a positive statement, not a default: it means the
+# latch must not fire, so the variable is actively unset for the test rather
+# than merely left unmentioned. Without that, a scenario whose whole point is
+# an unresolved latch would silently inherit whatever the developer's shell
+# exported and pass for the wrong reason. ENVIRONMENT_MODIFICATION carries it,
+# which is why CMakeLists.txt requires CMake 3.22 -- below that the property is
+# ignored without warning and this guarantee disappears.
 function(add_stub_test name executable)
     cmake_parse_arguments(PARSE_ARGV 2 ARG "" "HLI_DD_VERSION;STAMP_VERSION" "ENV")
 
