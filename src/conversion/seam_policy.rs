@@ -11,7 +11,8 @@
 //! calls — the delete loop took two until ADR 0017 decision 2 retired its
 //! presence probe — and formats that retained failure after the loop returns.
 //!
-//! Before this module existed, `read_data_impl` (`src/interpose.rs`) mixed
+//! Before this module existed, `read_data_impl` — now in
+//! `src/interpose/read.rs` — mixed
 //! raw-pointer marshalling with the read-loop decisions ADR 0010, ADR 0012
 //! and ADR 0014 make: which candidate to try next, whether a value
 //! transformation applies, and what fidelity a caller's field/timebase
@@ -31,7 +32,7 @@
 //! touches [`crate::registry::context_registry::REGISTRY`] or the HLI version
 //! latch, and never calls into [`crate::core::dl`] — every raw pointer, every
 //! registry lookup, and the ADR-0014/HLI-version gates ahead of them stay in
-//! `src/interpose.rs`, the interposition layer ADR 0015 names.
+//! `src/interpose/`, the interposition layer ADR 0015 names.
 //!
 //! [`ReadVerdict`]'s `field`/`timebase` fidelities are mandatory struct
 //! fields rather than a separately-returned loss list: every branch of
@@ -1266,7 +1267,8 @@ mod tests {
     /// Issue #107 AC5, the issue-#66 shape: a relative field resolved
     /// beneath a child record's anchor must retain the complete anchor-joined
     /// DD path, not the bare relative argument the caller actually passed.
-    /// The adapter (`src/interpose.rs`) is the one that performs that join —
+    /// The adapter (`read_argument_path`, `src/interpose/refusal.rs`) is the
+    /// one that performs that join —
     /// this proves `run_read` never re-derives or truncates it once given,
     /// which is what makes issue #66's defect (nine independent join call
     /// sites, one of which used the unjoined argument) impossible to
@@ -1284,7 +1286,8 @@ mod tests {
             forward: None,
             // The anchor ("time_slice") already joined onto the caller's own
             // relative argument ("boundary_separatrix/gap/r") by the adapter,
-            // exactly as `read_argument_path` does in `src/interpose.rs`.
+            // exactly as `read_argument_path` does in
+            // `src/interpose/refusal.rs`.
             dd_path: "time_slice/boundary_separatrix/gap/r".to_string(),
         };
         let timebase = ReadArgument {
