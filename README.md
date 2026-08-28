@@ -73,7 +73,7 @@ On the ITER cluster:
 $ source scripts/iter-env.sh     # Rust/1.88.0-GCCcore-14.3.0 + cargo-c/0.10.15-GCCcore-14.3.0 + IMAS-Core/5.7.1
 ```
 
-Elsewhere: Rust ≥ 1.88, `cargo install cargo-c`, CMake ≥ 3.21, a C and C++
+Elsewhere: Rust ≥ 1.88, `cargo install cargo-c`, CMake ≥ 3.22, a C and C++
 compiler, and IMAS-Core itself — see the acquisition options in [Build,
 test, install](#build-test-install).
 
