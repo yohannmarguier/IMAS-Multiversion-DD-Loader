@@ -85,7 +85,14 @@ pub(crate) enum Resolved {
     Forward,
     Single(Candidate),
     Plan(Vec<Candidate>),
-    NoSource(Fidelity),
+    /// The artifact claimed the path but names no stored counterpart.
+    /// `requested_precedence` travels with it because the non-primary check
+    /// sits ahead of the no-stored-source check in both seams' declared
+    /// orders, and so must be answerable without a candidate to read it from.
+    NoSource {
+        fidelity: Fidelity,
+        requested_precedence: Option<u32>,
+    },
     Unclaimed,
     Refusal {
         reason: String,
@@ -209,12 +216,75 @@ pub(crate) enum ArgumentRole {
 }
 
 impl ArgumentRole {
-    fn serves(self, actual: Self) -> bool {
-        self == Self::Any || self == actual
+    /// Whether a check tagged `self` serves an argument supplied in `role`.
+    /// This is what keeps the last entries of each list from firing on the
+    /// wrong argument: a write resolves `field` and `timebase` through one
+    /// list, and refusing a field for a timebase's rule would reject every
+    /// legitimate COCOS sign flip.
+    fn serves(self, role: Self) -> bool {
+        self == Self::Any || self == role
     }
 }
 
-#[derive(Clone, Copy)]
+/// The DD-version stamp. A write must never rewrite it under a mismatch: this
+/// call can translate one field, not migrate the occurrence into the HLI DD
+/// version (ADR 0016 decision 5).
+const DD_VERSION_STAMP: &str = "ids_properties/version_put/data_dictionary";
+
+/// The stamp and the two containers that hold it. *Deleting* any of the three
+/// takes the stamp with it (ADR 0016 decision 6), whereas *writing* the two
+/// containers describes the writing library rather than the DD and stays
+/// ordinary — which is why only the delete list reads this.
+const DD_VERSION_STAMP_ANCESTRY: &[&str] = &[
+    "ids_properties",
+    "ids_properties/version_put",
+    DD_VERSION_STAMP,
+];
+
+/// What the ordered checks below are allowed to look at.
+///
+/// The two resolution-level facts are held apart from the resolution's shape
+/// on purpose: the stamp check and the non-primary check read only these, and
+/// therefore give the same answer whether the map produced one stored source,
+/// a plan, or none at all. That is what lets both sit ahead of the shared
+/// guard in the declared order without needing a candidate to exist.
+struct CheckSubject<'a> {
+    /// The absolute HLI-DD spelling a refusal names — the caller's own joined
+    /// path where no rule claimed it.
+    dd_path: &'a str,
+    /// The precedence the rule assigned the HLI spelling, present whenever the
+    /// map claimed it. Deliberately distinct from a candidate's own precedence
+    /// inside a declared plan.
+    requested_precedence: Option<u32>,
+    shape: CheckShape<'a>,
+}
+
+/// The shape a resolution presented to the checks.
+enum CheckShape<'a> {
+    /// A real path argument no rule and no document-level default claims.
+    Unclaimed,
+    /// The artifact says no stored counterpart exists.
+    NoStoredSource,
+    /// The shared conversion map declined to serve the rule, with its reason.
+    SharedRefusal(&'a str),
+    /// The map named a stored source: the one candidate a write may change, or
+    /// the candidate a delete is currently considering. `None` is a declared
+    /// plan holding no source this seam may act on — the resolution-level
+    /// checks still run, and the narrowing reports the missing slot after
+    /// they have had their say.
+    Candidate(Option<&'a Candidate>),
+}
+
+impl<'a> CheckSubject<'a> {
+    fn candidate(&self) -> Option<&'a Candidate> {
+        match self.shape {
+            CheckShape::Candidate(candidate) => candidate,
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum WriteCheck {
     Unclaimed,
     ImmutableStamp,
@@ -225,18 +295,25 @@ enum WriteCheck {
     InvertibleTransformation,
 }
 
-/// The complete write refusal order. The role tag is part of the policy.
+/// The complete write refusal order, and the one artifact that fixes it:
+/// [`first_write_refusal`] walks exactly this list in exactly this order, so a
+/// fifth operation cannot inherit a different order by imitating a sibling's
+/// `if` chain (ADR 0016 decision 9, ADR 0021 decision 4). The shared guard is
+/// at a fixed position here by construction rather than by convention.
+///
+/// The role tag is part of the policy, not decoration — see
+/// [`ArgumentRole::serves`].
 const WRITE_CHECKS: &[(ArgumentRole, WriteCheck)] = &[
     (ArgumentRole::Any, WriteCheck::Unclaimed),
-    (ArgumentRole::Any, WriteCheck::ImmutableStamp),
-    (ArgumentRole::Any, WriteCheck::SharedRefusal),
-    (ArgumentRole::Any, WriteCheck::NonPrimarySource),
-    (ArgumentRole::Any, WriteCheck::NoStoredSource),
+    (ArgumentRole::Any, WriteCheck::ImmutableStamp), // ADR 0016 decision 5
+    (ArgumentRole::Any, WriteCheck::SharedRefusal),  // ADR 0016 decision 9 step 1
+    (ArgumentRole::Any, WriteCheck::NonPrimarySource), // ADR 0016 decision 2
+    (ArgumentRole::Any, WriteCheck::NoStoredSource), // ADR 0016 decision 3
     (ArgumentRole::Timebase, WriteCheck::TimebaseTransformation),
-    (ArgumentRole::Field, WriteCheck::InvertibleTransformation),
+    (ArgumentRole::Field, WriteCheck::InvertibleTransformation), // ADR 0016 decision 7
 ];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum DeleteCheck {
     Unclaimed,
     ImmutableStamp,
@@ -246,33 +323,128 @@ enum DeleteCheck {
     EscapingSubtree,
 }
 
-/// The complete delete refusal order.
+/// The complete delete refusal order, walked by [`first_delete_refusal`] with
+/// the same guarantee [`WRITE_CHECKS`] carries. Every entry serves the seam's
+/// one `path` argument, so no entry is role-narrowed here.
 const DELETE_CHECKS: &[(ArgumentRole, DeleteCheck)] = &[
     (ArgumentRole::Path, DeleteCheck::Unclaimed),
-    (ArgumentRole::Path, DeleteCheck::ImmutableStamp),
+    (ArgumentRole::Path, DeleteCheck::ImmutableStamp), // ADR 0016 decision 6
     (ArgumentRole::Path, DeleteCheck::SharedRefusal),
     (ArgumentRole::Path, DeleteCheck::NonPrimarySource),
     (ArgumentRole::Path, DeleteCheck::NoStoredSource),
-    (ArgumentRole::Path, DeleteCheck::EscapingSubtree),
+    (ArgumentRole::Path, DeleteCheck::EscapingSubtree), // ADR 0017
 ];
 
-fn write_check_index(check: WriteCheck) -> usize {
+/// The first write refusal the declared order reaches, as its position in
+/// [`WRITE_CHECKS`] and its reason, or `None` where every check that serves
+/// `role` passes.
+fn first_write_refusal(role: ArgumentRole, subject: &CheckSubject<'_>) -> Option<(usize, String)> {
     WRITE_CHECKS
         .iter()
-        .position(|(role, candidate)| {
-            role.serves(*role)
-                && std::mem::discriminant(candidate) == std::mem::discriminant(&check)
+        .enumerate()
+        .filter(|(_, (tag, _))| tag.serves(role))
+        .find_map(|(index, (_, check))| {
+            write_check_refusal(*check, subject).map(|reason| (index, reason))
         })
-        .expect("write check is listed")
 }
 
-fn delete_check_is_listed(check: DeleteCheck) {
-    debug_assert!(
-        DELETE_CHECKS
-            .iter()
-            .any(|(_, candidate)| std::mem::discriminant(candidate)
-                == std::mem::discriminant(&check))
-    );
+fn write_check_refusal(check: WriteCheck, subject: &CheckSubject<'_>) -> Option<String> {
+    match check {
+        WriteCheck::Unclaimed => matches!(subject.shape, CheckShape::Unclaimed)
+            .then(|| "this path is unclaimed by the conversion map".to_string()),
+        WriteCheck::ImmutableStamp => (subject.dd_path == DD_VERSION_STAMP)
+            .then(|| "the DD-version stamp is immutable under a version mismatch".to_string()),
+        // A shared refusal is decided here rather than at the non-primary
+        // check below it: a rule that cannot be served at all must not appear
+        // to be merely a collision risk.
+        WriteCheck::SharedRefusal => match subject.shape {
+            CheckShape::SharedRefusal(reason) => Some(reason.to_string()),
+            _ => None,
+        },
+        WriteCheck::NonPrimarySource => subject
+            .requested_precedence
+            .is_some_and(|precedence| precedence != 1)
+            .then(|| {
+                "this path is a non-primary source and cannot write a shared stored slot"
+                    .to_string()
+            }),
+        WriteCheck::NoStoredSource => matches!(subject.shape, CheckShape::NoStoredSource)
+            .then(|| "this path has no stored source".to_string()),
+        WriteCheck::TimebaseTransformation => subject
+            .candidate()
+            .is_some_and(|candidate| candidate.value_transformation != ValueTransformation::None)
+            .then(|| {
+                "this timebase needs a value transformation, which al_write_data cannot apply"
+                    .to_string()
+            }),
+        WriteCheck::InvertibleTransformation => subject
+            .candidate()
+            .is_some_and(|candidate| candidate.value_transformation.inverse().is_none())
+            .then(|| {
+                "this path needs a value transformation that cannot be inverted for a write"
+                    .to_string()
+            }),
+    }
+}
+
+/// The first delete refusal the declared order reaches, or `None` where every
+/// check passes.
+fn first_delete_refusal(
+    record: &ConversionRecord,
+    role: ArgumentRole,
+    subject: &CheckSubject<'_>,
+) -> Option<String> {
+    DELETE_CHECKS
+        .iter()
+        .filter(|(tag, _)| tag.serves(role))
+        .find_map(|(_, check)| delete_check_refusal(*check, record, subject))
+}
+
+fn delete_check_refusal(
+    check: DeleteCheck,
+    record: &ConversionRecord,
+    subject: &CheckSubject<'_>,
+) -> Option<String> {
+    match check {
+        DeleteCheck::Unclaimed => matches!(subject.shape, CheckShape::Unclaimed)
+            .then(|| "this path is unclaimed by the conversion map".to_string()),
+        DeleteCheck::ImmutableStamp => {
+            DD_VERSION_STAMP_ANCESTRY
+                .contains(&subject.dd_path)
+                .then(|| {
+                    "this delete would remove the DD-version stamp while stored data remains"
+                        .to_string()
+                })
+        }
+        DeleteCheck::SharedRefusal => match subject.shape {
+            CheckShape::SharedRefusal(reason) => Some(reason.to_string()),
+            _ => None,
+        },
+        DeleteCheck::NonPrimarySource => subject
+            .requested_precedence
+            .is_some_and(|precedence| precedence != 1)
+            .then(|| {
+                "this path is a non-primary source and cannot delete a shared stored slot"
+                    .to_string()
+            }),
+        DeleteCheck::NoStoredSource => matches!(subject.shape, CheckShape::NoStoredSource)
+            .then(|| "this path has no stored source".to_string()),
+        DeleteCheck::EscapingSubtree => subject
+            .candidate()
+            .is_some_and(|candidate| {
+                !is_equilibrium_leaf(record, &candidate.dd_path)
+                    && !record.map.subtree_delete_is_trivial(
+                        &candidate.dd_path,
+                        &candidate.stored_dd_path,
+                        record.direction_to_stored,
+                    )
+            })
+            .then(|| {
+                "this subtree delete would leave data at a stored path outside the requested \
+                 subtree"
+                    .to_string()
+            }),
+    }
 }
 
 /// What one path-bearing ABI argument amounts to, before
@@ -344,7 +516,10 @@ pub(crate) fn resolve(record: &ConversionRecord, raw: *const c_char) -> Resolved
     };
     match explanation.outcome {
         Outcome::Refusal(reason) => refusal(refusal_reason_message(reason)),
-        Outcome::NoSource => Resolved::NoSource(metadata.fidelity),
+        Outcome::NoSource => Resolved::NoSource {
+            fidelity: metadata.fidelity,
+            requested_precedence: metadata.requested_precedence,
+        },
         Outcome::Path {
             resolved_path,
             value_transformation,
@@ -420,7 +595,7 @@ pub(crate) fn narrow_context_path(resolved: Resolved) -> ContextPathResolution {
     match resolved {
         Resolved::Forward => ContextPathResolution::Forward,
         Resolved::Unclaimed => ContextPathResolution::Unclaimed,
-        Resolved::NoSource(_) => ContextPathResolution::NoSource,
+        Resolved::NoSource { .. } => ContextPathResolution::NoSource,
         Resolved::Refusal { reason, .. } => ContextPathResolution::Refusal(reason),
         Resolved::Single(candidate) if candidate.value_transformation == ValueTransformation::None =>
             ContextPathResolution::Translated(candidate.path),
@@ -439,7 +614,7 @@ pub(crate) fn narrow_read_path(resolved: Resolved) -> ReadPath {
     match resolved {
         Resolved::Forward => ReadPath::Forward,
         Resolved::Unclaimed => ReadPath::NoSource(Fidelity::Unmappable),
-        Resolved::NoSource(fidelity) => ReadPath::NoSource(fidelity),
+        Resolved::NoSource { fidelity, .. } => ReadPath::NoSource(fidelity),
         Resolved::Refusal {
             reason,
             dd_path,
@@ -473,127 +648,125 @@ fn inverted_for_write(transformation: ValueTransformation) -> ValueTransformatio
 }
 
 /// ADR 0016 decision 3: write-specific policy narrows one shared answer.
+///
+/// Every refusal below comes from one walk of [`WRITE_CHECKS`]; the match only
+/// says what each resolution shape looks like to those checks. That is what
+/// keeps the declared order and the enacted order the same artifact.
 pub(crate) fn narrow_write_path(
     record: &ConversionRecord,
     raw: *const c_char,
     role: ArgumentRole,
     resolved: Resolved,
 ) -> WritePath {
-    let refusal = |reason, dd_path, check_index| WritePath::Refusal {
-        reason,
-        dd_path,
-        check_index,
+    if matches!(resolved, Resolved::Forward) {
+        return WritePath::Forward;
+    }
+    let caller = caller_dd_path(record, raw);
+    // The primary is the one stored slot a write may change, so it is also the
+    // candidate the role-specific checks judge. A plan that declares none
+    // still runs every resolution-level check first.
+    let primary = match &resolved {
+        Resolved::Single(candidate) => Some(candidate),
+        Resolved::Plan(candidates) => candidates
+            .iter()
+            .find(|candidate| candidate.precedence == Some(1)),
+        _ => None,
     };
+    if let Some(refusal) = write_subject(&resolved, &caller, primary)
+        .as_ref()
+        .and_then(|subject| {
+            first_write_refusal(role, subject).map(|(check_index, reason)| WritePath::Refusal {
+                reason,
+                dd_path: subject.dd_path.to_string(),
+                check_index: Some(check_index),
+            })
+        })
+    {
+        return refusal;
+    }
     match resolved {
-        Resolved::Forward => WritePath::Forward,
-        Resolved::Unclaimed => refusal(
-            "this path is unclaimed by the conversion map".to_string(),
-            caller_dd_path(record, raw),
-            Some(write_check_index(WriteCheck::Unclaimed)),
-        ),
-        Resolved::NoSource(_) => refusal(
-            "this path has no stored source".to_string(),
-            caller_dd_path(record, raw),
-            Some(write_check_index(WriteCheck::NoStoredSource)),
-        ),
-        Resolved::Refusal {
-            reason, dd_path, ..
-        } => refusal(
-            reason,
-            dd_path,
-            Some(write_check_index(WriteCheck::SharedRefusal)),
-        ),
-        Resolved::Single(candidate) => narrow_single_write(role, candidate, refusal),
-        Resolved::Plan(candidates) => {
-            if let Some(candidate) = candidates.first() {
-                if candidate.dd_path == "ids_properties/version_put/data_dictionary" {
-                    return refusal(
-                        "the DD-version stamp is immutable under a version mismatch".to_string(),
-                        candidate.dd_path.clone(),
-                        Some(write_check_index(WriteCheck::ImmutableStamp)),
-                    );
-                }
-                if candidate
-                    .requested_precedence
-                    .is_some_and(|precedence| precedence != 1)
-                {
-                    return refusal(
-                        "this path is a non-primary source and cannot write a shared stored slot"
-                            .to_string(),
-                        candidate.dd_path.clone(),
-                        Some(write_check_index(WriteCheck::NonPrimarySource)),
-                    );
-                }
-            }
-            let Some(primary) = candidates
-                .iter()
-                .find(|candidate| candidate.precedence == Some(1))
-            else {
-                return refusal(
-                    "this candidate plan has no precedence-1 source for a write".to_string(),
-                    caller_dd_path(record, raw),
-                    None,
-                );
-            };
-            if let Some(path) = write_candidate_refusal(role, primary) {
-                return refusal(path.0, path.1, path.2);
-            }
+        Resolved::Single(candidate) => WritePath::Translated {
+            path: candidate.path,
+            value_transformation: inverted_for_write(candidate.value_transformation),
+        },
+        Resolved::Plan(candidates) if primary.is_some() => {
             WritePath::Candidates(candidates.into_iter().map(write_candidate).collect())
         }
+        // A declared plan naming no precedence-1 source has no slot to write.
+        // This is not one of the ordered checks: those judge the rule, and
+        // this reports that the rule named nothing this seam can act on.
+        Resolved::Plan(_) => WritePath::Refusal {
+            reason: "this candidate plan has no precedence-1 source for a write".to_string(),
+            dd_path: caller,
+            check_index: None,
+        },
+        // `Forward` returned above; the three shapes naming no stored source
+        // are each covered by an entry in `WRITE_CHECKS` and refused there.
+        other => write_shape_refusal(&other, caller),
     }
 }
 
-fn narrow_single_write(
-    role: ArgumentRole,
-    candidate: Candidate,
-    refusal: impl FnOnce(String, String, Option<usize>) -> WritePath,
-) -> WritePath {
-    if let Some((reason, dd_path, check_index)) = write_candidate_refusal(role, &candidate) {
-        return refusal(reason, dd_path, check_index);
-    }
-    WritePath::Translated {
-        path: candidate.path,
-        value_transformation: inverted_for_write(candidate.value_transformation),
-    }
+/// The subject one resolution presents to [`WRITE_CHECKS`].
+fn write_subject<'a>(
+    resolved: &'a Resolved,
+    caller: &'a str,
+    primary: Option<&'a Candidate>,
+) -> Option<CheckSubject<'a>> {
+    let subject = match resolved {
+        Resolved::Forward => return None,
+        Resolved::Unclaimed => CheckSubject {
+            dd_path: caller,
+            requested_precedence: None,
+            shape: CheckShape::Unclaimed,
+        },
+        Resolved::NoSource {
+            requested_precedence,
+            ..
+        } => CheckSubject {
+            dd_path: caller,
+            requested_precedence: *requested_precedence,
+            shape: CheckShape::NoStoredSource,
+        },
+        // The non-primary check sits after the shared guard in the declared
+        // order, so a shared refusal is reported before any precedence the
+        // rule carried could be consulted.
+        Resolved::Refusal {
+            reason, dd_path, ..
+        } => CheckSubject {
+            dd_path,
+            requested_precedence: None,
+            shape: CheckShape::SharedRefusal(reason),
+        },
+        Resolved::Single(candidate) => CheckSubject {
+            dd_path: &candidate.dd_path,
+            requested_precedence: candidate.requested_precedence,
+            shape: CheckShape::Candidate(Some(candidate)),
+        },
+        Resolved::Plan(candidates) => CheckSubject {
+            dd_path: candidates.first().map_or(caller, |first| &first.dd_path),
+            requested_precedence: candidates
+                .first()
+                .and_then(|first| first.requested_precedence),
+            shape: CheckShape::Candidate(primary),
+        },
+    };
+    Some(subject)
 }
 
-fn write_candidate_refusal(
-    role: ArgumentRole,
-    candidate: &Candidate,
-) -> Option<(String, String, Option<usize>)> {
-    if candidate.dd_path == "ids_properties/version_put/data_dictionary" {
-        Some((
-            "the DD-version stamp is immutable under a version mismatch".to_string(),
-            candidate.dd_path.clone(),
-            Some(write_check_index(WriteCheck::ImmutableStamp)),
-        ))
-    } else if candidate
-        .requested_precedence
-        .is_some_and(|precedence| precedence != 1)
-    {
-        Some((
-            "this path is a non-primary source and cannot write a shared stored slot".to_string(),
-            candidate.dd_path.clone(),
-            Some(write_check_index(WriteCheck::NonPrimarySource)),
-        ))
-    } else if role == ArgumentRole::Timebase
-        && candidate.value_transformation != ValueTransformation::None
-    {
-        Some((
-            "this timebase needs a value transformation, which al_write_data cannot apply"
-                .to_string(),
-            candidate.dd_path.clone(),
-            Some(write_check_index(WriteCheck::TimebaseTransformation)),
-        ))
-    } else if role == ArgumentRole::Field && candidate.value_transformation.inverse().is_none() {
-        Some((
-            "this path needs a value transformation that cannot be inverted for a write"
-                .to_string(),
-            candidate.dd_path.clone(),
-            Some(write_check_index(WriteCheck::InvertibleTransformation)),
-        ))
-    } else {
-        None
+/// The refusal a shape naming no stored source earns. Reached only if a future
+/// shape escapes [`WRITE_CHECKS`]: reporting the list's own no-stored-slot
+/// verdict refuses safely rather than writing a path no check has judged.
+fn write_shape_refusal(resolved: &Resolved, caller: String) -> WritePath {
+    let (reason, dd_path) = match resolved {
+        Resolved::Refusal {
+            reason, dd_path, ..
+        } => (reason.clone(), dd_path.clone()),
+        _ => ("this path has no stored source".to_string(), caller),
+    };
+    WritePath::Refusal {
+        reason,
+        dd_path,
+        check_index: None,
     }
 }
 
@@ -615,77 +788,86 @@ pub(crate) fn narrow_delete_path(
     raw: *const c_char,
     resolved: Resolved,
 ) -> DeletePath {
-    match resolved {
-        Resolved::Forward => DeletePath::Forward,
-        Resolved::Unclaimed => DeletePath::Refusal {
-            reason: "this path is unclaimed by the conversion map".to_string(),
-            dd_path: caller_dd_path(record, raw),
-        },
-        Resolved::NoSource(_) => DeletePath::Refusal {
-            reason: "this path has no stored source".to_string(),
-            dd_path: caller_dd_path(record, raw),
-        },
-        Resolved::Refusal {
-            reason, dd_path, ..
-        } => DeletePath::Refusal { reason, dd_path },
-        Resolved::Single(candidate) => narrow_single_delete(record, candidate),
-        Resolved::Plan(candidates) => {
-            for candidate in &candidates {
-                if let Some(refusal) = delete_candidate_refusal(record, candidate) {
-                    return refusal;
-                }
-            }
-            DeletePath::Candidates(
-                candidates
-                    .into_iter()
-                    .map(|candidate| candidate.path)
-                    .collect(),
-            )
-        }
+    if matches!(resolved, Resolved::Forward) {
+        return DeletePath::Forward;
     }
-}
-
-fn narrow_single_delete(record: &ConversionRecord, candidate: Candidate) -> DeletePath {
-    if let Some(refusal) = delete_candidate_refusal(record, &candidate) {
+    let caller = caller_dd_path(record, raw);
+    // Unlike a write, a delete acts on every candidate, so every candidate is
+    // judged. The resolution-level checks read only `dd_path` and the rule's
+    // own precedence, which every candidate shares, so walking the list once
+    // per candidate cannot report a later check ahead of an earlier one.
+    if let Some(refusal) = delete_subjects(&resolved, &caller)
+        .iter()
+        .find_map(|subject| {
+            first_delete_refusal(record, ArgumentRole::Path, subject).map(|reason| {
+                DeletePath::Refusal {
+                    reason,
+                    dd_path: subject.dd_path.to_string(),
+                }
+            })
+        })
+    {
         return refusal;
     }
-    DeletePath::Translated(candidate.path)
+    match resolved {
+        Resolved::Single(candidate) => DeletePath::Translated(candidate.path),
+        Resolved::Plan(candidates) => DeletePath::Candidates(
+            candidates
+                .into_iter()
+                .map(|candidate| candidate.path)
+                .collect(),
+        ),
+        // `Forward` returned above; the three shapes naming no stored source
+        // are each covered by an entry in `DELETE_CHECKS` and refused there.
+        other => delete_shape_refusal(&other, caller),
+    }
 }
 
-fn delete_candidate_refusal(
-    record: &ConversionRecord,
-    candidate: &Candidate,
-) -> Option<DeletePath> {
-    let reason = if matches!(
-        candidate.dd_path.as_str(),
-        "ids_properties"
-            | "ids_properties/version_put"
-            | "ids_properties/version_put/data_dictionary"
-    ) {
-        delete_check_is_listed(DeleteCheck::ImmutableStamp);
-        Some("this delete would remove the DD-version stamp while stored data remains")
-    } else if candidate
-        .requested_precedence
-        .is_some_and(|precedence| precedence != 1)
-    {
-        delete_check_is_listed(DeleteCheck::NonPrimarySource);
-        Some("this path is a non-primary source and cannot delete a shared stored slot")
-    } else if !is_equilibrium_leaf(record, &candidate.dd_path)
-        && !record.map.subtree_delete_is_trivial(
-            &candidate.dd_path,
-            &candidate.stored_dd_path,
-            record.direction_to_stored,
-        )
-    {
-        delete_check_is_listed(DeleteCheck::EscapingSubtree);
-        Some("this subtree delete would leave data at a stored path outside the requested subtree")
-    } else {
-        None
+/// Every subject one resolution presents to [`DELETE_CHECKS`], in the order a
+/// delete would act on them.
+fn delete_subjects<'a>(resolved: &'a Resolved, caller: &'a str) -> Vec<CheckSubject<'a>> {
+    let candidate_subject = |candidate: &'a Candidate| CheckSubject {
+        dd_path: &candidate.dd_path,
+        requested_precedence: candidate.requested_precedence,
+        shape: CheckShape::Candidate(Some(candidate)),
     };
-    reason.map(|reason| DeletePath::Refusal {
-        reason: reason.to_string(),
-        dd_path: candidate.dd_path.clone(),
-    })
+    match resolved {
+        Resolved::Forward => Vec::new(),
+        Resolved::Unclaimed => vec![CheckSubject {
+            dd_path: caller,
+            requested_precedence: None,
+            shape: CheckShape::Unclaimed,
+        }],
+        Resolved::NoSource {
+            requested_precedence,
+            ..
+        } => vec![CheckSubject {
+            dd_path: caller,
+            requested_precedence: *requested_precedence,
+            shape: CheckShape::NoStoredSource,
+        }],
+        Resolved::Refusal {
+            reason, dd_path, ..
+        } => vec![CheckSubject {
+            dd_path,
+            requested_precedence: None,
+            shape: CheckShape::SharedRefusal(reason),
+        }],
+        Resolved::Single(candidate) => vec![candidate_subject(candidate)],
+        Resolved::Plan(candidates) => candidates.iter().map(candidate_subject).collect(),
+    }
+}
+
+/// The refusal a shape naming no stored source earns, for the same reason
+/// [`write_shape_refusal`] exists.
+fn delete_shape_refusal(resolved: &Resolved, caller: String) -> DeletePath {
+    let (reason, dd_path) = match resolved {
+        Resolved::Refusal {
+            reason, dd_path, ..
+        } => (reason.clone(), dd_path.clone()),
+        _ => ("this path has no stored source".to_string(), caller),
+    };
+    DeletePath::Refusal { reason, dd_path }
 }
 
 fn caller_dd_path(record: &ConversionRecord, raw: *const c_char) -> String {
