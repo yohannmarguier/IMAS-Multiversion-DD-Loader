@@ -13,9 +13,11 @@ not in the interposition layer: `run_read`, `run_write`, `run_delete`, the
 `ReadAttempt` type, the `impl TranslatedReadPath` block that produces
 attempts, and `validate_value_transformation` /
 `apply_value_transformation` are all there, and none of them reaches
-IMAS-Core or process-global state (ADR 0015). `src/interpose.rs` keeps only
-what is C-facing: `read_data_impl` and its siblings, the `CallFamily`
-dispatch that chooses an ABI symbol, `resolve_arraystruct_argument`,
+IMAS-Core or process-global state (ADR 0015). `src/interpose.rs` keeps the
+C-facing seam policies: `read_data_impl` and its siblings plus
+`resolve_arraystruct_argument`. Shared interposition machinery lives under
+`src/interpose/`: `dispatch.rs` owns `CallFamily` and its ABI-symbol dispatch,
+`reentry.rs` owns the ADR 0014 depth gate, and `refusal.rs` owns
 `contextual_refusal`, `joined_argument_path` and `live_conversion_record`.
 `src/conversion/path_conversion.rs` answers *which stored path does this HLI
 argument mean, and at what fidelity* and knows about neither seams nor
