@@ -6,22 +6,34 @@ If it has to been modified, apply the same changes to AGENTS.md.
 ## Current path map
 
 Current source ownership is `src/core/`, `src/conversion/`, `src/registry/`,
-and `src/version/`; C ABI adaptation remains in `src/interpose.rs`.
+and `src/version/`; C ABI adaptation lives under `src/interpose/`.
 
 The read, write and delete **loops** live in `src/conversion/seam_policy.rs`,
 not in the interposition layer: `run_read`, `run_write`, `run_delete`, the
 `ReadAttempt` type, the `impl TranslatedReadPath` block that produces
 attempts, and `validate_value_transformation` /
 `apply_value_transformation` are all there, and none of them reaches
-IMAS-Core or process-global state (ADR 0015). `src/interpose.rs` keeps the
-C-facing seam policies: `read_data_impl` and its siblings plus
-`resolve_arraystruct_argument`. Shared interposition machinery lives under
-`src/interpose/`: `dispatch.rs` owns `CallFamily` and its ABI-symbol dispatch,
-`reentry.rs` owns the ADR 0014 depth gate, and `refusal.rs` owns
-`contextual_refusal`, `joined_argument_path` and `live_conversion_record`.
+IMAS-Core or process-global state (ADR 0015).
 `src/conversion/path_conversion.rs` answers *which stored path does this HLI
 argument mean, and at what fidelity* and knows about neither seams nor
 IMAS-Core.
+
+`src/interpose.rs` itself holds **nothing but module declarations and
+`pub(crate) use` re-exports** — the surface `lib.rs` reaches through
+`use interpose as resolve;` (issue #153). One module per seam family under
+`src/interpose/`:
+
+| Module | Owns |
+|---|---|
+| `occurrence.rs` | `begin_dataentry_action`, the global/slice/timerange/arraystruct opening seams and their plugin twins, `end_action`, plus stamp discovery (`discover_stamp`, `probe_stamp_through_a_read_context`), registration (`apply_discovery_decision`, `apply_occurrence_cache_effect`), the conversion-map cache (`resolve_conversion_map`, `map_cache_key`, `load_artifact`) and `resolve_arraystruct_argument` |
+| `read.rs` | `read_data` / `plugin_read_data` and their shared `read_data_impl` |
+| `write.rs` | `write_data` / `plugin_write_data` and their shared impl |
+| `delete.rs` | `delete_data` and `candidate_failure` |
+| `loss.rs` | the shim-owned `imas_mvdd_context_loss_*` exports |
+| `passthrough.rs` | the ADR 0002 untranslated seams and the verbatim forwards, including `close_pulse` |
+| `dispatch.rs` | `CallFamily` and its ABI-symbol dispatch |
+| `reentry.rs` | the ADR 0014 depth gate |
+| `refusal.rs` | `contextual_refusal`, `joined_argument_path` and `live_conversion_record` |
 
 C tests are
 grouped under `tests/abi/`, `tests/shim/`, `tests/real_core/`, and
@@ -29,8 +41,9 @@ grouped under `tests/abi/`, `tests/shim/`, `tests/real_core/`, and
 C harness), `tests/stub/` (the recording stub), `tests/fixtures/` (the
 reduced conversion-map fixture), `tests/cmake/` (`cmake -P` script checks),
 and `tests/scripts/` (install/package shell checks). The historical
-per-issue entries under `docs/history/` retain the paths used when their
-changes landed; use this map for current navigation.
+per-issue entries under `docs/history/` — and the ADRs under `docs/adr/`,
+which are dated records of a decision rather than navigation aids — retain the
+paths used when they were written; use this map for current navigation.
 
 ## Repository state
 
@@ -98,7 +111,7 @@ and limitations".
   instructions to add real coverage if a future artifact makes either reachable.
 - **ADR 0015 — seam policy never reaches global state.** See "Current path map"
   above: `src/conversion/` and `src/core/` know nothing about IMAS-Core or
-  process-global state; only `src/interpose.rs` is C-facing.
+  process-global state; only `src/interpose/` is C-facing.
 - **Mutation-test with the test binary deleted first.** A stale build makes a red
   assertion look green, lagging by exactly one iteration.
 - **Doc comments decay.** Any comment naming a ticket, a file under `tests/`, or
