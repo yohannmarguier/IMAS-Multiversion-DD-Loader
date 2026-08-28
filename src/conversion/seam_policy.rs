@@ -492,7 +492,7 @@ struct TimebaseFidelity<'a> {
 
 /// What [`run_read`] decided to report back to the HLI, short of turning it
 /// into an `al_status_t` — that formatting step needs the live
-/// [`crate::context_registry::ConversionRecord`]'s DD versions, which this
+/// [`crate::registry::context_registry::ConversionRecord`]'s DD versions, which this
 /// module never touches.
 // `al_status_t` is a 260-byte fixed-size ABI struct (`MAX_ERR_MSG_LEN`) that
 // the crate already copies by value throughout rather than boxing (see

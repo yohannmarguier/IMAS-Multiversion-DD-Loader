@@ -113,7 +113,8 @@ pub(crate) struct ConversionRecord {
     /// Kept crate-visible so resolver unit tests can construct a complete
     /// record without entering the process-global registry. Conversion itself
     /// still resolves a child to its root in one lookup through `root_id`,
-    /// never by walking ancestry.
+    /// never by walking ancestry — so outside `cfg(test)` this field is
+    /// written and never read, which is what the allow below records.
     #[allow(dead_code, reason = "read by registry tests that pin parentage rules")]
     pub(crate) parent_id: Option<ContextId>,
 }
