@@ -28,6 +28,7 @@
 
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
+use std::sync::Arc;
 
 use crate::conversion::conversion_map::{ConversionMap, Fidelity};
 use crate::conversion::known_artifacts;
@@ -511,9 +512,15 @@ unsafe fn open_occurrence(
     if let (Some(dataobjectname_str), Some(ids_name)) = (dataobjectname_str, ids_name)
         && let Some(stored) = REGISTRY.known_stored_version(pctx_id, dataobjectname_str)
         && stored != hli
+        && let Some(raw_path) = datapath
+            .and_then(c_str_or_none)
+            .filter(|path| !path.is_empty())
+        && let Some(artifact) = known_artifacts::lookup(ids_name, &stored, &hli)
     {
+        let map = resolve_conversion_map(ids_name, &stored, &hli, &artifact);
         translated_datapath =
-            translate_down(ids_name, &stored, &hli, datapath.and_then(c_str_or_none));
+            seam_policy::decide_datapath_translation(&map, artifact.direction_to_stored, raw_path)
+                .and_then(|path| CString::new(path).ok());
     }
     let effective_datapath = datapath.map(|original| {
         translated_datapath
@@ -724,25 +731,20 @@ fn c_str_or_none<'a>(ptr: *const c_char) -> Option<&'a str> {
     unsafe { CStr::from_ptr(ptr) }.to_str().ok()
 }
 
-/// Translates `path` from the HLI's own DD spelling to `stored`'s spelling
-/// via the artifact this project has embedded for `(ids, stored, hli)`, if
-/// any. Returns `None` — forward unchanged — when there is no such artifact,
-/// `path` is absent or empty (nothing to translate), or no rule in the
-/// artifact claims `path` at all: none of these is a basis to invent a
-/// translation (ADR 0011).
-fn translate_down(
+/// Resolves the cached conversion map for a global-action `datapath`.
+///
+/// This does not fold into [`crate::registry::context_registry::ContextRegistry::record_root`]:
+/// a global action needs the same map before its forward call, whereas root
+/// registration happens only after a successful occurrence open. Keeping the
+/// cache lookup separate also preserves `record_root`'s focused registry API.
+fn resolve_conversion_map(
     ids: &str,
     stored: &crate::version::dd_version::DdVersion,
     hli: &crate::version::dd_version::DdVersion,
-    path: Option<&str>,
-) -> Option<CString> {
-    let path = path.filter(|p| !p.is_empty())?;
-    let artifact = known_artifacts::lookup(ids, stored, hli)?;
+    artifact: &known_artifacts::ArtifactMatch,
+) -> Arc<ConversionMap> {
     let key = map_cache_key(ids, stored, hli);
-    let map = REGISTRY.get_or_create_map(key, || load_artifact(&artifact));
-    let explanation = map.resolve(path, artifact.direction_to_stored)?;
-    path_conversion::datapath_translation(explanation.outcome)
-        .and_then(|resolved_path| CString::new(resolved_path).ok())
+    REGISTRY.get_or_create_map(key, || load_artifact(artifact))
 }
 
 /// The `(IDS name, stored DD version, HLI DD version)` cache key both the

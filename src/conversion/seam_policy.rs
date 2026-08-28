@@ -45,7 +45,9 @@
 use std::ffi::{CStr, c_int};
 
 use crate::al_status_t;
-use crate::conversion::conversion_map::{Fidelity, TransformationDirection, ValueTransformation};
+use crate::conversion::conversion_map::{
+    ConversionMap, Direction, Fidelity, TransformationDirection, ValueTransformation,
+};
 use crate::conversion::known_artifacts::{self, ArtifactMatch};
 use crate::conversion::path_conversion::{
     self, DeletePath, ReadPath, TranslatedReadPath, WritePath,
@@ -122,6 +124,21 @@ pub(crate) fn decide_occurrence_registration(
             },
         },
     }
+}
+
+/// Decides whether a cached mismatching occurrence's global-action
+/// `datapath` has one concrete stored-DD spelling. This is a sibling of
+/// [`decide_occurrence_registration`], not part of it: this decision happens
+/// before forwarding from a cached mismatch, while discovery decides after
+/// forwarding from a freshly read stamp, so they have different inputs and
+/// timing despite sharing the occurrence-opening seam.
+pub(crate) fn decide_datapath_translation(
+    map: &ConversionMap,
+    direction: Direction,
+    path: &str,
+) -> Option<String> {
+    let explanation = map.resolve(path, direction)?;
+    path_conversion::datapath_translation(explanation.outcome)
 }
 
 /// The datatype half of a buffer's shape, mapped by the adapter from
@@ -998,6 +1015,78 @@ mod tests {
                 ..
             } if stored == version("3.39.0") && cache_stored == version("3.39.0")
         ));
+    }
+
+    const DATAPATH_FIXTURE: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
+    const UNCLAIMED_DATAPATH_FIXTURE: &str = r#"
+        <ids-map ids="equilibrium" format-version="1">
+          <side id="left" dd="3.39.0" cocos="11"/>
+          <side id="right" dd="4.1.1" cocos="17"/>
+          <rules/>
+        </ids-map>
+    "#;
+
+    fn datapath_map() -> ConversionMap {
+        ConversionMap::load(DATAPATH_FIXTURE).expect("fixture artifact must load")
+    }
+
+    #[test]
+    fn datapath_translation_leaves_an_unclaimed_path_to_the_adapter() {
+        let map = ConversionMap::load(UNCLAIMED_DATAPATH_FIXTURE)
+            .expect("unclaimed-path fixture artifact must load");
+        assert_eq!(
+            decide_datapath_translation(&map, Direction::Forward, "not/in/the/map"),
+            None
+        );
+    }
+
+    #[test]
+    fn datapath_translation_resolves_a_claimed_rename() {
+        assert_eq!(
+            decide_datapath_translation(
+                &datapath_map(),
+                Direction::Forward,
+                "time_slice/global_quantities/beta_normal",
+            ),
+            Some("time_slice/global_quantities/beta_tor_norm".to_string())
+        );
+    }
+
+    #[test]
+    fn datapath_translation_leaves_no_source_rules_to_the_adapter() {
+        let map = datapath_map();
+        assert_eq!(
+            decide_datapath_translation(&map, Direction::Forward, "time_slice/boundary/lcfs"),
+            None
+        );
+        assert_eq!(
+            decide_datapath_translation(&map, Direction::Reverse, "time_slice/contour_tree"),
+            None
+        );
+    }
+
+    #[test]
+    fn datapath_translation_leaves_a_retyped_rule_to_the_read_seam() {
+        assert_eq!(
+            decide_datapath_translation(
+                &datapath_map(),
+                Direction::Forward,
+                "grids_ggd/grid/space/coordinates_type",
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn datapath_translation_keeps_a_merged_rules_resolved_path() {
+        assert_eq!(
+            decide_datapath_translation(
+                &datapath_map(),
+                Direction::Forward,
+                "time_slice/constraints/j_tor",
+            ),
+            Some("time_slice/constraints/j_phi".to_string())
+        );
     }
 
     /// The deliverable test (issue #107 AC3): a `merged` field's second
