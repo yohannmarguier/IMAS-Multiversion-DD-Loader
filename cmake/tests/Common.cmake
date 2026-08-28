@@ -95,7 +95,19 @@ function(add_stub_test name executable)
 endfunction()
 
 # Registers one real-IMAS-Core scenario. The shim must resolve IMAS-Core through
-# its build RPATH, rather than the recording-stub override used by stub suites.
+# its build RPATH, rather than the recording-stub override used by stub suites,
+# so the IMAS_CORE_LIBRARY unset is unconditional and has no opt-out: a real-Core
+# test that wanted the stub would not be one.
+#
+#   add_real_core_test(<ctest-name> <executable> [<scenario-argument>...]
+#                      [RESOURCE_LOCK <lock>])
+#
+# RESOURCE_LOCK serialises the scenarios sharing the checked-in HDF5 pulse.
+#
+# This does not apply the real-core label. That comes from the enclosing
+# imas_mvdd_begin_real_core_tests()/imas_mvdd_end_real_core_tests() bracket,
+# which labels whatever was registered between them however it was registered --
+# so calling this outside the bracket yields an unlabelled test.
 function(add_real_core_test name executable)
     cmake_parse_arguments(PARSE_ARGV 2 ARG "" "RESOURCE_LOCK" "")
 
