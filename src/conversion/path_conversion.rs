@@ -94,10 +94,16 @@ pub(crate) enum Resolved {
         requested_precedence: Option<u32>,
     },
     Unclaimed,
+    /// The artifact or the shared map declines to serve the rule.
+    /// `requested_precedence` travels with it for the same reason
+    /// [`Resolved::NoSource`] carries one: which of the two checks that can
+    /// claim such a path answers first is decided by the declared order, not
+    /// by withholding the fact one of them reads.
     Refusal {
         reason: String,
         dd_path: String,
         fidelity: Fidelity,
+        requested_precedence: Option<u32>,
     },
 }
 
@@ -503,10 +509,12 @@ pub(crate) fn resolve(record: &ConversionRecord, raw: *const c_char) -> Resolved
     };
 
     let dd_path_for_refusal = hli_absolute.clone();
+    let precedence_for_refusal = metadata.requested_precedence;
     let refusal = move |reason| Resolved::Refusal {
         reason,
         dd_path: dd_path_for_refusal.clone(),
         fidelity: Fidelity::Unmappable,
+        requested_precedence: precedence_for_refusal,
     };
     match explanation.outcome {
         Outcome::Refusal(reason) => refusal(refusal_reason_message(reason)),
@@ -613,6 +621,7 @@ pub(crate) fn narrow_read_path(resolved: Resolved) -> ReadPath {
             reason,
             dd_path,
             fidelity,
+            ..
         } => ReadPath::Refusal {
             reason,
             dd_path,
@@ -719,14 +728,14 @@ fn write_subject<'a>(
             requested_precedence: *requested_precedence,
             shape: CheckShape::NoStoredSource,
         },
-        // The non-primary check sits after the shared guard in the declared
-        // order, so a shared refusal is reported before any precedence the
-        // rule carried could be consulted.
         Resolved::Refusal {
-            reason, dd_path, ..
+            reason,
+            dd_path,
+            requested_precedence,
+            ..
         } => CheckSubject {
             dd_path,
-            requested_precedence: None,
+            requested_precedence: *requested_precedence,
             shape: CheckShape::SharedRefusal(reason),
         },
         Resolved::Single(candidate) => CheckSubject {
@@ -846,10 +855,13 @@ fn delete_subjects<'a>(resolved: &'a Resolved, caller: &'a str) -> Vec<CheckSubj
             shape: CheckShape::NoStoredSource,
         }],
         Resolved::Refusal {
-            reason, dd_path, ..
+            reason,
+            dd_path,
+            requested_precedence,
+            ..
         } => vec![CheckSubject {
             dd_path,
-            requested_precedence: None,
+            requested_precedence: *requested_precedence,
             shape: CheckShape::SharedRefusal(reason),
         }],
         Resolved::Single(candidate) => vec![candidate_subject(candidate)],
@@ -1184,134 +1196,347 @@ mod tests {
     /// artifact. The registry caches maps by IDS name as well as version
     /// pair, so this fixture must not claim the shipped `equilibrium` key:
     /// another test can keep that map live while this one runs.
-    #[test]
-    fn write_pre_resolution_refusals_keep_the_shared_guard_ahead_of_rule_specific_ones() {
-        const ARTIFACT: &str = r#"
-            <ids-map ids="equilibrium" format-version="1">
-              <side id="left" dd="3.39.0" cocos="11"/>
-              <side id="right" dd="4.1.1" cocos="17"/>
-              <rules>
-                <rule id="retyped-wins" rel="retyped" left="shape" right="shape">
-                  <fidelity forward="unmappable" reverse="unmappable"/>
-                </rule>
-                <rule id="declared-impossible" rel="renamed" left="impossible" right="stored">
-                  <fidelity forward="unmappable" reverse="exact"/>
-                </rule>
-                <rule id="no-stored-slot" rel="left_only" left="missing">
-                  <fidelity forward="lossy" reverse="unmappable"/>
-                </rule>
-                <rule id="collides-and-unmappable" rel="merged" right="folded">
-                  <from left="primary" precedence="1"/>
-                  <from left="secondary" precedence="2"/>
-                  <fidelity forward="unmappable" reverse="exact"/>
-                </rule>
-              </rules>
-            </ids-map>
-        "#;
-        let record = record(ARTIFACT, "");
-
-        let assert_refusal = |path: &str, expected_reason: &str| {
-            let path = CString::new(path).expect("fixture paths contain no NUL");
-            match narrow_write_path(
-                &record,
-                path.as_ptr(),
-                ArgumentRole::Field,
-                resolve(&record, path.as_ptr()),
-            ) {
-                WritePath::Refusal {
-                    reason, dd_path, ..
-                } => {
-                    assert_eq!(reason, expected_reason);
-                    assert_eq!(dd_path, path.to_str().expect("fixture paths are ASCII"));
-                }
-                WritePath::Forward | WritePath::Translated { .. } | WritePath::Candidates(_) => {
-                    panic!("{path:?} must refuse before IMAS-Core")
-                }
+    /// ADR 0016 decision 9 pins the refusal order by test, not by the order
+    /// of match arms. `WRITE_CHECKS` and `DELETE_CHECKS` are that order, and
+    /// the tests below pin every adjacent pair in each list.
+    ///
+    /// Each pair is asserted in both directions the pair admits: a path both
+    /// checks claim must report the *earlier* check's reason, and a path only
+    /// the later check claims must still report the later one. The first
+    /// assertion fails if the two are swapped; the second fails if the earlier
+    /// check is widened until it swallows the later one.
+    ///
+    /// Four adjacent pairs cannot be asserted that way, because the two checks
+    /// cannot both claim one path. Those tests say so and assert the
+    /// structural reason instead of inventing a fixture that cannot exist
+    /// (ADR 0011).
+    ///
+    /// Verified by swapping each adjacent pair in the two lists in turn and
+    /// rebuilding with the test binary deleted first:
+    ///
+    /// | pair | write | delete |
+    /// |---|---|---|
+    /// | unclaimed ↔ stamp | caught | caught |
+    /// | stamp ↔ shared guard | caught | caught |
+    /// | shared guard ↔ non-primary | caught | caught |
+    /// | non-primary ↔ no stored source | cannot co-occur | cannot co-occur |
+    /// | no stored source ↔ candidate check | cannot co-occur | cannot co-occur |
+    /// | timebase ↔ invertible | caught (by role) | — |
+    ///
+    /// A future artifact that makes one of the "cannot co-occur" rows
+    /// reachable must replace that test's structural assertion with a real
+    /// co-occurrence fixture — the assertion is written to fail if the reason
+    /// it records stops holding.
+    fn assert_write_refusal(
+        record: &ConversionRecord,
+        role: ArgumentRole,
+        path: &str,
+        expected_reason: &str,
+    ) {
+        let path = CString::new(path).expect("fixture paths contain no NUL");
+        match narrow_write_path(record, path.as_ptr(), role, resolve(record, path.as_ptr())) {
+            WritePath::Refusal { reason, dd_path } => {
+                assert_eq!(reason, expected_reason);
+                assert_eq!(dd_path, path.to_str().expect("fixture paths are ASCII"));
             }
-        };
+            WritePath::Forward | WritePath::Translated { .. } | WritePath::Candidates(_) => {
+                panic!("{path:?} must refuse before IMAS-Core")
+            }
+        }
+    }
 
-        assert_refusal(
-            "shape",
-            "this path's container changed shape and cannot be served",
-        );
-        assert_refusal(
-            "impossible",
-            "this path has no safe conversion between DD versions",
-        );
-        assert_refusal("missing", "this path has no stored source");
+    fn assert_delete_refusal(record: &ConversionRecord, path: &str, expected_reason: &str) {
+        let path = CString::new(path).expect("fixture paths contain no NUL");
+        match narrow_delete_path(record, path.as_ptr(), resolve(record, path.as_ptr())) {
+            DeletePath::Refusal { reason, dd_path } => {
+                assert_eq!(reason, expected_reason);
+                assert_eq!(dd_path, path.to_str().expect("fixture paths are ASCII"));
+            }
+            DeletePath::Forward | DeletePath::Translated(_) | DeletePath::Candidates(_) => {
+                panic!("{path:?} must refuse before IMAS-Core")
+            }
+        }
+    }
 
-        // The only configuration in which the order is observable at all:
-        // `secondary` is a precedence-2 `<from>`, so the write-specific
-        // collision guard claims it, *and* its rule is declared `unmappable`
-        // in the direction under test, so the shared guard claims it too.
-        // Reporting the rule's own reason is what proves the shared guard ran
-        // first; swapping the two guards leaves every assertion above green
-        // and turns this one into "non-primary source".
-        assert_refusal(
-            "secondary",
-            "this path has no safe conversion between DD versions",
+    /// No `<default>`, so any path no rule names is unclaimed.
+    const NO_DEFAULT: &str = r#"
+        <ids-map ids="equilibrium" format-version="1">
+          <side id="left" dd="3.39.0" cocos="11"/>
+          <side id="right" dd="4.1.1" cocos="17"/>
+          <rules>
+            <rule id="claimed" rel="renamed" left="claimed" right="stored_claimed">
+              <fidelity forward="exact" reverse="exact"/>
+            </rule>
+          </rules>
+        </ids-map>
+    "#;
+
+    /// Every refusal a claimed path can earn, under an identity default.
+    const CLAIMED: &str = r#"
+        <ids-map ids="equilibrium" format-version="1">
+          <side id="left" dd="3.39.0" cocos="11"/>
+          <side id="right" dd="4.1.1" cocos="17"/>
+          <default rel="identical"/>
+          <rules>
+            <rule id="stamp-unservable" rel="retyped"
+                  left="ids_properties/version_put/data_dictionary"
+                  right="ids_properties/version_put/data_dictionary">
+              <fidelity forward="unmappable" reverse="unmappable"/>
+            </rule>
+            <rule id="stamp-container-unservable" rel="retyped"
+                  left="ids_properties" right="ids_properties">
+              <fidelity forward="unmappable" reverse="unmappable"/>
+            </rule>
+            <rule id="unservable" rel="retyped" left="shape" right="shape">
+              <fidelity forward="unmappable" reverse="unmappable"/>
+            </rule>
+            <rule id="no-stored-slot" rel="left_only" left="missing">
+              <fidelity forward="lossy" reverse="unmappable"/>
+            </rule>
+            <rule id="collides-and-unmappable" rel="merged" right="folded">
+              <from left="primary" precedence="1"/>
+              <from left="secondary" precedence="2"/>
+              <fidelity forward="unmappable" reverse="exact"/>
+            </rule>
+            <rule id="collides-only" rel="merged" right="other_folded">
+              <from left="other_primary" precedence="1"/>
+              <from left="other_secondary" precedence="2"/>
+              <fidelity forward="lossy" reverse="exact"/>
+            </rule>
+            <rule id="flips" rel="renamed" left="flipped_hli" right="flipped">
+              <fidelity forward="exact" reverse="exact"/>
+            </rule>
+          </rules>
+          <transforms>
+            <cocos from="11" to="17">
+              <flip path="flipped"/>
+            </cocos>
+          </transforms>
+        </ids-map>
+    "#;
+
+    #[test]
+    fn write_order_unclaimed_precedes_the_stamp_check() {
+        let unclaimed = record(NO_DEFAULT, "");
+        // The stamp's own spelling, claimed by nothing: both checks apply.
+        assert_write_refusal(
+            &unclaimed,
+            ArgumentRole::Field,
+            "ids_properties/version_put/data_dictionary",
+            "this path is unclaimed by the conversion map",
+        );
+        // Claimed, so only the stamp check applies.
+        assert_write_refusal(
+            &record(CLAIMED, ""),
+            ArgumentRole::Field,
+            "ids_properties/version_put/data_dictionary",
+            "the DD-version stamp is immutable under a version mismatch",
         );
     }
 
-    /// Issue #126 / review finding S-J3: the delete narrowing carries the
-    /// same two guards in the same order, so one rule earns one reason at
-    /// both seams. The write's own order is pinned by
-    /// `write_pre_resolution_refusals_keep_the_shared_guard_ahead_of_rule_specific_ones`
-    /// directly above; this is the delete half of the same claim.
-    ///
-    /// The third refusal issue #126 names — a value transformation that
-    /// cannot be inverted — is not orderable against these two and so is
-    /// absent from both fixtures deliberately: it lives in
-    /// `seam_policy::run_write`, which can only see a transformation *after*
-    /// resolution has produced one, and a delete carries no value at all.
     #[test]
-    fn delete_pre_resolution_refusals_keep_the_shared_guard_ahead_of_rule_specific_ones() {
-        const ARTIFACT: &str = r#"
-            <ids-map ids="equilibrium" format-version="1">
-              <side id="left" dd="3.39.0" cocos="11"/>
-              <side id="right" dd="4.1.1" cocos="17"/>
-              <rules>
-                <rule id="collides-and-unmappable" rel="merged" right="folded">
-                  <from left="primary" precedence="1"/>
-                  <from left="secondary" precedence="2"/>
-                  <fidelity forward="unmappable" reverse="exact"/>
-                </rule>
-                <rule id="collides-only" rel="merged" right="other_folded">
-                  <from left="other_primary" precedence="1"/>
-                  <from left="other_secondary" precedence="2"/>
-                  <fidelity forward="lossy" reverse="exact"/>
-                </rule>
-              </rules>
-            </ids-map>
-        "#;
-        let record = record(ARTIFACT, "");
+    fn write_order_the_stamp_check_precedes_the_shared_guard() {
+        let record = record(CLAIMED, "");
+        // The stamp path carries an unservable rule: both checks apply.
+        assert_write_refusal(
+            &record,
+            ArgumentRole::Field,
+            "ids_properties/version_put/data_dictionary",
+            "the DD-version stamp is immutable under a version mismatch",
+        );
+        // The same unservable rule shape on an ordinary path.
+        assert_write_refusal(
+            &record,
+            ArgumentRole::Field,
+            "shape",
+            "this path's container changed shape and cannot be served",
+        );
+    }
 
-        let assert_refusal = |path: &str, expected_reason: &str| {
-            let path = CString::new(path).expect("fixture paths contain no NUL");
-            match narrow_delete_path(&record, path.as_ptr(), resolve(&record, path.as_ptr())) {
-                DeletePath::Refusal { reason, dd_path } => {
-                    assert_eq!(reason, expected_reason);
-                    assert_eq!(dd_path, path.to_str().expect("fixture paths are ASCII"));
-                }
-                DeletePath::Forward | DeletePath::Translated(_) | DeletePath::Candidates(_) => {
-                    panic!("{path:?} must refuse before IMAS-Core")
-                }
-            }
-        };
-
-        // Both guards claim `secondary`; the shared one answers, exactly as it
-        // does at the write seam.
-        assert_refusal(
+    #[test]
+    fn write_order_the_shared_guard_precedes_the_non_primary_check() {
+        let record = record(CLAIMED, "");
+        // `secondary` is a precedence-2 source *and* its rule is unmappable
+        // forward, so both claim it. A rule that cannot be served at all must
+        // not appear to be merely a collision risk.
+        assert_write_refusal(
+            &record,
+            ArgumentRole::Field,
             "secondary",
             "this path has no safe conversion between DD versions",
         );
-        // Only the delete-specific guard claims `other_secondary`, so its
-        // reason is the one a caller sees — the hoist above did not swallow
-        // the collision guard.
-        assert_refusal(
+        // Servable, so only the collision guard claims it.
+        assert_write_refusal(
+            &record,
+            ArgumentRole::Field,
+            "other_secondary",
+            "this path is a non-primary source and cannot write a shared stored slot",
+        );
+    }
+
+    #[test]
+    fn write_order_the_non_primary_check_precedes_the_no_stored_source_check() {
+        let record = record(CLAIMED, "");
+        // The two cannot both claim a path: a precedence is only ever declared
+        // by a `<from>` inside a merged or split rule, and resolving such a
+        // source always names the folded counterpart — never no source at all.
+        // So each is asserted alone, and the assertion that they cannot
+        // co-occur is the resolver's own: no `NoSource` carries a precedence.
+        let path = CString::new("missing").expect("fixture paths contain no NUL");
+        assert!(matches!(
+            resolve(&record, path.as_ptr()),
+            Resolved::NoSource {
+                requested_precedence: None,
+                ..
+            }
+        ));
+        assert_write_refusal(
+            &record,
+            ArgumentRole::Field,
+            "other_secondary",
+            "this path is a non-primary source and cannot write a shared stored slot",
+        );
+        assert_write_refusal(
+            &record,
+            ArgumentRole::Field,
+            "missing",
+            "this path has no stored source",
+        );
+    }
+
+    #[test]
+    fn write_order_the_no_stored_source_check_precedes_the_timebase_check() {
+        let record = record(CLAIMED, "");
+        // These cannot both claim a path either: the timebase check reads a
+        // candidate's value transformation, and a resolution with no stored
+        // source has no candidate to read.
+        let path = CString::new("missing").expect("fixture paths contain no NUL");
+        let resolved = resolve(&record, path.as_ptr());
+        let caller = caller_dd_path(&record, path.as_ptr());
+        assert!(
+            write_subject(&resolved, &caller, None)
+                .expect("a claimed path presents a subject")
+                .candidate()
+                .is_none()
+        );
+        assert_write_refusal(
+            &record,
+            ArgumentRole::Timebase,
+            "missing",
+            "this path has no stored source",
+        );
+        assert_write_refusal(
+            &record,
+            ArgumentRole::Timebase,
+            "flipped_hli",
+            "this timebase needs a value transformation, which al_write_data cannot apply",
+        );
+    }
+
+    #[test]
+    fn write_order_the_timebase_and_field_checks_never_serve_one_argument() {
+        // The last adjacent pair cannot be observed in one call at all: one
+        // entry serves `timebase` and the other serves `field`, and a single
+        // argument is exactly one of the two. Their relative position is
+        // therefore unobservable, and this asserts the reason rather than
+        // pinning an order no caller can reach.
+        for role in [ArgumentRole::Field, ArgumentRole::Timebase] {
+            let served: Vec<_> = WRITE_CHECKS
+                .iter()
+                .filter(|(tag, _)| tag.serves(role))
+                .filter(|(_, check)| {
+                    matches!(
+                        check,
+                        WriteCheck::TimebaseTransformation | WriteCheck::InvertibleTransformation
+                    )
+                })
+                .collect();
+            assert_eq!(served.len(), 1, "one role must never serve both checks");
+        }
+        // The field-only entry is the one a `field` argument reaches. It is
+        // unreachable from any artifact today — the only non-invertible
+        // transformation is a sign flip between identical conventions, which
+        // the loader normalises to `None` — so its position is pinned by the
+        // list and its behaviour by the seam policy's own inversion tests.
+        assert_eq!(
+            WRITE_CHECKS.last().map(|(_, check)| *check),
+            Some(WriteCheck::InvertibleTransformation)
+        );
+    }
+
+    #[test]
+    fn delete_order_unclaimed_precedes_the_stamp_check() {
+        assert_delete_refusal(
+            &record(NO_DEFAULT, ""),
+            "ids_properties",
+            "this path is unclaimed by the conversion map",
+        );
+        assert_delete_refusal(
+            &record(CLAIMED, ""),
+            "ids_properties",
+            "this delete would remove the DD-version stamp while stored data remains",
+        );
+    }
+
+    #[test]
+    fn delete_order_the_stamp_check_precedes_the_shared_guard() {
+        let record = record(CLAIMED, "");
+        // `ids_properties` carries an unservable rule, so both claim it.
+        assert_delete_refusal(
+            &record,
+            "ids_properties",
+            "this delete would remove the DD-version stamp while stored data remains",
+        );
+        assert_delete_refusal(
+            &record,
+            "shape",
+            "this path's container changed shape and cannot be served",
+        );
+    }
+
+    #[test]
+    fn delete_order_the_shared_guard_precedes_the_non_primary_check() {
+        let record = record(CLAIMED, "");
+        assert_delete_refusal(
+            &record,
+            "secondary",
+            "this path has no safe conversion between DD versions",
+        );
+        assert_delete_refusal(
+            &record,
             "other_secondary",
             "this path is a non-primary source and cannot delete a shared stored slot",
         );
+    }
+
+    #[test]
+    fn delete_order_the_non_primary_check_precedes_the_no_stored_source_check() {
+        // Cannot co-occur, for the reason the write seam's equivalent records.
+        let record = record(CLAIMED, "");
+        assert_delete_refusal(
+            &record,
+            "other_secondary",
+            "this path is a non-primary source and cannot delete a shared stored slot",
+        );
+        assert_delete_refusal(&record, "missing", "this path has no stored source");
+    }
+
+    #[test]
+    fn delete_order_the_no_stored_source_check_precedes_the_escaping_subtree_check() {
+        // Cannot co-occur either: the subtree check reads a candidate's stored
+        // spelling, and a resolution with no stored source has no candidate.
+        let record = record(CLAIMED, "");
+        let path = CString::new("missing").expect("fixture paths contain no NUL");
+        let resolved = resolve(&record, path.as_ptr());
+        let caller = caller_dd_path(&record, path.as_ptr());
+        assert!(
+            delete_subjects(&resolved, &caller)
+                .iter()
+                .all(|subject| subject.candidate().is_none())
+        );
+        assert_delete_refusal(&record, "missing", "this path has no stored source");
+        // The escaping-subtree check firing on its own is pinned by
+        // `delete_narrowing_admits_a_trivial_structure_and_refuses_an_escaping_one`.
     }
 
     /// Issue #131 / ADR 0017 decision 4: a structure delete resolves and
