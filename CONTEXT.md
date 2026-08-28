@@ -145,3 +145,15 @@ The registry-owned set of conversion maps shared by mismatched context records. 
 **seam policy**:
 The shim-side rule a seam applies, separate from the binding that carries it out: which arguments translate, which contexts refuse, what fidelity a read earned, and what the shim records afterwards. A seam policy decides; it never calls IMAS-Core, reads the latch, or writes the context registry — it receives what it needs as values and returns the effects for the C-facing layer to perform (ADR 0015).
 _Avoid_: policy on its own, conversion policy, business logic, rules engine, translator — and do not use it for the C-facing layer, which is the interposition, not the policy.
+
+**seam refusal check**:
+One test a seam applies to decide whether to refuse a path-bearing argument, before the shim hands anything to IMAS-Core. A seam's checks form an ordered sequence, and the order is itself part of the seam policy: an unservable rule must earn its own reason rather than appear as a lesser problem found later in the sequence. A check reads the rule explanation, and may read the stored path that explanation resolves to.
+_Avoid_: guard — it names no particular thing in this domain and reads as a wrapper rather than a decision; pre-resolution refusal check — one such check reads the resolved stored path, so the prefix is wrong.
+
+**argument role**:
+Which of a seam's path-bearing arguments a value is: the field, the timebase, or the path a delete addresses. A seam refusal check names the role it serves, because a refusal can be correct for one role and wrong for another — a value transformation is legitimate on a field and unservable on a timebase.
+_Avoid_: argument kind, parameter type, position.
+
+**narrowing**:
+The step that turns one shared path resolution into the answer a single seam can act on, folding together the outcomes that seam does not distinguish. Every fold is a decision of record rather than a simplification: a read folds an unclaimed path into not-found, and a write folds both an unclaimed path and an absent stored slot into a refusal.
+_Avoid_: projection, conversion, mapping — and do not use it for DD-path translation, which is what a rule does to a path.
