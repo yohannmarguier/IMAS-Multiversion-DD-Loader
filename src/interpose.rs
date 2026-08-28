@@ -19,14 +19,13 @@
 //! - ADR 0012 — the three-way read outcome and the refusal/loss reporting
 //!   channel, via [`crate::conversion::read_outcome`] and the registry's loss log.
 //! - ADR 0014 — a seam arriving beneath an in-flight one is forwarded
-//!   untouched, by call depth (see [`SHIM_REENTRY_DEPTH`] and [`ReentryGuard`]).
+//!   untouched, by call depth managed by [`ReentryGuard`].
 //!
 //! Issue #101 split this layer from `core_binding` and `seam_policy` in a
 //! series rather than one unreviewable change. The layer used to be called
 //! `resolve`, a name that conflated resolving IMAS-Core symbols with resolving
 //! DD paths; it is now named for its role at the C boundary.
 
-use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::Arc;
 
@@ -42,202 +41,20 @@ use crate::registry::context_registry::{ConversionRecord, MapCacheKey, REGISTRY}
 use crate::version::version_stamp;
 use crate::{al_status_t, write_truncated};
 
+mod dispatch;
 mod loss;
+mod reentry;
+mod refusal;
 
+use dispatch::{
+    CallFamily, call_begin_arraystruct, call_begin_global, call_begin_slice, call_end, call_read,
+    call_write,
+};
 pub(crate) use loss::{context_loss_at, context_loss_count, context_loss_operation_at};
-
-thread_local! {
-    /// How many guarded shim seams this thread is currently inside (ADR 0014).
-    /// Only ever read through [`ReentryGuard`]; a thread-local rather than a
-    /// global because the depth describes one call stack, and ADR 0003 already
-    /// puts concurrent use of a single IMAS-Core context out of scope.
-    static SHIM_REENTRY_DEPTH: Cell<u32> = const { Cell::new(0) };
-}
-
-/// Raises the thread's shim-seam depth for as long as a guarded seam is on the
-/// stack, so a call that arrives *underneath* an in-flight IMAS-Core call can
-/// recognise itself as reentrant (ADR 0014). The guard wraps the forwarded
-/// call too, not just any conversion policy around it — the reentrant call
-/// happens inside that call.
-struct ReentryGuard;
-
-impl ReentryGuard {
-    /// Enters a guarded seam, reporting whether one was already in flight on this
-    /// thread.
-    fn enter() -> (Self, bool) {
-        let already_entered = SHIM_REENTRY_DEPTH.with(|depth| {
-            let entered = depth.get();
-            depth.set(entered + 1);
-            entered > 0
-        });
-        (Self, already_entered)
-    }
-}
-
-impl Drop for ReentryGuard {
-    fn drop(&mut self) {
-        SHIM_REENTRY_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
-    }
-}
-
-/// Which real ABI symbol family a shared seam call forwards through: an
-/// ordinary HLI call (`al_begin_global_action`, `al_read_data`, ...) or its
-/// plugin-reentry twin (`al_plugin_begin_global_action`,
-/// `al_plugin_read_data`, ...). One `CallFamily` value now replaces the
-/// forward/end-on-refusal closure pair that used to be rebuilt at each of the
-/// nine call sites below, differing only in which symbol it named (issue
-/// #109).
-///
-/// Bound over exactly the six symbols the two families share —
-/// `al_begin_timerange_action` and `al_delete_data` have no plugin twin at
-/// all (`lib.rs`'s manifest never resolves one), so those two seams take no
-/// `CallFamily` parameter at all rather than carry an always-unused half.
-///
-/// This does **not** make "a context opened through one family must be closed
-/// through that same family" unrepresentable. The calling binary — not this
-/// type — chooses the family, by which ABI symbol it calls first; no Rust
-/// type constrains that choice, and nothing here stops someone writing
-/// `CallFamily::ORDINARY` where `family` was meant. What this *does*
-/// guarantee: a family mismatch requires bypassing the `family` parameter
-/// threaded through this module's shared policy functions, and a reviewer
-/// sees that bypass, because [`call_begin_global`], [`call_begin_slice`],
-/// [`call_begin_arraystruct`], [`call_read`], [`call_write`] and
-/// [`call_end`] are the only six places the choice between symbols is ever
-/// made — not nine independently-miswirable closures rebuilding it.
-///
-/// `ORDINARY` and `PLUGIN` are not independently resolved values: each of the
-/// six dispatch functions above matches on `CallFamily` to pick one of a pair
-/// [`crate::core::core_binding`]'s manifest already resolves together (e.g.
-/// `begin_global_action`/`plugin_begin_global_action`, both
-/// `BeginGlobalActionFn`). A `CallFamily` value never holds a raw symbol
-/// pointer itself — it only *names* which half of that manifest applies —
-/// because `CoreBinding` sits behind a lazily-resolved `OnceLock`
-/// ([`crate::core::core_binding::core`]) and several of the nine call sites refuse
-/// before ever forwarding at all (`begin_arraystruct_action_impl`'s argument
-/// resolution, `write_data_impl`'s mismatch check): eagerly extracting a
-/// resolved fn pointer at `CallFamily` construction time would attempt
-/// IMAS-Core resolution on a path that used to skip it entirely. Naming the
-/// family and resolving `core()` at the point of the actual forward — the
-/// same lazy timing `forward_status!` already used — keeps both properties.
-#[derive(Clone, Copy)]
-enum CallFamily {
-    Ordinary,
-    Plugin,
-}
-
-impl CallFamily {
-    /// The ordinary HLI call family: `al_begin_global_action`, `al_read_data`
-    /// and their four siblings.
-    const ORDINARY: Self = Self::Ordinary;
-    /// The plugin-reentry call family: `al_plugin_begin_global_action`,
-    /// `al_plugin_read_data` and their four siblings.
-    const PLUGIN: Self = Self::Plugin;
-}
-
-/// Forwards to `al_begin_global_action` or `al_plugin_begin_global_action`,
-/// chosen by `family`.
-fn call_begin_global(
-    family: CallFamily,
-    pctx_id: c_int,
-    dataobjectname: *const c_char,
-    datapath: *const c_char,
-    rwmode: c_int,
-    octx_id: *mut c_int,
-) -> al_status_t {
-    match family {
-        CallFamily::Ordinary => forward_status!(begin_global_action(
-            pctx_id,
-            dataobjectname,
-            datapath,
-            rwmode,
-            octx_id,
-        )),
-        CallFamily::Plugin => forward_status!(plugin_begin_global_action(
-            pctx_id,
-            dataobjectname,
-            datapath,
-            rwmode,
-            octx_id,
-        )),
-    }
-}
-
-/// Forwards to `al_begin_slice_action` or `al_plugin_begin_slice_action`,
-/// chosen by `family`.
-fn call_begin_slice(
-    family: CallFamily,
-    pctx_id: c_int,
-    dataobjectname: *const c_char,
-    rwmode: c_int,
-    time: c_double,
-    interpmode: c_int,
-    octx_id: *mut c_int,
-) -> al_status_t {
-    match family {
-        CallFamily::Ordinary => forward_status!(begin_slice_action(
-            pctx_id,
-            dataobjectname,
-            rwmode,
-            time,
-            interpmode,
-            octx_id,
-        )),
-        CallFamily::Plugin => forward_status!(plugin_begin_slice_action(
-            pctx_id,
-            dataobjectname,
-            rwmode,
-            time,
-            interpmode,
-            octx_id,
-        )),
-    }
-}
-
-/// Forwards to `al_begin_arraystruct_action` or
-/// `al_plugin_begin_arraystruct_action`, chosen by `family`.
-fn call_begin_arraystruct(
-    family: CallFamily,
-    ctx_id: c_int,
-    path: *const c_char,
-    timebase: *const c_char,
-    size: *mut c_int,
-    actx_id: *mut c_int,
-) -> al_status_t {
-    match family {
-        CallFamily::Ordinary => {
-            forward_status!(begin_arraystruct_action(
-                ctx_id, path, timebase, size, actx_id
-            ))
-        }
-        CallFamily::Plugin => {
-            forward_status!(plugin_begin_arraystruct_action(
-                ctx_id, path, timebase, size, actx_id
-            ))
-        }
-    }
-}
-
-/// Forwards to `al_read_data` or `al_plugin_read_data`, chosen by `family`.
-#[allow(clippy::too_many_arguments)]
-fn call_read(
-    family: CallFamily,
-    ctx_id: c_int,
-    field: *const c_char,
-    timebase: *const c_char,
-    data: *mut *mut c_void,
-    datatype: c_int,
-    dim: c_int,
-    size: *mut c_int,
-) -> al_status_t {
-    match family {
-        CallFamily::Ordinary => forward_status!(read_data(
-            ctx_id, field, timebase, data, datatype, dim, size
-        )),
-        CallFamily::Plugin => forward_status!(plugin_read_data(
-            ctx_id, field, timebase, data, datatype, dim, size
-        )),
-    }
-}
+use reentry::ReentryGuard;
+use refusal::{
+    c_str_ref, context_path_refusal, contextual_refusal, live_conversion_record, read_argument_path,
+};
 
 /// Calls IMAS-Core's ordinary read symbol without applying conversion policy.
 /// Internal readers enter the reentry guard so an IMAS-Core callback knows the
@@ -256,36 +73,6 @@ unsafe fn read_data_unconverted(
     forward_status!(read_data(
         ctx_id, field, timebase, data, datatype, dim, size
     ))
-}
-
-/// Forwards to `al_write_data` or `al_plugin_write_data`, chosen by `family`.
-#[allow(clippy::too_many_arguments)]
-fn call_write(
-    family: CallFamily,
-    ctx_id: c_int,
-    field: *const c_char,
-    timebase: *const c_char,
-    data: *mut c_void,
-    datatype: c_int,
-    dim: c_int,
-    size: *mut c_int,
-) -> al_status_t {
-    match family {
-        CallFamily::Ordinary => forward_status!(write_data(
-            ctx_id, field, timebase, data, datatype, dim, size,
-        )),
-        CallFamily::Plugin => forward_status!(plugin_write_data(
-            ctx_id, field, timebase, data, datatype, dim, size,
-        )),
-    }
-}
-
-/// Forwards to `al_end_action` or `al_plugin_end_action`, chosen by `family`.
-fn call_end(family: CallFamily, ctx_id: c_int) -> al_status_t {
-    match family {
-        CallFamily::Ordinary => forward_status!(end_action(ctx_id)),
-        CallFamily::Plugin => forward_status!(plugin_end_action(ctx_id)),
-    }
 }
 
 /// The result of one occurrence-opening adapter call. A malformed stamp is
@@ -1251,19 +1038,6 @@ unsafe fn read_data_impl(
     finish_read(&record, verdict, data)
 }
 
-/// `ptr` as a borrowed `&CStr`, or `None` if it is null.
-///
-/// # Safety
-/// `ptr` must be a valid, NUL-terminated C string, or null.
-unsafe fn c_str_ref<'a>(ptr: *const c_char) -> Option<&'a CStr> {
-    if ptr.is_null() {
-        return None;
-    }
-    // SAFETY: the caller's own contract requires `ptr`, when non-null, to be
-    // a valid NUL-terminated C string.
-    Some(unsafe { CStr::from_ptr(ptr) })
-}
-
 /// Builds the safe, typed view [`seam_policy::run_read`] applies a value
 /// transformation through, from a data buffer IMAS-Core has just written.
 /// Only ever called on a [`ReadOutcome::Data`] outcome, per `read_data_impl`'s
@@ -1419,67 +1193,6 @@ fn record_argument_loss(
     }
 }
 
-/// The raw HLI argument joined onto `record`'s own anchor, or `None` if the
-/// argument itself is absent. Shared by its two callers, which want opposite
-/// things from that `None`: `read_argument_path` falls back to the bare anchor,
-/// because a loss entry always needs some path to name, while
-/// `contextual_refusal` prefers a non-empty anchor and otherwise says so
-/// explicitly rather than reporting a misleading one.
-fn joined_argument_path(
-    record: &crate::registry::context_registry::ConversionRecord,
-    raw_path: *const c_char,
-) -> Option<String> {
-    c_str_or_none(raw_path)
-        .filter(|path| !path.is_empty())
-        .map(|path| path_conversion::join_hli_path(&record.resolved_path, path))
-}
-
-fn read_argument_path(
-    record: &crate::registry::context_registry::ConversionRecord,
-    raw_path: *const c_char,
-) -> String {
-    joined_argument_path(record, raw_path).unwrap_or_else(|| record.resolved_path.clone())
-}
-
-/// Formats a path-conversion refusal using the version pair retained by its
-/// live context record. Read, write, and context-opening seams use this one
-/// status boundary, so their caller-visible diagnostics cannot drift.
-fn context_path_refusal(
-    record: &crate::registry::context_registry::ConversionRecord,
-    reason: &str,
-    dd_path: &str,
-) -> al_status_t {
-    crate::path_conversion_refusal(reason, dd_path, &record.hli_version, &record.stored_version)
-}
-
-/// A refusal from a seam that holds a live conversion record but has no
-/// resolved path to name — today the two arraystruct-open arguments, whose
-/// own resolution already failed and so produced no stored spelling.
-///
-/// Issue #58 AC3 asks that *every* refusal message name the reason, the DD
-/// path and both DD versions, and these seams used to emit the reason alone.
-/// Not having resolved a path is no reason to withhold the rest: the record
-/// that triggered the refusal carries both versions, and `raw_path` is the
-/// caller's own argument, which is the spelling AC3 asks to see anyway.
-///
-/// A seam whose path argument is null or empty falls back to the context's
-/// own resolved path, and says so plainly when there is no path at either
-/// place rather than inventing one. That fallback outlives the delete seam
-/// that motivated it: issue #64's blanket context-keyed delete refusal was
-/// this function's original caller, and #129/#131 replaced it with real path
-/// resolution, so `delete_data` now refuses through `context_path_refusal`
-/// with a resolved spelling in hand.
-fn contextual_refusal(
-    record: &crate::registry::context_registry::ConversionRecord,
-    reason: &str,
-    raw_path: *const c_char,
-) -> al_status_t {
-    let dd_path = joined_argument_path(record, raw_path)
-        .or_else(|| (!record.resolved_path.is_empty()).then(|| record.resolved_path.clone()))
-        .unwrap_or_else(|| "(no path argument)".to_string());
-    context_path_refusal(record, reason, &dd_path)
-}
-
 /// Returns the C ABI's normal not-found outcome for a path the artifact says
 /// has no stored source. The caller owns `data`'s validity by the public
 /// `al_read_data` contract.
@@ -1510,33 +1223,6 @@ fn resolve_arraystruct_argument(
         )),
         ContextPathResolution::Forward => Ok(None),
     }
-}
-
-/// The live conversion record for `ctx_id`, or `None` — with the
-/// conversion-disabled case answered before the registry's lock is taken.
-///
-/// Every seam keyed on a context ID goes through this rather than
-/// [`ContextRegistry::lookup`] directly. A record exists only where
-/// `open_occurrence` made one, which requires a latched HLI DD
-/// version, and the latch is an `OnceLock` that can never fall back to unset —
-/// so with no conversion basis the answer is `None` by construction, and
-/// acquiring the registry's mutex to rediscover that is cost with no result. It
-/// is per `al_read_data` call, on the path every non-converting HLI takes for
-/// every field it reads: issue #56 AC5 asks for exactly this
-/// ("Matching, unknown, unstamped, and conversion-disabled contexts bypass
-/// registry lookup and rule resolution"), and the `begin_*` seams have always
-/// short-circuited the same way — they call `hli_version::latched` because they
-/// go on to use the version, while these seams only need to know whether one
-/// exists.
-///
-/// The *unknown* and *matching* halves of that criterion still cost one lookup:
-/// they are not knowable without asking the registry, and ADR 0003 budgets one
-/// lookup for them by design.
-fn live_conversion_record(ctx_id: c_int) -> Option<ConversionRecord> {
-    if !crate::version::hli_version::conversion_is_possible() {
-        return None;
-    }
-    REGISTRY.lookup(ctx_id)
 }
 
 /// Forwards to IMAS-Core's real `al_write_data`, resolving IMAS-Core
@@ -1916,53 +1602,6 @@ mod tests {
     use super::*;
     use crate::conversion::conversion_map::Direction;
     use crate::conversion::path_conversion::WritePath;
-
-    /// Issue #56 AC5: "Matching, unknown, unstamped, and conversion-disabled
-    /// contexts bypass registry lookup and rule resolution." The
-    /// conversion-disabled half is the one a seam can act on by itself, and
-    /// this proves it acts on it *before* the registry rather than after.
-    ///
-    /// `hli_version`'s latch is deliberately never set in-process (its module
-    /// comment explains why a unit test cannot set it), so
-    /// `conversion_is_possible()` is false for the whole `cargo test` run.
-    /// Registering a genuine root record and still getting `None` back is the
-    /// observable proof: the record is unquestionably there, so a lookup that
-    /// ran could not have missed it.
-    #[test]
-    fn a_data_path_seam_answers_before_the_registry_when_conversion_is_disabled() {
-        // Far from the small IDs every other registry test uses, so this one
-        // cannot collide with a concurrently running test in the same process.
-        const CTX_ID: c_int = 0x5D00;
-        let stored: crate::version::dd_version::DdVersion =
-            "3.39.0".parse().expect("known release");
-        let hli: crate::version::dd_version::DdVersion = "4.1.1".parse().expect("known release");
-        let artifact = known_artifacts::lookup("equilibrium", &stored, &hli)
-            .expect("the embedded equilibrium artifact serves this pair");
-        let direction = artifact.direction_to_stored;
-        assert!(REGISTRY.record_root(
-            CTX_ID,
-            String::new(),
-            CTX_ID,
-            MapCacheKey::new("equilibrium".to_string(), stored, hli),
-            direction,
-            || load_artifact(&artifact),
-        ));
-
-        assert!(
-            !crate::version::hli_version::conversion_is_possible(),
-            "no unit test can latch an HLI DD version, so conversion is off here"
-        );
-        assert!(
-            REGISTRY.lookup(CTX_ID).is_some(),
-            "the record must really be in the registry for this test to prove anything"
-        );
-        assert!(
-            live_conversion_record(CTX_ID).is_none(),
-            "the seam must answer from the latch, without consulting the registry"
-        );
-
-        REGISTRY.remove(CTX_ID);
-    }
 
     #[test]
     fn a_declared_unmappable_write_refusal_carries_its_message_and_write_loss() {
