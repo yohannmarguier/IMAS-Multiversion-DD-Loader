@@ -503,7 +503,7 @@ fn map_cache_key(
 /// only as a `get_or_create_map`/`record_root` cache-miss closure, so this
 /// runs at most once per `(IDS, stored, HLI)` key for as long as some record
 /// still references the resulting map.
-fn load_artifact(artifact: &known_artifacts::ArtifactMatch) -> ConversionMap {
+pub(super) fn load_artifact(artifact: &known_artifacts::ArtifactMatch) -> ConversionMap {
     ConversionMap::load(artifact.xml).expect("embedded artifact must parse")
 }
 

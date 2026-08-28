@@ -115,6 +115,7 @@ pub(super) fn live_conversion_record(ctx_id: c_int) -> Option<ConversionRecord> 
 mod tests {
     use super::*;
     use crate::conversion::known_artifacts;
+    use crate::interpose::occurrence::load_artifact;
 
     /// Issue #56 AC5: "Matching, unknown, unstamped, and conversion-disabled
     /// contexts bypass registry lookup and rule resolution." The
@@ -144,10 +145,7 @@ mod tests {
             CTX_ID,
             MapCacheKey::new("equilibrium".to_string(), stored, hli),
             direction,
-            || {
-                crate::conversion::conversion_map::ConversionMap::load(artifact.xml)
-                    .expect("embedded artifact must parse")
-            },
+            || load_artifact(&artifact),
         ));
 
         assert!(
