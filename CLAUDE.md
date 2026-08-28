@@ -177,7 +177,7 @@ Real IMAS-Core is required by the default configure profile. CMake acquires it
 in one of three modes (installed package lookup by default, development layout,
 or download-and-build). CI's explicit `IMAS_MVDD_REAL_CORE_TESTS=OFF` profile
 is the only stub-only path; it registers the recording-stub seams without
-silently reducing the real-Core suite. See CMakeLists.txt's IMAS-Core
+silently reducing the real-Core-gated set. See CMakeLists.txt's IMAS-Core
 acquisition section for the option names and `IMAS_CORE_LIBRARY`-free test
 wiring.
 
