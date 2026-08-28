@@ -19,6 +19,21 @@ name: HLI validation
 # artifact, and the HLI commit is pinned so a red run is attributable.
 
 on:
+  # A GitHub Actions cache is readable only from the ref that wrote it and from
+  # the repository's default branch. Every run of this workflow used to be a
+  # pull_request run, so every cache it ever wrote was scoped to one
+  # refs/pull/N/merge and no other pull request could read it -- the tree was
+  # saved faithfully and then never used again, and each new pull request paid
+  # the full cold build. Running on push to the long-lived branches is what
+  # gives the cache a shared scope to live in.
+  push:
+    branches: [main, develop]
+    paths-ignore:
+      - '**.md'
+      - 'docs/adr/**'
+      - 'graphify-out/**'
+      - 'tests/**'
+      - 'scripts/**'
   pull_request:
     branches: [develop, main]
     # An ignore-list, not an allow-list, so the filter fails safe. A second
@@ -67,10 +82,11 @@ env:
   # coverage rather than an incidental total.
   #
   # CALIBRATION: these three came from a macOS Debug build. Linux registration
-  # can differ and a green macOS run proves nothing about Linux. Expect the
-  # first run on this workflow to fail the assertion, read the numbers it
-  # reports, and correct these once, deliberately.
-  HLI_TOTAL_TESTS: 115
+  # can differ and a green macOS run proves nothing about Linux. The first Linux
+  # run (32951410023) registered the 115 the macOS calibration predicted, so no
+  # such correction was needed. 114 is a real change upstream: the fork removed
+  # playground-play_eq_two_dd-self, which was that run's only failure.
+  HLI_TOTAL_TESTS: 114
   HLI_DISABLED_TESTS: 20
 
 jobs:
@@ -131,6 +147,22 @@ jobs:
           ref: ${{ steps.hli_pin.outputs.ref }}
           path: hli
 
+      # actions/checkout writes every file with the checkout's own timestamp, so
+      # against a restored build tree every source is newer than every object in
+      # it and make rebuilds the lot. That is not hypothetical: the first warm
+      # run of this cache regenerated the XSLT sources (5m31s) and recompiled all
+      # of libal-fortran (12m08s) off a clean cache hit, keeping only IMAS-Core.
+      #
+      # One fixed timestamp for the whole checkout, rather than each file's
+      # commit time, because the HLI is pinned to a single commit and the cache
+      # key names that commit -- see the restore-keys below, which deliberately
+      # never reach a tree built from different HLI sources. Whenever a tree is
+      # restored at all, it was built from exactly these bytes, so a constant is
+      # both stable across runs and safe. .git is left alone: nothing in the
+      # build reads it, and rewriting index timestamps only confuses git.
+      - name: Stamp the HLI checkout with a fixed mtime
+        run: find hli -path hli/.git -prune -o -exec touch -h -d '2001-01-01T00:00:00Z' {} +
+
       # The cache key has to be known before the build, so the IMAS-Core commit
       # the HLI *will* acquire is predicted here rather than read back from the
       # configure log. The prediction reads the HLI's own declared default
@@ -158,9 +190,14 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "IMAS-Core: $repo @ $ref ($sha)"
 
-      # Exact key, no restore-keys. A miss must produce a clean full build
-      # rather than a tree half-built against different sources, which is the
-      # one failure mode here that is genuinely hard to read.
+      # A restore-keys ladder, deliberately reversing this workflow's original
+      # exact-key-only rule. That rule was there so a miss produced a clean full
+      # build rather than a tree half-built against different sources -- a real
+      # hazard, but it priced every miss at the full cold build, and IMAS-Core
+      # floats by design (ADR 0020), so upstream moving Core threw the tree away
+      # for a dependency that is rebuilt in minutes. The hazard is now handled
+      # where it actually occurs instead: if an incremental build off a restored
+      # tree fails, the build step discards the tree and builds once from clean.
       #
       # Keyed on the resolved commit rather than hashFiles('IMAS_FORTRAN_REF'),
       # so editing that file's commentary does not throw the cache away. The
@@ -177,6 +214,15 @@ jobs:
         with:
           path: hli/build
           key: hli-${{ runner.os }}-dd${{ env.HLI_DD_VERSION }}-fortran${{ steps.hli_pin.outputs.ref }}-core${{ steps.core.outputs.sha }}
+          # One rung, and it keeps the HLI commit. Core moving is the common
+          # miss and is worth reusing a tree for -- it rebuilds in about thirty
+          # seconds. Crossing HLI commits is deliberately not reachable: the
+          # fixed-mtime stamp above makes every source older than any object in
+          # a restored tree, which is correct for a tree built from these bytes
+          # and would silently skip rebuilding changed ones otherwise. A moved
+          # pin is a deliberate one-line commit, so it pays the cold build.
+          restore-keys: |
+            hli-${{ runner.os }}-dd${{ env.HLI_DD_VERSION }}-fortran${{ steps.hli_pin.outputs.ref }}-
 
       # IMAS_MVDD_REAL_CORE_TESTS=OFF because this job needs the shim built and
       # installed, not the shim's own suite -- ci.yml's fast and full jobs own
@@ -204,31 +250,32 @@ jobs:
       # build, because HLI_DISABLED_TESTS asserts on that count.
       - name: Configure the HLI against the shim
         working-directory: hli
-        run: |
-          set -euo pipefail
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=gcc-14 \
-            -DCMAKE_CXX_COMPILER=g++-14 \
-            -DCMAKE_Fortran_COMPILER=gfortran-14 \
-            -DCMAKE_CXX_STANDARD=17 \
-            -DAL_USE_MULTIVERSION_SHIM=ON \
-            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/dist" \
-            -DDD_VERSION="${HLI_DD_VERSION}" \
-            -DAL_BACKEND_HDF5=ON \
-            -DAL_BACKEND_MDSPLUS=OFF \
-            -DAL_BACKEND_UDA=OFF \
-            -DAL_BUILD_MDSPLUS_MODELS=OFF \
-            -DAL_TESTS=ON \
-            -DAL_EXAMPLES=ON \
-            -DAL_PLAYGROUND=ON \
-            -DAL_PLUGINS=OFF \
-            -DAL_HLI_DOCS=OFF
+        run: "$GITHUB_WORKSPACE/.github/scripts/configure-hli.sh"
 
       - name: Build the HLI
         id: build_hli
         working-directory: hli
-        run: cmake --build build -j"$(nproc)"
+        env:
+          RESTORED_TREE: ${{ steps.hli_cache.outputs.cache-matched-key != '' }}
+        run: |
+          set -uo pipefail
+          if cmake --build build -j"$(nproc)"; then
+            exit 0
+          fi
+
+          # A restored tree is the one input this job does not fully control.
+          # Rather than leave a poisoned cache failing every run until someone
+          # clears it by hand, fall back once to a clean build. A build that was
+          # already clean fails for a real reason, so do not retry it.
+          if [ "$RESTORED_TREE" != "true" ]; then
+            echo "::error::HLI build failed from a clean tree"
+            exit 1
+          fi
+
+          echo "::warning::Incremental HLI build from the restored tree failed - discarding it and building from scratch"
+          rm -rf build
+          "$GITHUB_WORKSPACE/.github/scripts/configure-hli.sh"
+          cmake --build build -j"$(nproc)"
 
       # Asserted before ctest runs, so a suite that shrank is reported as a
       # shrunken suite rather than as a pass.
