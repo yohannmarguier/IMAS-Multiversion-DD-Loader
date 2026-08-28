@@ -29,7 +29,7 @@ pub(super) fn joined_argument_path(
     record: &ConversionRecord,
     raw_path: *const c_char,
 ) -> Option<String> {
-    super::c_str_or_none(raw_path)
+    super::occurrence::c_str_or_none(raw_path)
         .filter(|path| !path.is_empty())
         .map(|path| path_conversion::join_hli_path(&record.resolved_path, path))
 }
@@ -137,7 +137,10 @@ mod tests {
             CTX_ID,
             MapCacheKey::new("equilibrium".to_string(), stored, hli),
             direction,
-            || super::super::load_artifact(&artifact),
+            || {
+                crate::conversion::conversion_map::ConversionMap::load(artifact.xml)
+                    .expect("embedded artifact must parse")
+            },
         ));
 
         assert!(

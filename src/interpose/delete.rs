@@ -15,7 +15,7 @@ use super::refusal::{c_str_ref, context_path_refusal, live_conversion_record};
 /// spelling. The empty path deliberately forwards unchanged: IMAS-Core reads
 /// it as an explicit whole-DATAOBJECT delete, leaving no foreign-version data
 /// behind for a later unstamped open to mistake for HLI-version data. Unlike
-/// [`super::write_data`], this seam takes no [`super::CallFamily`] parameter:
+/// [`super::write_data`], this seam takes no [`super::dispatch::CallFamily`] parameter:
 /// `al_delete_data` has no plugin twin at all (issue #109 AC2).
 ///
 /// # Safety

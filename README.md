@@ -406,7 +406,7 @@ src/core/               runtime binding and dlopen/dlsym adapter
 src/conversion/         map resolution, path policy, outcomes, and embedded artifacts
 src/registry/           live conversion-context registry
 src/version/            DD versions, HLI latch, and occurrence stamp discovery
-src/interpose.rs        C-facing seam adapter over those modules
+src/interpose/          C-facing seam adapters, one module per seam family
 tests/abi/              generated-header smoke test and ABI manifests
 tests/shim/             recording-stub seam tests
 tests/real_core/        HDF5 and real-IMAS-Core checks and plugin fixture
