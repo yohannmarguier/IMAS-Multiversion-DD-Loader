@@ -415,35 +415,6 @@ pub(crate) struct DeleteFailure<'a> {
     pub(crate) path: &'a CStr,
 }
 
-/// ADR 0017 decision 2: a candidate plan asserts absence only after every
-/// possible stored source has been asked to delete itself.
-struct VisitEveryDeleteCandidate;
-
-const VISIT_EVERY_DELETE_CANDIDATE: VisitEveryDeleteCandidate = VisitEveryDeleteCandidate;
-
-impl VisitEveryDeleteCandidate {
-    fn paths<'a>(self, paths: &'a [std::ffi::CString]) -> std::slice::Iter<'a, std::ffi::CString> {
-        paths.iter()
-    }
-}
-
-/// ADR 0017 decision 3: later delete attempts still run, but the caller sees
-/// the first failure once they have all completed.
-struct RetainFirstDeleteFailure;
-
-const RETAIN_FIRST_DELETE_FAILURE: RetainFirstDeleteFailure = RetainFirstDeleteFailure;
-
-impl RetainFirstDeleteFailure {
-    fn retain<'a>(
-        self,
-        failure: &mut Option<DeleteFailure<'a>>,
-        status: al_status_t,
-        path: &'a CStr,
-    ) {
-        failure.get_or_insert(DeleteFailure { status, path });
-    }
-}
-
 /// The delete policy's complete answer. The injected closures alone perform
 /// IMAS-Core calls, so this layer remains free of raw pointers and state.
 // As with `SeamOutcome`, carrying IMAS-Core's fixed-size status by value keeps
@@ -474,10 +445,15 @@ pub(crate) fn run_delete<'a>(
         },
         DeletePath::Candidates(paths) => {
             let mut first_failure = None;
-            for path in VISIT_EVERY_DELETE_CANDIDATE.paths(paths) {
+            // ADR 0017 decision 2: a candidate plan asserts absence only after
+            // every possible stored source has been asked to delete itself, so
+            // this visits all of them and never stops at the first.
+            for path in paths {
                 let status = delete(path);
                 if status.code != 0 {
-                    RETAIN_FIRST_DELETE_FAILURE.retain(&mut first_failure, status, path);
+                    // ADR 0017 decision 3: later candidates still run, and the
+                    // caller sees the first failure once they have completed.
+                    first_failure.get_or_insert(DeleteFailure { status, path });
                 }
             }
             DeleteVerdict::Complete {
