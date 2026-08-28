@@ -150,6 +150,11 @@ pub(crate) struct WriteCandidate {
     /// decision 4).
     pub(crate) stored_dd_path: String,
     pub(crate) precedence: u32,
+    /// Inverted to point at stored data on the precedence-1 candidate — the
+    /// one slot this write may change, and the only candidate whose
+    /// transformation the seam policy reads. Every other candidate keeps the
+    /// read-direction transformation the map declared, because it is never
+    /// written and inverting it can fail.
     pub(crate) value_transformation: ValueTransformation,
 }
 
@@ -754,13 +759,24 @@ fn write_shape_refusal(resolved: &Resolved, caller: String) -> WritePath {
 }
 
 fn write_candidate(candidate: Candidate) -> WriteCandidate {
+    let precedence = candidate
+        .precedence
+        .expect("a plan candidate declares precedence");
     WriteCandidate {
         path: candidate.path,
         stored_dd_path: candidate.stored_dd_path,
-        precedence: candidate
-            .precedence
-            .expect("a plan candidate declares precedence"),
-        value_transformation: inverted_for_write(candidate.value_transformation),
+        precedence,
+        // Only the precedence-1 candidate is ever written, and the seam policy
+        // reads only its transformation; the rest exist to be named in the
+        // loss log. Inverting them too would `expect` on a transformation that
+        // no write can reach, and WriteCheck::InvertibleTransformation judges
+        // the primary alone — so a non-invertible non-primary would abort the
+        // process across the C ABI rather than refuse.
+        value_transformation: if precedence == 1 {
+            inverted_for_write(candidate.value_transformation)
+        } else {
+            candidate.value_transformation
+        },
     }
 }
 
@@ -987,7 +1003,7 @@ fn refusal_reason_message(reason: RefusalReason) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversion::conversion_map::{ConversionMap, Direction};
+    use crate::conversion::conversion_map::{ConversionMap, Direction, TransformationDirection};
     use std::sync::Arc;
 
     /// Builds the resolver seam directly. Path resolution has no registry
@@ -1004,6 +1020,80 @@ mod tests {
             hli_version: "3.39.0".parse().expect("known release"),
             parent_id: None,
         }
+    }
+
+    /// A record whose stored side is the artifact's left side, so a merged
+    /// rule resolves into the multi-candidate plan a write must narrow.
+    fn reverse_record(artifact: &str) -> ConversionRecord {
+        ConversionRecord {
+            resolved_path: String::new(),
+            pulse_ctx_id: 0,
+            map: Arc::new(ConversionMap::load(artifact).expect("fixture artifact must load")),
+            root_id: 0,
+            direction_to_stored: Direction::Reverse,
+            stored_version: "3.39.0".parse().expect("known release"),
+            hli_version: "4.1.1".parse().expect("known release"),
+            parent_id: None,
+        }
+    }
+
+    /// Only the one stored slot a write may change carries a transformation
+    /// pointing at stored data. The others are named in the loss log and never
+    /// written, so inverting them would be work whose only reachable effect is
+    /// to `expect` on a transformation no write can apply — aborting the
+    /// process across the C ABI instead of refusing.
+    #[test]
+    fn a_write_plan_inverts_its_primary_candidate_alone() {
+        const ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="folds" rel="merged" right="folded">
+                  <from left="primary" precedence="1"/>
+                  <from left="secondary" precedence="2"/>
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+              </rules>
+              <transforms>
+                <cocos from="11" to="17">
+                  <flip path="folded"/>
+                </cocos>
+              </transforms>
+            </ids-map>
+        "#;
+        let record = reverse_record(ARTIFACT);
+        let path = CString::new("folded").expect("fixture paths contain no NUL");
+
+        let WritePath::Candidates(candidates) = narrow_write_path(
+            &record,
+            path.as_ptr(),
+            ArgumentRole::Field,
+            resolve(&record, path.as_ptr()),
+        ) else {
+            panic!("a merged rule resolved from its single side is a write plan")
+        };
+
+        let direction = |precedence: u32| match &candidates
+            .iter()
+            .find(|candidate| candidate.precedence == precedence)
+            .expect("the fixture declares both precedences")
+            .value_transformation
+        {
+            ValueTransformation::SignFlip { direction, .. } => Some(*direction),
+            ValueTransformation::None => None,
+        };
+
+        assert_eq!(
+            direction(1),
+            Some(TransformationDirection::ToStored),
+            "the primary is the slot being written, so its flip must point at stored data"
+        );
+        assert_eq!(
+            direction(2),
+            Some(TransformationDirection::ToHli),
+            "a candidate that is never written keeps the transformation the map declared"
+        );
     }
 
     /// User story 47: "As an HLI reading through a known version mismatch, I
