@@ -40,6 +40,7 @@ use crate::{al_status_t, write_truncated};
 
 mod dispatch;
 mod loss;
+mod passthrough;
 mod read;
 mod reentry;
 mod refusal;
@@ -47,6 +48,13 @@ mod write;
 
 use dispatch::{CallFamily, call_begin_arraystruct, call_begin_global, call_begin_slice, call_end};
 pub(crate) use loss::{context_loss_at, context_loss_count, context_loss_operation_at};
+pub(crate) use passthrough::{
+    bind_plugin, bind_readback_plugins, close_pulse, context_info, get_occurrences,
+    is_plugin_registered, iterate_over_arraystruct, list_filled_paths, register_plugin,
+    setvalue_double_scalar_parameter_plugin, setvalue_int_scalar_parameter_plugin,
+    setvalue_parameter_plugin, unbind_plugin, unbind_readback_plugins, unregister_plugin,
+    write_plugins_metadata,
+};
 pub(crate) use read::{plugin_read_data, read_data};
 use reentry::ReentryGuard;
 use refusal::{c_str_ref, context_path_refusal, contextual_refusal, live_conversion_record};
@@ -81,16 +89,6 @@ enum OpenOccurrenceResult {
         opened_ctx_id: c_int,
         status: al_status_t,
     },
-}
-
-/// Forwards to IMAS-Core's real `al_context_info`, resolving IMAS-Core
-/// lazily on first use.
-///
-/// # Safety
-/// `info` must be a valid, writable `*mut *mut c_char`, or null, matching
-/// IMAS-Core's own contract for this function.
-pub(crate) unsafe fn context_info(ctx: c_int, info: *mut *mut c_char) -> al_status_t {
-    forward_status!(context_info(ctx, info))
 }
 
 /// Forwards to IMAS-Core's real `al_begin_dataentry_action`, resolving
@@ -128,12 +126,6 @@ pub(crate) unsafe fn begin_dataentry_action(
         REGISTRY.record_dataentry(ctx_id);
     }
     status
-}
-
-/// Forwards to IMAS-Core's real `al_close_pulse`, resolving IMAS-Core
-/// lazily on first use.
-pub(crate) fn close_pulse(pulse_ctx: c_int, mode: c_int) -> al_status_t {
-    forward_status!(close_pulse(pulse_ctx, mode))
 }
 
 /// Forwards to IMAS-Core's real `al_begin_global_action`, resolving
@@ -940,128 +932,4 @@ fn candidate_failure(mut status: al_status_t, path: &CStr) -> al_status_t {
         ),
     );
     status
-}
-
-/// Forwards to IMAS-Core's real `al_iterate_over_arraystruct`, resolving
-/// IMAS-Core lazily on first use.
-pub(crate) fn iterate_over_arraystruct(aosctx: c_int, step: c_int) -> al_status_t {
-    forward_status!(iterate_over_arraystruct(aosctx, step))
-}
-
-/// Forwards to IMAS-Core's real `al_get_occurrences`, resolving IMAS-Core
-/// lazily on first use.
-///
-/// # Safety
-/// `ids_name` must be a valid, NUL-terminated C string. `occurrences_list`
-/// and `size` must be valid, writable pointers, matching IMAS-Core's own
-/// contract for this function.
-pub(crate) unsafe fn get_occurrences(
-    pctx_id: c_int,
-    ids_name: *const c_char,
-    occurrences_list: *mut *mut c_int,
-    size: *mut c_int,
-) -> al_status_t {
-    forward_status!(get_occurrences(pctx_id, ids_name, occurrences_list, size,))
-}
-
-/// Forwards to IMAS-Core's real `al_list_filled_paths`, resolving
-/// IMAS-Core lazily on first use.
-///
-/// # Safety
-/// `dataobjectname` must be a valid, NUL-terminated C string. `path_list`
-/// and `size` must be valid, writable pointers, matching IMAS-Core's own
-/// contract for this function.
-pub(crate) unsafe fn list_filled_paths(
-    pctx_id: c_int,
-    dataobjectname: *const c_char,
-    path_list: *mut *mut *mut c_char,
-    size: *mut c_int,
-) -> al_status_t {
-    forward_status!(list_filled_paths(pctx_id, dataobjectname, path_list, size,))
-}
-
-pub(crate) unsafe fn register_plugin(plugin_name: *const c_char) -> al_status_t {
-    forward_status!(register_plugin(plugin_name))
-}
-
-pub(crate) unsafe fn unregister_plugin(plugin_name: *const c_char) -> al_status_t {
-    forward_status!(unregister_plugin(plugin_name))
-}
-
-pub(crate) unsafe fn bind_plugin(
-    field_path: *const c_char,
-    plugin_name: *const c_char,
-) -> al_status_t {
-    forward_status!(bind_plugin(field_path, plugin_name))
-}
-
-pub(crate) unsafe fn unbind_plugin(
-    field_path: *const c_char,
-    plugin_name: *const c_char,
-) -> al_status_t {
-    forward_status!(unbind_plugin(field_path, plugin_name))
-}
-
-pub(crate) fn bind_readback_plugins(ctx_id: c_int) -> al_status_t {
-    let (_reentry_guard, _already_entered) = ReentryGuard::enter();
-    forward_status!(bind_readback_plugins(ctx_id))
-}
-
-pub(crate) fn unbind_readback_plugins(ctx_id: c_int) -> al_status_t {
-    let (_reentry_guard, _already_entered) = ReentryGuard::enter();
-    forward_status!(unbind_readback_plugins(ctx_id))
-}
-
-pub(crate) unsafe fn is_plugin_registered(
-    plugin_name: *const c_char,
-    is_registered: *mut bool,
-) -> al_status_t {
-    forward_status!(is_plugin_registered(plugin_name, is_registered))
-}
-
-pub(crate) fn write_plugins_metadata(ctx_id: c_int) -> al_status_t {
-    let (_reentry_guard, _already_entered) = ReentryGuard::enter();
-    forward_status!(write_plugins_metadata(ctx_id))
-}
-
-pub(crate) unsafe fn setvalue_parameter_plugin(
-    parameter_name: *const c_char,
-    datatype: c_int,
-    dim: c_int,
-    size: *mut c_int,
-    data: *mut c_void,
-    plugin_name: *const c_char,
-) -> al_status_t {
-    forward_status!(setvalue_parameter_plugin(
-        parameter_name,
-        datatype,
-        dim,
-        size,
-        data,
-        plugin_name,
-    ))
-}
-
-pub(crate) unsafe fn setvalue_int_scalar_parameter_plugin(
-    parameter_name: *const c_char,
-    parameter_value: c_int,
-    plugin_name: *const c_char,
-) -> al_status_t {
-    forward_status!(setvalue_int_scalar_parameter_plugin(
-        parameter_name,
-        parameter_value,
-        plugin_name,
-    ))
-}
-
-pub(crate) unsafe fn setvalue_double_scalar_parameter_plugin(
-    parameter_name: *const c_char,
-    parameter_value: c_double,
-    plugin_name: *const c_char,
-) -> al_status_t {
-    forward_status!(setvalue_double_scalar_parameter_plugin(
-        parameter_name,
-        parameter_value,
-        plugin_name,
-    ))
 }
