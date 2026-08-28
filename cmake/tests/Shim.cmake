@@ -28,11 +28,12 @@ set_target_properties(runtime_binding_test PROPERTIES
 
 add_stub_test(runtime-binding-success runtime_binding_test success)
 
-add_test(NAME runtime-binding-version-drift-tolerated
-    COMMAND runtime_binding_test version-drift)
+add_stub_test(runtime-binding-version-drift-tolerated runtime_binding_test version-drift
+    ENV "RECORDING_STUB_VERSION=${IMAS_CORE_DRIFT_VERSION}")
+# The only thing add_stub_test does not own: this scenario proves the drift is
+# announced rather than merely survived, so it asserts on stdout. Setting one
+# more property afterwards leaves the environment add_stub_test built intact.
 set_tests_properties(runtime-binding-version-drift-tolerated PROPERTIES
-    ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_VERSION=${IMAS_CORE_DRIFT_VERSION}"
     PASS_REGULAR_EXPRESSION
         "tolerating IMAS-Core version drift.*built against ${IMAS_CORE_VERSION}, found ${IMAS_CORE_DRIFT_VERSION}")
 
