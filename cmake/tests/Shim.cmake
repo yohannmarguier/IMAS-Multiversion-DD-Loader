@@ -90,7 +90,12 @@ set_target_properties(hli_dd_version_test PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
 # These setter-only scenarios never open a context and deliberately need no
-# recording stub, so an ambient latch variable is inert; keep them environment-free.
+# recording stub, so an ambient latch variable is inert; keep them
+# environment-free. Inert is checkable rather than assumed: only
+# resolve_for_open() in src/version/hli_version.rs consults
+# IMAS_MVDD_HLI_DD_VERSION, and set() -- all these scenarios call -- never does,
+# so the variable cannot be reached without an open. A scenario added here that
+# opens anything breaks that and belongs in add_stub_test instead.
 add_test(NAME hli-dd-version-setter-accepts-valid-version
     COMMAND hli_dd_version_test setter-accepts-valid-version)
 add_test(NAME hli-dd-version-setter-accepts-identical-repeat
