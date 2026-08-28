@@ -1,3 +1,15 @@
+//! The `al_write_data` seams.
+//!
+//! `al_write_data` and its `al_plugin_write_data` twin share one body.
+//! A write asserts a value, so unlike a read it must resolve to exactly one
+//! stored spelling: an ambiguous plan writes only precedence 1 and records
+//! what it skipped, while an unservable rule refuses before Core is called.
+//! A value transformation runs on a shim-owned copy (ADR 0018), never on the
+//! caller's buffer.
+//!
+//! The decision is not here — [`crate::conversion::seam_policy::run_write`]
+//! owns it (ADR 0015); this module supplies the Core call and the buffers.
+
 use std::ffi::{CStr, c_char, c_int, c_void};
 
 use crate::al_status_t;

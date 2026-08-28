@@ -1,3 +1,14 @@
+//! The `al_read_data` seams.
+//!
+//! `al_read_data` and its `al_plugin_read_data` twin share one body: resolve
+//! `field` and `timebase` to the stored spelling, try the candidate plan in
+//! declared precedence order, classify the three-way read outcome (ADR 0012)
+//! and apply any value transformation in place on the way back up.
+//!
+//! The loop itself is not here — [`crate::conversion::seam_policy::run_read`]
+//! owns which candidate to try next and what fidelity an argument reached
+//! (ADR 0015). This module supplies it the Core call and the raw buffers.
+
 use std::ffi::{CStr, c_char, c_int, c_void};
 
 use crate::al_status_t;

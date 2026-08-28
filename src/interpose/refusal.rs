@@ -1,3 +1,15 @@
+//! The refusal formatter and the raw-argument marshalling around it.
+//!
+//! Every seam that can refuse names the same four things — reason, DD path,
+//! HLI version and stored version — from [`context_path_refusal`], so no
+//! caller-visible diagnostic drifts from its siblings. Naming the DD path
+//! means first turning a raw `*const c_char` into an anchor-joined one, which
+//! is why the pointer helpers live beside the formatter that consumes them.
+//!
+//! [`live_conversion_record`] is the gate the data-path seams share: it
+//! answers from the ADR 0005 latch before touching the registry, so a process
+//! that cannot convert pays no lock.
+
 use std::ffi::{CStr, c_char, c_int};
 
 use crate::al_status_t;

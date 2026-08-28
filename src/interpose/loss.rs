@@ -1,3 +1,11 @@
+//! The shim-owned `imas_mvdd_context_loss_*` exports.
+//!
+//! ADR 0012's reporting channel. `al_status_t` has no room for a partial
+//! outcome, so loss is retained on the context and drained afterwards by
+//! these three exports — the only symbols here that IMAS-Core does not also
+//! define. They allocate nothing, resolve a child context to its root, and
+//! report zero for an untracked context rather than refusing.
+
 use std::ffi::{c_char, c_int};
 
 use crate::al_status_t;

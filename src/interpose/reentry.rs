@@ -1,3 +1,10 @@
+//! ADR 0014's depth gate.
+//!
+//! IMAS-Core calls back into this shim while a seam is still in flight, and
+//! by then the path in flight is already a *stored* path — resolving it again
+//! would translate it twice. [`ReentryGuard`] is the one counter that tells a
+//! seam it arrived underneath another, across every family Core can reenter.
+
 use std::cell::Cell;
 
 thread_local! {

@@ -1,10 +1,17 @@
-//! Verbatim forwards for interposition seams without conversion policy.
+//! The seams that forward unchanged.
+//!
+//! Two kinds, deliberately together. `al_get_occurrences`,
+//! `al_list_filled_paths` and the plugin bind/unbind pair carry DD paths and
+//! are left untranslated *by decision* (ADR 0002) — passthrough is their
+//! policy, not the absence of one. The rest — utility accessors, plugin
+//! registration, metadata and parameter setters — have no path to translate.
+//! Neither kind touches the context registry.
 
 use std::ffi::{c_char, c_double, c_int, c_void};
 
+use super::reentry::ReentryGuard;
 use crate::al_status_t;
 use crate::core::core_binding::forward_status;
-use crate::interpose::reentry::ReentryGuard;
 
 /// Forwards to IMAS-Core's real `al_context_info`, resolving IMAS-Core
 /// lazily on first use.

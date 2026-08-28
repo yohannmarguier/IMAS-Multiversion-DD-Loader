@@ -1,3 +1,10 @@
+//! Which real ABI symbol a shared seam forwards through.
+//!
+//! Six of this layer's seams exist twice in IMAS-Core's ABI — once for
+//! ordinary HLI callers and once as an `al_plugin_*` reentry twin — with the
+//! same signature and the same policy either side. [`CallFamily`] is the one
+//! parameter that carries the difference, so the policy is written once.
+
 use std::ffi::{c_char, c_double, c_int, c_void};
 
 use crate::al_status_t;

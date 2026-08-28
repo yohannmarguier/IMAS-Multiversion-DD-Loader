@@ -1,3 +1,12 @@
+//! The `al_delete_data` seam.
+//!
+//! A write asserts a value where a delete asserts an absence, so where a
+//! write must not fan out a delete must: ADR 0017 calls Core for *every*
+//! candidate in the plan, with no presence probe. The first nonzero status is
+//! retained while later candidates are still attempted, which is why
+//! [`candidate_failure`] renames the failure after the stored candidate that
+//! produced it — the caller's own path does not identify it.
+
 use std::ffi::{CStr, c_char, c_int};
 
 use crate::conversion::path_conversion;

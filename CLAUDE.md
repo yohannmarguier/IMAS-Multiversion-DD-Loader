@@ -33,7 +33,7 @@ IMAS-Core.
 | `passthrough.rs` | the ADR 0002 untranslated seams and the verbatim forwards, including `close_pulse` |
 | `dispatch.rs` | `CallFamily` and its ABI-symbol dispatch |
 | `reentry.rs` | the ADR 0014 depth gate |
-| `refusal.rs` | `contextual_refusal`, `joined_argument_path` and `live_conversion_record` |
+| `refusal.rs` | the one refusal formatter — `context_path_refusal`, `contextual_refusal` and `live_conversion_record` — plus the raw-argument marshalling they need (`c_str_ref`, `c_str_or_none`, `joined_argument_path`, `read_argument_path`) |
 
 C tests are
 grouped under `tests/abi/`, `tests/shim/`, `tests/real_core/`, and
