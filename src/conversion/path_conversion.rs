@@ -136,14 +136,7 @@ pub(crate) enum WritePath {
     /// entry only after that one write succeeds.
     Candidates(Vec<WriteCandidate>),
     /// The supplied HLI-DD path cannot safely be written through this seam.
-    Refusal {
-        reason: String,
-        dd_path: String,
-        /// The entry in [`WRITE_CHECKS`] that rejected this argument. `None`
-        /// is a later path-construction failure, not one of the ordered
-        /// refusal checks.
-        check_index: Option<usize>,
-    },
+    Refusal { reason: String, dd_path: String },
 }
 
 pub(crate) struct WriteCandidate {
@@ -335,17 +328,13 @@ const DELETE_CHECKS: &[(ArgumentRole, DeleteCheck)] = &[
     (ArgumentRole::Path, DeleteCheck::EscapingSubtree), // ADR 0017
 ];
 
-/// The first write refusal the declared order reaches, as its position in
-/// [`WRITE_CHECKS`] and its reason, or `None` where every check that serves
-/// `role` passes.
-fn first_write_refusal(role: ArgumentRole, subject: &CheckSubject<'_>) -> Option<(usize, String)> {
+/// The first write refusal the declared order reaches, or `None` where every
+/// check that serves `role` passes.
+fn first_write_refusal(role: ArgumentRole, subject: &CheckSubject<'_>) -> Option<String> {
     WRITE_CHECKS
         .iter()
-        .enumerate()
-        .filter(|(_, (tag, _))| tag.serves(role))
-        .find_map(|(index, (_, check))| {
-            write_check_refusal(*check, subject).map(|reason| (index, reason))
-        })
+        .filter(|(tag, _)| tag.serves(role))
+        .find_map(|(_, check)| write_check_refusal(*check, subject))
 }
 
 fn write_check_refusal(check: WriteCheck, subject: &CheckSubject<'_>) -> Option<String> {
@@ -675,10 +664,9 @@ pub(crate) fn narrow_write_path(
     if let Some(refusal) = write_subject(&resolved, &caller, primary)
         .as_ref()
         .and_then(|subject| {
-            first_write_refusal(role, subject).map(|(check_index, reason)| WritePath::Refusal {
+            first_write_refusal(role, subject).map(|reason| WritePath::Refusal {
                 reason,
                 dd_path: subject.dd_path.to_string(),
-                check_index: Some(check_index),
             })
         })
     {
@@ -698,7 +686,6 @@ pub(crate) fn narrow_write_path(
         Resolved::Plan(_) => WritePath::Refusal {
             reason: "this candidate plan has no precedence-1 source for a write".to_string(),
             dd_path: caller,
-            check_index: None,
         },
         // `Forward` returned above; the three shapes naming no stored source
         // are each covered by an entry in `WRITE_CHECKS` and refused there.
@@ -763,11 +750,7 @@ fn write_shape_refusal(resolved: &Resolved, caller: String) -> WritePath {
         } => (reason.clone(), dd_path.clone()),
         _ => ("this path has no stored source".to_string(), caller),
     };
-    WritePath::Refusal {
-        reason,
-        dd_path,
-        check_index: None,
-    }
+    WritePath::Refusal { reason, dd_path }
 }
 
 fn write_candidate(candidate: Candidate) -> WriteCandidate {

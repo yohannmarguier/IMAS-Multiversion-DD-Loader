@@ -243,9 +243,6 @@ pub(crate) fn run_write<'a>(
     shape: BufferShape,
     source: SourceView<'a>,
 ) -> WriteVerdict<'a> {
-    if let Some(refusal) = earliest_write_check_refusal(field, timebase) {
-        return write_refusal(refusal);
-    }
     let field = match write_argument_path(field) {
         Ok(path) => path,
         Err(refusal) => return write_refusal(refusal),
@@ -285,27 +282,6 @@ pub(crate) fn run_write<'a>(
         timebase: timebase.path,
         data,
         unwritten_candidates: unwritten_candidate_paths(&field, &timebase),
-    }
-}
-
-fn earliest_write_check_refusal<'a>(
-    field: &'a WriteArgument<'a>,
-    timebase: &'a WriteArgument<'a>,
-) -> Option<(&'a str, &'a str)> {
-    let ordered_refusal = |argument: &'a WriteArgument<'a>| match &argument.resolution {
-        WritePath::Refusal {
-            reason,
-            dd_path,
-            check_index: Some(check_index),
-        } => Some((*check_index, reason.as_str(), dd_path.as_str())),
-        _ => None,
-    };
-    match (ordered_refusal(field), ordered_refusal(timebase)) {
-        (Some(field), Some(timebase)) if field.0 <= timebase.0 => Some((field.1, field.2)),
-        (Some(_), Some(timebase)) => Some((timebase.1, timebase.2)),
-        (Some(field), None) => Some((field.1, field.2)),
-        (None, Some(timebase)) => Some((timebase.1, timebase.2)),
-        (None, None) => None,
     }
 }
 
@@ -1371,12 +1347,16 @@ mod tests {
     }
 
     #[test]
-    fn write_refusals_across_argument_roles_follow_the_resolver_check_order() {
+    fn a_refused_field_is_reported_ahead_of_a_refused_timebase() {
+        // The two arguments are resolved independently and `field` is resolved
+        // first, so a caller who supplied a bad field hears about the field.
+        // Which check inside the resolver rejected each argument does not
+        // reorder them against each other: `field` is the argument the write
+        // is about, and the ordered lists pin the order *within* one argument.
         let field = WriteArgument {
             resolution: WritePath::Refusal {
                 reason: "field transform is not invertible".to_string(),
                 dd_path: "field".to_string(),
-                check_index: Some(6),
             },
             forward: None,
             dd_path: "field".to_string(),
@@ -1385,7 +1365,6 @@ mod tests {
             resolution: WritePath::Refusal {
                 reason: "timebase needs a transformation".to_string(),
                 dd_path: "timebase".to_string(),
-                check_index: Some(5),
             },
             forward: None,
             dd_path: "timebase".to_string(),
@@ -1404,7 +1383,7 @@ mod tests {
         assert!(matches!(
             verdict,
             WriteVerdict::Refusal { ref reason, ref dd_path }
-                if reason == "timebase needs a transformation" && dd_path == "timebase"
+                if reason == "field transform is not invertible" && dd_path == "field"
         ));
     }
 
