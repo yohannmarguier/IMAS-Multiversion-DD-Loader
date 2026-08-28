@@ -19,6 +19,13 @@ pub(super) unsafe fn c_str_ref<'a>(ptr: *const c_char) -> Option<&'a CStr> {
     Some(unsafe { CStr::from_ptr(ptr) })
 }
 
+/// `ptr` as a borrowed `&str`, or `None` if it is null or not valid UTF-8.
+pub(super) fn c_str_or_none<'a>(ptr: *const c_char) -> Option<&'a str> {
+    // SAFETY: this function carries `c_str_ref`'s contract to its own
+    // callers, who are the ones holding IMAS-Core's guarantee about `ptr`.
+    unsafe { c_str_ref(ptr) }.and_then(|path| path.to_str().ok())
+}
+
 /// The raw HLI argument joined onto `record`'s own anchor, or `None` if the
 /// argument itself is absent. Shared by its two callers, which want opposite
 /// things from that `None`: `read_argument_path` falls back to the bare anchor,
@@ -29,7 +36,7 @@ pub(super) fn joined_argument_path(
     record: &ConversionRecord,
     raw_path: *const c_char,
 ) -> Option<String> {
-    super::occurrence::c_str_or_none(raw_path)
+    c_str_or_none(raw_path)
         .filter(|path| !path.is_empty())
         .map(|path| path_conversion::join_hli_path(&record.resolved_path, path))
 }

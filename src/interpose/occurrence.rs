@@ -30,7 +30,7 @@ use super::dispatch::{
     CallFamily, call_begin_arraystruct, call_begin_global, call_begin_slice, call_end,
 };
 use super::reentry::ReentryGuard;
-use super::refusal::{contextual_refusal, live_conversion_record};
+use super::refusal::{c_str_or_none, contextual_refusal, live_conversion_record};
 
 /// Calls IMAS-Core's ordinary read symbol without applying conversion policy.
 /// Internal readers enter the reentry guard so an IMAS-Core callback knows the
@@ -470,16 +470,6 @@ fn apply_occurrence_cache_effect(
 /// map applies.
 fn ids_name_from(dataobjectname: &str) -> &str {
     dataobjectname.split('/').next().unwrap_or(dataobjectname)
-}
-
-/// `ptr` as a borrowed `&str`, or `None` if it is null or not valid UTF-8.
-pub(super) fn c_str_or_none<'a>(ptr: *const c_char) -> Option<&'a str> {
-    if ptr.is_null() {
-        return None;
-    }
-    // SAFETY: the caller's own contract requires `ptr`, when non-null, to be
-    // a valid NUL-terminated C string.
-    unsafe { CStr::from_ptr(ptr) }.to_str().ok()
 }
 
 /// Resolves the cached conversion map for a global-action `datapath`.
