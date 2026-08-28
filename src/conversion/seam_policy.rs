@@ -4,7 +4,7 @@
 //!
 //! The three are deliberately not equal in weight. [`run_read`] owns the
 //! candidate loop and its fidelity bookkeeping; [`run_write`] owns the
-//! sentinel skip, transformation inversion, shape validation, the shim-owned
+//! sentinel skip, shape validation, the shim-owned
 //! copy and the unwritten-candidate list. [`run_delete`] owns candidate
 //! iteration, continuation after a failure, and retention of the first
 //! failure. The adapter injects the one Core-facing operation each loop
@@ -261,25 +261,7 @@ pub(crate) fn run_write<'a>(
             unwritten_candidates: Vec::new(),
         };
     }
-    if timebase.value_transformation != ValueTransformation::None {
-        return WriteVerdict::Refusal {
-            reason: "this timebase needs a value transformation, which al_write_data cannot apply"
-                .to_string(),
-            dd_path: timebase.dd_path.to_string(),
-        };
-    }
-
-    let transformation = match field.value_transformation.inverse() {
-        Some(transformation) => transformation,
-        None => {
-            return WriteVerdict::Refusal {
-                reason:
-                    "this path needs a value transformation that cannot be inverted for a write"
-                        .to_string(),
-                dd_path: field.dd_path.to_string(),
-            };
-        }
-    };
+    let transformation = field.value_transformation.clone();
     if let Err(reason) = validate_value_transformation(&transformation, &shape) {
         return WriteVerdict::Refusal {
             reason: reason.to_string(),
@@ -377,7 +359,9 @@ fn write_argument_path<'a>(
                     .collect(),
             })
         }
-        WritePath::Refusal { reason, dd_path } => Err((reason, dd_path)),
+        WritePath::Refusal {
+            reason, dd_path, ..
+        } => Err((reason, dd_path)),
     }
 }
 
@@ -386,16 +370,11 @@ fn write_argument_path<'a>(
 /// an array remains a value and therefore is transformed with its neighbours,
 /// matching the scope of IMAS-Core's own shape gate (ADR 0018).
 ///
-/// This is the one place that reads [`TransformationDirection`], and it is
-/// what makes ADR 0016 decision 7 an enforced invariant rather than a naming
-/// convention. Conversion-map resolution only ever produces `ToHli`, because
-/// it serves reads; a write is correct only because [`run_write`] called
-/// [`ValueTransformation::inverse`] first. Refusing a `ToHli` transformation
-/// here means a future write path that forgets that call fails loudly instead
-/// of storing values with the sign the *caller* handed in — which, for the one
-/// transformation that exists today, is exactly the direction that looks
-/// plausible and is wrong. It cannot be reached from the shipped artifact and
-/// is proven by unit test (ADR 0011).
+/// This is the one place that reads [`TransformationDirection`]. The resolver
+/// inverts the map's read-direction transformation before it reaches this
+/// policy, and this remains its final assertion that only `ToStored` data can
+/// be copied. A future resolver that forgets that inversion therefore fails
+/// loudly instead of storing values with the sign the caller supplied.
 fn copy_value_transformation(
     transformation: &ValueTransformation,
     source: SourceView<'_>,
@@ -466,9 +445,14 @@ pub(crate) fn run_delete<'a>(
         },
         DeletePath::Candidates(paths) => {
             let mut first_failure = None;
+            // ADR 0017 decision 2: a candidate plan asserts absence only after
+            // every possible stored source has been asked to delete itself, so
+            // this visits all of them and never stops at the first.
             for path in paths {
                 let status = delete(path);
                 if status.code != 0 {
+                    // ADR 0017 decision 3: later candidates still run, and the
+                    // caller sees the first failure once they have completed.
                     first_failure.get_or_insert(DeleteFailure { status, path });
                 }
             }
@@ -492,9 +476,23 @@ pub(crate) struct ArgumentFidelity {
     pub(crate) fidelity: Fidelity,
 }
 
+/// The field pair accepted by [`verdict`]. It is deliberately distinct from
+/// [`TimebaseFidelity`] so field and timebase cannot be transposed at a call
+/// site while still compiling.
+struct FieldFidelity<'a> {
+    path: &'a str,
+    fidelity: Fidelity,
+}
+
+/// The timebase pair accepted by [`verdict`].
+struct TimebaseFidelity<'a> {
+    path: &'a str,
+    fidelity: Fidelity,
+}
+
 /// What [`run_read`] decided to report back to the HLI, short of turning it
 /// into an `al_status_t` — that formatting step needs the live
-/// [`crate::context_registry::ConversionRecord`]'s DD versions, which this
+/// [`crate::registry::context_registry::ConversionRecord`]'s DD versions, which this
 /// module never touches.
 // `al_status_t` is a 260-byte fixed-size ABI struct (`MAX_ERR_MSG_LEN`) that
 // the crate already copies by value throughout rather than boxing (see
@@ -631,8 +629,8 @@ fn apply_value_transformation(
 /// until one field candidate returns data — a single `Translated` path and a
 /// `Forward` argument both present as a one-candidate list, so there is only
 /// one loop, not a special case for the non-candidate path (issue #65).
-/// [`validate_value_transformation`] runs before `reader` is ever called for
-/// that pair (ADR 0010); a [`Attempt::Data`] result runs
+/// [`validate_value_transformation`] runs once for each field candidate before
+/// `reader` is ever called for any of its timebase candidates (ADR 0010); a [`Attempt::Data`] result runs
 /// [`apply_value_transformation`] in place before this returns.
 pub(crate) fn run_read<'a>(
     field: ReadArgument<'a>,
@@ -647,7 +645,7 @@ pub(crate) fn run_read<'a>(
 
     let field_translated = match field.resolution {
         ReadPath::Forward => None,
-        ReadPath::Translated(path) | ReadPath::Candidates(path) => Some(path),
+        ReadPath::Translated(path) => Some(path),
         ReadPath::Refusal {
             reason,
             dd_path,
@@ -655,26 +653,34 @@ pub(crate) fn run_read<'a>(
         } => {
             return verdict(
                 SeamOutcome::Refusal { reason, dd_path },
-                &field_dd_path,
-                fidelity,
-                &timebase_dd_path,
-                Fidelity::Exact,
+                FieldFidelity {
+                    path: &field_dd_path,
+                    fidelity,
+                },
+                TimebaseFidelity {
+                    path: &timebase_dd_path,
+                    fidelity: Fidelity::Exact,
+                },
             );
         }
         ReadPath::NoSource(fidelity) => {
             return verdict(
                 SeamOutcome::NotFound,
-                &field_dd_path,
-                fidelity,
-                &timebase_dd_path,
-                Fidelity::Exact,
+                FieldFidelity {
+                    path: &field_dd_path,
+                    fidelity,
+                },
+                TimebaseFidelity {
+                    path: &timebase_dd_path,
+                    fidelity: Fidelity::Exact,
+                },
             );
         }
     };
 
     let timebase_translated = match timebase.resolution {
         ReadPath::Forward => None,
-        ReadPath::Translated(path) | ReadPath::Candidates(path) => Some(path),
+        ReadPath::Translated(path) => Some(path),
         ReadPath::Refusal {
             reason,
             dd_path,
@@ -682,19 +688,27 @@ pub(crate) fn run_read<'a>(
         } => {
             return verdict(
                 SeamOutcome::Refusal { reason, dd_path },
-                &field_dd_path,
-                Fidelity::Exact,
-                &timebase_dd_path,
-                fidelity,
+                FieldFidelity {
+                    path: &field_dd_path,
+                    fidelity: Fidelity::Exact,
+                },
+                TimebaseFidelity {
+                    path: &timebase_dd_path,
+                    fidelity,
+                },
             );
         }
         ReadPath::NoSource(fidelity) => {
             return verdict(
                 SeamOutcome::NotFound,
-                &field_dd_path,
-                Fidelity::Exact,
-                &timebase_dd_path,
-                fidelity,
+                FieldFidelity {
+                    path: &field_dd_path,
+                    fidelity: Fidelity::Exact,
+                },
+                TimebaseFidelity {
+                    path: &timebase_dd_path,
+                    fidelity,
+                },
             );
         }
     };
@@ -709,29 +723,37 @@ pub(crate) fn run_read<'a>(
     );
 
     for field_attempt in &field_attempts {
+        if let Err(reason) =
+            validate_value_transformation(&field_attempt.value_transformation, &shape)
+        {
+            return verdict(
+                SeamOutcome::Refusal {
+                    reason: reason.to_string(),
+                    dd_path: field_dd_path.clone(),
+                },
+                FieldFidelity {
+                    path: &field_dd_path,
+                    fidelity: Fidelity::Unmappable,
+                },
+                TimebaseFidelity {
+                    path: &timebase_dd_path,
+                    fidelity: timebase_attempts[0].fidelity,
+                },
+            );
+        }
         for timebase_attempt in &timebase_attempts {
-            if let Err(reason) =
-                validate_value_transformation(&field_attempt.value_transformation, &shape)
-            {
-                return verdict(
-                    SeamOutcome::Refusal {
-                        reason: reason.to_string(),
-                        dd_path: field_dd_path.clone(),
-                    },
-                    &field_dd_path,
-                    Fidelity::Unmappable,
-                    &timebase_dd_path,
-                    timebase_attempt.fidelity,
-                );
-            }
             match reader(field_attempt.path, timebase_attempt.path) {
                 Attempt::Failure(status) => {
                     return verdict(
                         SeamOutcome::Data(status),
-                        &field_dd_path,
-                        field_attempt.fidelity,
-                        &timebase_dd_path,
-                        timebase_attempt.fidelity,
+                        FieldFidelity {
+                            path: &field_dd_path,
+                            fidelity: field_attempt.fidelity,
+                        },
+                        TimebaseFidelity {
+                            path: &timebase_dd_path,
+                            fidelity: timebase_attempt.fidelity,
+                        },
                     );
                 }
                 Attempt::Data(status, mut view) => {
@@ -743,18 +765,26 @@ pub(crate) fn run_read<'a>(
                                 reason: reason.to_string(),
                                 dd_path: field_dd_path.clone(),
                             },
-                            &field_dd_path,
-                            Fidelity::Unmappable,
-                            &timebase_dd_path,
-                            timebase_attempt.fidelity,
+                            FieldFidelity {
+                                path: &field_dd_path,
+                                fidelity: Fidelity::Unmappable,
+                            },
+                            TimebaseFidelity {
+                                path: &timebase_dd_path,
+                                fidelity: timebase_attempt.fidelity,
+                            },
                         );
                     }
                     return verdict(
                         SeamOutcome::Data(status),
-                        &field_dd_path,
-                        field_attempt.fidelity,
-                        &timebase_dd_path,
-                        timebase_attempt.fidelity,
+                        FieldFidelity {
+                            path: &field_dd_path,
+                            fidelity: field_attempt.fidelity,
+                        },
+                        TimebaseFidelity {
+                            path: &timebase_dd_path,
+                            fidelity: timebase_attempt.fidelity,
+                        },
                     );
                 }
                 Attempt::NotFound => {}
@@ -764,10 +794,14 @@ pub(crate) fn run_read<'a>(
 
     verdict(
         SeamOutcome::NotFound,
-        &field_dd_path,
-        path_conversion::translated_read_fidelity(field_translated.as_ref()),
-        &timebase_dd_path,
-        path_conversion::translated_read_fidelity(timebase_translated.as_ref()),
+        FieldFidelity {
+            path: &field_dd_path,
+            fidelity: path_conversion::translated_read_fidelity(field_translated.as_ref()),
+        },
+        TimebaseFidelity {
+            path: &timebase_dd_path,
+            fidelity: path_conversion::translated_read_fidelity(timebase_translated.as_ref()),
+        },
     )
 }
 
@@ -776,20 +810,18 @@ pub(crate) fn run_read<'a>(
 /// nested-struct literal at every one of `run_read`'s return points.
 fn verdict(
     outcome: SeamOutcome,
-    field_path: &str,
-    field_fidelity: Fidelity,
-    timebase_path: &str,
-    timebase_fidelity: Fidelity,
+    field: FieldFidelity<'_>,
+    timebase: TimebaseFidelity<'_>,
 ) -> ReadVerdict {
     ReadVerdict {
         outcome,
         field: ArgumentFidelity {
-            path: field_path.to_string(),
-            fidelity: field_fidelity,
+            path: field.path.to_string(),
+            fidelity: field.fidelity,
         },
         timebase: ArgumentFidelity {
-            path: timebase_path.to_string(),
-            fidelity: timebase_fidelity,
+            path: timebase.path.to_string(),
+            fidelity: timebase.fidelity,
         },
     }
 }
@@ -813,9 +845,9 @@ mod tests {
     /// out of a loaded artifact exactly as conversion-map resolution produces
     /// it, which is always `ToHli`, because resolution serves reads. Handing
     /// that straight to the write executor is precisely the mistake a future
-    /// write path can make: [`run_write`] cannot reach this state today, since
-    /// it calls [`ValueTransformation::inverse`] first, which is why this is a
-    /// direct unit test rather than a seam scenario.
+    /// write path can make. The resolver is responsible for inversion now, so
+    /// this remains a direct test of the copy-side assertion rather than a
+    /// `run_write` scenario.
     #[test]
     fn a_write_side_transformation_that_was_not_inverted_refuses() {
         const ARTIFACT: &str = r#"
@@ -993,7 +1025,7 @@ mod tests {
             ],
         };
         let field = ReadArgument {
-            resolution: ReadPath::Candidates(candidates),
+            resolution: ReadPath::Translated(candidates),
             forward: None,
             dd_path: "profiles_2d/b_tor".to_string(),
         };
@@ -1096,6 +1128,52 @@ mod tests {
         assert_eq!(verdict.field.fidelity, Fidelity::Unmappable);
     }
 
+    #[test]
+    fn field_transform_validation_uses_the_first_timebase_candidate_fidelity() {
+        let field = ReadArgument {
+            resolution: ReadPath::Translated(TranslatedReadPath {
+                paths: vec![resolved(
+                    "field",
+                    Fidelity::Exact,
+                    sign_flip_transformation(),
+                )],
+            }),
+            forward: None,
+            dd_path: "field".to_string(),
+        };
+        let timebase = ReadArgument {
+            resolution: ReadPath::Translated(TranslatedReadPath {
+                paths: vec![
+                    resolved(
+                        "first_timebase",
+                        Fidelity::PotentiallyLossy,
+                        ValueTransformation::None,
+                    ),
+                    resolved(
+                        "second_timebase",
+                        Fidelity::Lossy,
+                        ValueTransformation::None,
+                    ),
+                ],
+            }),
+            forward: None,
+            dd_path: "timebase".to_string(),
+        };
+
+        let verdict = run_read(
+            field,
+            timebase,
+            BufferShape {
+                datatype: BufferDataType::Other,
+                rank: 0,
+            },
+            |_, _| panic!("validation must refuse before the reader runs"),
+        );
+
+        assert_eq!(verdict.field.fidelity, Fidelity::Unmappable);
+        assert_eq!(verdict.timebase.fidelity, Fidelity::PotentiallyLossy);
+    }
+
     /// Issue #107 AC5, the issue-#66 shape: a relative field resolved
     /// beneath a child record's anchor must retain the complete anchor-joined
     /// DD path, not the bare relative argument the caller actually passed.
@@ -1171,7 +1249,9 @@ mod tests {
     fn a_write_sign_flip_copies_and_transforms_the_source() {
         let field = write_argument(
             "time_slice/constraints/flux_loop/measured",
-            sign_flip_transformation(),
+            sign_flip_transformation()
+                .inverse()
+                .expect("a flip between differing conventions inverts"),
         );
         let timebase = plain_timebase();
         let caller_values = [1.25, -2.5, 3.75];
@@ -1207,7 +1287,7 @@ mod tests {
     }
 
     #[test]
-    fn an_uninvertible_write_transformation_refuses_before_any_copy() {
+    fn a_write_copy_refuses_a_transformation_that_did_not_point_to_stored_data() {
         use crate::conversion::conversion_map::TransformationDirection;
         let same_convention = match sign_flip_transformation() {
             ValueTransformation::SignFlip { from_cocos, .. } => from_cocos,
@@ -1237,9 +1317,50 @@ mod tests {
         assert!(matches!(
             verdict,
             WriteVerdict::Refusal { ref reason, .. }
-                if reason == "this path needs a value transformation that cannot be inverted for a write"
+                if reason == "this value transformation was not inverted for the write direction"
         ));
         assert_eq!(caller_values, [1.25]);
+    }
+
+    #[test]
+    fn a_refused_field_is_reported_ahead_of_a_refused_timebase() {
+        // The two arguments are resolved independently and `field` is resolved
+        // first, so a caller who supplied a bad field hears about the field.
+        // Which check inside the resolver rejected each argument does not
+        // reorder them against each other: `field` is the argument the write
+        // is about, and the ordered lists pin the order *within* one argument.
+        let field = WriteArgument {
+            resolution: WritePath::Refusal {
+                reason: "field transform is not invertible".to_string(),
+                dd_path: "field".to_string(),
+            },
+            forward: None,
+            dd_path: "field".to_string(),
+        };
+        let timebase = WriteArgument {
+            resolution: WritePath::Refusal {
+                reason: "timebase needs a transformation".to_string(),
+                dd_path: "timebase".to_string(),
+            },
+            forward: None,
+            dd_path: "timebase".to_string(),
+        };
+
+        let verdict = run_write(
+            &field,
+            &timebase,
+            BufferShape {
+                datatype: BufferDataType::Double,
+                rank: 0,
+            },
+            SourceView::Double(&[1.25]),
+        );
+
+        assert!(matches!(
+            verdict,
+            WriteVerdict::Refusal { ref reason, ref dd_path }
+                if reason == "field transform is not invertible" && dd_path == "field"
+        ));
     }
 
     #[test]
@@ -1285,5 +1406,93 @@ mod tests {
         );
 
         assert!(matches!(verdict, WriteVerdict::Forward { data: None, .. }));
+    }
+
+    fn delete_argument(paths: &[&str]) -> DeleteArgument<'static> {
+        DeleteArgument {
+            resolution: DeletePath::Candidates(
+                paths
+                    .iter()
+                    .map(|path| CString::new(*path).expect("fixture path contains no NUL"))
+                    .collect(),
+            ),
+            forward: None,
+        }
+    }
+
+    #[test]
+    fn a_delete_candidate_plan_visits_every_candidate_in_order() {
+        let argument = delete_argument(&["first", "second", "third"]);
+        let mut visited = Vec::new();
+
+        let verdict = run_delete(&argument, |path| {
+            visited.push(path.to_str().expect("fixture paths are ASCII").to_string());
+            al_status_t::default()
+        });
+
+        assert_eq!(visited, ["first", "second", "third"]);
+        assert!(matches!(verdict, DeleteVerdict::Complete { failure: None }));
+    }
+
+    #[test]
+    fn a_delete_candidate_plan_reports_its_first_failure_after_visiting_later_candidates() {
+        let argument = delete_argument(&["first", "second", "third"]);
+        let mut visited = Vec::new();
+
+        let verdict = run_delete(&argument, |path| {
+            let path = path.to_str().expect("fixture paths are ASCII");
+            visited.push(path.to_string());
+            al_status_t {
+                code: if path == "first" {
+                    7
+                } else if path == "second" {
+                    9
+                } else {
+                    0
+                },
+                ..al_status_t::default()
+            }
+        });
+
+        assert_eq!(visited, ["first", "second", "third"]);
+        match verdict {
+            DeleteVerdict::Complete {
+                failure: Some(failure),
+            } => {
+                assert_eq!(failure.status.code, 7);
+                assert_eq!(
+                    failure.path.to_str().expect("fixture paths are ASCII"),
+                    "first"
+                );
+            }
+            DeleteVerdict::Complete { failure: None } => {
+                panic!("the first failure must be retained")
+            }
+            DeleteVerdict::Forward { .. } | DeleteVerdict::Refusal { .. } => {
+                panic!("a candidate plan must complete in seam policy")
+            }
+        }
+    }
+
+    #[test]
+    fn one_translated_delete_path_forwards_once_for_the_c_facing_layer() {
+        let argument = DeleteArgument {
+            resolution: DeletePath::Translated(CString::new("one").expect("no interior NUL")),
+            forward: None,
+        };
+
+        let verdict = run_delete(&argument, |_| {
+            panic!("the policy must not call Core for one path")
+        });
+
+        match verdict {
+            DeleteVerdict::Forward { path: Some(path) } => {
+                assert_eq!(path.to_str().expect("fixture paths are ASCII"), "one");
+            }
+            DeleteVerdict::Forward { path: None } => panic!("the translated path must be retained"),
+            DeleteVerdict::Complete { .. } | DeleteVerdict::Refusal { .. } => {
+                panic!("one translated path must forward to the C-facing layer")
+            }
+        }
     }
 }

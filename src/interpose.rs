@@ -1190,14 +1190,14 @@ unsafe fn read_data_impl(
     };
 
     let field_argument = seam_policy::ReadArgument {
-        resolution: path_conversion::resolve_read_path(&record, field),
+        resolution: path_conversion::narrow_read_path(path_conversion::resolve(&record, field)),
         // SAFETY: this function's own contract requires `field` to be a
         // valid, NUL-terminated C string, or null.
         forward: unsafe { c_str_ref(field) },
         dd_path: read_argument_path(&record, field),
     };
     let timebase_argument = seam_policy::ReadArgument {
-        resolution: path_conversion::resolve_read_path(&record, timebase),
+        resolution: path_conversion::narrow_read_path(path_conversion::resolve(&record, timebase)),
         // SAFETY: this function's own contract requires `timebase` to be a
         // valid, NUL-terminated C string, or null.
         forward: unsafe { c_str_ref(timebase) },
@@ -1637,7 +1637,7 @@ fn resolve_arraystruct_argument(
     raw: *const c_char,
     label: &str,
 ) -> Result<Option<CString>, String> {
-    match path_conversion::resolve_context_path(record, raw) {
+    match path_conversion::narrow_context_path(path_conversion::resolve(record, raw)) {
         ContextPathResolution::Translated(path) => Ok(Some(path)),
         ContextPathResolution::Refusal(reason) => Err(reason),
         ContextPathResolution::NoSource => Err(format!("arraystruct {label} has no stored source")),
@@ -1757,14 +1757,24 @@ fn write_data_impl(
     };
 
     let field_argument = seam_policy::WriteArgument {
-        resolution: path_conversion::resolve_write_path(&record, field),
+        resolution: path_conversion::narrow_write_path(
+            &record,
+            field,
+            path_conversion::ArgumentRole::Field,
+            path_conversion::resolve(&record, field),
+        ),
         // SAFETY: this function's contract requires `field` to be a valid,
         // NUL-terminated C string, or null.
         forward: unsafe { c_str_ref(field) },
         dd_path: read_argument_path(&record, field),
     };
     let timebase_argument = seam_policy::WriteArgument {
-        resolution: path_conversion::resolve_write_path(&record, timebase),
+        resolution: path_conversion::narrow_write_path(
+            &record,
+            timebase,
+            path_conversion::ArgumentRole::Timebase,
+            path_conversion::resolve(&record, timebase),
+        ),
         // SAFETY: this function's contract requires `timebase` to be a valid,
         // NUL-terminated C string, or null.
         forward: unsafe { c_str_ref(timebase) },
@@ -1871,7 +1881,11 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
     };
 
     let argument = seam_policy::DeleteArgument {
-        resolution: path_conversion::resolve_delete_path(&record, path),
+        resolution: path_conversion::narrow_delete_path(
+            &record,
+            path,
+            path_conversion::resolve(&record, path),
+        ),
         // SAFETY: this function's contract requires `path` to be a valid,
         // NUL-terminated C string, or null.
         forward: unsafe { c_str_ref(path) },
@@ -2115,8 +2129,15 @@ mod tests {
             .lookup(CTX_ID)
             .expect("the root record was just registered");
         let path = CString::new("impossible").expect("fixture path contains no NUL");
-        let (reason, dd_path) = match path_conversion::resolve_write_path(&record, path.as_ptr()) {
-            WritePath::Refusal { reason, dd_path } => (reason, dd_path),
+        let (reason, dd_path) = match path_conversion::narrow_write_path(
+            &record,
+            path.as_ptr(),
+            path_conversion::ArgumentRole::Field,
+            path_conversion::resolve(&record, path.as_ptr()),
+        ) {
+            WritePath::Refusal {
+                reason, dd_path, ..
+            } => (reason, dd_path),
             WritePath::Forward | WritePath::Translated { .. } | WritePath::Candidates(_) => {
                 panic!("a declared-unmappable write must refuse")
             }
@@ -2199,7 +2220,12 @@ mod tests {
             .expect("the root record was just registered");
 
         let field = CString::new("folded").expect("fixture path contains no NUL");
-        let resolution = path_conversion::resolve_write_path(&record, field.as_ptr());
+        let resolution = path_conversion::narrow_write_path(
+            &record,
+            field.as_ptr(),
+            path_conversion::ArgumentRole::Field,
+            path_conversion::resolve(&record, field.as_ptr()),
+        );
         assert!(
             matches!(resolution, WritePath::Candidates(_)),
             "the fixture must resolve to a candidate plan, or this proves nothing"
