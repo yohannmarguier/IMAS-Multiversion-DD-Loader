@@ -6,7 +6,11 @@ guaranteed, and what a round trip cannot prove. This is a synthesis of
 `docs/adr/0002`, `0005`, `0007`, `0008`, `0009`, `0012`, `0016`–`0021` and the
 current `src/conversion/seam_policy.rs` / `src/lib.rs`. Where this document and
 an ADR disagree, the ADR (or the code) is authoritative — this file only
-collects and orders what they already say.
+collects and orders what they already say, with one exception: **§8 is a
+frozen surface, not a summary.** The refusal reason strings listed there are
+what downstream tests are invited to assert on, so a change to one of those
+strings in `src/` is a change to this document's contract and must land in
+the same commit.
 
 ## 1. Vocabulary you need before reading the matrices
 
@@ -228,7 +232,10 @@ from the on-disk consequence (which real HDF5 collapses to one).
   a leading `...` so the leaf name — the identifying part — survives) to fit
   the ABI's fixed 256-byte message buffer. A refusal raised before any
   context exists (bad HLI version, malformed stamp) has no path or version
-  pair and uses a shorter `"IMAS-MVDD: {reason}"` form instead.
+  pair and uses a shorter `"IMAS-MVDD: {reason}"` form instead. **Every
+  `{reason}` the shipped shim can produce is listed verbatim in §8** — that
+  is the only part of the message worth asserting on, since `code` alone is
+  `-1000` for all of them and the rest of the message can be truncated away.
 - **Loss/fidelity never travels through `al_status_t`.** It travels through a
   per-root-context log, drained via three shim-owned exports:
   `imas_mvdd_context_loss_count(ctx, *count)`,
@@ -257,7 +264,171 @@ from the on-disk consequence (which real HDF5 collapses to one).
   question (what was actually asked for). Don't expect the same kind of path
   string in both cases.
 
-## 8. What a round trip can prove, and what it structurally cannot
+## 8. Refusal reason strings: a frozen, named surface
+
+Everything above tells you *whether* a call refuses. This section tells you
+*what it says*, verbatim, so an HLI-side test can assert on the reason rather
+than on `code == -1000` alone — which every refusal in the shim shares and
+which therefore proves almost nothing about *which* rule fired.
+
+**This list is the contract.** The strings below are the ones a test may
+depend on. They are literals in `src/`, but treating them as an
+implementation detail is exactly the failure mode this section exists to
+prevent: a reworded string turns a precise assertion into a vacuous one
+without failing a single test in this repository. Anyone changing one of
+these strings must update this table in the same commit, and should treat the
+change as breaking for downstream HLI suites. New reasons may be *added* as
+new artifacts land; existing ones do not get reworded silently.
+
+### 8.1 The envelope around every reason
+
+Two shapes, one formatter (`src/lib.rs`, reached through
+`src/interpose/refusal.rs`):
+
+| Raised | Message |
+|---|---|
+| By a seam holding a live conversion record (every read, write, delete and arraystruct refusal) | `IMAS-MVDD: {reason}; DD path: {path}; HLI DD version: {hli}; stored DD version: {stored}` |
+| Before any context exists (bad HLI DD version, malformed stamp, loss-export argument errors) | `IMAS-MVDD: {reason}` |
+
+`{path}` is the DD path *in the caller's own spelling*, anchor-joined — not
+the stored spelling. Where a seam has a record but no resolved path to name
+(the two arraystruct arguments), it falls back to the context's own resolved
+path, and to the literal `(no path argument)` when there is no path at either
+place.
+
+**Do not assert on the whole message.** It is truncated to fit
+`MAX_ERR_MSG_LEN` (256) in a fixed order: the two versions are dropped first,
+then the path is cut **from the left** and marked with a leading `...`. A
+deep DD path plus a long reason can therefore legitimately produce a message
+with no version pair in it. Assert `code == IMAS_MVDD_CONVERSION_ERROR` plus
+a **substring** match on the reason; assert the full string only where you
+control the path length. (This repository's own C suite asserts exact strings
+via `CHECK_REFUSAL_MESSAGE` precisely because it controls both.)
+
+`{...}` below marks runtime substitution; everything outside braces is
+literal, including punctuation. Note the em-dash (`—`, U+2014) in the
+version-conflict message.
+
+### 8.2 Path-resolution reasons
+
+Raised by the artifact's own rules, shared across seams. These are the ones a
+conversion test most wants to name.
+
+| Reason string | Raised by |
+|---|---|
+| `this path's container changed shape and cannot be served` | any seam, on the `retyped` rule — unconditional, even where the rule declares itself `exact` |
+| `this path's unit was redefined and cannot be converted` | any seam, on a unit-redefinition rule |
+| `this path has no safe conversion between DD versions` | any seam, on a declared-`unmappable` rule. **Unreachable from the shipped artifact** (ADR 0011) and asserted to be so — a test that hits it means a new artifact made it reachable |
+| `this path is unclaimed by the conversion map` | write, delete |
+| `this path has no stored source` | write, delete |
+| `this path is a non-primary source and cannot write a shared stored slot` | write |
+| `this path is a non-primary source and cannot delete a shared stored slot` | delete |
+| `this candidate plan has no precedence-1 source for a write` | write, where a `merged`/`split` plan has no precedence-1 slot at all |
+| `the DD-version stamp is immutable under a version mismatch` | write, on `ids_properties/version_put/data_dictionary` (§5) |
+| `this delete would remove the DD-version stamp while stored data remains` | delete, on the stamp or any ancestor of it |
+| `this timebase needs a value transformation, which al_write_data cannot apply` | write, `timebase` argument only |
+| `this path needs a value transformation that cannot be inverted for a write` | write, `field` argument |
+| `this subtree delete would leave data at a stored path outside the requested subtree` | delete, on an escaping-rule subtree (§6) |
+
+### 8.3 Context-open and arraystruct reasons
+
+Raised by `al_begin_arraystruct_action` / its plugin twin, and by the shared
+anchor resolution beneath every relative path argument.
+
+| Reason string | Raised when |
+|---|---|
+| `this path needs a value transformation, which only a data read can apply` | a context open resolves to a rule carrying a value transformation — an open has no buffer to transform |
+| `this path is served by several stored candidates, and only a data read can try them in turn` | a context open resolves to a `merged`/`split` candidate plan |
+| `arraystruct path has no stored source` | the AOS `path` argument resolves to nothing on the stored side |
+| `arraystruct timebase has no stored source` | same, for `timebase` |
+| `arraystruct path is unclaimed by the conversion map` | the AOS `path` argument is claimed by no rule |
+| `arraystruct timebase is unclaimed by the conversion map` | same, for `timebase` |
+| `translated path does not lie beneath this context's stored anchor` | a relative argument translated to a path outside its own context |
+| `translated field contains an interior NUL byte` | the translated spelling cannot be formed as a C string |
+| `context anchor has no stored-DD conversion rule` | the enclosing context's own anchor is unclaimed |
+| `context anchor has no stored source` | the enclosing context's anchor has nothing on the stored side |
+
+The two `arraystruct ...` families are built from a `{label}` substitution
+over `path` and `timebase`; those four are the only spellings the shipped
+seams produce.
+
+### 8.4 Value-transform execution reasons
+
+Raised when a buffer's declared shape cannot carry the transformation the
+rule asks for. Read and write share the first three; the last two are
+write-only.
+
+| Reason string | Raised when |
+|---|---|
+| `value-transform execution requires DOUBLE_DATA and a rank no greater than MAXDIM` | the datatype is not `DOUBLE_DATA`, or `dim` is outside `0..=7` |
+| `value-transform execution needs array dimensions` | `dim > 0` with a null `size` |
+| `value-transform execution received an invalid array shape` | a negative extent, or extents whose product overflows |
+| `value-transform execution needs a data buffer` | write: a non-scalar write with a null `data` |
+| `this value transformation was not inverted for the write direction` | write: a defensive assertion that a read-direction transformation never reaches the write path. Not reachable through the shipped resolver; a test hitting it has found a real bug |
+
+### 8.5 Version-latch and stamp reasons (pre-context, short envelope)
+
+| Reason string | Raised by |
+|---|---|
+| `HLI DD version must not be null` | `imas_mvdd_set_hli_dd_version(NULL)` |
+| `HLI DD version must be valid UTF-8` | a non-UTF-8 version string |
+| `conflicting HLI DD version: this process already latched to '{existing}' and cannot also serve '{parsed}' — one process cannot host two HLIs built against different DD versions` | a second setter call with a different version (§2.1) |
+| `cannot set HLI DD version to '{parsed}': this process already latched to unset, after an earlier open found no setter call and no valid IMAS_MVDD_HLI_DD_VERSION` | a setter call after an open already latched the process to "no conversion" |
+| `cannot set HLI DD version to '{parsed}': this process already latched to an invalid IMAS_MVDD_HLI_DD_VERSION value at an earlier open ({reason})` | a setter call after an open latched an invalid environment value; `{reason}` is one of §8.6 |
+| `malformed DD-version stamp at 'ids_properties/version_put/data_dictionary'` | the occurrence-open refusal of §3's last row |
+
+### 8.6 DD version grammar reasons
+
+Produced by version parsing (ADR 0009) and delivered through the short
+envelope, either from `imas_mvdd_set_hli_dd_version` or nested inside the
+last message of §8.5. `{input}`/`{raw}`/`{whole}` is the offending string.
+
+| Reason string |
+|---|
+| `DD version '{input}' must not contain whitespace` |
+| `'{input}' is not a known DD release` |
+| `'{input}' is not MAJOR.MINOR.PATCH` |
+| `'{input}' has extra '.'-separated components` |
+| `'{whole}' has a non-canonical version component '{component}'` |
+| `'{whole}' has an out-of-range version component '{component}'` |
+| `'{raw}' has an unknown base release '{base}'` |
+| `'{raw}' is missing the '-N-gHASH' development suffix` |
+| `'{raw}' has a non-canonical development commit distance` |
+| `'{raw}' has a zero commit distance, which is not a development build` |
+| `'{raw}' is missing the 'g' hash prefix` |
+| `'{raw}' hash must be 7 to 64 characters, got {n}` |
+| `'{raw}' hash must be lowercase hexadecimal` |
+
+### 8.7 Loss-export argument reasons
+
+Argument errors from the three `imas_mvdd_context_loss_*` exports (§7). These
+are programming errors in the caller, not conversion outcomes — an untracked
+context is *not* one of them (it reports a count of `0`).
+
+| Reason string |
+|---|
+| `imas_mvdd_context_loss_count requires a non-null count output` |
+| `imas_mvdd_context_loss_at requires a non-null verdict output` |
+| `imas_mvdd_context_loss_at requires a non-null path buffer` |
+| `imas_mvdd_context_loss_at index must not be negative` |
+| `imas_mvdd_context_loss_at buffer length must not be negative` |
+| `imas_mvdd_context_loss_at index is out of range for this context` |
+| `imas_mvdd_context_loss_at buffer is too small for this path` |
+| `imas_mvdd_context_loss_operation_at requires a non-null operation output` |
+| `imas_mvdd_context_loss_operation_at index must not be negative` |
+| `imas_mvdd_context_loss_operation_at index is out of range for this context` |
+
+### 8.8 One status the shim emits that is *not* a refusal
+
+If IMAS-Core itself cannot be resolved at runtime — `libal` not found, or an
+ABI major-version mismatch — every mirrored seam returns `code == -1` (not
+`-1000`) with a message shaped `override with $IMAS_CORE_LIBRARY if this is
+wrong; {detail}`, where `{detail}` is the platform's own `dlerror()` text or
+the version comparison. It carries **no** `IMAS-MVDD:` prefix and predates
+the reserved `-1000..=-1099` block. A test that sees `-1` has a broken
+environment, not a conversion outcome; don't fold it into refusal handling.
+
+## 9. What a round trip can prove, and what it structurally cannot
 
 A write-then-read round trip through the shim is a **consistency check**, not
 a correctness proof, for exactly one class of case: any value transformation
@@ -308,7 +479,7 @@ so you don't chase a false negative:
   *actually* held different data — `PotentiallyLossy` is a statement about
   ambiguity in the rule, never a verified fact about the specific occurrence.
 
-## 9. A minimal scenario checklist
+## 10. A minimal scenario checklist
 
 For each operation (read, write, delete), a reasonably complete integration
 suite exercises, at minimum:
