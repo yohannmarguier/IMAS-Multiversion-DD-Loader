@@ -1,15 +1,25 @@
 # tests/ — what is covered, and where
 
-**167 ctest tests** (17 labelled `real-core`; the `IMAS_MVDD_REAL_CORE_TESTS=OFF`
-stub-only profile registers 146). None of the C sources here is registered by
-itself: every test is declared in `cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
+Every test the stub-only profile skips carries the `real-core` label, and every
+labelled test is skipped by it — the label is applied to the difference by
+construction, so `ctest -L real-core` **is** the gated set. For current totals:
+`ctest -N` / `ctest -N -L real-core`.
+
+**real-Core-gated** means registered only when `IMAS_MVDD_REAL_CORE_TESTS=ON`.
+_Avoid_: real-core suite, real-core profile, real-Core-labelled.
+
+None of the C sources here is registered by itself: every test is declared in
+`cmake/tests/{Common,Abi,Shim,RealCore}.cmake`,
 **one ctest process per scenario**, because both the HLI DD version latch
 (ADR 0005) and the context registry (ADR 0003) are process-wide state that
-settles once. A scenario name maps to `<executable> <scenario-argument>`.
+settles once. A scenario name maps to `<executable> <scenario-argument>`, and
+a group prefix names the seam under test — so where one executable drives more
+than one seam, its prefixes split accordingly rather than naming the file
+(`write-path-*` and `delete-path-*` are both `write_delete_conversion_test`).
 
 ```console
 $ ctest --test-dir build --output-on-failure    # everything
-$ ctest --test-dir build -L real-core           # the 17 real-IMAS-Core ones
+$ ctest --test-dir build -L real-core           # every real-Core-gated test
 $ ctest --test-dir build -R read-path           # one group
 $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 ```
@@ -18,11 +28,11 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 
 | Path | What lives there |
 |---|---|
-| `support/` | `shim_test_support.h` — the one shared C harness: `CHECK`/`CHECK_OK`/`CHECK_REFUSAL_MESSAGE`, IMAS-Core's four data-type codes, `open_recording_stub` plus the `{string,int,double,pointer}_from_stub` accessors, `open_mismatched_occurrence`, and the `{name, function}` scenario table `RUN_NAMED_SCENARIO` dispatches `argv[1]` through. Include this instead of writing a prologue. |
-| `stub/` | `recording_stub.c` — a fake `libal` exporting the whole runtime-bound surface and recording what it received, so assertions are made on what crossed the boundary rather than inferred from a data round trip. ~23 `RECORDING_STUB_*` env knobs drive fixtures and failures (stamp version, not-found, sign-flip values, per-seam `*_FAIL` knobs, filled-paths CSV, reentrant read). |
-| `shim/` | 10 C suites driving the public ABI against that stub — 137 tests. |
-| `real_core/` | 3 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core and the checked-in equilibrium HDF5 fixture pair. |
-| `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 3 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
+| `support/` | `shim_test_support.h` — the one shared C harness: `CHECK`/`CHECK_OK`/`CHECK_REFUSAL_MESSAGE`, IMAS-Core's four data-type codes, the recording stub's two data-event kinds, the loss-log helpers (`loss_count`, `check_no_loss_entry`, `check_loss_at`, `check_no_write_lossy_verdict`), `open_recording_stub` plus the `{string,int,double,double_at,pointer}_from_stub` accessors, `open_mismatched_occurrence`, and the `{name, function}` scenario table `RUN_NAMED_SCENARIO` dispatches `argv[1]` through. Include this instead of writing a prologue. |
+| `stub/` | `recording_stub.c` — a fake `libal` exporting the whole runtime-bound surface and recording what it received, including snapshots of write payloads whose shim-owned buffers are freed on return, so assertions are made on what crossed the boundary rather than inferred from a data round trip. ~23 `RECORDING_STUB_*` env knobs drive fixtures and failures (stamp version, not-found, sign-flip values, per-seam `*_FAIL` knobs, filled-paths CSV, reentrant reads and writes). |
+| `shim/` | 11 C suites driving the public ABI against that stub, one ctest test per scenario. |
+| `real_core/` | 4 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core and the checked-in equilibrium HDF5 fixture pair. |
+| `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 4 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
 | `cmake/` | `cmake -P` checks of the build/CI configuration itself, each with a guard-the-guard companion that proves it rejects what it claims. |
 | `scripts/` | Install/packaging shell checks. **CI-only — not in ctest.** |
 | `package/` | A downstream `find_package()` consumer project, used by `scripts/check-installed-package.sh`. |
@@ -53,7 +63,7 @@ repeat / invalid / null; concurrent identical setters; the
 invalid environment value failing the first open; a setter refused after an
 unset first open has already latched.
 
-### `version-discovery-*` — 22 · `shim/version_discovery_test.c`
+### `version-discovery-*` — 28 · `shim/version_discovery_test.c`
 
 Stamp discovery and registration at `al_begin_{dataentry,global,slice,timerange}_action`
 (ADR 0002/0007/0009/0012, issues #53 and #55). Per seam: unstamped and matching
@@ -66,7 +76,19 @@ HLI version is a plain forward.
 > is proven the only way it is externally observable: a *second* open of the
 > same occurrence translates `datapath` before Core is called.
 
-### `read-path-*` — 34 · `shim/read_path_test.c`
+Six scenarios cover ADR 0020 — *where* the stamp is read from. A `READ_OP` open
+reads it through the caller's own context and opens nothing; any other access
+mode reads it through a shim-owned read-mode context of the shim's own, because
+real IMAS-Core's HDF5 backend gives a write-mode context no reader. The probe is
+observed through the stub's plugin-call recorder, since ADR 0020 has it use
+IMAS-Core's plugin-free `al_plugin_*` primitive and no other scenario in this
+suite calls that family. `WRITE_OP`, `REPLACE_OP`, and all three
+occurrence-opening seams are covered; the two that pin what the probe *asks for*
+refuse it, because the stub's recorder resets its integer fields on every call,
+so the probe's own rwmode is only readable while its open is the last plugin
+call made.
+
+### `read-path-*` — 39 · `shim/read_path_test.c`
 
 `al_read_data`, the main conversion seam (issues #56 and #65, ADR 0014).
 
@@ -84,8 +106,8 @@ HLI version is a plain forward.
   untouched and does not re-apply a sign flip.
 - **Bypass** — matching, unknown, unstamped and conversion-disabled contexts.
 - **Loss log** — lossy `merged`/`moved` reads retained, log destroyed with its
-  context, plus the six safety refusals of the `imas_mvdd_context_loss_*` query
-  exports (null out, negative / out-of-range index, short buffer).
+  context, plus the ten safety refusals of the `imas_mvdd_context_loss_*` query
+  exports (null output, negative / out-of-range index, short buffer).
 
 ### `arraystruct-path-*` — 8 · `shim/arraystruct_path_test.c`
 
@@ -111,14 +133,64 @@ record intact, a recycled context ID never exposes a stale record, and the
 latter two seams forward unchanged without touching the registry. Observed
 indirectly, via whether a later read still translates.
 
-### `write-delete-*` — 14 · `shim/write_delete_conversion_test.c`
+### `write-path-*` — 25 · `shim/write_delete_conversion_test.c`
 
-ADR 0002's write policy (issue #64): `al_write_data`, `al_delete_data` and
-`al_plugin_write_data` refuse **before** Core whenever `ctx_id` carries a live
-conversion record (a mismatched root, or a child that inherited one), leaving
-the caller's `data`/`size` untouched; matching, unstamped, unknown and
-conversion-disabled contexts forward unchanged. No path translation is
-introduced — the check is keyed on the context, never on the path.
+`al_write_data` and its plugin reentry twin `al_plugin_write_data`, whose three
+scenarios are spelled `write-path-plugin-*`. The delete half of the same
+executable is the next group: one binary serves both seams because they share
+the fixture helpers, but a ctest name says which seam it drives, so
+`ctest -R "^write-path-"` selects the write seam alone.
+
+Issue #125's safe write slice: `al_write_data` and `al_plugin_write_data`
+independently resolve identity, `renamed`, and `moved` field/timebase paths to
+one stored spelling, preserving relative/absolute child-context semantics and
+caller-owned `data`/`size`. Issue #127 adds COCOS writes: the policy sends Core
+a sign-flipped, shim-owned copy (including rank 7) while preserving caller
+storage; an unset rank-0 sentinel forwards unchanged so Core keeps its own
+skip behaviour. Issue #128 writes only an ambiguous plan's precedence-1
+candidate — never fanning out the way issue #130's delete does, because a write
+asserts one value where a delete asserts an absence (ADR 0017) — records every
+skipped candidate as a `POTENTIALLY_LOSSY` `WRITE` loss after Core succeeds
+(apart from ADR 0018's unset rank-zero scalar, which stores no value and earns
+no loss), and refuses a non-primary source in either direction, even where its
+artifact entry is not deprecated; a child keeps those losses at its root under
+the complete DD path. Each such entry names the **stored** spelling that was
+left unwritten — `b_field_tor`/`b_tor` beside a written `b_field_phi`,
+`psi_magnetic_axis` beside a written `psi_axis` — because the risk the entry
+exists to report is that another reader of the occurrence finds a stale value
+under one of those names; naming the caller's own path instead answered that
+question with nothing (review finding P1). The DD-version stamp still refuses before Core; the
+stamp's access-layer siblings still forward. Matching, unstamped, unknown and
+conversion-disabled contexts forward unchanged.
+
+Issue #126 adds the impossible-write proof: both fixture directions refuse a
+field with no stored slot, and a retyped field refuses before Core. Each refusal
+keeps caller storage untouched, records an `UNMAPPABLE` `WRITE` loss, and a
+child-context refusal reaches its root under the complete joined DD path.
+
+### `delete-path-*` — 15 · `shim/write_delete_conversion_test.c`
+
+`al_delete_data`, from the same executable as `write-path-*` above.
+
+Issue #129 translates identity, `renamed`, and `moved` leaf deletes to one
+stored spelling in both directions; it refuses the DD-version stamp and
+containing subtrees, non-primary aliases, no-source and unservable paths. Issue
+#130 fans a candidate plan out in declared order. Issue #138 removed its
+presence probe: a write-mode context cannot read it reliably, and the artifact
+has no type or rank for a sound replacement. Every candidate is deleted; the
+first failure returns only after the rest are attempted. An empty delete forwards as the caller's
+explicit whole-DATAOBJECT migration route, and delete never retains a loss-log
+entry.
+
+Issue #131 admits a *trivial* structure delete instead of refusing every
+non-leaf path outright: `time_slice` and `time_slice/constraints` now resolve
+and delete, while `time_slice/boundary` still refuses under a DD4 HLI because
+a `moved` rule nested underneath it targets a stored path outside that
+subtree (an **escaping rule**, ADR 0017 decision 4). `time_slice/
+boundary_separatrix` still refuses under a DD3 HLI too, but for an unrelated,
+pre-existing reason — `drop-boundary-separatrix` (`left_only`) claims that
+exact path itself, so it resolves to no stored source before the
+escaping-rule check ever runs.
 
 ### `plugin-reentry-policy-*` — 22 · `shim/plugin_reentry_policy_test.c`
 
@@ -130,7 +202,13 @@ retention-on-failure for plugin end action, and the full read policy for
 `al_plugin_read_data` (translation, refusal, no-source, merged fallthrough,
 sign flip, loss retention through a child context).
 
-### `scoped-passthrough-*` — 4 · `shim/scoped_passthrough_test.c`
+### `reentry-guard-*` — 6 · `shim/reentry_guard_test.c`
+
+The process-wide reentry guard forwards every seam untouched beneath an
+in-flight Core call. This is provable only against the recording stub, which
+can re-enter the shim on command; genuine IMAS-Core offers no such control.
+
+### `scoped-passthrough-*` — 7 · `shim/scoped_passthrough_test.c`
 
 The outside edge of the seam list (issue #69). With a mismatched occurrence open
 and demonstrably converting, `al_get_occurrences`, `al_list_filled_paths` (both
@@ -140,17 +218,81 @@ deliberately the two spellings of a real rename rule, so a shim that started
 rewriting them would produce a visibly different string rather than pass by
 coincidence. Also pins `getDDVersion()`'s `"!!DEPRECATED!!"` sentinel.
 
-### `equilibrium-read-*` — 16, `real-core` · `real_core/equilibrium_read_test.c`
+Issue #134 repeats the three path-bearing seams under a converting **write**,
+since the write path is a policy of its own (ADR 0016) rather than the read
+path reversed, and a rewrite grown on the write side alone would have passed
+every scenario above. Those three open `WRITE_OP` (31) — the mode a writing
+caller really uses, and the one that makes discovery probe through a
+shim-owned read-mode context (ADR 0020) — and each proves the write translates
+before claiming anything about a passthrough. The remaining non-seam exports
+are not re-run: they carry no DD path, so there is no spelling for a
+write-side rewrite to reach.
+
+### `equilibrium-read-*` — 17, `real-core` · `real_core/equilibrium_read_test.c`
 
 The same conversion policy against genuine IMAS-Core and the checked-in
 equilibrium HDF5 fixture pair, in **both** fixture directions: a renamed scalar
 read through the HLI's own spelling, renamed and sign-flipped fields nested
 under `time_slice`, `merged` and `split` read plans, refusals for an unmappable
 `redefine` and for the artifact's one `retyped` rule (lossless in principle,
-unavailable in practice), a write/delete/plugin-write refusal across a real
-boundary, a real context lifecycle, and the two no-op cases (same version,
-conversion disabled). Scenarios sharing a fixture directory hold a ctest
-`RESOURCE_LOCK`, because of HDF5's own file locking.
+unavailable in practice), the remaining mismatched delete refusal across a
+real boundary, a real context lifecycle, and the two no-op cases (same
+version, conversion disabled). Safe writes are asserted at the recording-stub
+boundary, where their translated Core arguments are directly observable.
+Scenarios sharing a fixture directory hold a ctest
+`RESOURCE_LOCK`, because of HDF5's own file locking. One harness scenario uses
+an isolated temporary copy instead: it reads the copied DD-version stamp and a
+numeric dataset through raw HDF5, then re-proves a translated read against that
+copy, leaving the checked-in pair untouched.
+
+### `write-oracle-*` / `delete-oracle-*` — 11 + 1, `real-core` · `real_core/write_delete_oracle_test.c`
+
+The on-disk oracle for the write and delete seams (issue #133): every
+scenario mutates its own private temp-directory copy of the equilibrium
+fixture through the shim, then reads the result back with raw HDF5 — never
+through the shim or IMAS-Core — because a shim round trip cannot verify a
+sign flip, a stored spelling, a stamp, or a fan-out on its own (ADR 0016's
+"Consequences"). Four of the ticket's five claims are proven here, and all of them
+became reachable only with issue #136 (ADR 0020): before it, a `WRITE_OP`-opened
+context never registered a conversion record against real Core's HDF5 backend,
+so no successful translating write could be driven through real Core at all.
+Every successful write here is a `put_slice` and none of them writes the
+slice's own `time` — both are constraints real IMAS-Core imposes, spelled out
+in the test file's header.
+
+`*-refused-write-leaves-stamp-untouched` carries two claims at once: the
+stamp-immutability refusal can only fire if the write-mode open registered,
+so the refusal *is* the registration proof, and the untouched on-disk stamp is
+the ticket's claim 5. `*-write-lands-on-the-stored-spelling` proves the value
+reached the stored spelling and the HLI's own spelling was never created;
+`*-write-flips-the-sign-on-disk` proves the sign on disk is the stored
+version's convention; both also re-assert that the stamp still reads the
+stored version afterwards. The two
+`*-write-leaves-the-precedence-two-candidate-alone` scenarios prove ADR 0016
+decision 4's primary-only answer in both directions: a reverse `split` plan
+and a forward `merged` plan. Finally,
+`forward-write-through-a-non-primary-source-refuses` proves decision 2, with
+the on-disk assertion that nothing else moved.
+
+`forward-write-with-no-stored-slot-refuses` is the third refusal ADR 0016
+names, on a `right_only` path DD 3.39.0 has no slot for, and all three refusals
+assert the shim's exact message rather than only its code.
+
+Two of these scenarios exist because they contradict something that would
+otherwise be assumed. `forward-write-through-a-non-primary-source-refuses`
+asserts that a refused write leaves **one empty appended slice** behind: the
+caller's own `al_begin_arraystruct_action` widens `time_slice` before any leaf
+write is attempted, and IMAS-Core commits that shape whether or not a value
+followed — the on-disk form of "a refusal aborts the put where it stands, with
+no rollback". And `fresh-occurrence-write-is-untranslated` covers the one case
+ADR 0020's probe can never learn anything from, a brand-new occurrence with no
+stamp: the probe's own open fails, the caller's succeeds, and the value reaches
+disk spelled the HLI's own way, as ADR 0007 requires.
+
+The real-Core `reverse-delete-fan-out-reaches-disk` scenario proves that a
+write-mode fan-out reaches the backend rather than returning a successful
+no-op. IMAS-Core's HDF5 backend still ignores the delete path and removes the
+whole occurrence (issue #139), so it cannot prove per-candidate deletion.
 
 ### `runtime-binding-real-core-forwarding` — 1, `real-core` · `real_core/real_core_forwarding_test.c`
 
@@ -237,8 +379,8 @@ is where the shared harness came from, and one of those copies printed a literal
 Two standing cautions:
 
 1. **A green local run proves less than it looks.** The `cmake -P` scripts
-   behave differently under a local CMake 4.x than under CI's 3.31 pin, and the
-   stub-only profile silently skips 21 tests.
+   behave differently under a local CMake 4.x than under CI's 3.31 pin; compare
+   the two profiles with `ctest -N` and `ctest -N -L real-core`.
 2. **Never pass a small ordinal as a data type.** The stub-only profile has no
    `al_const.h` to include, so `support/shim_test_support.h` defines
    `IMAS_CHAR_DATA` / `IMAS_INTEGER_DATA` / `IMAS_DOUBLE_DATA` /

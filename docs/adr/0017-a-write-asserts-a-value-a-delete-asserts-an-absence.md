@@ -1,6 +1,6 @@
 # A write asserts a value, a delete asserts an absence
 
-Where one HLI path resolves to several stored candidate paths, a write and a delete take **opposite** answers to what looks like the same question. A write writes only the precedence-1 candidate (ADR 0016 decision 4). A delete deletes **all** of them. This ADR exists because that asymmetry looks like an inconsistency and is not, and because a reader who assumes symmetry will "fix" one of the two. It is a decision record only: no code implements it yet.
+Where one HLI path resolves to several stored candidate paths, a write and a delete take **opposite** answers to what looks like the same question. A write writes only the precedence-1 candidate (ADR 0016 decision 4). A delete deletes **all** of them. This ADR exists because that asymmetry looks like an inconsistency and is not, and because a reader who assumes symmetry will "fix" one of the two. Issue #129 implements the safe single-path leaf case and its stamp guard; issue #130 adds candidate-plan fan-out. Subtree handling remains deferred to the following ticket.
 
 ## Why the answers differ
 
@@ -16,9 +16,9 @@ So the asymmetry is not a compromise between the two. Each direction is the fait
 
 1. **A delete fans out over every resolved candidate. A write does not.** ADR 0016 decision 2's precedence-1-only refusal applies to delete as well: a delete addressed through a non-primary source refuses, the same as a write.
 
-2. **A delete probes before it deletes, to manufacture the outcome the ABI does not give it.** `al_delete_data` has no not-found outcome — only `code == 0` and `code != 0` — so a fan-out delete would fail every time a precedence-2 candidate had simply never been written. Before deleting, the shim issues an *unconverted* `al_read_data` per resolved candidate and classifies the result through the existing read-outcome classifier (ADR 0012 decision 3), then deletes only the candidates that hold data.
+2. **A delete fan-out deletes every candidate without a presence probe.** `al_delete_data` has no not-found outcome — only `code == 0` and `code != 0` — but an attempted delete is preferable to a fabricated successful no-op. The former probe read through the caller's context. Under real IMAS-Core's HDF5 `WRITE_OP` context, its reader group is absent, so every candidate looked absent, no delete was forwarded, and the shim returned `code == 0` for data it had not deleted (issue #138).
 
-   This invents no machinery. `read_data_unconverted` already exists for version-stamp discovery, the classifier already owns the three-way outcome, and the probe enters the reentry counter (ADR 0014) like every other internal read.
+   Opening a shim-owned read context mid-delete is not safe either: closing it releases the pulse's per-IDS file handle while the caller's write context remains live. Nor can the old fixed `DOUBLE_DATA`, rank-0 scalar probe establish presence for arbitrary candidate shapes. The conversion-map artifact has neither a type nor a rank, so there is no sound probe shape to supply. The shim therefore calls `al_delete_data` for each candidate directly, retains the first nonzero result, and continues through later candidates as decision 3 requires. A missing candidate can consequently look like a backend failure, but that is an honest limitation of the ABI; reporting success after forwarding nothing is not.
 
 3. **A partial failure attempts every candidate and then returns the failure.** There is no rollback in either direction, so stopping at the first failure only leaves more data behind than continuing does. The caller gets the failure; the log gets nothing, because a delete that reports failure has told the caller everything the shim knows.
 
@@ -38,13 +38,14 @@ So the asymmetry is not a compromise between the two. Each direction is the fait
 
 - **Fan out on both, for symmetry** — rejected. It fabricates data on the write path, and the artifact itself flags the assumption it would rest on.
 - **Precedence-1 only on both, for symmetry** — rejected, and the worse of the two symmetric options. It leaves a stale candidate that the read path's own fallback then serves as live data after a successful delete.
-- **Delete without probing, and treat a failure on a never-written candidate as success** — rejected. It cannot distinguish that case from a real backend failure, so it would swallow genuine errors to work around a missing outcome.
-- **Track which candidates were written, to avoid the probe** — rejected. That is per-occurrence state the shim does not keep, it would have to survive across processes to be correct, and ADR 0003 confines the registry to live contexts.
+- **Treat a failed delete of a never-written candidate as success** — rejected. The ABI cannot distinguish it from a real backend failure, so that would swallow genuine errors to compensate for its missing not-found outcome.
+- **Track which candidates were written** — rejected. That is per-occurrence state the shim does not keep, it would have to survive across processes to be correct, and ADR 0003 confines the registry to live contexts.
 - **Allow a subtree delete and translate each rule's targets individually** — rejected for now. It is the more capable answer, but it makes one caller request into an unbounded set of deletes across disjoint subtrees, with no way to report which parts happened.
 
 ## Consequences
 
-- **A delete is the only seam that reads before it writes.** The probe means a delete's cost scales with the number of candidates, and it can fail for a reason that is a read failure rather than a delete failure. The refusal message must say which.
+- **A delete fan-out makes one delete call per candidate.** It can report a failure for an absent candidate because the ABI has no not-found result, but it never claims success without forwarding the candidate plan.
+- **On the only backend that implements delete, the per-path fan-out has no per-path effect.** Real IMAS-Core's `HDF5Writer::deleteData` ignores its `path` argument and removes the whole IDS pulse file plus its master-file link, so the first candidate takes the occurrence with it and the rest find nothing. Decision 2's fan-out is still the right shape — it is the ABI contract this shim is written against, and a backend that honoured `path` would need it — but no test can observe a *per-candidate* deletion until the backend is fixed. This decision's removal of the presence probe is what made that reachable: the probe's silence used to stop the fan-out before Core, at the cost of the false `code == 0` this decision exists to eliminate. Tracked as issue #139, stated for users in README.md's "Scope and limitations", and pinned by `delete-oracle-reverse-fan-out-reaches-disk` as behaviour of record rather than as desired behaviour.
 - **"Escaping rule" enters the vocabulary** and is recorded in `CONTEXT.md`. The term is needed because the predicate is not "does this rule apply" but "does this rule's *target* leave the subtree the caller named".
-- **The delete seam never writes to the loss log.** A fan-out is faithful, a probe-and-skip is faithful, and a partial failure is reported through `al_status_t`. Only the write seam logs, and only for ADR 0016 decision 4.
+- **The delete seam never writes to the loss log.** A fan-out is faithful, and a partial failure is reported through `al_status_t`. Only the write seam logs, and only for ADR 0016 decision 4.
 - **A caller who wants a mismatched occurrence migrated has exactly one legitimate route**: delete the whole DATAOBJECT and write it fresh. That is a data-losing operation they must ask for explicitly, which is the right shape for it.

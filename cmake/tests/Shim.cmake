@@ -28,11 +28,12 @@ set_target_properties(runtime_binding_test PROPERTIES
 
 add_stub_test(runtime-binding-success runtime_binding_test success)
 
-add_test(NAME runtime-binding-version-drift-tolerated
-    COMMAND runtime_binding_test version-drift)
+add_stub_test(runtime-binding-version-drift-tolerated runtime_binding_test version-drift
+    ENV "RECORDING_STUB_VERSION=${IMAS_CORE_DRIFT_VERSION}")
+# The only thing add_stub_test does not own: this scenario proves the drift is
+# announced rather than merely survived, so it asserts on stdout. Setting one
+# more property afterwards leaves the environment add_stub_test built intact.
 set_tests_properties(runtime-binding-version-drift-tolerated PROPERTIES
-    ENVIRONMENT
-        "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>;RECORDING_STUB_VERSION=${IMAS_CORE_DRIFT_VERSION}"
     PASS_REGULAR_EXPRESSION
         "tolerating IMAS-Core version drift.*built against ${IMAS_CORE_VERSION}, found ${IMAS_CORE_DRIFT_VERSION}")
 
@@ -42,6 +43,8 @@ add_stub_test(runtime-binding-version-mismatch runtime_binding_test version-mism
 add_stub_test(runtime-binding-null-version runtime_binding_test null-version
     ENV "RECORDING_STUB_NULL_VERSION=1")
 
+# Bare, and must stay bare: this scenario needs IMAS_CORE_LIBRARY pointing at a
+# path that does not exist, which is the one value add_stub_test hardcodes.
 add_test(NAME runtime-binding-missing-library COMMAND runtime_binding_test missing-library)
 set_tests_properties(runtime-binding-missing-library PROPERTIES ENVIRONMENT
     "IMAS_CORE_LIBRARY=${CMAKE_CURRENT_BINARY_DIR}/does-not-exist.so")
@@ -50,11 +53,16 @@ add_stub_test(runtime-binding-verbatim-forwarding runtime_binding_test verbatim-
 
 add_stub_test(runtime-binding-plugin-forwarding runtime_binding_test plugin-forwarding)
 
+# Bare, and must stay bare: this scenario dlopens the shim to assert one symbol
+# is absent and never binds IMAS-Core, so it needs no stub and no environment.
 add_test(NAME runtime-binding-plugin-timerange-omitted
     COMMAND runtime_binding_test plugin-timerange-omitted)
 
 add_stub_test(runtime-binding-utility-forwarding runtime_binding_test utility-forwarding)
 
+# Bare, and must stay bare: this scenario proves a bare soname resolves through
+# the loader's own search path, so it must leave IMAS_CORE_LIBRARY unset --
+# setting it, as add_stub_test always does, is exactly what it disproves.
 add_test(NAME runtime-binding-bare-soname COMMAND runtime_binding_test bare-soname)
 if(APPLE)
     set(_runtime_binding_search_path_var DYLD_LIBRARY_PATH)
@@ -81,6 +89,13 @@ add_dependencies(hli_dd_version_test imas_mvdd_capi recording_stub)
 set_target_properties(hli_dd_version_test PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
+# These setter-only scenarios never open a context and deliberately need no
+# recording stub, so an ambient latch variable is inert; keep them
+# environment-free. Inert is checkable rather than assumed: only
+# resolve_for_open() in src/version/hli_version.rs consults
+# IMAS_MVDD_HLI_DD_VERSION, and set() -- all these scenarios call -- never does,
+# so the variable cannot be reached without an open. A scenario added here that
+# opens anything breaks that and belongs in add_stub_test instead.
 add_test(NAME hli-dd-version-setter-accepts-valid-version
     COMMAND hli_dd_version_test setter-accepts-valid-version)
 add_test(NAME hli-dd-version-setter-accepts-identical-repeat
@@ -106,11 +121,8 @@ add_stub_test(hli-dd-version-invalid-environment-fails-first-open
     hli_dd_version_test invalid-environment-fails-first-open
     HLI_DD_VERSION not-a-version)
 
-add_test(NAME hli-dd-version-unset-first-open-then-setter-refused
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:hli_dd_version_test> unset-first-open-then-setter-refused)
-set_tests_properties(hli-dd-version-unset-first-open-then-setter-refused PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(hli-dd-version-unset-first-open-then-setter-refused
+    hli_dd_version_test unset-first-open-then-setter-refused)
 
 # --- DD-version stamp discovery test: the al_begin_global_action seam
 # and al_begin_dataentry_action's registration (issue #53, ADR 0002,
@@ -135,11 +147,8 @@ add_stub_test(version-discovery-dataentry-failure-forwards-status-unchanged
     version_discovery_test dataentry-failure-forwards-status-unchanged
     ENV "RECORDING_STUB_DATAENTRY_FAIL=1")
 
-add_test(NAME version-discovery-hli-unset-global-action-is-plain-forward
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:version_discovery_test> hli-unset-global-action-is-plain-forward)
-set_tests_properties(version-discovery-hli-unset-global-action-is-plain-forward PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(version-discovery-hli-unset-global-action-is-plain-forward
+    version_discovery_test hli-unset-global-action-is-plain-forward)
 
 add_stub_test(version-discovery-unstamped-occurrence-forwards-datapath-unchanged
     version_discovery_test unstamped-occurrence-forwards-datapath-unchanged
@@ -152,6 +161,45 @@ add_stub_test(version-discovery-matching-version-forwards-datapath-unchanged
 
 add_stub_test(version-discovery-mismatch-translates-datapath-on-second-open
     version_discovery_test mismatch-translates-datapath-on-second-open
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
+# ADR 0020: a write-mode open reads the stamp through a shim-owned read-mode
+# context of its own. The two scenarios that pin what the probe *asks for*
+# refuse it (RECORDING_STUB_PLUGIN_GLOBAL_FAIL), because the stub's plugin
+# recorder resets its integer fields on every call, so the probe's own rwmode
+# is only readable while its open is the last plugin call made.
+add_stub_test(version-discovery-write-mode-open-probes-through-the-plugin-family
+    version_discovery_test write-mode-open-probes-through-the-plugin-family
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
+add_stub_test(version-discovery-write-mode-probe-asks-for-a-read-context
+    version_discovery_test write-mode-probe-asks-for-a-read-context
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_PLUGIN_GLOBAL_FAIL=1")
+
+add_stub_test(version-discovery-write-mode-slice-open-probes-with-a-global-action
+    version_discovery_test write-mode-slice-open-probes-with-a-global-action
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_PLUGIN_GLOBAL_FAIL=1")
+
+add_stub_test(version-discovery-replace-mode-open-probes-too
+    version_discovery_test replace-mode-open-probes-too
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_PLUGIN_GLOBAL_FAIL=1")
+
+add_stub_test(version-discovery-write-mode-timerange-open-probes-with-a-global-action
+    version_discovery_test write-mode-timerange-open-probes-with-a-global-action
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_PLUGIN_GLOBAL_FAIL=1")
+
+add_stub_test(version-discovery-read-mode-open-does-not-probe
+    version_discovery_test read-mode-open-does-not-probe
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
 
@@ -176,11 +224,8 @@ add_stub_test(version-discovery-reentrant-read-beneath-stamp-discovery-forwards-
 # --- al_begin_slice_action / al_begin_timerange_action apply the same
 # rule as global action (issue #55) ---
 
-add_test(NAME version-discovery-slice-action-hli-unset-is-plain-forward
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:version_discovery_test> slice-action-hli-unset-is-plain-forward)
-set_tests_properties(version-discovery-slice-action-hli-unset-is-plain-forward PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(version-discovery-slice-action-hli-unset-is-plain-forward
+    version_discovery_test slice-action-hli-unset-is-plain-forward)
 
 add_stub_test(version-discovery-slice-action-unstamped-forwards-ids-name-unchanged
     version_discovery_test slice-action-unstamped-forwards-ids-name-unchanged
@@ -206,11 +251,8 @@ add_stub_test(version-discovery-slice-action-failure-forwards-status-unchanged
     HLI_DD_VERSION 4.1.1
     ENV "RECORDING_STUB_SLICE_FAIL=1")
 
-add_test(NAME version-discovery-timerange-action-hli-unset-is-plain-forward
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:version_discovery_test> timerange-action-hli-unset-is-plain-forward)
-set_tests_properties(version-discovery-timerange-action-hli-unset-is-plain-forward PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(version-discovery-timerange-action-hli-unset-is-plain-forward
+    version_discovery_test timerange-action-hli-unset-is-plain-forward)
 
 add_stub_test(version-discovery-timerange-action-unstamped-forwards-ids-name-unchanged
     version_discovery_test timerange-action-unstamped-forwards-ids-name-unchanged
@@ -327,6 +369,11 @@ add_stub_test(read-path-reentrant-read-does-not-reapply-a-sign-flip
     STAMP_VERSION 3.39.0
     ENV "RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-9e40,3.2,-4.0")
 
+add_stub_test(read-path-plugin-reentrant-read-is-forwarded-across-the-ordinary-family
+    read_path_test plugin-reentrant-read-is-forwarded-across-the-ordinary-family
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+
 add_stub_test(read-path-sign-flip-invalid-shape-refuses-without-modifying-buffer
     read_path_test sign-flip-invalid-shape-refuses-without-modifying-buffer
     HLI_DD_VERSION 4.1.1
@@ -366,11 +413,8 @@ add_stub_test(read-path-unstamped-context-bypasses-conversion
     read_path_test unstamped-context-bypasses-conversion
     HLI_DD_VERSION 4.1.1)
 
-add_test(NAME read-path-conversion-disabled-bypasses-conversion
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:read_path_test> conversion-disabled-bypasses-conversion)
-set_tests_properties(read-path-conversion-disabled-bypasses-conversion PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(read-path-conversion-disabled-bypasses-conversion
+    read_path_test conversion-disabled-bypasses-conversion)
 
 add_stub_test(read-path-core-failure-propagates-unchanged
     read_path_test core-failure-propagates-unchanged
@@ -378,7 +422,7 @@ add_stub_test(read-path-core-failure-propagates-unchanged
     STAMP_VERSION 3.39.0
     ENV "RECORDING_STUB_READ_FAIL=1")
 
-# --- Issue #65: the root-context fidelity loss log and its query exports ---
+# --- Issues #65 and #124: root-context loss log and query exports ---
 # Both scenarios below need the HLI reading in its own, 3.39.0 spelling
 # (Direction::Forward) to hit a rule this artifact declares lossy in that
 # direction: fold-ggd-bfield (merged) and move-gap (moved).
@@ -418,6 +462,14 @@ add_loss_query_test(read-path-loss-at-out-of-range-index-is-refused
     loss-at-out-of-range-index-is-refused)
 add_loss_query_test(read-path-loss-at-insufficient-buffer-is-refused
     loss-at-insufficient-buffer-is-refused)
+add_loss_query_test(read-path-loss-operation-at-null-output-is-refused
+    loss-operation-at-null-output-is-refused)
+add_loss_query_test(read-path-loss-operation-at-negative-index-is-refused
+    loss-operation-at-negative-index-is-refused)
+add_loss_query_test(read-path-loss-operation-at-out-of-range-index-is-refused
+    loss-operation-at-out-of-range-index-is-refused)
+add_loss_query_test(read-path-loss-operation-at-untracked-context-is-refused-after-zero-count
+    loss-operation-at-untracked-context-is-refused-after-zero-count)
 
 # --- Issue #64: al_write_data / al_delete_data refusal through the public C ABI ---
 add_executable(write_delete_conversion_test
@@ -429,69 +481,148 @@ add_dependencies(write_delete_conversion_test imas_mvdd_capi recording_stub)
 set_target_properties(write_delete_conversion_test PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
-# All scenarios below need the same known mismatched equilibrium
-# occurrence. Keep that shared seam setup in one place.
-function(add_write_delete_mismatched_test name scenario)
-    add_stub_test("${name}" write_delete_conversion_test "${scenario}"
+# One executable drives three ABI seams -- al_write_data, al_plugin_write_data
+# and al_delete_data -- so a ctest name in this suite has to say which one its
+# scenario is about. It is the scenario argument verbatim, and the scenario
+# argument leads with its seam:
+#
+#   write-path-*         al_write_data
+#   write-path-plugin-*  al_plugin_write_data
+#   delete-path-*        al_delete_data
+#   write-delete-path-*  one scenario driving both write and delete
+#
+# so `ctest -R "^write-path-"` selects the write seam alone and
+# `ctest -R "^delete-path-"` the delete seam alone. Neither was selectable
+# while all 40 names began `write-delete-`, which additionally spelled the
+# delete scenarios `write-delete-delete-...` -- read as two deletes when it is
+# one. `-path-` is the read seam's own prefix (`read-path-*`) and the wording
+# the ADRs use. The `write-delete-path-` group is empty today: no scenario
+# drives both seams, which is why no name should have claimed to.
+function(check_write_delete_seam_prefix scenario)
+    if(NOT "${scenario}" MATCHES "^(write-path-|delete-path-|write-delete-path-)")
+        message(FATAL_ERROR
+            "write/delete scenario '${scenario}' must lead with write-path-, "
+            "delete-path- or write-delete-path- so its ctest name names the "
+            "seam it drives")
+    endif()
+endfunction()
+
+# Registers one scenario under its own name. Without an explicit version pair
+# it gets the known mismatched forward equilibrium occurrence that most
+# scenarios need; anything else passes add_stub_test's own keywords through.
+function(add_write_delete_test scenario)
+    check_write_delete_seam_prefix("${scenario}")
+    if(ARGN)
+        add_stub_test("${scenario}" write_delete_conversion_test "${scenario}" ${ARGN})
+    else()
+        add_stub_test("${scenario}" write_delete_conversion_test "${scenario}"
+            HLI_DD_VERSION 4.1.1
+            STAMP_VERSION 3.39.0)
+    endif()
+endfunction()
+
+add_write_delete_test(write-path-renamed-field-lands-at-stored-spelling)
+add_write_delete_test(write-path-identity-and-moved-fields-land-at-stored-spelling)
+add_write_delete_test(write-path-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+add_write_delete_test(delete-path-identity-renamed-and-moved-fields-land-at-stored-spelling)
+add_write_delete_test(delete-path-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+add_write_delete_test(write-path-plugin-renamed-field-lands-at-stored-spelling)
+add_write_delete_test(write-path-nested-child-context-resolves-relative-and-absolute-fields)
+add_write_delete_test(write-path-candidate-lands-at-primary-and-retains-unwritten-candidates
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_READ_LAST_WRITE=1")
+add_write_delete_test(write-path-non-primary-source-refuses-by-precedence)
+add_write_delete_test(write-path-split-candidate-lands-at-primary
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+add_write_delete_test(write-path-child-candidate-retains-complete-path-at-root)
+add_write_delete_test(write-path-uses-the-primary-candidate-without-fanout)
+add_write_delete_test(write-path-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy)
+add_write_delete_test(write-path-plugin-cocos-sign-flip-uses-a-shim-owned-copy)
+add_write_delete_test(write-path-cocos-sentinel-forwards-unchanged-without-loss)
+add_write_delete_test(write-path-cocos-invalid-shape-or-type-refuses-before-core)
+add_write_delete_test(write-path-refuses-dd-version-stamp-but-forwards-its-siblings)
+add_write_delete_test(write-path-without-stored-slot-refuses-and-retains-a-write-loss)
+add_write_delete_test(write-path-reverse-without-stored-slot-refuses-and-retains-a-write-loss
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+add_write_delete_test(write-path-retyped-path-refuses-and-retains-a-write-loss)
+add_write_delete_test(write-path-child-refusal-is-retained-on-its-root-with-a-complete-path)
+add_write_delete_test(delete-path-nested-child-context-translates-relative-path)
+add_write_delete_test(delete-path-refuses-stamp-subtrees-before-core-call)
+add_write_delete_test(delete-path-empty-path-forwards-as-explicit-migration-route)
+add_write_delete_test(delete-path-refuses-no-source-unservable-and-structures)
+add_write_delete_test(delete-path-admits-trivial-structure-deletes)
+add_write_delete_test(delete-path-refuses-boundary-separatrix-reverse-direction
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+add_write_delete_test(delete-path-fans-out-over-candidates-in-declared-order)
+add_write_delete_test(delete-path-reports-a-failure-and-continues)
+add_write_delete_test(delete-path-refuses-non-primary-source-before-core-call
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+add_write_delete_test(write-path-refuses-non-primary-source-before-core-call
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+add_write_delete_test(write-path-unstamped-context-forwards-unchanged
+    HLI_DD_VERSION 4.1.1)
+add_write_delete_test(write-path-matching-context-forwards-unchanged
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 4.1.1)
+add_write_delete_test(write-path-plugin-matching-context-forwards-unchanged
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 4.1.1)
+add_write_delete_test(delete-path-matching-context-forwards-unchanged
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 4.1.1)
+add_write_delete_test(write-path-unknown-context-forwards-unchanged)
+add_write_delete_test(delete-path-unknown-context-forwards-unchanged)
+add_write_delete_test(delete-path-unstamped-context-forwards-unchanged
+    HLI_DD_VERSION 4.1.1)
+
+# With no HLI_DD_VERSION, add_stub_test unsets the latch environment variable,
+# so conversion is impossible. The scenarios remain guarded by the same naming
+# rule as everything above.
+foreach(scenario IN ITEMS
+        write-path-conversion-disabled-forwards-unchanged
+        delete-path-conversion-disabled-forwards-unchanged)
+    check_write_delete_seam_prefix("${scenario}")
+    add_stub_test("${scenario}" write_delete_conversion_test "${scenario}")
+endforeach()
+
+# --- Issue #123: one reentry guard for every seam IMAS-Core calls beneath ---
+add_executable(reentry_guard_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/reentry_guard_test.c")
+target_link_libraries(reentry_guard_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS})
+target_compile_definitions(reentry_guard_test PRIVATE
+    "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+add_dependencies(reentry_guard_test imas_mvdd_capi recording_stub)
+set_target_properties(reentry_guard_test PROPERTIES
+    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+
+function(add_reentry_guard_test name scenario)
+    add_stub_test("${name}" reentry_guard_test "${scenario}"
         HLI_DD_VERSION 4.1.1
         STAMP_VERSION 3.39.0)
 endfunction()
 
-add_write_delete_mismatched_test(write-delete-write-refuses-under-known-mismatched-root-before-core-call
-    write-refuses-under-known-mismatched-root-before-core-call)
-add_write_delete_mismatched_test(write-delete-delete-refuses-under-known-mismatched-root-before-core-call
-    delete-refuses-under-known-mismatched-root-before-core-call)
-add_write_delete_mismatched_test(write-delete-plugin-write-refuses-under-known-mismatched-root-before-core-call
-    plugin-write-refuses-under-known-mismatched-root-before-core-call)
-add_write_delete_mismatched_test(write-delete-write-nested-child-context-refuses-through-mismatched-root
-    write-nested-child-context-refuses-through-mismatched-root)
-add_write_delete_mismatched_test(write-delete-delete-nested-child-context-refuses-through-mismatched-root
-    delete-nested-child-context-refuses-through-mismatched-root)
-
-add_stub_test(write-delete-write-unstamped-context-forwards-unchanged
-    write_delete_conversion_test write-unstamped-context-forwards-unchanged
-    HLI_DD_VERSION 4.1.1)
-
-add_stub_test(write-delete-write-matching-context-forwards-unchanged
-    write_delete_conversion_test write-matching-context-forwards-unchanged
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 4.1.1)
-
-add_stub_test(write-delete-plugin-write-matching-context-forwards-unchanged
-    write_delete_conversion_test plugin-write-matching-context-forwards-unchanged
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 4.1.1)
-
-add_stub_test(write-delete-delete-matching-context-forwards-unchanged
-    write_delete_conversion_test delete-matching-context-forwards-unchanged
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 4.1.1)
-
-add_stub_test(write-delete-write-unknown-context-forwards-unchanged
-    write_delete_conversion_test write-unknown-context-forwards-unchanged
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-
-add_test(NAME write-delete-write-conversion-disabled-forwards-unchanged
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:write_delete_conversion_test> write-conversion-disabled-forwards-unchanged)
-set_tests_properties(write-delete-write-conversion-disabled-forwards-unchanged PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
-
-add_stub_test(write-delete-delete-unknown-context-forwards-unchanged
-    write_delete_conversion_test delete-unknown-context-forwards-unchanged
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-
-add_stub_test(write-delete-delete-unstamped-context-forwards-unchanged
-    write_delete_conversion_test delete-unstamped-context-forwards-unchanged
-    HLI_DD_VERSION 4.1.1)
-
-add_test(NAME write-delete-delete-conversion-disabled-forwards-unchanged
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:write_delete_conversion_test> delete-conversion-disabled-forwards-unchanged)
-set_tests_properties(write-delete-delete-conversion-disabled-forwards-unchanged PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_reentry_guard_test(reentry-guard-write-data-forwards-across-plugin-family
+    write-data-reentry-forwards-across-the-plugin-family)
+add_reentry_guard_test(reentry-guard-plugin-write-data-forwards-across-ordinary-family
+    plugin-write-data-reentry-forwards-across-the-ordinary-family)
+add_reentry_guard_test(reentry-guard-delete-data-forwards-unchanged
+    delete-data-reentry-forwards-unchanged)
+add_reentry_guard_test(reentry-guard-write-plugins-metadata-forwards-unchanged
+    write-plugins-metadata-reentry-forwards-unchanged)
+add_reentry_guard_test(reentry-guard-bind-readback-plugins-forwards-unchanged
+    bind-readback-plugins-reentry-forwards-unchanged)
+add_reentry_guard_test(reentry-guard-unbind-readback-plugins-forwards-unchanged
+    unbind-readback-plugins-reentry-forwards-unchanged)
 
 # --- Issue #61: arraystruct path conversion through the public C ABI ---
 add_executable(arraystruct_path_test
@@ -538,11 +669,8 @@ add_stub_test(arraystruct-path-unknown-parent-forwards-unchanged
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
 
-add_test(NAME arraystruct-path-conversion-disabled-parent-forwards-unchanged
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:arraystruct_path_test> plain-parent-forwards-unchanged)
-set_tests_properties(arraystruct-path-conversion-disabled-parent-forwards-unchanged PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(arraystruct-path-conversion-disabled-parent-forwards-unchanged
+    arraystruct_path_test plain-parent-forwards-unchanged)
 
 # --- Issue #62: al_read_data through a live arraystruct context -------
 add_executable(nested_context_read_test
@@ -652,11 +780,8 @@ add_dependencies(plugin_reentry_policy_test imas_mvdd_capi recording_stub)
 set_target_properties(plugin_reentry_policy_test PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
 
-add_test(NAME plugin-reentry-policy-plugin-global-hli-unset-is-plain-forward
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:plugin_reentry_policy_test> plugin-global-hli-unset-is-plain-forward)
-set_tests_properties(plugin-reentry-policy-plugin-global-hli-unset-is-plain-forward PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(plugin-reentry-policy-plugin-global-hli-unset-is-plain-forward
+    plugin_reentry_policy_test plugin-global-hli-unset-is-plain-forward)
 
 add_stub_test(plugin-reentry-policy-plugin-global-unstamped-forwards-datapath-unchanged
     plugin_reentry_policy_test plugin-global-unstamped-forwards-datapath-unchanged
@@ -682,11 +807,8 @@ add_stub_test(plugin-reentry-policy-plugin-global-failure-forwards-status-unchan
     HLI_DD_VERSION 4.1.1
     ENV "RECORDING_STUB_PLUGIN_GLOBAL_FAIL=1")
 
-add_test(NAME plugin-reentry-policy-plugin-slice-hli-unset-is-plain-forward
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_MVDD_HLI_DD_VERSION --
-        $<TARGET_FILE:plugin_reentry_policy_test> plugin-slice-hli-unset-is-plain-forward)
-set_tests_properties(plugin-reentry-policy-plugin-slice-hli-unset-is-plain-forward PROPERTIES
-    ENVIRONMENT "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+add_stub_test(plugin-reentry-policy-plugin-slice-hli-unset-is-plain-forward
+    plugin_reentry_policy_test plugin-slice-hli-unset-is-plain-forward)
 
 add_stub_test(plugin-reentry-policy-plugin-slice-mismatch-registers-occurrence-for-plugin-global-action
     plugin_reentry_policy_test plugin-slice-mismatch-registers-occurrence-for-plugin-global-action
@@ -802,3 +924,16 @@ add_scoped_passthrough_test(
     bind-and-unbind-plugin-forward-field-path-unchanged)
 add_scoped_passthrough_test(scoped-passthrough-remaining-non-seam-exports-forward-unchanged
     remaining-non-seam-exports-forward-unchanged)
+
+# Issue #134: the same three path-bearing passthrough seams, asserted while a
+# WRITE_OP-opened occurrence is demonstrably converting a write rather than a
+# read. Same conversion setup and same seeded stored spelling — only the
+# operation proving the conversion is active differs.
+add_scoped_passthrough_test(scoped-passthrough-writing-get-occurrences-forwards-ids-name-unchanged
+    writing-get-occurrences-forwards-ids-name-unchanged)
+add_scoped_passthrough_test(
+    scoped-passthrough-writing-list-filled-paths-forwards-name-and-returns-stored-paths-unchanged
+    writing-list-filled-paths-forwards-name-and-returns-stored-paths-unchanged)
+add_scoped_passthrough_test(
+    scoped-passthrough-writing-bind-and-unbind-plugin-forward-field-path-unchanged
+    writing-bind-and-unbind-plugin-forward-field-path-unchanged)

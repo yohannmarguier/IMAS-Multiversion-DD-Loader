@@ -11,7 +11,7 @@
  * The "first open" scenarios call al_begin_dataentry_action against the
  * recording stub — the earliest action any HLI performs — since that is
  * where an unresolved latch settles from the environment variable or to
- * unset (see src/interpose.rs's begin_dataentry_action). */
+ * unset (see src/interpose/occurrence.rs's begin_dataentry_action). */
 
 #include <dlfcn.h>
 #include <pthread.h>

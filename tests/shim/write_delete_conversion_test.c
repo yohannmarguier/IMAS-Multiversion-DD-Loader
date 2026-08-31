@@ -1,14 +1,8 @@
-/* Issue #64: public al_write_data / al_delete_data and al_plugin_write_data
- * ABI scenarios against the recording stub.
- *
- * Per docs/adr/0002-read-path-seam-policy.md: "al_write_data, al_delete_data:
- * If known versions differ, return failure without calling IMAS-Core.
- * Otherwise forward unchanged." Unlike al_read_data, no path translation is
- * introduced here — the rule is a blanket refusal keyed only on whether
- * `ctx_id` carries a live conversion record (a known mismatched root, or a
- * child context that inherited one), never on the path argument's content. */
+/* Public al_write_data / al_delete_data and al_plugin_write_data ABI scenarios
+ * against the recording stub. */
 
 #include <dlfcn.h>
+#include <complex.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,69 +15,120 @@
 
 static al_status_t write_field(int ctx_id, const char *field, const char *timebase, void *data,
                                int *size) {
-    return al_write_data(ctx_id, field, timebase, data, 52 /* DOUBLE_DATA */, 1, size);
+    return al_write_data(ctx_id, field, timebase, data, IMAS_DOUBLE_DATA, 1, size);
 }
 
-static void scenario_write_refuses_under_known_mismatched_root_before_core_call(void) {
-    int operation_ctx = open_mismatched_equilibrium();
-    int writes_before = int_from_stub("recording_stub_write_call_count");
+typedef const char *(*delete_path_at_fn)(int);
+typedef int (*data_event_kind_at_fn)(int);
+typedef const char *(*data_event_path_at_fn)(int);
 
+static const char *delete_path_at(int index) {
+    return ((delete_path_at_fn)stub_symbol_or_die("recording_stub_delete_path_at"))(index);
+}
+
+static int data_event_kind_at(int index) {
+    return ((data_event_kind_at_fn)stub_symbol_or_die("recording_stub_data_event_kind_at"))(index);
+}
+
+static const char *data_event_path_at(int index) {
+    return ((data_event_path_at_fn)stub_symbol_or_die("recording_stub_data_event_path_at"))(index);
+}
+
+static void check_write_lands(int ctx_id, const char *field, const char *timebase,
+                              const char *stored_field, const char *stored_timebase) {
+    int writes_before = int_from_stub("recording_stub_write_call_count");
     double sentinel = 42.0;
-    void *data = &sentinel;
     int size[1] = {73};
 
-    al_status_t status =
-        write_field(operation_ctx, "time_slice/global_quantities/beta_tor_norm", "time", data, size);
-
-    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
-    /* The refusal resolves no path through the map by design (issue #64), but
-     * the record that triggered it still names both DD versions, and the field
-     * the caller passed is the spelling AC3 asks to see. */
-    CHECK_REFUSAL_MESSAGE(status, "al_write_data refuses on a context with a known DD version mismatch",
-                          "time_slice/global_quantities/beta_tor_norm", "4.1.1", "3.39.0");
-    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
-    CHECK(data == &sentinel);
+    CHECK(write_field(ctx_id, field, timebase, &sentinel, size).code == 0);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 1);
+    CHECK(strcmp(string_from_stub("recording_stub_write_field"), stored_field) == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_write_timebase"), stored_timebase) == 0);
+    CHECK(pointer_from_stub("recording_stub_write_data") == &sentinel);
     CHECK(sentinel == 42.0);
     CHECK(size[0] == 73);
-
-    printf("write_delete_conversion_test write-refuses-under-known-mismatched-root-before-core-call: "
-           "IMAS-Core was never called, the caller's buffers were untouched, and the refusal named "
-           "the path and both DD versions\n");
 }
 
-static void scenario_delete_refuses_under_known_mismatched_root_before_core_call(void) {
-    int operation_ctx = open_mismatched_equilibrium();
+static void check_delete_lands(int ctx_id, const char *path, const char *stored_path) {
     int deletes_before = int_from_stub("recording_stub_delete_call_count");
-
-    al_status_t status =
-        al_delete_data(operation_ctx, "time_slice/global_quantities/beta_tor_norm");
-
-    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
-    CHECK_REFUSAL_MESSAGE(status, "al_delete_data refuses on a context with a known DD version mismatch",
-                          "time_slice/global_quantities/beta_tor_norm", "4.1.1", "3.39.0");
-    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
-
-    printf("write_delete_conversion_test delete-refuses-under-known-mismatched-root-before-core-call: "
-           "IMAS-Core was never called and the refusal named the path and both DD versions\n");
+    CHECK(al_delete_data(ctx_id, path).code == 0);
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 1);
+    CHECK(int_from_stub("recording_stub_delete_ctx") == ctx_id);
+    CHECK(strcmp(string_from_stub("recording_stub_delete_path"), stored_path) == 0);
 }
 
-static void scenario_plugin_write_refuses_under_known_mismatched_root_before_core_call(void) {
+static void scenario_write_renamed_field_lands_at_stored_spelling(void) {
     int operation_ctx = open_mismatched_equilibrium();
-    int plugin_calls_before = int_from_stub("recording_stub_plugin_call_count");
+    check_write_lands(operation_ctx, "time_slice/global_quantities/beta_tor_norm", "time",
+                      "time_slice/global_quantities/beta_normal", "time");
 
+    printf("write_delete_conversion_test write-path-renamed-field-lands-at-stored-spelling: a DD4 "
+           "field landed at its DD3 spelling without mutating caller storage\n");
+}
+
+static void scenario_write_identity_and_moved_fields_land_at_stored_spelling(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    check_write_lands(operation_ctx, "time_slice/boundary/elongation", "time",
+                      "time_slice/boundary/elongation", "time");
+    check_write_lands(operation_ctx, "time_slice/boundary/closest_wall_point", "time",
+                      "time_slice/boundary_separatrix/closest_wall_point", "time");
+
+    printf("write_delete_conversion_test write-path-identity-and-moved-fields-land-at-stored-spelling: "
+           "identity and moved DD4 fields landed at their DD3 spellings\n");
+}
+
+static void scenario_write_reverse_identity_renamed_and_moved_fields_land_at_stored_spelling(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    check_write_lands(operation_ctx, "time_slice/boundary/elongation", "time",
+                      "time_slice/boundary/elongation", "time");
+    check_write_lands(operation_ctx, "time_slice/global_quantities/beta_normal", "time",
+                      "time_slice/global_quantities/beta_tor_norm", "time");
+    check_write_lands(operation_ctx, "time_slice/boundary_separatrix/closest_wall_point", "time",
+                      "time_slice/boundary/closest_wall_point", "time");
+
+    printf("write_delete_conversion_test write-path-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling: "
+           "identity, renamed and moved DD3 fields landed at their DD4 spellings\n");
+}
+
+static void scenario_delete_identity_renamed_and_moved_fields_land_at_stored_spelling(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    check_delete_lands(operation_ctx, "time_slice/boundary/elongation",
+                       "time_slice/boundary/elongation");
+    check_delete_lands(operation_ctx, "time_slice/global_quantities/beta_tor_norm",
+                       "time_slice/global_quantities/beta_normal");
+    check_delete_lands(operation_ctx, "time_slice/boundary/closest_wall_point/r",
+                       "time_slice/boundary_separatrix/closest_wall_point/r");
+    CHECK(loss_count(operation_ctx) == 0);
+}
+
+static void scenario_delete_reverse_identity_renamed_and_moved_fields_land_at_stored_spelling(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    check_delete_lands(operation_ctx, "time_slice/boundary/elongation",
+                       "time_slice/boundary/elongation");
+    check_delete_lands(operation_ctx, "time_slice/global_quantities/beta_normal",
+                       "time_slice/global_quantities/beta_tor_norm");
+    check_delete_lands(operation_ctx, "time_slice/boundary_separatrix/closest_wall_point/r",
+                       "time_slice/boundary/closest_wall_point/r");
+}
+
+static void scenario_plugin_write_renamed_field_lands_at_stored_spelling(void) {
+    int operation_ctx = open_mismatched_equilibrium();
     double sentinel = 42.0;
     int size[1] = {73};
     al_status_t status = al_plugin_write_data(
         operation_ctx, "time_slice/global_quantities/beta_tor_norm", "time", &sentinel,
-        52 /* DOUBLE_DATA */, 1, size);
+        IMAS_DOUBLE_DATA, 1, size);
 
-    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
-    CHECK(int_from_stub("recording_stub_plugin_call_count") == plugin_calls_before);
+    CHECK(status.code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"),
+                 "time_slice/global_quantities/beta_normal") == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_second_string"), "time") == 0);
+    CHECK(pointer_from_stub("recording_stub_plugin_pointer") == &sentinel);
     CHECK(sentinel == 42.0);
     CHECK(size[0] == 73);
 
-    printf("write_delete_conversion_test plugin-write-refuses-under-known-mismatched-root-before-core-call: "
-           "IMAS-Core was never called and the caller's buffers were untouched\n");
+    printf("write_delete_conversion_test write-path-plugin-renamed-field-lands-at-stored-spelling: "
+           "the plugin reentry seam applied the ordinary write policy\n");
 }
 
 static void scenario_plugin_write_matching_context_forwards_unchanged(void) {
@@ -93,7 +138,7 @@ static void scenario_plugin_write_matching_context_forwards_unchanged(void) {
 
     al_status_t status = al_plugin_write_data(
         operation_ctx, "time_slice/global_quantities/beta_tor_norm", "time", &sentinel,
-        52 /* DOUBLE_DATA */, 1, size);
+        IMAS_DOUBLE_DATA, 1, size);
 
     CHECK(status.code == 0);
     CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"),
@@ -101,11 +146,344 @@ static void scenario_plugin_write_matching_context_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_plugin_second_string"), "time") == 0);
     CHECK(pointer_from_stub("recording_stub_plugin_pointer") == &sentinel);
 
-    printf("write_delete_conversion_test plugin-write-matching-context-forwards-unchanged: a "
+    printf("write_delete_conversion_test write-path-plugin-matching-context-forwards-unchanged: a "
            "matching stamp was forwarded verbatim through the plugin reentry seam\n");
 }
 
-static void scenario_write_nested_child_context_refuses_through_mismatched_root(void) {
+static void scenario_write_nested_child_context_resolves_relative_and_absolute_fields(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int size = -1;
+    int arraystruct_ctx = -1;
+    CHECK(al_begin_arraystruct_action(operation_ctx, "time_slice", "", &size, &arraystruct_ctx)
+              .code == 0);
+
+    check_write_lands(arraystruct_ctx, "global_quantities/beta_tor_norm", "",
+                      "global_quantities/beta_normal", "");
+    check_write_lands(arraystruct_ctx, "/time_slice/global_quantities/beta_tor_norm", "",
+                      "/time_slice/global_quantities/beta_normal", "");
+
+    printf("write_delete_conversion_test write-path-nested-child-context-resolves-relative-and-absolute-fields: "
+           "a child write used its own anchor for relative paths and the IDS root for absolute paths\n");
+}
+
+static void scenario_write_candidate_lands_at_primary_and_retains_unwritten_candidates(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double value = 42.0;
+    int size[1] = {1};
+    void *read_data = NULL;
+
+    CHECK(write_field(operation_ctx, "time_slice/profiles_2d/b_field_phi", "time", &value, size)
+              .code == 0);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 1);
+    CHECK(strcmp(string_from_stub("recording_stub_write_field"),
+                 "time_slice/profiles_2d/b_field_phi") == 0);
+    /* The entries name the two candidates left unwritten, by their own stored
+     * 3.39.0 spellings — not the caller's `b_field_phi`, which is where the
+     * value did land. Story 22 asks the log to say where a stale value may now
+     * be found, so a repeated copy of the caller's own path would answer the
+     * one question it exists to answer with nothing. `fold-p2d-bphi` declares
+     * b_field_phi at precedence 1, b_field_tor at 2, b_tor at 3. */
+    CHECK(loss_count(operation_ctx) == 2);
+    check_loss_at(operation_ctx, 0, "time_slice/profiles_2d/b_field_tor",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+    check_loss_at(operation_ctx, 1, "time_slice/profiles_2d/b_tor",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+    check_no_write_lossy_verdict(operation_ctx);
+
+    /* A CONSISTENCY CHECK, not a proof of what reached storage — issue #133's
+     * acceptance criteria ask for that label to be here, so nobody later reads
+     * this read as the on-disk claim it cannot make. The write flips
+     * HLI-to-stored and this read flips stored-to-HLI, so the caller's own
+     * value comes back whichever sign, spelling or fan-out actually landed;
+     * what it does prove is that the two directions agree. The on-disk claims
+     * are made natively, against real IMAS-Core, in
+     * tests/real_core/write_delete_oracle_test.c (ADR 0016's "Consequences").
+     * The recording stub exposes the value accepted at the stored spelling,
+     * which is what lets this read close the loop at all. */
+    CHECK(al_read_data(operation_ctx, "time_slice/profiles_2d/b_field_phi", "time", &read_data,
+                       IMAS_DOUBLE_DATA, 1, size)
+              .code == 0);
+    CHECK(read_data != NULL);
+    CHECK(*(double *)read_data == value);
+
+    printf("write_delete_conversion_test write-path-candidate-lands-at-primary-and-retains-unwritten-candidates: "
+           "only precedence 1 was written, the other candidates were retained as potential write losses, and the round trip is consistent (a consistency check, not an on-disk claim)\n");
+}
+
+static void scenario_write_non_primary_source_refuses_by_precedence(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double value = 42.0;
+    int size[1] = {1};
+    al_status_t status = write_field(operation_ctx, "time_slice/global_quantities/psi_magnetic_axis",
+                                     "time", &value, size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status,
+                          "this path is a non-primary source and cannot write a shared stored slot",
+                          "time_slice/global_quantities/psi_magnetic_axis", "4.1.1", "3.39.0");
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/global_quantities/psi_magnetic_axis",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_WRITE);
+}
+
+static void scenario_write_split_candidate_lands_at_primary(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double value = 42.0;
+    int size[1] = {1};
+
+    CHECK(write_field(operation_ctx, "time_slice/global_quantities/psi_axis", "time", &value, size)
+              .code == 0);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 1);
+    CHECK(strcmp(string_from_stub("recording_stub_write_field"),
+                 "time_slice/global_quantities/psi_axis") == 0);
+    CHECK(pointer_from_stub("recording_stub_write_data") != &value);
+    CHECK(double_at_from_stub("recording_stub_write_double_at", 0) == -value);
+    CHECK(value == 42.0);
+    /* `split-psi-axis` feeds the 3.39.0 psi_axis into two 4.1.1 slots. Only
+     * precedence 1 is written, and the entry names the precedence-2 stored
+     * spelling that keeps whatever it already held. */
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/global_quantities/psi_magnetic_axis",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+    check_no_write_lossy_verdict(operation_ctx);
+}
+
+static void scenario_write_child_candidate_retains_complete_path_at_root(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int child_size = -1;
+    int child_ctx = -1;
+    double value = 42.0;
+    int size[1] = {1};
+
+    CHECK(al_begin_arraystruct_action(operation_ctx, "time_slice", "", &child_size, &child_ctx)
+              .code == 0);
+    CHECK(write_field(child_ctx, "profiles_2d/b_field_phi", "time", &value, size).code == 0);
+    CHECK(loss_count(operation_ctx) == 2);
+    CHECK(loss_count(child_ctx) == 2);
+    /* The caller's argument was relative to the `time_slice` anchor, and the
+     * stored candidate spellings are still reported as complete DD paths from
+     * the IDS root — the anchor-stripped fragment IMAS-Core received would
+     * not tell a draining caller where to look. */
+    check_loss_at(child_ctx, 0, "time_slice/profiles_2d/b_field_tor",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+    check_loss_at(child_ctx, 1, "time_slice/profiles_2d/b_tor",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    check_no_write_lossy_verdict(operation_ctx);
+    check_no_write_lossy_verdict(child_ctx);
+}
+
+static void scenario_write_uses_the_primary_candidate_without_fanout(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    check_write_lands(operation_ctx, "time_slice/profiles_2d/b_field_phi", "time",
+                      "time_slice/profiles_2d/b_field_phi", "time");
+
+    printf("write_delete_conversion_test write-path-uses-the-primary-candidate-without-fanout: "
+           "a write chose only precedence one while the paired delete fan-out removes all sources\n");
+}
+
+static void scenario_write_cocos_sign_flip_uses_a_shim_owned_rank_seven_copy(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    double scalar = 2.5;
+    double values[128];
+    int size[7] = {2, 2, 2, 2, 2, 2, 2};
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    for (int index = 0; index < 128; ++index) {
+        values[index] = (double)(index - 64);
+    }
+
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time", &scalar,
+                        IMAS_DOUBLE_DATA, 0, NULL)
+              .code == 0);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 1);
+    CHECK(pointer_from_stub("recording_stub_write_data") != &scalar);
+    CHECK(int_from_stub("recording_stub_write_double_count") == 1);
+    CHECK(double_at_from_stub("recording_stub_write_double_at", 0) == -2.5);
+    CHECK(scalar == 2.5);
+
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time", values,
+                        IMAS_DOUBLE_DATA, 7, size)
+              .code == 0);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 2);
+    CHECK(pointer_from_stub("recording_stub_write_data") != values);
+    CHECK(int_from_stub("recording_stub_write_double_count") == 128);
+    for (int index = 0; index < 128; ++index) {
+        CHECK(double_at_from_stub("recording_stub_write_double_at", index) == -values[index]);
+        CHECK(values[index] == (double)(index - 64));
+    }
+    for (int index = 0; index < 7; ++index) {
+        CHECK(size[index] == 2);
+    }
+
+    printf("write_delete_conversion_test write-path-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy: "
+           "Core received every negated value while caller storage stayed unchanged\n");
+}
+
+static void scenario_plugin_write_cocos_sign_flip_uses_a_shim_owned_copy(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    double values[2] = {1.25, -2.5};
+    int size[1] = {2};
+
+    CHECK(al_plugin_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time",
+                               values, IMAS_DOUBLE_DATA, 1, size)
+              .code == 0);
+    CHECK(pointer_from_stub("recording_stub_plugin_pointer") != values);
+    CHECK(int_from_stub("recording_stub_plugin_write_double_count") == 2);
+    CHECK(double_at_from_stub("recording_stub_plugin_write_double_at", 0) == -1.25);
+    CHECK(double_at_from_stub("recording_stub_plugin_write_double_at", 1) == 2.5);
+    CHECK(values[0] == 1.25);
+    CHECK(values[1] == -2.5);
+    CHECK(size[0] == 2);
+
+    printf("write_delete_conversion_test write-path-plugin-cocos-sign-flip-uses-a-shim-owned-copy: "
+           "the plugin reentry seam used the same copy policy\n");
+}
+
+static void scenario_write_cocos_sentinel_forwards_unchanged_without_loss(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    double unset = -9.0E40;
+    int unset_int = -999999999;
+    double complex unset_complex = -9.0E40 - 9.0E40 * I;
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time", &unset,
+                        IMAS_DOUBLE_DATA, 0, NULL)
+              .code == 0);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 1);
+    CHECK(pointer_from_stub("recording_stub_write_data") == &unset);
+    CHECK(int_from_stub("recording_stub_write_double_count") == 1);
+    CHECK(double_at_from_stub("recording_stub_write_double_at", 0) == -9.0E40);
+    CHECK(unset == -9.0E40);
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time",
+                        &unset_int, IMAS_INTEGER_DATA, 0, NULL)
+              .code == 0);
+    CHECK(pointer_from_stub("recording_stub_write_data") == &unset_int);
+    CHECK(unset_int == -999999999);
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time",
+                        &unset_complex, IMAS_COMPLEX_DATA, 0, NULL)
+              .code == 0);
+    CHECK(pointer_from_stub("recording_stub_write_data") == &unset_complex);
+    CHECK(creal(unset_complex) == -9.0E40);
+    CHECK(cimag(unset_complex) == -9.0E40);
+    int loss_count = -1;
+    CHECK_OK(imas_mvdd_context_loss_count(operation_ctx, &loss_count));
+    CHECK(loss_count == 0);
+
+    printf("write_delete_conversion_test write-path-cocos-sentinel-forwards-unchanged-without-loss: "
+           "an unset scalar kept IMAS-Core's own skip sentinel\n");
+}
+
+static void scenario_write_cocos_invalid_shape_or_type_refuses_before_core(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    double value = 1.25;
+    int oversized_shape[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time", &value,
+                        IMAS_INTEGER_DATA, 0, NULL)
+              .code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(al_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time", &value,
+                        IMAS_DOUBLE_DATA, 8, oversized_shape)
+              .code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    CHECK(value == 1.25);
+    for (int index = 0; index < 8; ++index) {
+        CHECK(oversized_shape[index] == 1);
+    }
+
+    printf("write_delete_conversion_test write-path-cocos-invalid-shape-or-type-refuses-before-core: "
+           "the ADR-0010 gate rejected both unsupported declarations\n");
+}
+
+static void scenario_write_refuses_dd_version_stamp_but_forwards_its_siblings(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double sentinel = 42.0;
+    int size[1] = {73};
+
+    CHECK(write_field(operation_ctx, "ids_properties/version_put/data_dictionary", "", &sentinel,
+                      size)
+              .code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    check_write_lands(operation_ctx, "ids_properties/version_put/access_layer", "",
+                      "ids_properties/version_put/access_layer", "");
+    check_write_lands(operation_ctx, "ids_properties/version_put/access_layer_language", "",
+                      "ids_properties/version_put/access_layer_language", "");
+
+    printf("write_delete_conversion_test write-path-refuses-dd-version-stamp-but-forwards-its-siblings: "
+           "the immutable stamp was protected while access-layer metadata remained plain writes\n");
+}
+
+static void scenario_write_without_stored_slot_refuses_and_retains_a_write_loss(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double sentinel = 42.0;
+    int size[1] = {73};
+    al_status_t status = write_field(operation_ctx, "time_slice/boundary/phi", "", &sentinel, size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path has no stored source", "time_slice/boundary/phi", "4.1.1",
+                          "3.39.0");
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    CHECK(sentinel == 42.0);
+    CHECK(size[0] == 73);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary/phi", IMAS_MVDD_FIDELITY_UNMAPPABLE,
+                  IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    printf("write_delete_conversion_test write-path-without-stored-slot-refuses-and-retains-a-write-loss: "
+           "a DD4-only field was refused before Core and retained as a write loss\n");
+}
+
+static void scenario_write_reverse_without_stored_slot_refuses_and_retains_a_write_loss(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double sentinel = 42.0;
+    int size[1] = {73};
+    al_status_t status = write_field(operation_ctx, "time_slice/boundary_secondary_separatrix/gap/r", "",
+                                     &sentinel, size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path has no stored source",
+                          "time_slice/boundary_secondary_separatrix/gap/r", "3.39.0", "4.1.1");
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    CHECK(sentinel == 42.0);
+    CHECK(size[0] == 73);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary_secondary_separatrix/gap/r",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    printf("write_delete_conversion_test write-path-reverse-without-stored-slot-refuses-and-retains-a-write-loss: "
+           "a DD3-only field was refused before Core and retained as a write loss\n");
+}
+
+static void scenario_write_retyped_path_refuses_and_retains_a_write_loss(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double sentinel = 42.0;
+    int size[1] = {73};
+    al_status_t status = write_field(operation_ctx, "grids_ggd/grid/space/coordinates_type", "", &sentinel,
+                                     size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path's container changed shape and cannot be served",
+                          "grids_ggd/grid/space/coordinates_type", "4.1.1", "3.39.0");
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    CHECK(sentinel == 42.0);
+    CHECK(size[0] == 73);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "grids_ggd/grid/space/coordinates_type",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    printf("write_delete_conversion_test write-path-retyped-path-refuses-and-retains-a-write-loss: a "
+           "shape-changing path was refused before Core and retained as a write loss\n");
+}
+
+static void scenario_write_child_refusal_is_retained_on_its_root_with_a_complete_path(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int size = -1;
     int arraystruct_ctx = -1;
@@ -113,33 +491,198 @@ static void scenario_write_nested_child_context_refuses_through_mismatched_root(
               .code == 0);
 
     int writes_before = int_from_stub("recording_stub_write_call_count");
-    int write_size[1] = {0};
-    double sentinel = 1.0;
-    al_status_t status =
-        write_field(arraystruct_ctx, "global_quantities/beta_tor_norm", "", &sentinel, write_size);
-
-    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    double sentinel = 42.0;
+    int shape[1] = {73};
+    CHECK(write_field(arraystruct_ctx, "boundary/phi", "", &sentinel, shape).code ==
+          IMAS_MVDD_CONVERSION_ERROR);
     CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    CHECK(sentinel == 42.0);
+    CHECK(shape[0] == 73);
+    CHECK(loss_count(arraystruct_ctx) == 1);
+    check_loss_at(arraystruct_ctx, 0, "time_slice/boundary/phi", IMAS_MVDD_FIDELITY_UNMAPPABLE,
+                  IMAS_MVDD_LOSS_OPERATION_WRITE);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary/phi", IMAS_MVDD_FIDELITY_UNMAPPABLE,
+                  IMAS_MVDD_LOSS_OPERATION_WRITE);
 
-    printf("write_delete_conversion_test write-nested-child-context-refuses-through-mismatched-root: "
-           "a child arraystruct context inherited its root's refusal\n");
+    printf("write_delete_conversion_test write-path-child-refusal-is-retained-on-its-root-with-a-complete-path: "
+           "a child refusal reached the root log under its joined DD path\n");
 }
 
-static void scenario_delete_nested_child_context_refuses_through_mismatched_root(void) {
+static void scenario_delete_nested_child_context_translates_relative_path(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int size = -1;
     int arraystruct_ctx = -1;
     CHECK(al_begin_arraystruct_action(operation_ctx, "time_slice", "", &size, &arraystruct_ctx)
               .code == 0);
 
+    check_delete_lands(arraystruct_ctx, "global_quantities/beta_tor_norm",
+                       "global_quantities/beta_normal");
+}
+
+static void scenario_delete_refuses_stamp_subtrees_before_core_call(void) {
+    int operation_ctx = open_mismatched_equilibrium();
     int deletes_before = int_from_stub("recording_stub_delete_call_count");
-    al_status_t status = al_delete_data(arraystruct_ctx, "global_quantities/beta_tor_norm");
+    const char *reason =
+        "this delete would remove the DD-version stamp while stored data remains";
+    const char *paths[] = {"ids_properties/version_put/data_dictionary",
+                           "ids_properties/version_put", "ids_properties"};
+    for (size_t index = 0; index < sizeof(paths) / sizeof(paths[0]); index++) {
+        al_status_t status = al_delete_data(operation_ctx, paths[index]);
+        CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+        CHECK_REFUSAL_MESSAGE(status, reason, paths[index], "4.1.1", "3.39.0");
+    }
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
+}
+
+static void scenario_delete_empty_path_forwards_as_explicit_migration_route(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    check_delete_lands(operation_ctx, "", "");
+    CHECK(loss_count(operation_ctx) == 0);
+}
+
+static void scenario_delete_refuses_no_source_unservable_and_structures(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int deletes_before = int_from_stub("recording_stub_delete_call_count");
+    al_status_t status = al_delete_data(operation_ctx, "time_slice/boundary/phi");
 
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path has no stored source", "time_slice/boundary/phi",
+                          "4.1.1", "3.39.0");
+    status = al_delete_data(operation_ctx, "grids_ggd/grid/space/coordinates_type");
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path's container changed shape and cannot be served",
+                          "grids_ggd/grid/space/coordinates_type", "4.1.1", "3.39.0");
+    status = al_delete_data(operation_ctx, "time_slice/boundary");
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status,
+                          "this subtree delete would leave data at a stored path outside the "
+                          "requested subtree",
+                          "time_slice/boundary", "4.1.1", "3.39.0");
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
+}
 
-    printf("write_delete_conversion_test delete-nested-child-context-refuses-through-mismatched-root: "
-           "a child arraystruct context inherited its root's refusal\n");
+/* Issue #131 / ADR 0017 decision 4: a structure delete is trivial and
+ * proceeds when no rule nested underneath it targets a stored path outside
+ * the subtree it resolves to. "time_slice" and "time_slice/constraints" are
+ * ADR 0017's own examples of subtrees every nested rule stays inside. */
+static void scenario_delete_admits_trivial_structure_deletes(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+
+    check_delete_lands(operation_ctx, "time_slice", "time_slice");
+    check_delete_lands(operation_ctx, "time_slice/constraints", "time_slice/constraints");
+    CHECK(loss_count(operation_ctx) == 0);
+}
+
+/* ADR 0017 decision 4's "boundary_separatrix" example, under the opposite
+ * HLI/stored pairing from scenario_delete_refuses_no_source_unservable_and_
+ * structures (run via a CMake registration that sets HLI_DD_VERSION 3.39.0 /
+ * STAMP_VERSION 4.1.1). This still refuses under a DD3 HLI, but for a
+ * different, pre-existing reason: `drop-boundary-separatrix` (`left_only`)
+ * claims this exact path itself, so it resolves to no stored source before
+ * the escaping-rule check ever runs — it never reaches the leaf/structure
+ * classification at all. The escaping check is what makes "time_slice/
+ * boundary" (below) refuse in the *other* direction, where no rule directly
+ * claims the whole structure. */
+static void scenario_delete_refuses_boundary_separatrix_reverse_direction(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int deletes_before = int_from_stub("recording_stub_delete_call_count");
+
+    al_status_t status = al_delete_data(operation_ctx, "time_slice/boundary_separatrix");
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path has no stored source",
+                          "time_slice/boundary_separatrix", "3.39.0", "4.1.1");
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
+}
+
+/* Also issue #138's regression guard, which is why the not-found knob is set
+ * for a delete that performs no reads at all.
+ *
+ * `RECORDING_STUB_READ_NOT_FOUND_FIELD` makes a *read* of the precedence-2
+ * candidate report not-found — exactly the fixture the removed presence probe
+ * misread through a write-mode context. It changes nothing today, and that
+ * invariance is the claim. Reintroducing a probe makes this scenario fail
+ * twice over, and both failures were confirmed by mutating `delete_data` to
+ * probe each candidate again: the read count moves off `reads_before`, and
+ * with that assertion suppressed the delete count drops to two, because the
+ * probe skips the candidate the knob hid. The two signals are independent —
+ * the first catches any probe, the second catches a probe that skips — so
+ * they belong in one scenario rather than in a near-identical second one. */
+static void scenario_delete_fans_out_over_candidates_in_declared_order(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    int deletes_before = int_from_stub("recording_stub_delete_call_count");
+    int events_before = int_from_stub("recording_stub_data_event_count");
+
+    CHECK(setenv("RECORDING_STUB_READ_NOT_FOUND_FIELD", "time_slice/profiles_2d/b_field_tor", 1) ==
+          0);
+    CHECK(al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi").code == 0);
+    unsetenv("RECORDING_STUB_READ_NOT_FOUND_FIELD");
+
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 3);
+    CHECK(strcmp(delete_path_at(deletes_before), "time_slice/profiles_2d/b_field_phi") == 0);
+    CHECK(strcmp(delete_path_at(deletes_before + 1), "time_slice/profiles_2d/b_field_tor") ==
+          0);
+    CHECK(strcmp(delete_path_at(deletes_before + 2), "time_slice/profiles_2d/b_tor") == 0);
+    CHECK(int_from_stub("recording_stub_data_event_count") == events_before + 3);
+    for (int index = 0; index < 3; ++index) {
+        CHECK(data_event_kind_at(events_before + index) == IMAS_MVDD_STUB_DATA_EVENT_DELETE);
+        CHECK(strcmp(data_event_path_at(events_before + index),
+                     delete_path_at(deletes_before + index)) == 0);
+    }
+    CHECK(loss_count(operation_ctx) == 0);
+}
+
+static void scenario_delete_reports_a_failure_and_continues(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    int deletes_before = int_from_stub("recording_stub_delete_call_count");
+
+    CHECK(setenv("RECORDING_STUB_DELETE_FAIL_FIELD", "time_slice/profiles_2d/b_field_tor", 1) ==
+          0);
+    al_status_t delete_failure =
+        al_delete_data(operation_ctx, "time_slice/profiles_2d/b_field_phi");
+    unsetenv("RECORDING_STUB_DELETE_FAIL_FIELD");
+    CHECK(delete_failure.code == -24);
+    CHECK(strcmp(delete_failure.message,
+                 "IMAS-MVDD: delete failed for stored candidate time_slice/profiles_2d/b_field_tor") ==
+          0);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 3);
+    CHECK(strcmp(delete_path_at(deletes_before), "time_slice/profiles_2d/b_field_phi") == 0);
+    CHECK(strcmp(delete_path_at(deletes_before + 1), "time_slice/profiles_2d/b_field_tor") ==
+          0);
+    CHECK(strcmp(delete_path_at(deletes_before + 2), "time_slice/profiles_2d/b_tor") == 0);
+    CHECK(loss_count(operation_ctx) == 0);
+}
+
+static void scenario_delete_refuses_non_primary_source_before_core_call(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int deletes_before = int_from_stub("recording_stub_delete_call_count");
+    al_status_t status = al_delete_data(operation_ctx, "time_slice/profiles_2d/b_tor");
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status,
+                          "this path is a non-primary source and cannot delete a shared stored slot",
+                          "time_slice/profiles_2d/b_tor", "3.39.0", "4.1.1");
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
+}
+
+static void scenario_write_refuses_non_primary_source_before_core_call(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    double sentinel = 42.0;
+    int size[1] = {1};
+    al_status_t status =
+        write_field(operation_ctx, "time_slice/profiles_2d/b_tor", "time", &sentinel, size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path is a non-primary source and cannot write a shared stored slot",
+                          "time_slice/profiles_2d/b_tor", "3.39.0", "4.1.1");
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    CHECK(sentinel == 42.0);
+    CHECK(size[0] == 1);
 }
 
 static void scenario_write_matching_context_forwards_unchanged(void) {
@@ -157,7 +700,7 @@ static void scenario_write_matching_context_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_write_timebase"), "time") == 0);
     CHECK(pointer_from_stub("recording_stub_write_data") == &sentinel);
 
-    printf("write_delete_conversion_test write-matching-context-forwards-unchanged: a matching "
+    printf("write_delete_conversion_test write-path-matching-context-forwards-unchanged: a matching "
            "stamp was forwarded verbatim\n");
 }
 
@@ -174,7 +717,7 @@ static void scenario_write_unknown_context_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_write_field"), "profiles_1d/electrons/density") ==
           0);
 
-    printf("write_delete_conversion_test write-unknown-context-forwards-unchanged: an unavailable "
+    printf("write_delete_conversion_test write-path-unknown-context-forwards-unchanged: an unavailable "
            "artifact was forwarded\n");
 }
 
@@ -188,7 +731,7 @@ static void scenario_write_unstamped_context_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_write_field"),
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
-    printf("write_delete_conversion_test write-unstamped-context-forwards-unchanged: an unstamped "
+    printf("write_delete_conversion_test write-path-unstamped-context-forwards-unchanged: an unstamped "
            "occurrence was forwarded\n");
 }
 
@@ -202,7 +745,7 @@ static void scenario_write_conversion_disabled_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_write_field"),
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
-    printf("write_delete_conversion_test write-conversion-disabled-forwards-unchanged: an unset "
+    printf("write_delete_conversion_test write-path-conversion-disabled-forwards-unchanged: an unset "
            "HLI version was forwarded\n");
 }
 
@@ -215,7 +758,7 @@ static void scenario_delete_matching_context_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_delete_path"),
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
-    printf("write_delete_conversion_test delete-matching-context-forwards-unchanged: a matching "
+    printf("write_delete_conversion_test delete-path-matching-context-forwards-unchanged: a matching "
            "stamp was forwarded verbatim\n");
 }
 
@@ -229,7 +772,7 @@ static void scenario_delete_unknown_context_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_delete_path"), "profiles_1d/electrons/density") ==
           0);
 
-    printf("write_delete_conversion_test delete-unknown-context-forwards-unchanged: an unavailable "
+    printf("write_delete_conversion_test delete-path-unknown-context-forwards-unchanged: an unavailable "
            "artifact was forwarded\n");
 }
 
@@ -240,7 +783,7 @@ static void scenario_delete_unstamped_context_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_delete_path"),
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
-    printf("write_delete_conversion_test delete-unstamped-context-forwards-unchanged: an unstamped "
+    printf("write_delete_conversion_test delete-path-unstamped-context-forwards-unchanged: an unstamped "
            "occurrence was forwarded\n");
 }
 
@@ -251,26 +794,52 @@ static void scenario_delete_conversion_disabled_forwards_unchanged(void) {
     CHECK(strcmp(string_from_stub("recording_stub_delete_path"),
                  "time_slice/global_quantities/beta_tor_norm") == 0);
 
-    printf("write_delete_conversion_test delete-conversion-disabled-forwards-unchanged: an unset "
+    printf("write_delete_conversion_test delete-path-conversion-disabled-forwards-unchanged: an unset "
            "HLI version was forwarded\n");
 }
 
 int main(int argc, char **argv) {
     static const shim_test_scenario scenarios[] = {
-        {"write-refuses-under-known-mismatched-root-before-core-call", scenario_write_refuses_under_known_mismatched_root_before_core_call},
-        {"delete-refuses-under-known-mismatched-root-before-core-call", scenario_delete_refuses_under_known_mismatched_root_before_core_call},
-        {"plugin-write-refuses-under-known-mismatched-root-before-core-call", scenario_plugin_write_refuses_under_known_mismatched_root_before_core_call},
-        {"plugin-write-matching-context-forwards-unchanged", scenario_plugin_write_matching_context_forwards_unchanged},
-        {"write-nested-child-context-refuses-through-mismatched-root", scenario_write_nested_child_context_refuses_through_mismatched_root},
-        {"delete-nested-child-context-refuses-through-mismatched-root", scenario_delete_nested_child_context_refuses_through_mismatched_root},
-        {"write-matching-context-forwards-unchanged", scenario_write_matching_context_forwards_unchanged},
-        {"write-unknown-context-forwards-unchanged", scenario_write_unknown_context_forwards_unchanged},
-        {"write-unstamped-context-forwards-unchanged", scenario_write_unstamped_context_forwards_unchanged},
-        {"write-conversion-disabled-forwards-unchanged", scenario_write_conversion_disabled_forwards_unchanged},
-        {"delete-matching-context-forwards-unchanged", scenario_delete_matching_context_forwards_unchanged},
-        {"delete-unknown-context-forwards-unchanged", scenario_delete_unknown_context_forwards_unchanged},
-        {"delete-unstamped-context-forwards-unchanged", scenario_delete_unstamped_context_forwards_unchanged},
-        {"delete-conversion-disabled-forwards-unchanged", scenario_delete_conversion_disabled_forwards_unchanged},
+        {"write-path-renamed-field-lands-at-stored-spelling", scenario_write_renamed_field_lands_at_stored_spelling},
+        {"write-path-identity-and-moved-fields-land-at-stored-spelling", scenario_write_identity_and_moved_fields_land_at_stored_spelling},
+        {"write-path-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling", scenario_write_reverse_identity_renamed_and_moved_fields_land_at_stored_spelling},
+        {"delete-path-identity-renamed-and-moved-fields-land-at-stored-spelling", scenario_delete_identity_renamed_and_moved_fields_land_at_stored_spelling},
+        {"delete-path-reverse-identity-renamed-and-moved-fields-land-at-stored-spelling", scenario_delete_reverse_identity_renamed_and_moved_fields_land_at_stored_spelling},
+        {"write-path-plugin-renamed-field-lands-at-stored-spelling", scenario_plugin_write_renamed_field_lands_at_stored_spelling},
+        {"write-path-plugin-matching-context-forwards-unchanged", scenario_plugin_write_matching_context_forwards_unchanged},
+        {"write-path-nested-child-context-resolves-relative-and-absolute-fields", scenario_write_nested_child_context_resolves_relative_and_absolute_fields},
+        {"write-path-candidate-lands-at-primary-and-retains-unwritten-candidates", scenario_write_candidate_lands_at_primary_and_retains_unwritten_candidates},
+        {"write-path-non-primary-source-refuses-by-precedence", scenario_write_non_primary_source_refuses_by_precedence},
+        {"write-path-split-candidate-lands-at-primary", scenario_write_split_candidate_lands_at_primary},
+        {"write-path-child-candidate-retains-complete-path-at-root", scenario_write_child_candidate_retains_complete_path_at_root},
+        {"write-path-uses-the-primary-candidate-without-fanout", scenario_write_uses_the_primary_candidate_without_fanout},
+        {"write-path-cocos-sign-flip-uses-a-shim-owned-rank-seven-copy", scenario_write_cocos_sign_flip_uses_a_shim_owned_rank_seven_copy},
+        {"write-path-plugin-cocos-sign-flip-uses-a-shim-owned-copy", scenario_plugin_write_cocos_sign_flip_uses_a_shim_owned_copy},
+        {"write-path-cocos-sentinel-forwards-unchanged-without-loss", scenario_write_cocos_sentinel_forwards_unchanged_without_loss},
+        {"write-path-cocos-invalid-shape-or-type-refuses-before-core", scenario_write_cocos_invalid_shape_or_type_refuses_before_core},
+        {"write-path-refuses-dd-version-stamp-but-forwards-its-siblings", scenario_write_refuses_dd_version_stamp_but_forwards_its_siblings},
+        {"write-path-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_without_stored_slot_refuses_and_retains_a_write_loss},
+        {"write-path-reverse-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_reverse_without_stored_slot_refuses_and_retains_a_write_loss},
+        {"write-path-retyped-path-refuses-and-retains-a-write-loss", scenario_write_retyped_path_refuses_and_retains_a_write_loss},
+        {"write-path-child-refusal-is-retained-on-its-root-with-a-complete-path", scenario_write_child_refusal_is_retained_on_its_root_with_a_complete_path},
+        {"delete-path-nested-child-context-translates-relative-path", scenario_delete_nested_child_context_translates_relative_path},
+        {"delete-path-refuses-stamp-subtrees-before-core-call", scenario_delete_refuses_stamp_subtrees_before_core_call},
+        {"delete-path-empty-path-forwards-as-explicit-migration-route", scenario_delete_empty_path_forwards_as_explicit_migration_route},
+        {"delete-path-refuses-no-source-unservable-and-structures", scenario_delete_refuses_no_source_unservable_and_structures},
+        {"delete-path-admits-trivial-structure-deletes", scenario_delete_admits_trivial_structure_deletes},
+        {"delete-path-refuses-boundary-separatrix-reverse-direction", scenario_delete_refuses_boundary_separatrix_reverse_direction},
+        {"delete-path-fans-out-over-candidates-in-declared-order", scenario_delete_fans_out_over_candidates_in_declared_order},
+        {"delete-path-reports-a-failure-and-continues", scenario_delete_reports_a_failure_and_continues},
+        {"delete-path-refuses-non-primary-source-before-core-call", scenario_delete_refuses_non_primary_source_before_core_call},
+        {"write-path-refuses-non-primary-source-before-core-call", scenario_write_refuses_non_primary_source_before_core_call},
+        {"write-path-matching-context-forwards-unchanged", scenario_write_matching_context_forwards_unchanged},
+        {"write-path-unknown-context-forwards-unchanged", scenario_write_unknown_context_forwards_unchanged},
+        {"write-path-unstamped-context-forwards-unchanged", scenario_write_unstamped_context_forwards_unchanged},
+        {"write-path-conversion-disabled-forwards-unchanged", scenario_write_conversion_disabled_forwards_unchanged},
+        {"delete-path-matching-context-forwards-unchanged", scenario_delete_matching_context_forwards_unchanged},
+        {"delete-path-unknown-context-forwards-unchanged", scenario_delete_unknown_context_forwards_unchanged},
+        {"delete-path-unstamped-context-forwards-unchanged", scenario_delete_unstamped_context_forwards_unchanged},
+        {"delete-path-conversion-disabled-forwards-unchanged", scenario_delete_conversion_disabled_forwards_unchanged},
     };
     return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

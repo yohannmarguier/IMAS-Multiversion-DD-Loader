@@ -37,7 +37,7 @@ Fixing a value on its first use for the life of the process: an identical later 
 _Avoid_: lock, freeze, pin, cache, memoise.
 
 **shim-owned export**:
-A public symbol this project defines rather than mirrors from IMAS-Core, carrying the `imas_mvdd_` prefix and listed explicitly in the export-drift check. There are three — `imas_mvdd_set_hli_dd_version`, `imas_mvdd_context_loss_count` and `imas_mvdd_context_loss_at` — and a fourth, `imas_mvdd_context_loss_operation_at`, is decided but not yet built. None of them allocates memory that crosses the boundary.
+A public symbol this project defines rather than mirrors from IMAS-Core, carrying the `imas_mvdd_` prefix and listed explicitly in the export-drift check. There are four — `imas_mvdd_set_hli_dd_version`, `imas_mvdd_context_loss_count`, `imas_mvdd_context_loss_at` and `imas_mvdd_context_loss_operation_at`. None of them allocates memory that crosses the boundary.
 _Avoid_: extra symbol, extension, custom API, private API — they are public and supported.
 **IDS name**:
 The stable logical key of an IDS, such as `equilibrium`. It selects the same IDS across DD versions and is not a DD path that the shim translates.
@@ -98,7 +98,7 @@ A conversion rule whose HLI-side selector falls at or under a requested DD path,
 _Avoid_: crossing rule, leaking rule, straddling rule.
 
 **loss log**:
-The list of non-exact reads and writes recorded on a root context record: for each, the DD path as the HLI asked for it, its fidelity verdict, and which operation produced it. It is the only channel by which loss reaches the caller when the operation *succeeded*, because a success is forced to `al_status_t.code == 0`. The HLI drains it before `al_end_action` ends the context; it does not outlive the context. See `docs/adr/0012-loss-reaches-the-caller-by-a-context-log.md`.
+The list of non-exact reads and writes recorded on a root context record: for each, the relevant complete DD path, its fidelity verdict, and which operation produced it. A read loss or refused write names the HLI-DD path as the HLI asked for it. A successful ambiguous write instead names each stored-DD candidate it deliberately left unwritten, because those are the paths where stale data may remain. It is the only channel by which loss reaches the caller when the operation *succeeded*, because a success is forced to `al_status_t.code == 0`. The HLI drains it before `al_end_action` ends the context; it does not outlive the context. See `docs/adr/0012-loss-reaches-the-caller-by-a-context-log.md`.
 _Avoid_: report, journal, accumulator, diagnostics — and never call it an error channel; the reads and writes it records succeeded.
 
 **operation** (of a loss log entry):
@@ -106,8 +106,8 @@ Which kind of call produced an entry: a read or a write. Deliberately not called
 _Avoid_: direction, mode, kind.
 
 **read outcome**:
-Which of three things one `al_read_data` call did: **failure** (`code != 0`), **not-found** (`code == 0` with a null data pointer), or **data**. One shim classifier function decides it, and nothing else in the shim compares the data pointer to null.
-_Avoid_: treating not-found as an error, or as data; and never confuse this with `Backend::readData`'s `int` convention, which sits below the C ABI and never reaches the shim.
+Which of three things one `al_read_data` call did: **failure** (`code != 0`), **not-found** (`code == 0` with a null data pointer), or **data**. One shim classifier function decides it, and nothing else in the shim compares the data pointer to null. A **scalar** (`dim == 0`) read is the one exception, and it is an exception in IMAS-Core's ABI rather than in the shim: for `dim == 0` the caller owns the buffer, so the pointer comes back unchanged and absence is signalled by IMAS-Core writing the datatype's EMPTY sentinel into it. One further classifier reads that sentinel to decide the outcome, delegating to the same function for everything else; the sentinel itself is also read by the value pipeline, which must leave a hole in an array unflipped, so one definition serves both.
+_Avoid_: treating not-found as an error, or as data; passing a null `*data` for a scalar read, which IMAS-Core dereferences and so crashes on; and never confuse any of this with `Backend::readData`'s `int` convention, which sits below the C ABI and never reaches the shim.
 
 **refusal**:
 A shim-originated failure returned instead of calling IMAS-Core or instead of returning converted data, carrying the shim-owned code `IMAS_MVDD_CONVERSION_ERROR` (`-1000`). The shim reserves `-1000` to `-1099` and allocates only `-1000`; every other failure propagates IMAS-Core's own code unchanged.
@@ -123,7 +123,7 @@ A generated record of the DD paths that a conversion-map artifact covers. It is 
 `ConversionMap::check_completeness`'s result: whether every path in a real, checked-in path inventory pair is claimed by an explicit rule or a valid document-level default, and whether every rule's own primary selector corresponds to something real rather than a hallucinated path. It replaces trust in the hand-authored coverage record with an executable check; it never runs inside `resolve` and has no bearing on rule execution. See `docs/adr/0013-completeness-proven-against-real-inventories.md`.
 
 **path inventory**:
-A checked-in, real listing of the DD leaf paths for one IDS at one specific DD version, consulted only by the completeness proof.
+A checked-in, real listing of the DD leaf paths for one IDS at one specific DD version. It supplies the completeness proof and, for the current embedded equilibrium artifact only, the delete seam's leaf-versus-structure safety guard; it never selects a conversion rule. See `docs/adr/0013-completeness-proven-against-real-inventories.md`.
 _Avoid_: coverage record — a different, hand-authored concept the proof supersedes for verification purposes.
 
 **conversion chain**:
@@ -145,3 +145,15 @@ The registry-owned set of conversion maps shared by mismatched context records. 
 **seam policy**:
 The shim-side rule a seam applies, separate from the binding that carries it out: which arguments translate, which contexts refuse, what fidelity a read earned, and what the shim records afterwards. A seam policy decides; it never calls IMAS-Core, reads the latch, or writes the context registry — it receives what it needs as values and returns the effects for the C-facing layer to perform (ADR 0015).
 _Avoid_: policy on its own, conversion policy, business logic, rules engine, translator — and do not use it for the C-facing layer, which is the interposition, not the policy.
+
+**seam refusal check**:
+One test a seam applies to decide whether to refuse a path-bearing argument, before the shim hands anything to IMAS-Core. A seam's checks form an ordered sequence, and the order is itself part of the seam policy: an unservable rule must earn its own reason rather than appear as a lesser problem found later in the sequence. A check reads the rule explanation, and may read the stored path that explanation resolves to.
+_Avoid_: guard — it names no particular thing in this domain and reads as a wrapper rather than a decision; pre-resolution refusal check — one such check reads the resolved stored path, so the prefix is wrong.
+
+**argument role**:
+Which of a seam's path-bearing arguments a value is: the field, the timebase, or the path a delete addresses. A seam refusal check names the role it serves, because a refusal can be correct for one role and wrong for another — a value transformation is legitimate on a field and unservable on a timebase.
+_Avoid_: argument kind, parameter type, position.
+
+**narrowing**:
+The step that turns one shared path resolution into the answer a single seam can act on, folding together the outcomes that seam does not distinguish. Every fold is a decision of record rather than a simplification: a read folds an unclaimed path into not-found, and a write folds both an unclaimed path and an absent stored slot into a refusal.
+_Avoid_: projection, conversion, mapping — and do not use it for DD-path translation, which is what a rule does to a path.

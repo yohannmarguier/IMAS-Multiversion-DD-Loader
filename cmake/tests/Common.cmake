@@ -64,6 +64,14 @@ target_compile_definitions(recording_stub PRIVATE
 #
 # ENV entries are appended to the environment verbatim, in the order given,
 # and are how a scenario reaches the recording stub's own fixture knobs.
+#
+# Omitting HLI_DD_VERSION is a positive statement, not a default: it means the
+# latch must not fire, so the variable is actively unset for the test rather
+# than merely left unmentioned. Without that, a scenario whose whole point is
+# an unresolved latch would silently inherit whatever the developer's shell
+# exported and pass for the wrong reason. ENVIRONMENT_MODIFICATION carries it,
+# which is why CMakeLists.txt requires CMake 3.22 -- below that the property is
+# ignored without warning and this guarantee disappears.
 function(add_stub_test name executable)
     cmake_parse_arguments(PARSE_ARGV 2 ARG "" "HLI_DD_VERSION;STAMP_VERSION" "ENV")
 
@@ -80,6 +88,82 @@ function(add_stub_test name executable)
 
     add_test(NAME "${name}" COMMAND ${executable} ${ARG_UNPARSED_ARGUMENTS})
     set_tests_properties("${name}" PROPERTIES ENVIRONMENT "${environment}")
+    if(NOT DEFINED ARG_HLI_DD_VERSION)
+        set_property(TEST "${name}" APPEND PROPERTY ENVIRONMENT_MODIFICATION
+            "IMAS_MVDD_HLI_DD_VERSION=unset:")
+    endif()
+endfunction()
+
+# `real-core` denotes profile membership: every test registered inside this
+# bracket exists only when IMAS_MVDD_REAL_CORE_TESTS is on. Labelling the
+# difference in the TESTS directory property, rather than naming each test,
+# means no registration inside the bracket can be missed -- a bare add_test is
+# labelled exactly like one going through add_real_core_test, which is what the
+# four previously-unlabelled tests had fallen through.
+#
+# What this does not do is force a real-Core-only test *into* a bracket. A
+# registration gated by its own if(IMAS_MVDD_REAL_CORE_TESTS) somewhere outside
+# one is still unlabelled, and CMake cannot see the difference. The invariant is
+# checked by comparing `ctest -N` between the two configure profiles against
+# `ctest -N -L real-core`; keep the gated regions few enough to eyeball, which
+# today means all of RealCore.cmake and one block in Abi.cmake.
+#
+# The brackets do not nest, and an unmatched one would mislabel silently rather
+# than fail, so each end consumes the snapshot its begin left and both refuse
+# the mismatched case outright.
+function(imas_mvdd_begin_real_core_tests)
+    get_property(_open DIRECTORY PROPERTY IMAS_MVDD_REAL_CORE_TESTS_BEFORE SET)
+    if(_open)
+        message(FATAL_ERROR
+            "imas_mvdd_begin_real_core_tests() called while a bracket is already "
+            "open; these do not nest")
+    endif()
+    get_property(_tests_before DIRECTORY PROPERTY TESTS)
+    set_property(DIRECTORY PROPERTY IMAS_MVDD_REAL_CORE_TESTS_BEFORE "${_tests_before}")
+endfunction()
+
+function(imas_mvdd_end_real_core_tests)
+    get_property(_open DIRECTORY PROPERTY IMAS_MVDD_REAL_CORE_TESTS_BEFORE SET)
+    if(NOT _open)
+        message(FATAL_ERROR
+            "imas_mvdd_end_real_core_tests() called with no bracket open; every "
+            "test registered so far would be labelled real-core")
+    endif()
+    get_property(_tests_before DIRECTORY PROPERTY IMAS_MVDD_REAL_CORE_TESTS_BEFORE)
+    set_property(DIRECTORY PROPERTY IMAS_MVDD_REAL_CORE_TESTS_BEFORE)
+
+    get_property(_real_core_tests DIRECTORY PROPERTY TESTS)
+    if(_tests_before)
+        list(REMOVE_ITEM _real_core_tests ${_tests_before})
+    endif()
+    foreach(test IN LISTS _real_core_tests)
+        set_property(TEST "${test}" APPEND PROPERTY LABELS real-core)
+    endforeach()
+endfunction()
+
+# Registers one real-IMAS-Core scenario. The shim must resolve IMAS-Core through
+# its build RPATH, rather than the recording-stub override used by stub suites,
+# so the IMAS_CORE_LIBRARY unset is unconditional and has no opt-out: a real-Core
+# test that wanted the stub would not be one.
+#
+#   add_real_core_test(<ctest-name> <executable> [<scenario-argument>...]
+#                      [RESOURCE_LOCK <lock>])
+#
+# RESOURCE_LOCK serialises the scenarios sharing the checked-in HDF5 pulse.
+#
+# This does not apply the real-core label. That comes from the enclosing
+# imas_mvdd_begin_real_core_tests()/imas_mvdd_end_real_core_tests() bracket,
+# which labels whatever was registered between them however it was registered --
+# so calling this outside the bracket yields an unlabelled test.
+function(add_real_core_test name executable)
+    cmake_parse_arguments(PARSE_ARGV 2 ARG "" "RESOURCE_LOCK" "")
+
+    add_test(NAME "${name}"
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=IMAS_CORE_LIBRARY --
+            ${executable} ${ARG_UNPARSED_ARGUMENTS})
+    if(DEFINED ARG_RESOURCE_LOCK)
+        set_tests_properties("${name}" PROPERTIES RESOURCE_LOCK "${ARG_RESOURCE_LOCK}")
+    endif()
 endfunction()
 
 if(IMAS_MVDD_REAL_CORE_TESTS)

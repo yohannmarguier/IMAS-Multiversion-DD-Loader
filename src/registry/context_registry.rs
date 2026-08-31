@@ -110,18 +110,13 @@ pub(crate) struct ConversionRecord {
     /// The context ID of this record's direct parent, or `None` for a root
     /// record.
     ///
-    /// Nothing outside this module's tests reads it: conversion resolves a
-    /// child to its root in one lookup through `root_id` (issue #65), never by
-    /// walking ancestry. It is retained because those tests are the only place
-    /// the registry's parentage rules are pinned — that a child records the
-    /// parent it was actually opened under, that a root has none, and that a
-    /// recycled parent ID does not retroactively re-parent an existing child.
-    /// Dropping the field would mean dropping those assertions.
-    #[allow(
-        dead_code,
-        reason = "read by this module's tests, which pin the parentage rules"
-    )]
-    parent_id: Option<ContextId>,
+    /// Kept crate-visible so resolver unit tests can construct a complete
+    /// record without entering the process-global registry. Conversion itself
+    /// still resolves a child to its root in one lookup through `root_id`,
+    /// never by walking ancestry — so outside `cfg(test)` this field is
+    /// written and never read, which is what the allow below records.
+    #[allow(dead_code, reason = "read by registry tests that pin parentage rules")]
+    pub(crate) parent_id: Option<ContextId>,
 }
 
 /// One entry in the registry's shared context-ID namespace.
@@ -135,13 +130,22 @@ enum Entry {
     Conversion(ConversionRecord),
 }
 
+/// Which successful or refused seam operation earned a loss-log entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LossOperation {
+    Read,
+    Write,
+}
+
 /// A non-exact path requested through one root conversion context.
 /// The log is root-owned so child contexts contribute to the same eventual
-/// conversion report (ADR 0012); its public query ABI is deferred to #65.
+/// conversion report (ADR 0012); the query ABI exposes its path, fidelity,
+/// and operation through separate allocation-free accessors.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ReadLoss {
-    hli_path: String,
+struct LossEntry {
+    dd_path: String,
     fidelity: Fidelity,
+    operation: LossOperation,
 }
 
 #[derive(Default)]
@@ -149,7 +153,7 @@ struct State {
     entries: HashMap<ContextId, Entry>,
     /// Losses are separate from cloned conversion snapshots so a child never
     /// accidentally owns a copied log. A root context owns exactly one log.
-    loss_logs: HashMap<ContextId, Vec<ReadLoss>>,
+    loss_logs: HashMap<ContextId, Vec<LossEntry>>,
     maps: HashMap<MapCacheKey, Weak<ConversionMap>>,
 }
 
@@ -353,15 +357,46 @@ impl ContextRegistry {
     pub(crate) fn record_read_loss_at_root(
         &self,
         root_id: ContextId,
-        hli_path: String,
+        dd_path: String,
         fidelity: Fidelity,
+    ) {
+        self.record_loss_at_root(root_id, dd_path, fidelity, LossOperation::Read);
+    }
+
+    /// Appends a non-exact write outcome directly to the loss log belonging
+    /// to the root captured in a write's conversion-record snapshot. Exact
+    /// writes never enter the log; if that root has ended, its log is gone
+    /// and the outcome is deliberately not retained.
+    ///
+    /// This mirrors [`Self::record_read_loss_at_root`]: retaining against the
+    /// captured root prevents a child context ID recycled during a seam call
+    /// from receiving a stale loss entry.
+    pub(crate) fn record_write_loss_at_root(
+        &self,
+        root_id: ContextId,
+        dd_path: String,
+        fidelity: Fidelity,
+    ) {
+        self.record_loss_at_root(root_id, dd_path, fidelity, LossOperation::Write);
+    }
+
+    fn record_loss_at_root(
+        &self,
+        root_id: ContextId,
+        dd_path: String,
+        fidelity: Fidelity,
+        operation: LossOperation,
     ) {
         if fidelity == Fidelity::Exact {
             return;
         }
         let mut state = self.state.lock().unwrap();
         if let Some(losses) = state.loss_logs.get_mut(&root_id) {
-            losses.push(ReadLoss { hli_path, fidelity });
+            losses.push(LossEntry {
+                dd_path,
+                fidelity,
+                operation,
+            });
         }
     }
 
@@ -391,14 +426,14 @@ impl ContextRegistry {
         &self,
         ctx_id: ContextId,
         index: usize,
-        read: impl FnOnce(&str, Fidelity) -> T,
+        read: impl FnOnce(&str, Fidelity, LossOperation) -> T,
     ) -> Option<T> {
         let state = self.state.lock().unwrap();
         let Some(Entry::Conversion(record)) = state.entries.get(&ctx_id) else {
             return None;
         };
         let loss = state.loss_logs.get(&record.root_id)?.get(index)?;
-        Some(read(&loss.hli_path, loss.fidelity))
+        Some(read(&loss.dd_path, loss.fidelity, loss.operation))
     }
 
     /// Removes exactly the record at `ctx_id`, if any (mirrors a successful

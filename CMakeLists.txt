@@ -1,4 +1,8 @@
-    cmake_minimum_required(VERSION 3.21)
+# 3.22 for ENVIRONMENT_MODIFICATION, which cmake/tests/Common.cmake's
+# add_stub_test uses to unset IMAS_MVDD_HLI_DD_VERSION for scenarios that
+# must not latch. Below 3.22 that property is ignored without warning, so a
+# lower floor would silently hand those tests the developer's own value.
+cmake_minimum_required(VERSION 3.22)
 
 project(imas-mvdd-loader
     VERSION 0.1.0

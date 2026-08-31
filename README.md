@@ -46,11 +46,20 @@ Read-path DD conversion is implemented for one IDS and one version pair.**
   conversion map declares unservable, and reports non-exact reads through a
   loss log the caller drains from the root context (see [Draining the loss
   log](#draining-the-loss-log) below).
-- **Not yet done:** writes and deletes against a mismatched occurrence
-  refuse rather than convert (by design — see ADR 0002); reading a
-  `merged`/`split` candidate plan is proven only for the one embedded
-  artifact; `al_list_filled_paths` and `al_bind_plugin`/`al_unbind_plugin`
-  are deliberately not yet translated.
+- **Write/delete conversion.** Safe mismatched writes translate one
+  unambiguous path and send IMAS-Core a shim-owned, COCOS-flipped copy where
+  the rule calls for one, leaving the caller's own storage untouched; a write
+  the map cannot serve refuses before Core and is retained on the loss log.
+  Deletes translate identity, renamed, and moved leaf paths
+  to their stored spelling; deleting the whole DATAOBJECT is the explicit
+  migration route, while a DD-version stamp, unsafe source, no-source path,
+  or non-primary source refuses. A candidate-plan write reaches only
+  precedence 1 and records every skipped candidate as potentially lossy (apart
+  from ADR 0018's unset rank-zero scalar, which stores no value and earns no
+  loss), while a candidate-plan delete fans out over every stored source in
+  declared order — a write asserts one value, a delete asserts an absence
+  (ADR 0017). `al_list_filled_paths` and `al_bind_plugin`/`al_unbind_plugin`
+  are deliberately not translated.
 
 Read [Scope and limitations](#scope-and-limitations) before drawing
 conclusions from that list — several of the boundaries below are permanent
@@ -64,7 +73,7 @@ On the ITER cluster:
 $ source scripts/iter-env.sh     # Rust/1.88.0-GCCcore-14.3.0 + cargo-c/0.10.15-GCCcore-14.3.0 + IMAS-Core/5.7.1
 ```
 
-Elsewhere: Rust ≥ 1.88, `cargo install cargo-c`, CMake ≥ 3.21, a C and C++
+Elsewhere: Rust ≥ 1.88, `cargo install cargo-c`, CMake ≥ 3.22, a C and C++
 compiler, and IMAS-Core itself — see the acquisition options in [Build,
 test, install](#build-test-install).
 
@@ -216,8 +225,9 @@ forbid it," not as a supported deployment recipe.
 
 ### Draining the loss log
 
-A non-exact but served read is logged, not silently accepted. Two
-shim-owned exports let a caller inspect it without allocating:
+A non-exact read, and every write that could not be served exactly, is logged
+rather than silently accepted. Four shim-owned exports let a caller inspect it
+without allocating:
 
 ```c
 int count = 0;
@@ -226,14 +236,28 @@ imas_mvdd_context_loss_count(ctx_id, &count);   /* entries on ctx_id's root cont
 for (int i = 0; i < count; ++i) {
     char path[256];
     int verdict = 0;
+    int operation = 0;
     imas_mvdd_context_loss_at(ctx_id, i, path, sizeof(path), &verdict);
+    imas_mvdd_context_loss_operation_at(ctx_id, i, &operation);
     /* verdict is IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, _LOSSY, or _UNMAPPABLE */
+    /* operation is IMAS_MVDD_LOSS_OPERATION_READ or _WRITE */
 }
 ```
 
 A query on a child context (e.g. one opened by `al_begin_arraystruct_action`)
 resolves to the same log as its root; an untracked context reports `0`
 rather than a refusal.
+
+**Which spelling an entry names depends on what it is warning about.** A read
+loss and a refused write name the path *you* asked for, complete from the IDS
+root even where you addressed it relative to a live child context — that is the
+argument whose fidelity was in question. The `POTENTIALLY_LOSSY` entries a
+*successful* write leaves behind name something else: the **stored** spellings
+the write deliberately did not touch. Where one HLI path folds onto several
+stored slots, only the primary is written (ADR 0016), so what those entries
+report is where some other reader of the occurrence may still find a stale
+value — your own path is the one place that is now correct, and naming it would
+tell you nothing.
 
 ### Environment variables at a glance
 
@@ -300,7 +324,73 @@ is itself worth knowing when reading a green suite.
   spelling, and `al_bind_plugin` / `al_unbind_plugin` still take a `fieldPath`
   in it. CLAUDE.md lists all three as seams that will eventually need
   translation; until they get it, `scoped-passthrough-*` pins the current
-  behaviour so it cannot change by accident in either direction.
+  behaviour so it cannot change by accident in either direction — while a read
+  converts and, separately, while a write does, since the write path is a
+  policy of its own rather than the read path reversed.
+- **The access mode never decides whether conversion applies.** `rwmode` on
+  `al_begin_global_action` is not a policy input: the occurrence's own
+  DD-version stamp decides, so a write-mode open of a mismatched occurrence
+  translates exactly as a read-mode open does, and a write-mode open of a
+  *new* occurrence reads no stamp, registers nothing, and forwards
+  untranslated. Because the write scope is append-only, a write-mode open can
+  only ever inherit a mismatch, never create one. `rwmode` does decide which
+  context the stamp is read through — since
+  `docs/adr/0020-stamp-discovery-asks-a-context-of-its-own.md`, a non-`READ_OP`
+  open makes the shim probe the stamp through a read-mode context of its own —
+  but that is a mechanism, not a policy
+  (`docs/adr/0016-write-path-seam-policy.md`, decision 11).
+- **A timebase path has never been converted, and nothing will tell you when
+  that starts to matter.** `timebase` resolves independently of `field` on both
+  the read and the write seam, a refusal on either refuses the call, and both
+  feed the fidelity verdict — but in the one shipped artifact `time` is
+  identity and no rule touches a timebase path, so none of that has ever been
+  exercised on a timebase. The hazard is real: a write whose timebase resolved
+  to a *different* candidate than the neighbours already in the occurrence
+  would attach its value to a different time basis. No rule was invented for
+  it, because an unreachable rule is uncovered code
+  (`docs/adr/0011-silence-is-earned-by-mechanism-coverage.md`). This is the one
+  limitation here with no test standing behind it in either direction: the
+  first conversion-map artifact whose rules touch a timebase path must reopen
+  the question rather than read this silence as a decision that it is safe.
+- **A refused write can leave a partly written IDS, and which failure mode you
+  get depends on your HLI.** The shim refuses a write it cannot serve *before*
+  IMAS-Core, which is the correct answer — but it cannot undo what the caller
+  already wrote. IMAS-Fortran's generated `put`/`put_slice` routines have no
+  refusal-tolerance branch: any nonzero status ends the DD traversal, with
+  everything written earlier already on disk and no rollback. So against an
+  **unmodified upstream** IMAS-Fortran, a refusal partway through a `put_slice`
+  leaves a torn time slice plus an error rather than a clean failure. Against
+  an HLI patched with a put-side tolerance, the unwritable field is skipped and
+  reported instead. This is a **documented limitation of this shim, not a
+  defect in it** — the refusal belongs here and the tolerance belongs in the
+  HLI, and the shim deliberately does not *require* the HLI-side half
+  (`docs/adr/0019-a-refusal-is-only-safe-if-someone-catches-it.md`, decision
+  4). The HLI-side work is tracked at
+  [yohannmarguier/IMAS-Fortran#61](https://github.com/yohannmarguier/IMAS-Fortran/issues/61).
+  A separate consequence of the same shape: a refusal reaching IMAS-Core's own
+  plugin manager would be `abort()`, not a returned failure, which is why the
+  reentry guard keeps IMAS-Core's internal traffic out of the conversion path
+  entirely (`docs/adr/0014-reentrant-reads-forward-untouched.md`).
+- **A converted delete destroys the whole occurrence on the HDF5 backend.**
+  This is the most destructive limitation on the list, and it is IMAS-Core's
+  behaviour rather than the shim's: `HDF5Writer::deleteData` ignores its `path`
+  argument entirely and removes the IDS pulse file plus its master-file link,
+  and HDF5 is the only backend that implements delete at all. So a candidate-plan
+  delete that the shim fans out per stored path has no per-path effect — the
+  first call takes the occurrence with it, and the remaining candidates find
+  nothing. Until this is fixed upstream, **treat any `al_delete_data` through a
+  mismatched occurrence as a whole-occurrence delete**, whatever path you named.
+  Nothing in the shim masked this until recently: the delete fan-out used to
+  probe each candidate for presence through the caller's own context, and under
+  a write-mode open every probe reported absent, so no delete was forwarded and
+  the call returned success having done nothing. That silence was itself a
+  defect — the shim reporting `code == 0` for work it never did — and removing
+  it (issue #138, `docs/adr/0017-a-write-asserts-a-value-a-delete-asserts-an-absence.md`
+  decision 2) made this hazard reachable. Tracked at
+  [#139](https://github.com/yohannmarguier/IMAS-Multiversion-DD-Loader/issues/139),
+  and pinned as today's behaviour by the
+  `delete-oracle-reverse-fan-out-reaches-disk` test, which asserts
+  the occurrence is gone rather than asserting that it should be.
 
 ## Layout
 
@@ -316,7 +406,7 @@ src/core/               runtime binding and dlopen/dlsym adapter
 src/conversion/         map resolution, path policy, outcomes, and embedded artifacts
 src/registry/           live conversion-context registry
 src/version/            DD versions, HLI latch, and occurrence stamp discovery
-src/interpose.rs        C-facing seam adapter over those modules
+src/interpose/          C-facing seam adapters, one module per seam family
 tests/abi/              generated-header smoke test and ABI manifests
 tests/shim/             recording-stub seam tests
 tests/real_core/        HDF5 and real-IMAS-Core checks and plugin fixture
@@ -406,7 +496,7 @@ next to the equivalent `pkg-config` check.
   temporary HDF5 lifecycle against a real IMAS-Core. Its loadable fixture
   verifies plugin registration, binding and parameter values end to end.
 - `hli-dd-version-*`, `version-discovery-*`, `read-path-*`,
-  `write-delete-*`, `arraystruct-path-*`, `nested-context-read-*`,
+  `write-path-*`, `delete-path-*`, `arraystruct-path-*`, `nested-context-read-*`,
   `context-lifecycle-*` and `plugin-reentry-policy-*` — the conversion seams
   against the recording stub, one CTest process per scenario because both the
   HLI DD version latch and the context registry are process-wide.

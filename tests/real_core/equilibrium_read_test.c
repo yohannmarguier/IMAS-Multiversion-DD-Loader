@@ -67,9 +67,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <al_const.h>
-#include "../support/shim_test_support.h"
+#include <hdf5.h>
+#include "../support/real_core_fixture_support.h"
 
 #ifndef EQUILIBRIUM_FIXTURE_DIR
 #error "EQUILIBRIUM_FIXTURE_DIR must name the imas-python-fixtures/fixtures directory"
@@ -146,6 +149,86 @@ static double read_nested_constraint_scalar_at_slice_zero(int pulse_ctx, const c
 
 static void close_fixture_pulse(int pulse_ctx) {
     CHECK_OK(al_close_pulse(pulse_ctx, CLOSE_PULSE));
+}
+
+/* The HDF5 backend flattens this one AOS component as `time_slice[]` and
+ * joins the remaining DD path components with `&`. */
+static void time_slice_dataset_path(const char *dd_path, char *dataset, size_t dataset_size) {
+    int length = snprintf(dataset, dataset_size, "/equilibrium/time_slice[]&%s", dd_path);
+    CHECK(length > 0 && (size_t)length < dataset_size);
+    for (char *component = dataset + strlen("/equilibrium/time_slice[]&"); *component != '\0';
+         ++component) {
+        if (*component == '/') {
+            *component = '&';
+        }
+    }
+}
+
+/* Read one numeric value directly from the copied fixture. This accepts a DD
+ * path relative to `time_slice`, not an HDF5 object name, and validates the
+ * fixture's expected one-dimensional double representation. */
+static double read_time_slice_double_from_disk(const char *ids_file, const char *dd_path,
+                                               hsize_t slice) {
+    char dataset_path[1024];
+    time_slice_dataset_path(dd_path, dataset_path, sizeof dataset_path);
+    hid_t file = H5Fopen(ids_file, H5F_ACC_RDONLY, H5P_DEFAULT);
+    CHECK(file >= 0);
+    hid_t dataset = H5Dopen2(file, dataset_path, H5P_DEFAULT);
+    CHECK(dataset >= 0);
+    hid_t datatype = H5Dget_type(dataset);
+    CHECK(datatype >= 0);
+    CHECK(H5Tget_class(datatype) == H5T_FLOAT);
+    hid_t dataspace = H5Dget_space(dataset);
+    CHECK(dataspace >= 0);
+    CHECK(H5Sget_simple_extent_ndims(dataspace) == 1);
+    hsize_t length = 0;
+    CHECK(H5Sget_simple_extent_dims(dataspace, &length, NULL) == 1);
+    CHECK(slice < length);
+    double *values = malloc((size_t)length * sizeof *values);
+    CHECK(values != NULL);
+    CHECK(H5Dread(dataset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, values) >= 0);
+    double value = values[slice];
+    free(values);
+    CHECK(H5Sclose(dataspace) >= 0);
+    CHECK(H5Tclose(datatype) >= 0);
+    CHECK(H5Dclose(dataset) >= 0);
+    CHECK(H5Fclose(file) >= 0);
+    return value;
+}
+
+static real_core_fixture_copy copied_fixture;
+
+static void remove_fixture_pair(void) {
+    remove_real_core_fixture_copy(&copied_fixture);
+}
+
+static void copy_fixture_pair(const char *dd_version) {
+    create_real_core_fixture_copy(&copied_fixture, EQUILIBRIUM_FIXTURE_DIR, dd_version,
+                                  "/tmp/imas-mvdd-equilibrium-XXXXXX");
+    CHECK(atexit(remove_fixture_pair) == 0);
+}
+
+/* Issue #132: prove the mutable-fixture harness against an existing read
+ * claim. The source fixture is copied byte-for-byte and never opened through
+ * HDF5 or IMAS-Core; all raw and ABI access targets the private copy. */
+static void scenario_copied_fixture_harness_reproves_renamed_read(void) {
+    copy_fixture_pair("3.39.0");
+    char equilibrium_file[1024];
+    real_core_fixture_ids_file(&copied_fixture, equilibrium_file, sizeof equilibrium_file);
+    char stamp[64];
+    read_fixture_dd_version_stamp(equilibrium_file, stamp, sizeof stamp);
+    CHECK(strcmp(stamp, "3.39.0") == 0);
+    CHECK(read_time_slice_double_from_disk(equilibrium_file, "global_quantities/beta_normal", 0)
+          == 1.8);
+    CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
+    char uri[1024];
+    int uri_length = snprintf(uri, sizeof uri, "imas:hdf5?path=%s", copied_fixture.pulse_dir);
+    CHECK(uri_length > 0 && (size_t)uri_length < sizeof uri);
+    int pulse_ctx = -1;
+    CHECK_OK(al_begin_dataentry_action(uri, OPEN_PULSE, &pulse_ctx));
+    CHECK(read_scalar_at_slice_zero(pulse_ctx, "global_quantities/beta_tor_norm") == 1.8);
+    close_fixture_pulse(pulse_ctx);
+    remove_fixture_pair();
 }
 
 /* --- reverse: an HLI declaring 3.39.0 reads the 4.1.1 fixture ------------- */
@@ -479,54 +562,30 @@ static void scenario_conversion_disabled_read_is_unaffected(void) {
            "version left the read a plain forward\n");
 }
 
-/* --- P4: spec #43 tier-2 cells that were covered only against the stub ----- */
+/* --- Issue #129: the real-Core stamp-protection boundary ------------------- */
 
-/* Obligation (c)'s missing refusal: "write against mismatch ... returns -1000
- * with a well-formed message". tests/write_delete_conversion_test.c proves the
- * policy against the recording stub; this proves it across a real IMAS-Core
- * boundary, on a real mismatched occurrence.
- *
- * The pulse is opened READ_OP, and the refusal happens before IMAS-Core is
- * called, so nothing here can write to the checked-in fixture. The scenario
- * then reads through the same context to show the refusal did not come from a
- * broken or unregistered context: the very same op_ctx still converts. */
-static void scenario_forward_write_and_delete_refuse_against_mismatch(void) {
+/* Safe leaf deletes are proven at the recording-stub boundary, where the
+ * exact stored spelling delivered to IMAS-Core is observable. The checked-in
+ * HDF5 fixture is opened only for reads, so this real-Core probe keeps the
+ * refusal that must occur before any mutation: deleting the DD-version stamp
+ * or its containing subtree. */
+static void scenario_forward_delete_refuses_stamp_removal(void) {
     CHECK_OK(imas_mvdd_set_hli_dd_version("4.1.1"));
     int pulse_ctx = open_fixture_pulse("3.39.0");
 
     int op_ctx = -1;
     CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
 
-    const char *field = "time_slice/global_quantities/beta_tor_norm";
-    double sentinel = 42.0;
-    void *data = &sentinel;
-    int size[1] = {73};
-    al_status_t write_status = al_write_data(op_ctx, field, "", data, DOUBLE_DATA, 1, size);
-    CHECK(write_status.code == IMAS_MVDD_CONVERSION_ERROR);
-    CHECK_REFUSAL_MESSAGE(write_status,
-                          "al_write_data refuses on a context with a known DD version mismatch",
-                          field, "4.1.1", "3.39.0");
-    /* A refusal must not touch caller storage (issue #58's last criterion). */
-    CHECK(data == &sentinel);
-    CHECK(sentinel == 42.0);
-    CHECK(size[0] == 73);
+    const char *field = "ids_properties/version_put";
 
     al_status_t delete_status = al_delete_data(op_ctx, field);
     CHECK(delete_status.code == IMAS_MVDD_CONVERSION_ERROR);
     CHECK_REFUSAL_MESSAGE(delete_status,
-                          "al_delete_data refuses on a context with a known DD version mismatch",
+                          "this delete would remove the DD-version stamp while stored data remains",
                           field, "4.1.1", "3.39.0");
 
-    al_status_t plugin_write_status =
-        al_plugin_write_data(op_ctx, field, "", data, DOUBLE_DATA, 1, size);
-    CHECK(plugin_write_status.code == IMAS_MVDD_CONVERSION_ERROR);
-    CHECK_REFUSAL_MESSAGE(
-        plugin_write_status,
-        "al_plugin_write_data refuses on a context with a known DD version mismatch", field,
-        "4.1.1", "3.39.0");
-
-    /* The same context still converts a read, so the three refusals above were
-     * the policy acting, not a context that had been left unusable. */
+    /* The same context still converts a read, so the refusal was policy,
+     * rather than an unusable real-Core context. */
     int slice_size = -1;
     int aos_ctx = -1;
     CHECK_OK(al_begin_arraystruct_action(op_ctx, "time_slice", "", &slice_size, &aos_ctx));
@@ -541,9 +600,8 @@ static void scenario_forward_write_and_delete_refuse_against_mismatch(void) {
     CHECK_OK(al_end_action(aos_ctx));
     CHECK_OK(al_end_action(op_ctx));
     close_fixture_pulse(pulse_ctx);
-    printf("equilibrium_read_test forward-write-and-delete-refuse-against-mismatch: real-Core "
-           "write, delete and plugin-write refused with -1000 and a full message, caller storage "
-           "untouched, and the same context still converted a read\n");
+    printf("equilibrium_read_test forward-delete-refuses-stamp-removal: real Core kept the "
+           "DD-version stamp protected while the same mismatch still converted reads\n");
 }
 
 /* Obligation (g): "non-LIFO context closure, recycled context IDs,
@@ -643,8 +701,10 @@ int main(int argc, char **argv) {
         {"forward-sign-flip-applies-through-nested-container", scenario_forward_sign_flip_applies_through_nested_container},
         {"same-version-read-is-unaffected", scenario_same_version_read_is_unaffected},
         {"conversion-disabled-read-is-unaffected", scenario_conversion_disabled_read_is_unaffected},
-        {"forward-write-and-delete-refuse-against-mismatch", scenario_forward_write_and_delete_refuse_against_mismatch},
+        {"forward-delete-refuses-stamp-removal", scenario_forward_delete_refuses_stamp_removal},
         {"forward-context-lifecycle-keeps-conversion-live", scenario_forward_context_lifecycle_keeps_conversion_live},
+        {"copied-fixture-harness-reproves-renamed-read",
+         scenario_copied_fixture_harness_reproves_renamed_read},
     };
     return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }
