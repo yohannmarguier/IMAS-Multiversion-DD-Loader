@@ -53,7 +53,7 @@
 //!
 //! Each entry point below documents its own seam behaviour. The decisions
 //! themselves live in `src/conversion/seam_policy.rs` and
-//! `src/conversion/path_conversion.rs`, with `src/interpose.rs` holding only
+//! `src/conversion/path_conversion.rs`, with `src/interpose/` holding only
 //! the C-facing adaptation around them (ADR 0015) — go there for the per-seam
 //! detail rather than restating it here.
 
@@ -552,7 +552,7 @@ pub extern "C" fn al_end_action(ctx_id: c_int) -> al_status_t {
 /// the record's conversion map and translated to the stored spelling before
 /// IMAS-Core is called. A no-source outcome returns normal success with a
 /// null data pointer; refusals still stop before IMAS-Core (see
-/// `src/interpose.rs`). IMAS-Core's returned allocation is forwarded exactly
+/// `src/interpose/read.rs`). IMAS-Core's returned allocation is forwarded exactly
 /// as received: the shim neither substitutes nor frees it.
 ///
 /// # Safety

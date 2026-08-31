@@ -6,20 +6,34 @@ If it has to been modified, apply the same changes to AGENTS.md.
 ## Current path map
 
 Current source ownership is `src/core/`, `src/conversion/`, `src/registry/`,
-and `src/version/`; C ABI adaptation remains in `src/interpose.rs`.
+and `src/version/`; C ABI adaptation lives under `src/interpose/`.
 
 The read, write and delete **loops** live in `src/conversion/seam_policy.rs`,
 not in the interposition layer: `run_read`, `run_write`, `run_delete`, the
 `ReadAttempt` type, the `impl TranslatedReadPath` block that produces
 attempts, and `validate_value_transformation` /
 `apply_value_transformation` are all there, and none of them reaches
-IMAS-Core or process-global state (ADR 0015). `src/interpose.rs` keeps only
-what is C-facing: `read_data_impl` and its siblings, the `CallFamily`
-dispatch that chooses an ABI symbol, `resolve_arraystruct_argument`,
-`contextual_refusal`, `joined_argument_path` and `live_conversion_record`.
+IMAS-Core or process-global state (ADR 0015).
 `src/conversion/path_conversion.rs` answers *which stored path does this HLI
 argument mean, and at what fidelity* and knows about neither seams nor
 IMAS-Core.
+
+`src/interpose.rs` itself holds **nothing but module declarations and
+`pub(crate) use` re-exports** — the surface `lib.rs` reaches through
+`use interpose as resolve;` (issue #153). One module per seam family under
+`src/interpose/`:
+
+| Module | Owns |
+|---|---|
+| `occurrence.rs` | `begin_dataentry_action`, the global/slice/timerange/arraystruct opening seams and their plugin twins, `end_action`, plus stamp discovery (`discover_stamp`, `probe_stamp_through_a_read_context`), registration (`apply_discovery_decision`, `apply_occurrence_cache_effect`), the conversion-map cache (`resolve_conversion_map`, `map_cache_key`, `load_artifact`) and `resolve_arraystruct_argument` |
+| `read.rs` | `read_data` / `plugin_read_data` and their shared `read_data_impl` |
+| `write.rs` | `write_data` / `plugin_write_data` and their shared impl |
+| `delete.rs` | `delete_data` and `candidate_failure` |
+| `loss.rs` | the shim-owned `imas_mvdd_context_loss_*` exports |
+| `passthrough.rs` | the ADR 0002 untranslated seams and the verbatim forwards, including `close_pulse` |
+| `dispatch.rs` | `CallFamily` and its ABI-symbol dispatch |
+| `reentry.rs` | the ADR 0014 depth gate |
+| `refusal.rs` | the one refusal formatter — `context_path_refusal`, `contextual_refusal` and `live_conversion_record` — plus the raw-argument marshalling they need (`c_str_ref`, `c_str_or_none`, `joined_argument_path`, `read_argument_path`) |
 
 C tests are
 grouped under `tests/abi/`, `tests/shim/`, `tests/real_core/`, and
@@ -27,8 +41,9 @@ grouped under `tests/abi/`, `tests/shim/`, `tests/real_core/`, and
 C harness), `tests/stub/` (the recording stub), `tests/fixtures/` (the
 reduced conversion-map fixture), `tests/cmake/` (`cmake -P` script checks),
 and `tests/scripts/` (install/package shell checks). The historical
-per-issue entries under `docs/history/` retain the paths used when their
-changes landed; use this map for current navigation.
+per-issue entries under `docs/history/` — and the ADRs under `docs/adr/`,
+which are dated records of a decision rather than navigation aids — retain the
+paths used when they were written; use this map for current navigation.
 
 ## Repository state
 
@@ -54,7 +69,7 @@ and limitations".
 | Seam | Policy |
 |---|---|
 | `al_begin_dataentry_action` | registers its pulse in the context registry (ADR 0003) on success |
-| `al_begin_global_action` (+ `al_plugin_*` twin) | discovers the stored version, then registers a root conversion record **only** when a present, valid stamp names a stored version that differs from the latched HLI version *and* has an embedded artifact to serve it (`src/conversion/known_artifacts.rs`). A matching or absent stamp registers nothing (ADR 0007); a malformed present stamp refuses and ends the just-opened context rather than leaking it (ADR 0009). `datapath` is translated only once a prior open of the same occurrence cached a mismatch. When the caller's `rwmode != READ_OP`, the stamp is read through a shim-owned `READ_OP` probe context of its own (ADR 0020) |
+| `al_begin_global_action` (+ `al_plugin_*` twin) | `seam_policy::decide_occurrence_registration` decides stored-version discovery and registration, while its sibling `decide_datapath_translation` decides the pre-forward translation from a cached mismatch; both occurrence-opening policy functions live in `src/conversion/seam_policy.rs`. A root conversion record is registered **only** when a present, valid stamp names a stored version that differs from the latched HLI version *and* has an embedded artifact to serve it (`src/conversion/known_artifacts.rs`). A matching or absent stamp registers nothing (ADR 0007); a malformed present stamp refuses and ends the just-opened context rather than leaking it (ADR 0009). `datapath` is translated only once a prior open of the same occurrence cached a mismatch. When the caller's `rwmode != READ_OP`, the stamp is read through a shim-owned `READ_OP` probe context of its own (ADR 0020) |
 | `al_begin_slice_action`, `al_begin_timerange_action` | same discovery/registration rule; no `datapath` argument, so only the discovery half applies |
 | `al_begin_arraystruct_action` (+ plugin twin) | resolves `path` and `timebase` before Core is called; on success registers the returned context as a child record inheriting the shared map, root identity and stored direction |
 | `al_read_data` / `al_plugin_read_data` | one shared `read_data_impl`: identity, `renamed`, `moved`, and `merged`/`split` candidate plans tried in declared precedence order, COCOS sign flip applied in place, three-way read-outcome classification (ADR 0012), every non-exact success retained in the root's loss log |
@@ -96,7 +111,7 @@ and limitations".
   instructions to add real coverage if a future artifact makes either reachable.
 - **ADR 0015 — seam policy never reaches global state.** See "Current path map"
   above: `src/conversion/` and `src/core/` know nothing about IMAS-Core or
-  process-global state; only `src/interpose.rs` is C-facing.
+  process-global state; only `src/interpose/` is C-facing.
 - **Mutation-test with the test binary deleted first.** A stale build makes a red
   assertion look green, lagging by exactly one iteration.
 - **Doc comments decay.** Any comment naming a ticket, a file under `tests/`, or

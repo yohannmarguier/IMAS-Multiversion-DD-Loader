@@ -1,13 +1,15 @@
 //! What stored path an HLI argument means, and at what fidelity.
 //!
 //! Before this module existed, [`crate::conversion::conversion_map::Outcome`] was
-//! interpreted at three independent sites in `src/interpose.rs`, each deriving
-//! a different subset of its meaning: `translate_down` derived a `CString`
-//! or nothing, the read seam derived a [`ReadPath`] with fidelity and
-//! candidates, and the context-opening seams derived one concrete spelling,
-//! no-source, or a refusal. This module is the one place that answers the
-//! question instead, so no consumer re-derives the enum. [`resolve`] answers
-//! it once; each ABI seam applies its own named narrowing.
+//! interpreted at three independent sites in the interposition layer, each
+//! deriving a different subset of its meaning: global-action datapath
+//! translation derived a concrete spelling or nothing, the read seam derived
+//! a [`ReadPath`] with fidelity and candidates, and the context-opening seams
+//! derived one concrete spelling, no-source, or a refusal. Those sites are
+//! `src/interpose/occurrence.rs` and `src/interpose/read.rs` today. This module is the
+//! one place that answers the question instead, so no consumer re-derives the
+//! enum. [`resolve`] answers it once; each ABI seam applies its own named
+//! narrowing.
 //!
 //! It knows nothing about seams, attempts, loops or IMAS-Core: it takes a
 //! live [`ConversionRecord`] and a raw HLI argument, and answers either "what
