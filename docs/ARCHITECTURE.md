@@ -793,7 +793,7 @@ the opposite:
 | Question | Authority |
 |---|---|
 | What does seam X do today? | `CLAUDE.md` → "Where each seam stands" |
-| Why does it do that? | `docs/adr/0001`–`0021` |
+| Why does it do that? | `docs/adr/0001`–`0022` |
 | What is the exact contract of a function? | the module doc comment in `src/` |
 | What did this look like when it was built? | `docs/history/` (frozen; paths have moved) |
 | What can IMAS-Core actually do? | `docs/IMAS-CORE_FUNCTIONALITY_INVENTORY.md` |

@@ -556,7 +556,7 @@ names, because the shim's version gate is major-only and pinning it would mean
 editing this repository for every IMAS-Core release. The Data Dictionary is
 pinned to 4.1.1 instead, because the shim ships exactly one conversion-map
 artifact and a different DD version does not weaken the conversion test but
-dissolves it. `docs/adr/0020-hli-validation-floats-core-and-pins-the-dd.md`
+dissolves it. `docs/adr/0022-hli-validation-floats-core-and-pins-the-dd.md`
 records that asymmetry.
 
 Three things a green run does **not** prove. Twenty of the HLI's `examples/` I/O
