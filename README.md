@@ -53,11 +53,11 @@ Read-path DD conversion is implemented for one IDS and one version pair.**
   Deletes translate identity, renamed, and moved leaf paths
   to their stored spelling; deleting the whole DATAOBJECT is the explicit
   migration route, while a DD-version stamp, unsafe source, no-source path,
-  or non-primary source refuses. A candidate-plan write reaches only
+  or non-primary source refuses and is retained as an unmappable delete loss. A candidate-plan write reaches only
   precedence 1 and records every skipped candidate as potentially lossy (apart
   from ADR 0018's unset rank-zero scalar, which stores no value and earns no
   loss), while a candidate-plan delete fans out over every stored source in
-  declared order — a write asserts one value, a delete asserts an absence
+  declared order and records every visited stored candidate as potentially lossy — a write asserts one value, a delete asserts an absence
   (ADR 0017). `al_list_filled_paths` and `al_bind_plugin`/`al_unbind_plugin`
   are deliberately not translated.
 
@@ -240,7 +240,7 @@ for (int i = 0; i < count; ++i) {
     imas_mvdd_context_loss_at(ctx_id, i, path, sizeof(path), &verdict);
     imas_mvdd_context_loss_operation_at(ctx_id, i, &operation);
     /* verdict is IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, _LOSSY, or _UNMAPPABLE */
-    /* operation is IMAS_MVDD_LOSS_OPERATION_READ or _WRITE */
+    /* operation is IMAS_MVDD_LOSS_OPERATION_READ, _WRITE, or _DELETE */
 }
 ```
 
@@ -257,7 +257,7 @@ caller supplied it. If a site places credentials in a URI, disable the file or
 choose a suitably protected directory.
 
 **Which spelling an entry names depends on what it is warning about.** A read
-loss and a refused write name the path *you* asked for, complete from the IDS
+loss and a refused write or delete name the path *you* asked for, complete from the IDS
 root even where you addressed it relative to a live child context — that is the
 argument whose fidelity was in question. The `POTENTIALLY_LOSSY` entries a
 *successful* write leaves behind name something else: the **stored** spellings
@@ -400,7 +400,9 @@ is itself worth knowing when reading a green suite.
   the call returned success having done nothing. That silence was itself a
   defect — the shim reporting `code == 0` for work it never did — and removing
   it (issue #138, `docs/adr/0017-a-write-asserts-a-value-a-delete-asserts-an-absence.md`
-  decision 2) made this hazard reachable. Tracked at
+  decision 2) made this hazard reachable. Every fanned-out delete now leaves
+  its stored candidate paths in the loss log file as the evidence trail.
+  Tracked at
   [#139](https://github.com/yohannmarguier/IMAS-Multiversion-DD-Loader/issues/139),
   and pinned as today's behaviour by the
   `delete-oracle-reverse-fan-out-reaches-disk` test, which asserts

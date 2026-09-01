@@ -197,13 +197,15 @@ Same registration gate as read/write. When registered:
 | `path` resolves to one stored path (identity, `renamed`, `moved`) | One `al_delete_data` call to Core with that stored spelling. |
 | `path` resolves to several candidates (`merged`/`split`) | **Every candidate is deleted**, unconditionally, with **no presence probe** beforehand. This is the opposite answer from write's precedence-1-only rule, and it is deliberate (ADR 0017): a write asserts a value it must not fabricate into an assumed-equivalent slot, but a delete asserts an absence, and leaving a stale candidate behind would let the read path's own fallback serve it as live data after a delete the caller was told succeeded. |
 | One or more candidates fail | **All candidates are still attempted** (no early exit); the **first** nonzero status is what's returned to the caller, after every candidate has been tried. An absent candidate is indistinguishable from a genuine backend failure at the ABI (`al_delete_data` has no not-found outcome), so a missing candidate can *look like* a failure even when the delete "worked" as well as it could. |
+| A delete refuses | One `UNMAPPABLE` `DELETE` loss records the caller's complete HLI-DD path before the ordinary refusal returns. |
+| A candidate plan completes | One `POTENTIALLY_LOSSY` `DELETE` loss records each stored candidate after all candidates have been attempted, including when the first failure is returned. |
 | `path` names a structure (not a leaf) whose subtree contains an **escaping rule** — a rule at or under `path` with at least one stored-side target outside the resolved stored subtree | **Refused**, before any candidate is touched. A leaf delete is always trivial (never refuses on this basis). On the shipped artifact this refuses `time_slice/boundary_separatrix` from a DD3 HLI and `time_slice/boundary` from a DD4 HLI, but allows `time_slice`, `time_slice/constraints`, and every leaf. |
 | `path` is empty | Forwards **unchanged**, unconditionally — this is IMAS-Core's own "delete the whole DATAOBJECT" contract. It is the *only* legitimate way to migrate a mismatched occurrence: afterwards the occurrence is unstamped, so ADR 0007 makes the next open treat it as matching the HLI, and it can be written fresh. It is also the sole exception to "any delete touching the stamp refuses" — because it removes the data too, nothing is left to misread. |
 
-**The delete seam never writes to the loss log**, under any outcome — a
-fan-out is either faithful (every candidate genuinely tried) or reported as a
-failure through `al_status_t`; there is no successful-but-imperfect delete
-outcome the way there is for write.
+**The delete seam records destructive fidelity explicitly** (ADR 0024). A
+refusal names the caller's HLI-DD path as `UNMAPPABLE`; a fan-out names every
+visited stored candidate as `POTENTIALLY_LOSSY`, in both the root-context log
+and its append-only file. A one-path delete remains exact and records nothing.
 
 **Real-backend caveat you must not paper over in a round trip.** Real
 IMAS-Core's HDF5 `deleteData` ignores its `path` argument completely and
@@ -243,12 +245,12 @@ from the on-disk consequence (which real HDF5 collapses to one).
   is one of `IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY` / `_LOSSY` / `_UNMAPPABLE`;
   exact-fidelity entries are never logged at all), and
   `imas_mvdd_context_loss_operation_at(ctx, index, *operation)` (`
-  IMAS_MVDD_LOSS_OPERATION_READ` or `_WRITE`). Querying **any** context under
+  IMAS_MVDD_LOSS_OPERATION_READ`, `_WRITE`, or `_DELETE`). Querying **any** context under
   one IDS occurrence (a root or one of its arraystruct children) returns the
   **whole root's** log — there is no per-child scoping. An untracked
   context — including any occurrence with no registered root — reports a
   count of `0`, not a refusal.
-- **A refused read or write is logged too, at `Unmappable`**, in addition to
+- **A refused read, write or delete is logged too, at `Unmappable`**, in addition to
   being returned through `al_status_t`. This is deliberate redundancy, not a
   bug: it means `Unmappable` in the log conflates "this was refused" with
   "this candidate genuinely doesn't exist and came back not-found" — a test

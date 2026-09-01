@@ -9,11 +9,14 @@
 
 use std::ffi::{CStr, c_char, c_int};
 
+use crate::conversion::conversion_map::Fidelity;
 use crate::conversion::path_conversion;
 use crate::conversion::seam_policy;
 use crate::core::core_binding::forward_status;
+use crate::loss::LossOperation;
 use crate::{al_status_t, write_truncated};
 
+use super::loss::retain_loss;
 use super::reentry::ReentryGuard;
 use super::refusal::{c_str_ref, context_path_refusal, live_conversion_record};
 
@@ -57,11 +60,31 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
                 path.map_or(std::ptr::null(), CStr::as_ptr)
             ))
         }
-        seam_policy::DeleteVerdict::Complete { failure } => failure
-            .map_or_else(al_status_t::default, |failure| {
+        seam_policy::DeleteVerdict::Complete {
+            failure,
+            visited_candidates,
+        } => {
+            if visited_candidates.len() > 1 {
+                for path in visited_candidates {
+                    retain_loss(
+                        record.root_id,
+                        path.to_string_lossy().into_owned(),
+                        Fidelity::PotentiallyLossy,
+                        LossOperation::Delete,
+                    );
+                }
+            }
+            failure.map_or_else(al_status_t::default, |failure| {
                 candidate_failure(failure.status, failure.path)
-            }),
+            })
+        }
         seam_policy::DeleteVerdict::Refusal { reason, dd_path } => {
+            retain_loss(
+                record.root_id,
+                dd_path.clone(),
+                Fidelity::Unmappable,
+                LossOperation::Delete,
+            );
             context_path_refusal(&record, &reason, &dd_path)
         }
     }

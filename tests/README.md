@@ -170,7 +170,7 @@ field with no stored slot, and a retyped field refuses before Core. Each refusal
 keeps caller storage untouched, records an `UNMAPPABLE` `WRITE` loss, and a
 child-context refusal reaches its root under the complete joined DD path.
 
-### `delete-path-*` — 15 · `shim/write_delete_conversion_test.c`
+### `delete-path-*` — 16 · `shim/write_delete_conversion_test.c`
 
 `al_delete_data`, from the same executable as `write-path-*` above.
 
@@ -181,8 +181,11 @@ containing subtrees, non-primary aliases, no-source and unservable paths. Issue
 presence probe: a write-mode context cannot read it reliably, and the artifact
 has no type or rank for a sound replacement. Every candidate is deleted; the
 first failure returns only after the rest are attempted. An empty delete forwards as the caller's
-explicit whole-DATAOBJECT migration route, and delete never retains a loss-log
-entry.
+explicit whole-DATAOBJECT migration route. Issue #173 supersedes the former
+no-loss policy: a refusal retains one `UNMAPPABLE` `DELETE` loss naming the
+caller path, and a candidate-plan fan-out retains one `POTENTIALLY_LOSSY`
+`DELETE` loss per stored candidate after all attempts, in both the context log
+and loss-log file.
 
 Issue #131 admits a *trivial* structure delete instead of refusing every
 non-leaf path outright: `time_slice` and `time_slice/constraints` now resolve

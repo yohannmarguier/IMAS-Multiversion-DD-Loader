@@ -606,7 +606,14 @@ add_write_delete_test(delete-path-admits-trivial-structure-deletes)
 add_write_delete_test(delete-path-refuses-boundary-separatrix-reverse-direction
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
-add_write_delete_test(delete-path-fans-out-over-candidates-in-declared-order)
+add_write_delete_test(delete-path-fans-out-over-candidates-in-declared-order
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-delete")
+add_write_delete_test(delete-path-refusal-retains-an-unmappable-delete-loss
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-delete-refusal")
 add_write_delete_test(delete-path-reports-a-failure-and-continues)
 add_write_delete_test(delete-path-refuses-non-primary-source-before-core-call
     HLI_DD_VERSION 3.39.0

@@ -103,8 +103,8 @@ A conversion rule whose HLI-side selector falls at or under a requested DD path,
 _Avoid_: crossing rule, leaking rule, straddling rule.
 
 **loss log**:
-The list of non-exact reads and writes recorded on a root context record: for each, the relevant complete DD path, its fidelity verdict, and which operation produced it. A read loss or refused write names the HLI-DD path as the HLI asked for it. A successful ambiguous write instead names each stored-DD candidate it deliberately left unwritten, because those are the paths where stale data may remain. A patched HLI can drain it before `al_end_action`; it is one delivery channel alongside the loss log file. See `docs/adr/0012-loss-reaches-the-caller-by-a-context-log.md` and `docs/adr/0023-loss-log-file-delivery.md`.
-_Avoid_: report, journal, accumulator, diagnostics — and never call it an error channel; the reads and writes it records succeeded.
+The list of non-exact reads, writes or deletes recorded on a root context record: for each, the relevant complete DD path, its fidelity verdict, and which operation produced it. A read loss or refused write/delete names the HLI-DD path as the HLI asked for it. A successful ambiguous write instead names each stored-DD candidate it deliberately left unwritten, while a fanned-out delete names every stored candidate it visited, because those are the paths where stale data may remain or have been removed. A patched HLI can drain it before `al_end_action`; it is one delivery channel alongside the loss log file. See `docs/adr/0012-loss-reaches-the-caller-by-a-context-log.md` and `docs/adr/0023-loss-log-file-delivery.md`.
+_Avoid_: report, journal, accumulator, diagnostics — and never call it an error channel; the reads, writes and deletes it records succeeded.
 
 **loss log file**:
 The process-local, append-only tab-separated file that records each non-exact loss as it happens, independently of a root context's lifetime. It is created only on the first loss. See `docs/adr/0023-loss-log-file-delivery.md`.
@@ -115,7 +115,7 @@ The process-wide set of complete rendered loss-log lines already written to the 
 _Avoid_: cache, file index.
 
 **operation** (of a loss log entry):
-Which kind of call produced an entry: a read or a write. Deliberately not called a direction, because that word already names which side of a DD-version pair supplies a path.
+Which kind of call produced an entry: a read, write or delete. Deliberately not called a direction, because that word already names which side of a DD-version pair supplies a path.
 _Avoid_: direction, mode, kind.
 
 **read outcome**:

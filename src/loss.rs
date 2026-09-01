@@ -13,6 +13,7 @@ use crate::conversion::conversion_map::Fidelity;
 pub(crate) enum LossOperation {
     Read,
     Write,
+    Delete,
 }
 
 impl LossOperation {
@@ -21,6 +22,7 @@ impl LossOperation {
         match self {
             Self::Read => crate::IMAS_MVDD_LOSS_OPERATION_READ,
             Self::Write => crate::IMAS_MVDD_LOSS_OPERATION_WRITE,
+            Self::Delete => crate::IMAS_MVDD_LOSS_OPERATION_DELETE,
         }
     }
 
@@ -29,6 +31,7 @@ impl LossOperation {
         match self {
             Self::Read => "read",
             Self::Write => "write",
+            Self::Delete => "delete",
         }
     }
 }
