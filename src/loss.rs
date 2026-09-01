@@ -25,7 +25,6 @@ impl LossOperation {
     }
 
     /// Renders this operation for an on-disk loss report.
-    #[allow(dead_code, reason = "the next loss-file seam consumes this rendering")]
     pub(crate) fn file_word(self) -> &'static str {
         match self {
             Self::Read => "read",
@@ -47,13 +46,12 @@ pub(crate) fn fidelity_c_code(fidelity: Fidelity) -> c_int {
 }
 
 /// Renders a fidelity verdict for an on-disk loss report.
-#[allow(dead_code, reason = "the next loss-file seam consumes this rendering")]
 pub(crate) fn fidelity_file_word(fidelity: Fidelity) -> &'static str {
     match fidelity {
-        Fidelity::Exact => "exact",
-        Fidelity::PotentiallyLossy => "potentially_lossy",
-        Fidelity::Lossy => "lossy",
-        Fidelity::Unmappable => "unmappable",
+        Fidelity::Exact => "EXACT",
+        Fidelity::PotentiallyLossy => "POTENTIALLY_LOSSY",
+        Fidelity::Lossy => "LOSSY",
+        Fidelity::Unmappable => "UNMAPPABLE",
     }
 }
 

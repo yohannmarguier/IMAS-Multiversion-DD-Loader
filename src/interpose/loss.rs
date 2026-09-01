@@ -11,6 +11,7 @@ use std::ffi::{c_char, c_int};
 use crate::al_status_t;
 use crate::conversion::conversion_map::Fidelity;
 use crate::loss::{LossOperation, fidelity_c_code};
+use crate::loss_file::{self, LossFileEntry};
 use crate::registry::context_registry::{ContextId, REGISTRY};
 
 /// Retains one operation's loss against the root captured before the seam
@@ -21,7 +22,23 @@ pub(crate) fn retain_loss(
     fidelity: Fidelity,
     operation: LossOperation,
 ) {
-    REGISTRY.retain_loss_at_root(root_id, dd_path, fidelity, operation);
+    // The record snapshot and in-memory retention each take and release the
+    // registry lock before the file module ever considers an I/O operation.
+    let record = REGISTRY.lookup(root_id);
+    REGISTRY.retain_loss_at_root(root_id, dd_path.clone(), fidelity, operation);
+    if let Some(record) = record {
+        let stored_version = record.stored_version.to_string();
+        let hli_version = record.hli_version.to_string();
+        loss_file::retain(LossFileEntry {
+            uri: &record.pulse_uri,
+            ids: &record.dataobjectname,
+            stored_version: &stored_version,
+            hli_version: &hli_version,
+            operation,
+            fidelity,
+            path: &dd_path,
+        });
+    }
 }
 
 /// Implements `imas_mvdd_context_loss_count` (ADR 0012): reports the number

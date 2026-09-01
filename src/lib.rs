@@ -77,6 +77,7 @@ pub mod conversion;
 pub use conversion::conversion_map;
 mod core;
 mod loss;
+mod loss_file;
 mod registry;
 mod version;
 

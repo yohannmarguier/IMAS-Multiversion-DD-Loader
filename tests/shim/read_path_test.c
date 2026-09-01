@@ -122,6 +122,36 @@ static void scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log(void) {
            "rule's lossy verdict and read operation reached the queryable loss log\n");
 }
 
+static void scenario_loss_file_is_created_on_first_loss_and_deduplicates_lines(void) {
+    clear_loss_log_directory();
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+
+    char *contents = read_loss_log();
+    CHECK(strstr(contents, "# imas-mvdd loss log format 1\n") == contents);
+    CHECK(strstr(contents, "# process ") != NULL);
+    CHECK(strstr(contents, "# hli-dd-version 3.39.0\n") != NULL);
+    CHECK(strstr(contents, "uri\tids\tstored-dd\thli-dd\toperation\tfidelity\tpath\n") != NULL);
+    const char *line = "imas:hdf5?path=/tmp/pulse\tequilibrium\t4.1.1\t3.39.0\tread\tPOTENTIALLY_LOSSY\ttime_slice/ggd/b_field_phi\n";
+    CHECK(strstr(contents, line) != NULL);
+    CHECK(strstr(strstr(contents, line) + 1, line) == NULL);
+    free(contents);
+
+    printf("read_path_test loss-file-is-created-on-first-loss-and-deduplicates-lines: loss is persisted once\n");
+}
+
+static void scenario_loss_file_is_absent_without_loss(void) {
+    clear_loss_log_directory();
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time", "", &data).code == 0);
+    CHECK(single_loss_log_path_or_null() == NULL);
+    printf("read_path_test loss-file-is-absent-without-loss: exact work opens no report\n");
+}
+
 /* ADR 0014: a read arriving while the shim's own read is in flight was issued
  * from underneath IMAS-Core, not by the HLI, and carries a path the shim has
  * already translated - so it is forwarded exactly as received, with no
@@ -750,6 +780,8 @@ int main(int argc, char **argv) {
         {"conversion-disabled-bypasses-conversion", scenario_conversion_disabled_bypasses_conversion},
         {"core-failure-propagates-unchanged", scenario_core_failure_propagates_unchanged},
         {"merged-read-retains-a-lossy-verdict-in-the-loss-log", scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log},
+        {"loss-file-is-created-on-first-loss-and-deduplicates-lines", scenario_loss_file_is_created_on_first_loss_and_deduplicates_lines},
+        {"loss-file-is-absent-without-loss", scenario_loss_file_is_absent_without_loss},
         {"moved-read-retains-a-lossy-verdict-in-the-loss-log", scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log},
         {"ending-context-destroys-its-loss-log", scenario_ending_context_destroys_its_loss_log},
         {"loss-count-null-output-is-refused", scenario_loss_count_null_output_is_refused},

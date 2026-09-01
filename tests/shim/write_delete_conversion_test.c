@@ -439,6 +439,22 @@ static void scenario_write_without_stored_slot_refuses_and_retains_a_write_loss(
            "a DD4-only field was refused before Core and retained as a write loss\n");
 }
 
+static void scenario_loss_file_records_a_refused_write(void) {
+    clear_loss_log_directory();
+    int operation_ctx = open_mismatched_equilibrium();
+    double sentinel = 42.0;
+    int size[1] = {73};
+    CHECK(write_field(operation_ctx, "time_slice/boundary/phi", "", &sentinel, size).code
+          == IMAS_MVDD_CONVERSION_ERROR);
+
+    char *contents = read_loss_log();
+    CHECK(strstr(contents,
+                 "imas:hdf5?path=/tmp/pulse\tequilibrium\t3.39.0\t4.1.1\twrite\tUNMAPPABLE\ttime_slice/boundary/phi\n")
+          != NULL);
+    free(contents);
+    printf("write_delete_conversion_test loss-file-records-a-refused-write: an unmappable write is persisted\n");
+}
+
 static void scenario_write_reverse_without_stored_slot_refuses_and_retains_a_write_loss(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int writes_before = int_from_stub("recording_stub_write_call_count");
@@ -819,6 +835,7 @@ int main(int argc, char **argv) {
         {"write-path-cocos-invalid-shape-or-type-refuses-before-core", scenario_write_cocos_invalid_shape_or_type_refuses_before_core},
         {"write-path-refuses-dd-version-stamp-but-forwards-its-siblings", scenario_write_refuses_dd_version_stamp_but_forwards_its_siblings},
         {"write-path-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_without_stored_slot_refuses_and_retains_a_write_loss},
+        {"write-path-loss-file-records-a-refused-write", scenario_loss_file_records_a_refused_write},
         {"write-path-reverse-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_reverse_without_stored_slot_refuses_and_retains_a_write_loss},
         {"write-path-retyped-path-refuses-and-retains-a-write-loss", scenario_write_retyped_path_refuses_and_retains_a_write_loss},
         {"write-path-child-refusal-is-retained-on-its-root-with-a-complete-path", scenario_write_child_refusal_is_retained_on_its_root_with_a_complete_path},

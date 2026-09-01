@@ -176,6 +176,7 @@ endif()
 
 add_test(NAME rust-unit
     COMMAND "${CARGO_EXECUTABLE}" test ${CARGO_COMMON_ARGS})
+set_tests_properties(rust-unit PROPERTIES ENVIRONMENT "IMAS_MVDD_LOSS_LOG_DIR=")
 
 # The artifact's autoconvert-equivalence floor is an external contract:
 # run the validation command itself, including its deliberately reduced

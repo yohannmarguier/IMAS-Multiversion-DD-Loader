@@ -26,6 +26,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 #include <imas_mvdd_loader.h>
 
@@ -143,6 +145,75 @@ static inline int run_named_scenario(int argc, char **argv, const shim_test_scen
  * standing in a comparison under a comment claiming to be a constant. */
 #define IMAS_MVDD_STUB_DATA_EVENT_READ 1
 #define IMAS_MVDD_STUB_DATA_EVENT_DELETE 2
+
+/* The loss-file scenarios see only the published on-disk report. They clean
+ * their scenario-specific directory before opening an occurrence, then locate
+ * the one report the process produced without depending on its clock or PID. */
+static inline const char *loss_log_directory(void) {
+    const char *directory = getenv("IMAS_MVDD_LOSS_LOG_DIR");
+    CHECK(directory != NULL);
+    return directory;
+}
+
+static inline int is_loss_log_name(const char *name) {
+    size_t length = strlen(name);
+    return strncmp(name, "imas-mvdd-loss-", 15) == 0 && length > 19
+           && strcmp(name + length - 4, ".txt") == 0;
+}
+
+static inline void clear_loss_log_directory(void) {
+    const char *directory = loss_log_directory();
+    (void)mkdir(directory, 0700);
+    DIR *dir = opendir(directory);
+    CHECK(dir != NULL);
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (is_loss_log_name(entry->d_name)) {
+            char path[1024];
+            CHECK(snprintf(path, sizeof path, "%s/%s", directory, entry->d_name) < (int)sizeof path);
+            CHECK(remove(path) == 0);
+        }
+    }
+    CHECK(closedir(dir) == 0);
+}
+
+static inline char *single_loss_log_path_or_null(void) {
+    const char *directory = loss_log_directory();
+    DIR *dir = opendir(directory);
+    CHECK(dir != NULL);
+    char *result = NULL;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (!is_loss_log_name(entry->d_name)) {
+            continue;
+        }
+        CHECK(result == NULL);
+        size_t length = strlen(directory) + 1 + strlen(entry->d_name) + 1;
+        result = malloc(length);
+        CHECK(result != NULL);
+        snprintf(result, length, "%s/%s", directory, entry->d_name);
+    }
+    CHECK(closedir(dir) == 0);
+    return result;
+}
+
+static inline char *read_loss_log(void) {
+    char *path = single_loss_log_path_or_null();
+    CHECK(path != NULL);
+    FILE *file = fopen(path, "rb");
+    CHECK(file != NULL);
+    CHECK(fseek(file, 0, SEEK_END) == 0);
+    long length = ftell(file);
+    CHECK(length >= 0);
+    CHECK(fseek(file, 0, SEEK_SET) == 0);
+    char *contents = malloc((size_t)length + 1);
+    CHECK(contents != NULL);
+    CHECK(fread(contents, 1, (size_t)length, file) == (size_t)length);
+    contents[length] = '\0';
+    CHECK(fclose(file) == 0);
+    free(path);
+    return contents;
+}
 
 /* The loss log a caller drains through the shim's four owned exports
  * (ADR 0012). These four helpers were copied into five suites — `loss_count`

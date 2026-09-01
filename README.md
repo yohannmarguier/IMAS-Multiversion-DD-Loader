@@ -248,6 +248,14 @@ A query on a child context (e.g. one opened by `al_begin_arraystruct_action`)
 resolves to the same log as its root; an untracked context reports `0`
 rather than a refusal.
 
+The shim also writes the same newly discovered non-exact entries to an
+append-only, tab-separated `imas-mvdd-loss-<UTC>-<pid>.txt` file. It is created
+in the working directory only when the first loss occurs; set
+`IMAS_MVDD_LOSS_LOG_DIR` to choose another existing directory, or set it to an
+empty value to disable the file. The `uri` column holds the URI exactly as the
+caller supplied it. If a site places credentials in a URI, disable the file or
+choose a suitably protected directory.
+
 **Which spelling an entry names depends on what it is warning about.** A read
 loss and a refused write name the path *you* asked for, complete from the IDS
 root even where you addressed it relative to a live child context — that is the
@@ -265,8 +273,9 @@ tell you nothing.
 |---|---|---|
 | `IMAS_MVDD_HLI_DD_VERSION` | the shim, at first open | Fallback for `imas_mvdd_set_hli_dd_version()` — the calling HLI's own DD version |
 | `IMAS_CORE_LIBRARY` | the shim, at first IMAS-Core call | Absolute path to the real IMAS-Core shared library, overriding the bare-soname search |
+| `IMAS_MVDD_LOSS_LOG_DIR` | the shim, at first loss | Existing directory for the loss log file; an empty value disables it |
 
-These are the only two environment variables the shim itself reads.
+These are the only three environment variables the shim itself reads.
 
 ## Scope and limitations
 
@@ -293,6 +302,11 @@ is itself worth knowing when reading a green suite.
   environment variable, the version is a property of how the process was
   launched. Every conversion test in the suite is registered as its own CTest
   process for exactly this reason.
+- **Loss-log files may contain sensitive URI text.** Each non-exact operation
+  is persisted immediately to a per-process file so an unmodified HLI can
+  expose conversion loss even after a crash. The URI is not stripped: set
+  `IMAS_MVDD_LOSS_LOG_DIR` to an empty value to turn this channel off when a
+  URI can contain credentials.
 - **Self-converting clients are excluded.** imas-python is not a client: it
   converts DD versions itself and holds one DD version per `DBEntry` rather
   than one per process, so stacking this shim beneath it would convert twice.

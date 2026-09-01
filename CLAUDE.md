@@ -5,8 +5,11 @@ If it has to been modified, apply the same changes to AGENTS.md.
 
 ## Current path map
 
-Current source ownership is `src/core/`, `src/conversion/`, `src/registry/`,
-and `src/version/`; C ABI adaptation lives under `src/interpose/`.
+Current source ownership is `src/core/`, `src/conversion/`, `src/loss.rs`,
+`src/loss_file.rs`, `src/registry/`, and `src/version/`; C ABI adaptation lives
+under `src/interpose/`. `src/loss_file.rs` owns the append-only process loss-log
+file and its written-key set; it receives copied occurrence facts and never
+holds a registry lock during filesystem I/O.
 
 The read, write and delete **loops** live in `src/conversion/seam_policy.rs`,
 not in the interposition layer: `run_read`, `run_write`, `run_delete`, the
