@@ -55,13 +55,11 @@ impl LossFileEntry {
     }
 }
 
-/// Writes `entry` once for this process. The key lock is released before any
-/// path resolution, file creation, or write, so a slow filesystem cannot hold
-/// a seam lock.
+/// Writes `entry` once for this process. Its caller is the one place that
+/// filters an exact-fidelity operation out of both loss sinks (ADR 0012), so
+/// this never sees one. The key lock is released before any path resolution,
+/// file creation, or write, so a slow filesystem cannot hold a seam lock.
 pub(crate) fn retain(entry: LossFileEntry) {
-    if entry.fidelity == Fidelity::Exact {
-        return;
-    }
     let line = format!(
         "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
         entry.uri,

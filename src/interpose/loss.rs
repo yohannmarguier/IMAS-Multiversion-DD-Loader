@@ -22,12 +22,18 @@ use crate::registry::context_registry::{ConversionRecord, REGISTRY};
 /// root has already ended, per ADR 0023's documented file/export
 /// disagreement — the in-memory log still resolves independently through
 /// `record.root_id` and silently no-ops once that root is gone.
+///
+/// An exact-fidelity operation is never logged (ADR 0012) — checked once
+/// here, the one call site both sinks share, rather than in each of them.
 pub(crate) fn retain_loss(
     record: &ConversionRecord,
     dd_path: String,
     fidelity: Fidelity,
     operation: LossOperation,
 ) {
+    if fidelity == Fidelity::Exact {
+        return;
+    }
     REGISTRY.retain_loss_at_root(record.root_id, dd_path.clone(), fidelity, operation);
     loss_file::retain(LossFileEntry::new(
         &record.pulse_uri,
