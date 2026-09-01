@@ -164,15 +164,6 @@ impl ContextRegistry {
         Self::default()
     }
 
-    /// Records `ctx_id` as a data-entry (pulse) context. Replaces whatever
-    /// record — of any kind — previously lived at `ctx_id`, so a recycled ID
-    /// starts with an empty occurrence-version cache rather than inheriting
-    /// a previous pulse's discoveries.
-    #[cfg(test)]
-    pub(crate) fn record_dataentry(&self, ctx_id: ContextId) {
-        self.record_dataentry_with_uri(ctx_id, String::new());
-    }
-
     /// Records `ctx_id` as a pulse context and retains the URI the ABI seam
     /// received when opening it.
     pub(crate) fn record_dataentry_with_uri(&self, ctx_id: ContextId, uri: String) {
@@ -385,30 +376,6 @@ impl ContextRegistry {
         if let Some(losses) = state.loss_logs.get_mut(&root_id) {
             losses.retain(dd_path, fidelity, operation);
         }
-    }
-
-    /// Delegates a read loss to the root's loss log. Interposition uses its
-    /// shared retention helper; this remains for registry-level tests.
-    #[cfg(test)]
-    pub(crate) fn record_read_loss_at_root(
-        &self,
-        root_id: ContextId,
-        dd_path: String,
-        fidelity: Fidelity,
-    ) {
-        self.retain_loss_at_root(root_id, dd_path, fidelity, LossOperation::Read);
-    }
-
-    /// Delegates a write loss to the root's loss log. Interposition uses its
-    /// shared retention helper; this remains for registry-level tests.
-    #[cfg(test)]
-    pub(crate) fn record_write_loss_at_root(
-        &self,
-        root_id: ContextId,
-        dd_path: String,
-        fidelity: Fidelity,
-    ) {
-        self.retain_loss_at_root(root_id, dd_path, fidelity, LossOperation::Write);
     }
 
     /// Returns the number of loss-log entries retained for `ctx_id`'s root
