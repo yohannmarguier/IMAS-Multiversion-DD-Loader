@@ -95,7 +95,12 @@ pub(crate) unsafe fn begin_dataentry_action(
         // SAFETY: IMAS-Core's own contract already relied on above requires
         // `dectx_id` to be a valid, writable pointer.
         let ctx_id = unsafe { *dectx_id };
-        REGISTRY.record_dataentry(ctx_id);
+        // SAFETY: IMAS-Core's contract for this seam requires `uri` to be a
+        // valid, NUL-terminated C string.
+        let uri = unsafe { CStr::from_ptr(uri) }
+            .to_string_lossy()
+            .into_owned();
+        REGISTRY.record_dataentry_with_uri(ctx_id, uri);
     }
     status
 }
@@ -438,6 +443,7 @@ fn apply_discovery_decision(
                 opened_ctx_id,
                 String::new(),
                 pctx_id,
+                dataobjectname.to_string(),
                 key,
                 direction,
                 || load_artifact(&artifact),

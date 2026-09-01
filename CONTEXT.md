@@ -143,7 +143,7 @@ The single shim-owned catalogue of currently live IMAS-Core contexts whose store
 _Avoid_: context map, context stack.
 
 **context record**:
-The registry entry for one live mismatched context. It carries that context's resolved HLI DD path, conversion-map reference, pulse context ID, and optional parent context ID.
+The registry entry for one live mismatched context. It carries that context's resolved HLI DD path, conversion-map reference, pulse context ID and URI, complete occurrence `dataobjectname`, and optional parent context ID.
 
 **root context**:
 A context record whose root identity is its own context ID, as opposed to a child (arraystruct) context record, which resolves its root identity from a live parent snapshot instead. The registry resolves any child to its root in one lookup through the stored root identity, never by walking ancestry — ADR 0003 forbids a read-time hierarchy walk.

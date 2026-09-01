@@ -155,6 +155,7 @@ mod tests {
             CTX_ID,
             String::new(),
             CTX_ID,
+            "equilibrium".to_string(),
             MapCacheKey::new("equilibrium".to_string(), stored, hli),
             direction,
             || load_artifact(&artifact),

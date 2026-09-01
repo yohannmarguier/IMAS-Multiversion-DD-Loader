@@ -7,20 +7,20 @@
 //! record here — recording under a recycled ID replaces whatever used that
 //! ID before, and looking it up never sees the old record.
 //!
-//! A record retains everything a later conversion needs — the resolved
-//! absolute HLI-DD path, the pulse context ID, a shared conversion-map
-//! reference, and its root identity — so a lookup is one operation rather
-//! than a walk. `lookup` returns a cloned snapshot and a cheap `Arc` clone
-//! of the map, then drops the lock before the caller does anything that
-//! could call back into IMAS-Core or take a while (CONTEXT.md's "context
-//! registry"; ADR 0003).
+//! A record retains everything a later conversion or loss report needs — the
+//! resolved absolute HLI-DD path, the pulse context ID and URI, the complete
+//! occurrence `dataobjectname`, a shared conversion-map reference, and its
+//! root identity — so a lookup is one operation rather than a walk. `lookup`
+//! returns a cloned snapshot and a cheap `Arc` clone of the map, then drops
+//! the lock before the caller does anything that could call back into
+//! IMAS-Core or take a while (CONTEXT.md's "context registry"; ADR 0003).
 //!
-//! A data-entry context (the pulse opened by `al_begin_dataentry_action`)
-//! is recorded with no stored DD version and no conversion-map reference of
-//! its own. It exists only so operation records opened under it can carry
-//! its context ID as their pulse context ID; recording one never resolves
-//! rules or transforms anything by itself. It also carries a small cache of
-//! discovered occurrence versions (issue #53), keyed by `dataobjectname`: the
+//! A data-entry context (the pulse opened by `al_begin_dataentry_action`) is
+//! recorded with its URI but no stored DD version or conversion-map reference
+//! of its own. It exists so operation records opened under it can carry its
+//! context ID and snapshot its URI; recording one never resolves rules or
+//! transforms anything by itself. It also carries a small cache of discovered
+//! occurrence versions (issue #53), keyed by `dataobjectname`: the
 //! fact that a stored version, once found to mismatch the HLI DD version,
 //! lets a later re-open of that same occurrence translate
 //! `al_begin_global_action`'s `datapath` argument *before* IMAS-Core is
@@ -31,9 +31,10 @@
 //! at that ID.
 //!
 //! A root's root identity is its own context ID. A child (arraystruct)
-//! record resolves its root identity, pulse context ID, and shared
-//! conversion map from a live parent snapshot instead of storing them
-//! independently, and additionally carries its direct parent's context ID.
+//! record resolves its root identity, pulse identity, occurrence identity,
+//! and shared conversion map from a live parent snapshot instead of storing
+//! them independently, and additionally carries its direct parent's context
+//! ID.
 //! The parent snapshot only supplies that starting state — it does not make
 //! the parent record own the child's lifecycle, and the registry exposes no
 //! sibling enumeration or general ancestry-walking operation.
@@ -91,6 +92,13 @@ pub(crate) struct ConversionRecord {
     pub resolved_path: String,
     /// The data-entry context this record's pulse belongs to.
     pub pulse_ctx_id: ContextId,
+    /// The complete occurrence name this root was opened for, including any
+    /// occurrence suffix. Children inherit it unchanged.
+    pub dataobjectname: String,
+    /// The URI of the pulse this record belongs to. Children inherit the
+    /// root's captured value rather than consulting a potentially recycled
+    /// pulse context ID.
+    pub pulse_uri: String,
     /// The conversion map this record resolves paths and values through,
     /// shared with every other record on the same version pair.
     pub map: Arc<ConversionMap>,
@@ -123,10 +131,13 @@ pub(crate) struct ConversionRecord {
 /// One entry in the registry's shared context-ID namespace.
 #[derive(Debug, Clone)]
 enum Entry {
-    /// A pulse context: no stored DD version, no conversion map, not
-    /// itself conversion-eligible. Carries the occurrence-version cache
+    /// A pulse context: no stored DD version, no conversion map, not itself
+    /// conversion-eligible. Carries its URI plus the occurrence-version cache
     /// described in this module's doc comment, keyed by `dataobjectname`.
-    DataEntry(HashMap<String, DdVersion>),
+    DataEntry {
+        uri: String,
+        known: HashMap<String, DdVersion>,
+    },
     /// A conversion-eligible context.
     Conversion(ConversionRecord),
 }
@@ -157,28 +168,45 @@ impl ContextRegistry {
     /// record — of any kind — previously lived at `ctx_id`, so a recycled ID
     /// starts with an empty occurrence-version cache rather than inheriting
     /// a previous pulse's discoveries.
+    #[cfg(test)]
     pub(crate) fn record_dataentry(&self, ctx_id: ContextId) {
+        self.record_dataentry_with_uri(ctx_id, String::new());
+    }
+
+    /// Records `ctx_id` as a pulse context and retains the URI the ABI seam
+    /// received when opening it.
+    pub(crate) fn record_dataentry_with_uri(&self, ctx_id: ContextId, uri: String) {
         let mut state = self.state.lock().unwrap();
-        state
-            .entries
-            .insert(ctx_id, Entry::DataEntry(HashMap::new()));
+        state.entries.insert(
+            ctx_id,
+            Entry::DataEntry {
+                uri,
+                known: HashMap::new(),
+            },
+        );
         state.loss_logs.remove(&ctx_id);
     }
 
     /// Records `ctx_id` as a root conversion record when the stored and HLI
-    /// DD versions differ. Obtains the map through this registry's cache, so
-    /// every record for one version pair shares a map. Returns `false` for a
+    /// DD versions differ. Captures the complete occurrence `dataobjectname`
+    /// and its pulse URI, then obtains the map through this registry's cache,
+    /// so every record for one version pair shares a map. Returns `false` for a
     /// matching version pair after removing any record at `ctx_id`, so a
     /// recycled matching-version ID can never expose stale conversion state.
     ///
     /// For a mismatched pair, replaces whatever record — of any kind —
     /// previously lived at `ctx_id`, so a recycled ID can never expose the
     /// record it used to name.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "root registration receives the distinct facts the occurrence-opening seam owns"
+    )]
     pub(crate) fn record_root(
         &self,
         ctx_id: ContextId,
         resolved_path: String,
         pulse_ctx_id: ContextId,
+        dataobjectname: String,
         key: MapCacheKey,
         direction_to_stored: Direction,
         create: impl FnOnce() -> ConversionMap,
@@ -192,6 +220,8 @@ impl ContextRegistry {
         let record = ConversionRecord {
             resolved_path,
             pulse_ctx_id,
+            dataobjectname,
+            pulse_uri: self.pulse_uri(pulse_ctx_id).unwrap_or_default(),
             map: self.get_or_create_map(key, create),
             root_id: ctx_id,
             direction_to_stored,
@@ -226,7 +256,7 @@ impl ContextRegistry {
         let mut state = self.state.lock().unwrap();
         let parent = match state.entries.get(&parent_ctx_id) {
             Some(Entry::Conversion(record)) => record.clone(),
-            Some(Entry::DataEntry(_)) | None => {
+            Some(Entry::DataEntry { .. }) | None => {
                 state.entries.remove(&ctx_id);
                 state.loss_logs.remove(&ctx_id);
                 return false;
@@ -238,6 +268,8 @@ impl ContextRegistry {
             Entry::Conversion(ConversionRecord {
                 resolved_path,
                 pulse_ctx_id: parent.pulse_ctx_id,
+                dataobjectname: parent.dataobjectname,
+                pulse_uri: parent.pulse_uri,
                 map: parent.map,
                 root_id: parent.root_id,
                 direction_to_stored: parent.direction_to_stored,
@@ -258,7 +290,7 @@ impl ContextRegistry {
     pub(crate) fn lookup(&self, ctx_id: ContextId) -> Option<ConversionRecord> {
         match self.state.lock().unwrap().entries.get(&ctx_id) {
             Some(Entry::Conversion(record)) => Some(record.clone()),
-            Some(Entry::DataEntry(_)) | None => None,
+            Some(Entry::DataEntry { .. }) | None => None,
         }
     }
 
@@ -274,7 +306,17 @@ impl ContextRegistry {
     #[allow(dead_code, reason = "the tests' only handle on data-entry entries")]
     pub(crate) fn pulse_ctx_id(&self, ctx_id: ContextId) -> Option<ContextId> {
         match self.state.lock().unwrap().entries.get(&ctx_id) {
-            Some(Entry::DataEntry(_)) => Some(ctx_id),
+            Some(Entry::DataEntry { .. }) => Some(ctx_id),
+            Some(Entry::Conversion(_)) | None => None,
+        }
+    }
+
+    /// Returns a cloned URI for a live pulse context. It is captured by each
+    /// root record at registration so later pulse-ID reuse cannot alter the
+    /// root or its children.
+    pub(crate) fn pulse_uri(&self, ctx_id: ContextId) -> Option<String> {
+        match self.state.lock().unwrap().entries.get(&ctx_id) {
+            Some(Entry::DataEntry { uri, .. }) => Some(uri.clone()),
             Some(Entry::Conversion(_)) | None => None,
         }
     }
@@ -293,7 +335,7 @@ impl ContextRegistry {
         dataobjectname: &str,
     ) -> Option<DdVersion> {
         match self.state.lock().unwrap().entries.get(&pulse_ctx_id) {
-            Some(Entry::DataEntry(known)) => known.get(dataobjectname).cloned(),
+            Some(Entry::DataEntry { known, .. }) => known.get(dataobjectname).cloned(),
             _ => None,
         }
     }
@@ -309,7 +351,7 @@ impl ContextRegistry {
         dataobjectname: String,
         version: DdVersion,
     ) {
-        if let Some(Entry::DataEntry(known)) =
+        if let Some(Entry::DataEntry { known, .. }) =
             self.state.lock().unwrap().entries.get_mut(&pulse_ctx_id)
         {
             known.insert(dataobjectname, version);
@@ -322,7 +364,7 @@ impl ContextRegistry {
     /// wrongly translate a future `datapath`. A no-op if nothing was cached
     /// or `pulse_ctx_id` no longer names a live data-entry context.
     pub(crate) fn forget_occurrence_version(&self, pulse_ctx_id: ContextId, dataobjectname: &str) {
-        if let Some(Entry::DataEntry(known)) =
+        if let Some(Entry::DataEntry { known, .. }) =
             self.state.lock().unwrap().entries.get_mut(&pulse_ctx_id)
         {
             known.remove(dataobjectname);

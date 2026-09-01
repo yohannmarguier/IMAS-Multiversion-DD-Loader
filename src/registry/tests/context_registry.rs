@@ -40,6 +40,7 @@ fn record_dummy_root(
         ctx_id,
         resolved_path,
         pulse_ctx_id,
+        "equilibrium".to_string(),
         dummy_key(),
         DUMMY_DIRECTION,
         dummy_map,
@@ -60,6 +61,7 @@ fn a_root_record_retains_its_path_pulse_id_map_and_root_identity() {
         5,
         "time_slice/boundary/psi".to_string(),
         1,
+        "equilibrium".to_string(),
         key.clone(),
         DUMMY_DIRECTION,
         dummy_map,
@@ -78,6 +80,36 @@ fn a_root_record_retains_its_path_pulse_id_map_and_root_identity() {
         ),
         "lookup must hand back a shared reference to the same map, not a copy"
     );
+}
+
+#[test]
+fn root_and_child_retain_their_occurrence_and_pulse_identity_across_pulse_id_reuse() {
+    let registry = ContextRegistry::new();
+    registry.record_dataentry_with_uri(1, "imas:hdf5?path=/tmp/original-pulse".to_string());
+    assert_eq!(
+        registry.pulse_uri(1).as_deref(),
+        Some("imas:hdf5?path=/tmp/original-pulse")
+    );
+    assert!(registry.record_root(
+        5,
+        String::new(),
+        1,
+        "equilibrium/1".to_string(),
+        dummy_key(),
+        DUMMY_DIRECTION,
+        dummy_map,
+    ));
+    assert!(registry.record_child(6, 5, "time_slice(0)".to_string()));
+
+    // Reusing the pulse ID must not retroactively alter a root or child that
+    // already captured the original pulse URI.
+    registry.record_dataentry_with_uri(1, "imas:hdf5?path=/tmp/replacement-pulse".to_string());
+
+    for ctx_id in [5, 6] {
+        let record = registry.lookup(ctx_id).expect("record must stay live");
+        assert_eq!(record.dataobjectname, "equilibrium/1");
+        assert_eq!(record.pulse_uri, "imas:hdf5?path=/tmp/original-pulse");
+    }
 }
 
 #[test]
@@ -195,6 +227,7 @@ fn a_child_record_retains_its_own_path_and_parent_id_and_shares_the_parents_map(
         5,
         "root/path".to_string(),
         1,
+        "equilibrium".to_string(),
         key.clone(),
         DUMMY_DIRECTION,
         dummy_map
@@ -416,12 +449,18 @@ fn matching_versions_remove_stale_records_without_creating_a_map() {
         version("4.1.1"),
     );
 
-    assert!(
-        !registry.record_root(5, "p".to_string(), 1, matching_key, DUMMY_DIRECTION, || {
+    assert!(!registry.record_root(
+        5,
+        "p".to_string(),
+        1,
+        "equilibrium".to_string(),
+        matching_key,
+        DUMMY_DIRECTION,
+        || {
             loads.set(loads.get() + 1);
             dummy_map()
-        },)
-    );
+        },
+    ));
 
     assert!(
         registry.lookup(5).is_none(),
@@ -436,18 +475,30 @@ fn a_shared_map_survives_as_long_as_one_record_still_references_it() {
     let loads = Cell::new(0);
     let key = dummy_key();
 
-    assert!(
-        registry.record_root(5, "a".to_string(), 1, key.clone(), DUMMY_DIRECTION, || {
+    assert!(registry.record_root(
+        5,
+        "a".to_string(),
+        1,
+        "equilibrium".to_string(),
+        key.clone(),
+        DUMMY_DIRECTION,
+        || {
             loads.set(loads.get() + 1);
             dummy_map()
-        })
-    );
-    assert!(
-        registry.record_root(6, "b".to_string(), 1, key.clone(), DUMMY_DIRECTION, || {
+        }
+    ));
+    assert!(registry.record_root(
+        6,
+        "b".to_string(),
+        1,
+        "equilibrium".to_string(),
+        key.clone(),
+        DUMMY_DIRECTION,
+        || {
             loads.set(loads.get() + 1);
             dummy_map()
-        })
-    );
+        }
+    ));
 
     assert_eq!(loads.get(), 1, "the second record must hit the cache");
 
@@ -471,12 +522,18 @@ fn a_shared_map_is_released_once_no_record_references_it() {
     let loads = Cell::new(0);
     let key = dummy_key();
 
-    assert!(
-        registry.record_root(5, "a".to_string(), 1, key.clone(), DUMMY_DIRECTION, || {
+    assert!(registry.record_root(
+        5,
+        "a".to_string(),
+        1,
+        "equilibrium".to_string(),
+        key.clone(),
+        DUMMY_DIRECTION,
+        || {
             loads.set(loads.get() + 1);
             dummy_map()
-        })
-    );
+        }
+    ));
     registry.remove(5);
 
     let _new_map = registry.get_or_create_map(key, || {
@@ -504,6 +561,7 @@ fn concurrent_operations_never_observe_a_torn_record() {
                     ctx_id,
                     format!("path-{i}"),
                     ctx_id,
+                    format!("equilibrium/{i}"),
                     dummy_key(),
                     DUMMY_DIRECTION,
                     dummy_map,
@@ -540,6 +598,7 @@ fn concurrent_child_operations_never_observe_a_torn_record() {
                     root_id,
                     format!("root-{i}"),
                     root_id,
+                    format!("equilibrium/{i}"),
                     dummy_key(),
                     DUMMY_DIRECTION,
                     dummy_map,
