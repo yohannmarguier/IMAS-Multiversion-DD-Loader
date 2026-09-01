@@ -88,7 +88,7 @@ refuse it, because the stub's recorder resets its integer fields on every call,
 so the probe's own rwmode is only readable while its open is the last plugin
 call made.
 
-### `read-path-*` — 39 · `shim/read_path_test.c`
+### `read-path-*` — 45 · `shim/read_path_test.c`
 
 `al_read_data`, the main conversion seam (issues #56 and #65, ADR 0014).
 
@@ -107,7 +107,9 @@ call made.
 - **Bypass** — matching, unknown, unstamped and conversion-disabled contexts.
 - **Loss log** — lossy `merged`/`moved` reads retained, log destroyed with its
   context, plus the ten safety refusals of the `imas_mvdd_context_loss_*` query
-  exports (null output, negative / out-of-range index, short buffer).
+  exports (null output, negative / out-of-range index, short buffer), and loss
+  file delivery redirected, disabled, or failing at open and append without
+  changing the successful read or its queryable in-memory entries.
 
 ### `arraystruct-path-*` — 8 · `shim/arraystruct_path_test.c`
 

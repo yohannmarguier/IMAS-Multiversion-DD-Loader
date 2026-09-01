@@ -146,9 +146,9 @@ static inline int run_named_scenario(int argc, char **argv, const shim_test_scen
 #define IMAS_MVDD_STUB_DATA_EVENT_READ 1
 #define IMAS_MVDD_STUB_DATA_EVENT_DELETE 2
 
-/* The loss-file scenarios see only the published on-disk report. They clean
- * their scenario-specific directory before opening an occurrence, then locate
- * the one report the process produced without depending on its clock or PID. */
+/* The loss-file scenarios inspect a fixture directory's published report;
+ * ordinary delivery cases clean it first, while configuration-failure cases
+ * deliberately control whether that directory exists or permits writes. */
 static inline const char *loss_log_directory(void) {
     const char *directory = getenv("IMAS_MVDD_LOSS_LOG_DIR");
     CHECK(directory != NULL);
@@ -177,8 +177,7 @@ static inline void clear_loss_log_directory(void) {
     CHECK(closedir(dir) == 0);
 }
 
-static inline char *single_loss_log_path_or_null(void) {
-    const char *directory = loss_log_directory();
+static inline char *single_loss_log_path_or_null_in(const char *directory) {
     DIR *dir = opendir(directory);
     CHECK(dir != NULL);
     char *result = NULL;
@@ -195,6 +194,10 @@ static inline char *single_loss_log_path_or_null(void) {
     }
     CHECK(closedir(dir) == 0);
     return result;
+}
+
+static inline char *single_loss_log_path_or_null(void) {
+    return single_loss_log_path_or_null_in(loss_log_directory());
 }
 
 static inline char *read_loss_log(void) {

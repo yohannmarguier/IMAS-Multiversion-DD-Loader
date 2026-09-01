@@ -6,7 +6,10 @@
  * its public C ABI and observe its behavior through the arguments the stub
  * receives. */
 
+#include <errno.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #ifndef RECORDING_STUB_PATH
 #error "RECORDING_STUB_PATH must be defined by CMakeLists.txt"
@@ -150,6 +153,138 @@ static void scenario_loss_file_is_absent_without_loss(void) {
     CHECK(read_data(operation_ctx, "time", "", &data).code == 0);
     CHECK(single_loss_log_path_or_null() == NULL);
     printf("read_path_test loss-file-is-absent-without-loss: exact work opens no report\n");
+}
+
+/* Drive two distinct lossy reads so a disabled or failed file destination has
+ * to stay silent or report only once, while the caller-visible loss log still
+ * retains both entries. */
+static void retain_two_read_losses(int operation_ctx) {
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    CHECK(read_data(operation_ctx, "time_slice/boundary_separatrix/gap/r", "", &data).code == 0);
+    CHECK(loss_count(operation_ctx) == 2);
+    check_loss_at(operation_ctx, 0, "time_slice/ggd/b_field_phi",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
+    check_loss_at(operation_ctx, 1, "time_slice/boundary_separatrix/gap/r",
+                  IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
+}
+
+typedef struct {
+    FILE *file;
+    int saved_stderr;
+} stderr_capture;
+
+static stderr_capture begin_stderr_capture(void) {
+    stderr_capture capture = {.file = tmpfile(), .saved_stderr = -1};
+    CHECK(capture.file != NULL);
+    fflush(stderr);
+    capture.saved_stderr = dup(STDERR_FILENO);
+    CHECK(capture.saved_stderr >= 0);
+    CHECK(dup2(fileno(capture.file), STDERR_FILENO) >= 0);
+    return capture;
+}
+
+static char *finish_stderr_capture(stderr_capture capture) {
+    fflush(stderr);
+    CHECK(dup2(capture.saved_stderr, STDERR_FILENO) >= 0);
+    CHECK(close(capture.saved_stderr) == 0);
+    CHECK(fseek(capture.file, 0, SEEK_END) == 0);
+    long length = ftell(capture.file);
+    CHECK(length >= 0);
+    CHECK(fseek(capture.file, 0, SEEK_SET) == 0);
+    char *message = malloc((size_t)length + 1);
+    CHECK(message != NULL);
+    CHECK(fread(message, 1, (size_t)length, capture.file) == (size_t)length);
+    message[length] = '\0';
+    CHECK(fclose(capture.file) == 0);
+    return message;
+}
+
+static char *capture_loss_log_failure(int operation_ctx) {
+    stderr_capture capture = begin_stderr_capture();
+    retain_two_read_losses(operation_ctx);
+    return finish_stderr_capture(capture);
+}
+
+static int count_substring(const char *text, const char *needle) {
+    int count = 0;
+    size_t length = strlen(needle);
+    for (const char *found = strstr(text, needle); found != NULL;
+         found = strstr(found + length, needle)) {
+        ++count;
+    }
+    return count;
+}
+
+static void check_single_loss_log_failure_message(const char *message, const char *directory,
+                                                  const char *reason) {
+    CHECK(strstr(message, "IMAS-MVDD: ") != NULL);
+    CHECK(strstr(message, directory) != NULL);
+    CHECK(strstr(message, reason) != NULL);
+    CHECK(count_substring(message, "IMAS-MVDD: ") == 1);
+    CHECK(count_substring(message, "\n") == 1);
+}
+
+static void scenario_loss_file_empty_directory_value_disables_delivery(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    char *message = capture_loss_log_failure(operation_ctx);
+
+    CHECK(single_loss_log_path_or_null_in(".") == NULL);
+    CHECK(*message == '\0');
+    free(message);
+    printf("read_path_test loss-file-empty-directory-value-disables-delivery: an empty directory "
+           "setting keeps both loss channels independent\n");
+}
+
+static void scenario_loss_file_missing_directory_reports_once_without_failing_reads(void) {
+    const char *directory = loss_log_directory();
+    CHECK(rmdir(directory) == 0 || errno == ENOENT);
+    int operation_ctx = open_mismatched_equilibrium();
+    char *message = capture_loss_log_failure(operation_ctx);
+
+    CHECK(access(directory, F_OK) != 0);
+    check_single_loss_log_failure_message(message, directory, "directory does not exist");
+    free(message);
+    printf("read_path_test loss-file-missing-directory-reports-once-without-failing-reads: a "
+           "missing destination cannot change successful reads or their in-memory loss log\n");
+}
+
+static void scenario_loss_file_unwritable_directory_reports_once_without_failing_reads(void) {
+    const char *directory = loss_log_directory();
+    CHECK(mkdir(directory, 0700) == 0 || errno == EEXIST);
+    CHECK(chmod(directory, 0500) == 0);
+    int operation_ctx = open_mismatched_equilibrium();
+    char *message = capture_loss_log_failure(operation_ctx);
+    CHECK(chmod(directory, 0700) == 0);
+
+    CHECK(single_loss_log_path_or_null() == NULL);
+    check_single_loss_log_failure_message(message, directory, "could not write loss log in");
+    free(message);
+    printf("read_path_test loss-file-unwritable-directory-reports-once-without-failing-reads: "
+           "an unwritable destination cannot change successful reads or their in-memory loss log\n");
+}
+
+static void scenario_loss_file_append_failure_reports_once_without_failing_reads(void) {
+    clear_loss_log_directory();
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    char *log_path = single_loss_log_path_or_null();
+    CHECK(remove(log_path) == 0);
+    CHECK(mkdir(log_path, 0700) == 0);
+
+    stderr_capture capture = begin_stderr_capture();
+    CHECK(read_data(operation_ctx, "time_slice/boundary_separatrix/gap/r", "", &data).code == 0);
+    CHECK(read_data(operation_ctx, "time_slice/boundary/lcfs", "", &data).code == 0);
+    char *message = finish_stderr_capture(capture);
+
+    CHECK(loss_count(operation_ctx) == 3);
+    check_single_loss_log_failure_message(message, log_path, "could not append loss log");
+    CHECK(rmdir(log_path) == 0);
+    free(message);
+    free(log_path);
+    printf("read_path_test loss-file-append-failure-reports-once-without-failing-reads: an "
+           "append failure cannot change a successful read or its in-memory loss log\n");
 }
 
 /* ADR 0014: a read arriving while the shim's own read is in flight was issued
@@ -782,6 +917,10 @@ int main(int argc, char **argv) {
         {"merged-read-retains-a-lossy-verdict-in-the-loss-log", scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log},
         {"loss-file-is-created-on-first-loss-and-deduplicates-lines", scenario_loss_file_is_created_on_first_loss_and_deduplicates_lines},
         {"loss-file-is-absent-without-loss", scenario_loss_file_is_absent_without_loss},
+        {"loss-file-empty-directory-value-disables-delivery", scenario_loss_file_empty_directory_value_disables_delivery},
+        {"loss-file-missing-directory-reports-once-without-failing-reads", scenario_loss_file_missing_directory_reports_once_without_failing_reads},
+        {"loss-file-unwritable-directory-reports-once-without-failing-reads", scenario_loss_file_unwritable_directory_reports_once_without_failing_reads},
+        {"loss-file-append-failure-reports-once-without-failing-reads", scenario_loss_file_append_failure_reports_once_without_failing_reads},
         {"moved-read-retains-a-lossy-verdict-in-the-loss-log", scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log},
         {"ending-context-destroys-its-loss-log", scenario_ending_context_destroys_its_loss_log},
         {"loss-count-null-output-is-refused", scenario_loss_count_null_output_is_refused},
