@@ -21,20 +21,44 @@ static WRITTEN_KEYS: LazyLock<Mutex<HashSet<String>>> =
 static LOG_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 static FILE_FAILED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) struct LossFileEntry<'a> {
-    pub(crate) uri: &'a str,
-    pub(crate) ids: &'a str,
-    pub(crate) stored_version: &'a str,
-    pub(crate) hli_version: &'a str,
-    pub(crate) operation: LossOperation,
-    pub(crate) fidelity: Fidelity,
-    pub(crate) path: &'a str,
+pub(crate) struct LossFileEntry {
+    uri: String,
+    ids: String,
+    stored_version: String,
+    hli_version: String,
+    operation: LossOperation,
+    fidelity: Fidelity,
+    path: String,
+}
+
+impl LossFileEntry {
+    /// Copies the occurrence facts a caller needs to render one line, so
+    /// nothing this module holds is a reference back into the registry.
+    pub(crate) fn new(
+        uri: &str,
+        ids: &str,
+        stored_version: &str,
+        hli_version: &str,
+        operation: LossOperation,
+        fidelity: Fidelity,
+        path: &str,
+    ) -> Self {
+        Self {
+            uri: uri.to_string(),
+            ids: ids.to_string(),
+            stored_version: stored_version.to_string(),
+            hli_version: hli_version.to_string(),
+            operation,
+            fidelity,
+            path: path.to_string(),
+        }
+    }
 }
 
 /// Writes `entry` once for this process. The key lock is released before any
 /// path resolution, file creation, or write, so a slow filesystem cannot hold
 /// a seam lock.
-pub(crate) fn retain(entry: LossFileEntry<'_>) {
+pub(crate) fn retain(entry: LossFileEntry) {
     if entry.fidelity == Fidelity::Exact {
         return;
     }
@@ -67,7 +91,7 @@ pub(crate) fn retain(entry: LossFileEntry<'_>) {
     }
 }
 
-fn create_log(entry: &LossFileEntry<'_>) -> Option<PathBuf> {
+fn create_log(entry: &LossFileEntry) -> Option<PathBuf> {
     let seconds = match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => duration.as_secs(),
         Err(error) => {
@@ -139,11 +163,7 @@ fn report_failure(message: std::fmt::Arguments<'_>) {
     }
 }
 
-fn write_preamble(
-    file: &mut File,
-    timestamp: &str,
-    entry: &LossFileEntry<'_>,
-) -> std::io::Result<()> {
+fn write_preamble(file: &mut File, timestamp: &str, entry: &LossFileEntry) -> std::io::Result<()> {
     writeln!(file, "# imas-mvdd loss log format 1")?;
     writeln!(file, "# written {timestamp}")?;
     writeln!(file, "# process {}", std::process::id())?;

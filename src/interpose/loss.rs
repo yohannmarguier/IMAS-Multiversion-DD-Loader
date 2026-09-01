@@ -27,17 +27,15 @@ pub(crate) fn retain_loss(
     let record = REGISTRY.lookup(root_id);
     REGISTRY.retain_loss_at_root(root_id, dd_path.clone(), fidelity, operation);
     if let Some(record) = record {
-        let stored_version = record.stored_version.to_string();
-        let hli_version = record.hli_version.to_string();
-        loss_file::retain(LossFileEntry {
-            uri: &record.pulse_uri,
-            ids: &record.dataobjectname,
-            stored_version: &stored_version,
-            hli_version: &hli_version,
+        loss_file::retain(LossFileEntry::new(
+            &record.pulse_uri,
+            &record.dataobjectname,
+            &record.stored_version.to_string(),
+            &record.hli_version.to_string(),
             operation,
             fidelity,
-            path: &dd_path,
-        });
+            &dd_path,
+        ));
     }
 }
 
