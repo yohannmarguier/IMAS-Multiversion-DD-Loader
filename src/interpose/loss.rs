@@ -12,31 +12,32 @@ use crate::al_status_t;
 use crate::conversion::conversion_map::Fidelity;
 use crate::loss::{LossOperation, fidelity_c_code};
 use crate::loss_file::{self, LossFileEntry};
-use crate::registry::context_registry::{ContextId, REGISTRY};
+use crate::registry::context_registry::{ConversionRecord, REGISTRY};
 
-/// Retains one operation's loss against the root captured before the seam
-/// called IMAS-Core. The loss module decides whether it is worth keeping.
+/// Retains one operation's loss against `record`'s root. `record` is the
+/// snapshot the seam already resolved before calling IMAS-Core, not a fresh
+/// lookup: a root may end while that call is in flight, and a fresh
+/// `REGISTRY.lookup` taken after the fact could already report it gone.
+/// Using the seam's own snapshot is what lets the file retain an entry whose
+/// root has already ended, per ADR 0023's documented file/export
+/// disagreement — the in-memory log still resolves independently through
+/// `record.root_id` and silently no-ops once that root is gone.
 pub(crate) fn retain_loss(
-    root_id: ContextId,
+    record: &ConversionRecord,
     dd_path: String,
     fidelity: Fidelity,
     operation: LossOperation,
 ) {
-    // The record snapshot and in-memory retention each take and release the
-    // registry lock before the file module ever considers an I/O operation.
-    let record = REGISTRY.lookup(root_id);
-    REGISTRY.retain_loss_at_root(root_id, dd_path.clone(), fidelity, operation);
-    if let Some(record) = record {
-        loss_file::retain(LossFileEntry::new(
-            &record.pulse_uri,
-            &record.dataobjectname,
-            &record.stored_version.to_string(),
-            &record.hli_version.to_string(),
-            operation,
-            fidelity,
-            &dd_path,
-        ));
-    }
+    REGISTRY.retain_loss_at_root(record.root_id, dd_path.clone(), fidelity, operation);
+    loss_file::retain(LossFileEntry::new(
+        &record.pulse_uri,
+        &record.dataobjectname,
+        &record.stored_version.to_string(),
+        &record.hli_version.to_string(),
+        operation,
+        fidelity,
+        &dd_path,
+    ));
 }
 
 /// Implements `imas_mvdd_context_loss_count` (ADR 0012): reports the number

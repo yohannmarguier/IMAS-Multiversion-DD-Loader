@@ -67,7 +67,7 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
             if visited_candidates.len() > 1 {
                 for path in visited_candidates {
                     retain_loss(
-                        record.root_id,
+                        &record,
                         path.to_string_lossy().into_owned(),
                         Fidelity::PotentiallyLossy,
                         LossOperation::Delete,
@@ -80,7 +80,7 @@ pub(crate) unsafe fn delete_data(ctx: c_int, path: *const c_char) -> al_status_t
         }
         seam_policy::DeleteVerdict::Refusal { reason, dd_path } => {
             retain_loss(
-                record.root_id,
+                &record,
                 dd_path.clone(),
                 Fidelity::Unmappable,
                 LossOperation::Delete,

@@ -17,7 +17,7 @@ use crate::conversion::read_outcome::{self, ReadOutcome};
 use crate::conversion::seam_policy;
 use crate::core::core_binding::DOUBLE_DATA_ID;
 use crate::loss::LossOperation;
-use crate::registry::context_registry::{ContextId, ConversionRecord};
+use crate::registry::context_registry::ConversionRecord;
 
 use super::dispatch::{CallFamily, call_read};
 use super::loss::retain_loss;
@@ -258,8 +258,8 @@ fn finish_read(
     verdict: seam_policy::ReadVerdict,
     data: *mut *mut c_void,
 ) -> al_status_t {
-    record_argument_loss(record.root_id, &verdict.field);
-    record_argument_loss(record.root_id, &verdict.timebase);
+    record_argument_loss(record, &verdict.field);
+    record_argument_loss(record, &verdict.timebase);
     match verdict.outcome {
         seam_policy::SeamOutcome::Data(status) => status,
         seam_policy::SeamOutcome::NotFound => no_source_read(data),
@@ -269,11 +269,11 @@ fn finish_read(
     }
 }
 
-/// Retains one argument's fidelity on `root_id`'s loss log — skipping
+/// Retains one argument's fidelity on `record`'s root loss log — skipping
 /// exact-fidelity operations, which are never logged (ADR 0012).
-fn record_argument_loss(root_id: ContextId, argument: &seam_policy::ArgumentFidelity) {
+fn record_argument_loss(record: &ConversionRecord, argument: &seam_policy::ArgumentFidelity) {
     retain_loss(
-        root_id,
+        record,
         argument.path.clone(),
         argument.fidelity,
         LossOperation::Read,

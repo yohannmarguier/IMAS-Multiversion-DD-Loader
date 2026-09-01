@@ -268,7 +268,7 @@ fn write_data_impl(
 fn retain_unwritten_candidates(record: &ConversionRecord, unwritten: &[&str]) {
     for dd_path in unwritten {
         retain_loss(
-            record.root_id,
+            record,
             (*dd_path).to_string(),
             Fidelity::PotentiallyLossy,
             LossOperation::Write,
@@ -282,7 +282,7 @@ fn retain_unwritten_candidates(record: &ConversionRecord, unwritten: &[&str]) {
 /// effects use that same complete HLI-DD spelling.
 fn finish_write_refusal(record: &ConversionRecord, reason: &str, dd_path: &str) -> al_status_t {
     retain_loss(
-        record.root_id,
+        record,
         dd_path.to_string(),
         Fidelity::Unmappable,
         LossOperation::Write,
