@@ -84,6 +84,18 @@ impl MapCacheKey {
     }
 }
 
+/// The distinct facts the occurrence-opening seam owns about a root it is
+/// about to register, bundled so `record_root` takes one clump of related
+/// data rather than each fact as its own argument.
+pub(crate) struct RootRegistration {
+    pub(crate) ctx_id: ContextId,
+    pub(crate) resolved_path: String,
+    pub(crate) pulse_ctx_id: ContextId,
+    pub(crate) dataobjectname: String,
+    pub(crate) key: MapCacheKey,
+    pub(crate) direction_to_stored: Direction,
+}
+
 /// A live conversion-eligible context: a root or a child.
 #[derive(Debug, Clone)]
 pub(crate) struct ConversionRecord {
@@ -188,20 +200,19 @@ impl ContextRegistry {
     /// For a mismatched pair, replaces whatever record — of any kind —
     /// previously lived at `ctx_id`, so a recycled ID can never expose the
     /// record it used to name.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "root registration receives the distinct facts the occurrence-opening seam owns"
-    )]
     pub(crate) fn record_root(
         &self,
-        ctx_id: ContextId,
-        resolved_path: String,
-        pulse_ctx_id: ContextId,
-        dataobjectname: String,
-        key: MapCacheKey,
-        direction_to_stored: Direction,
+        registration: RootRegistration,
         create: impl FnOnce() -> ConversionMap,
     ) -> bool {
+        let RootRegistration {
+            ctx_id,
+            resolved_path,
+            pulse_ctx_id,
+            dataobjectname,
+            key,
+            direction_to_stored,
+        } = registration;
         if !key.needs_conversion() {
             self.remove(ctx_id);
             return false;

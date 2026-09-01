@@ -23,7 +23,7 @@ use crate::conversion::known_artifacts;
 use crate::conversion::path_conversion::{self, ContextPathResolution};
 use crate::conversion::seam_policy;
 use crate::core::core_binding::{READ_OP_ID, forward_status};
-use crate::registry::context_registry::{MapCacheKey, REGISTRY};
+use crate::registry::context_registry::{MapCacheKey, REGISTRY, RootRegistration};
 use crate::version::version_stamp;
 
 use super::dispatch::{
@@ -440,12 +440,14 @@ fn apply_discovery_decision(
             // occurrence's own root, empty because a relative read resolves
             // against it directly (ADR 0002, ADR 0003).
             REGISTRY.record_root(
-                opened_ctx_id,
-                String::new(),
-                pctx_id,
-                dataobjectname.to_string(),
-                key,
-                direction,
+                RootRegistration {
+                    ctx_id: opened_ctx_id,
+                    resolved_path: String::new(),
+                    pulse_ctx_id: pctx_id,
+                    dataobjectname: dataobjectname.to_string(),
+                    key,
+                    direction_to_stored: direction,
+                },
                 || load_artifact(&artifact),
             );
             OpenOccurrenceResult::Status(status)

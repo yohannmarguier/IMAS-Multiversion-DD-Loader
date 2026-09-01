@@ -37,12 +37,14 @@ fn record_dummy_root(
     pulse_ctx_id: ContextId,
 ) -> bool {
     registry.record_root(
-        ctx_id,
-        resolved_path,
-        pulse_ctx_id,
-        "equilibrium".to_string(),
-        dummy_key(),
-        DUMMY_DIRECTION,
+        RootRegistration {
+            ctx_id,
+            resolved_path,
+            pulse_ctx_id,
+            dataobjectname: "equilibrium".to_string(),
+            key: dummy_key(),
+            direction_to_stored: DUMMY_DIRECTION,
+        },
         dummy_map,
     )
 }
@@ -58,12 +60,14 @@ fn a_root_record_retains_its_path_pulse_id_map_and_root_identity() {
     let registry = ContextRegistry::new();
     let key = dummy_key();
     assert!(registry.record_root(
-        5,
-        "time_slice/boundary/psi".to_string(),
-        1,
-        "equilibrium".to_string(),
-        key.clone(),
-        DUMMY_DIRECTION,
+        RootRegistration {
+            ctx_id: 5,
+            resolved_path: "time_slice/boundary/psi".to_string(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium".to_string(),
+            key: key.clone(),
+            direction_to_stored: DUMMY_DIRECTION,
+        },
         dummy_map,
     ));
 
@@ -91,12 +95,14 @@ fn root_and_child_retain_their_occurrence_and_pulse_identity_across_pulse_id_reu
         Some("imas:hdf5?path=/tmp/original-pulse")
     );
     assert!(registry.record_root(
-        5,
-        String::new(),
-        1,
-        "equilibrium/1".to_string(),
-        dummy_key(),
-        DUMMY_DIRECTION,
+        RootRegistration {
+            ctx_id: 5,
+            resolved_path: String::new(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium/1".to_string(),
+            key: dummy_key(),
+            direction_to_stored: DUMMY_DIRECTION,
+        },
         dummy_map,
     ));
     assert!(registry.record_child(6, 5, "time_slice(0)".to_string()));
@@ -235,12 +241,14 @@ fn a_child_record_retains_its_own_path_and_parent_id_and_shares_the_parents_map(
     let registry = ContextRegistry::new();
     let key = dummy_key();
     assert!(registry.record_root(
-        5,
-        "root/path".to_string(),
-        1,
-        "equilibrium".to_string(),
-        key.clone(),
-        DUMMY_DIRECTION,
+        RootRegistration {
+            ctx_id: 5,
+            resolved_path: "root/path".to_string(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium".to_string(),
+            key: key.clone(),
+            direction_to_stored: DUMMY_DIRECTION,
+        },
         dummy_map
     ));
 
@@ -461,12 +469,14 @@ fn matching_versions_remove_stale_records_without_creating_a_map() {
     );
 
     assert!(!registry.record_root(
-        5,
-        "p".to_string(),
-        1,
-        "equilibrium".to_string(),
-        matching_key,
-        DUMMY_DIRECTION,
+        RootRegistration {
+            ctx_id: 5,
+            resolved_path: "p".to_string(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium".to_string(),
+            key: matching_key,
+            direction_to_stored: DUMMY_DIRECTION,
+        },
         || {
             loads.set(loads.get() + 1);
             dummy_map()
@@ -487,24 +497,28 @@ fn a_shared_map_survives_as_long_as_one_record_still_references_it() {
     let key = dummy_key();
 
     assert!(registry.record_root(
-        5,
-        "a".to_string(),
-        1,
-        "equilibrium".to_string(),
-        key.clone(),
-        DUMMY_DIRECTION,
+        RootRegistration {
+            ctx_id: 5,
+            resolved_path: "a".to_string(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium".to_string(),
+            key: key.clone(),
+            direction_to_stored: DUMMY_DIRECTION,
+        },
         || {
             loads.set(loads.get() + 1);
             dummy_map()
         }
     ));
     assert!(registry.record_root(
-        6,
-        "b".to_string(),
-        1,
-        "equilibrium".to_string(),
-        key.clone(),
-        DUMMY_DIRECTION,
+        RootRegistration {
+            ctx_id: 6,
+            resolved_path: "b".to_string(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium".to_string(),
+            key: key.clone(),
+            direction_to_stored: DUMMY_DIRECTION,
+        },
         || {
             loads.set(loads.get() + 1);
             dummy_map()
@@ -534,12 +548,14 @@ fn a_shared_map_is_released_once_no_record_references_it() {
     let key = dummy_key();
 
     assert!(registry.record_root(
-        5,
-        "a".to_string(),
-        1,
-        "equilibrium".to_string(),
-        key.clone(),
-        DUMMY_DIRECTION,
+        RootRegistration {
+            ctx_id: 5,
+            resolved_path: "a".to_string(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium".to_string(),
+            key: key.clone(),
+            direction_to_stored: DUMMY_DIRECTION,
+        },
         || {
             loads.set(loads.get() + 1);
             dummy_map()
@@ -569,12 +585,14 @@ fn concurrent_operations_never_observe_a_torn_record() {
             let ctx_id = i as ContextId;
             for _ in 0..200 {
                 registry.record_root(
-                    ctx_id,
-                    format!("path-{i}"),
-                    ctx_id,
-                    format!("equilibrium/{i}"),
-                    dummy_key(),
-                    DUMMY_DIRECTION,
+                    RootRegistration {
+                        ctx_id,
+                        resolved_path: format!("path-{i}"),
+                        pulse_ctx_id: ctx_id,
+                        dataobjectname: format!("equilibrium/{i}"),
+                        key: dummy_key(),
+                        direction_to_stored: DUMMY_DIRECTION,
+                    },
                     dummy_map,
                 );
                 if let Some(snapshot) = registry.lookup(ctx_id) {
@@ -606,12 +624,14 @@ fn concurrent_child_operations_never_observe_a_torn_record() {
             let child_id = (i + 100) as ContextId;
             for _ in 0..200 {
                 registry.record_root(
-                    root_id,
-                    format!("root-{i}"),
-                    root_id,
-                    format!("equilibrium/{i}"),
-                    dummy_key(),
-                    DUMMY_DIRECTION,
+                    RootRegistration {
+                        ctx_id: root_id,
+                        resolved_path: format!("root-{i}"),
+                        pulse_ctx_id: root_id,
+                        dataobjectname: format!("equilibrium/{i}"),
+                        key: dummy_key(),
+                        direction_to_stored: DUMMY_DIRECTION,
+                    },
                     dummy_map,
                 );
                 registry.record_child(child_id, root_id, format!("child-{i}"));

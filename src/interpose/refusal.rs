@@ -14,9 +14,9 @@ use std::ffi::{CStr, c_char, c_int};
 
 use crate::al_status_t;
 use crate::conversion::path_conversion;
-#[cfg(test)]
-use crate::registry::context_registry::MapCacheKey;
 use crate::registry::context_registry::{ConversionRecord, REGISTRY};
+#[cfg(test)]
+use crate::registry::context_registry::{MapCacheKey, RootRegistration};
 
 /// `ptr` as a borrowed `&CStr`, or `None` if it is null.
 ///
@@ -152,12 +152,14 @@ mod tests {
             .expect("the embedded equilibrium artifact serves this pair");
         let direction = artifact.direction_to_stored;
         assert!(REGISTRY.record_root(
-            CTX_ID,
-            String::new(),
-            CTX_ID,
-            "equilibrium".to_string(),
-            MapCacheKey::new("equilibrium".to_string(), stored, hli),
-            direction,
+            RootRegistration {
+                ctx_id: CTX_ID,
+                resolved_path: String::new(),
+                pulse_ctx_id: CTX_ID,
+                dataobjectname: "equilibrium".to_string(),
+                key: MapCacheKey::new("equilibrium".to_string(), stored, hli),
+                direction_to_stored: direction,
+            },
             || load_artifact(&artifact),
         ));
 

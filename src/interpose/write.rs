@@ -297,7 +297,7 @@ mod tests {
 
     use crate::conversion::conversion_map::{ConversionMap, Direction};
     use crate::conversion::path_conversion::WritePath;
-    use crate::registry::context_registry::{MapCacheKey, REGISTRY};
+    use crate::registry::context_registry::{MapCacheKey, REGISTRY, RootRegistration};
 
     #[test]
     fn a_declared_unmappable_write_refusal_carries_its_message_and_write_loss() {
@@ -317,12 +317,14 @@ mod tests {
         let stored = "4.1.1".parse().expect("known release");
         let hli = "3.39.0".parse().expect("known release");
         assert!(REGISTRY.record_root(
-            CTX_ID,
-            String::new(),
-            CTX_ID,
-            "equilibrium".to_string(),
-            MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
-            Direction::Forward,
+            RootRegistration {
+                ctx_id: CTX_ID,
+                resolved_path: String::new(),
+                pulse_ctx_id: CTX_ID,
+                dataobjectname: "equilibrium".to_string(),
+                key: MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
+                direction_to_stored: Direction::Forward,
+            },
             || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
         ));
         let record = REGISTRY
@@ -405,12 +407,14 @@ mod tests {
         let stored = "3.39.0".parse().expect("known release");
         let hli = "4.1.1".parse().expect("known release");
         assert!(REGISTRY.record_root(
-            CTX_ID,
-            String::new(),
-            CTX_ID,
-            "equilibrium".to_string(),
-            MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
-            Direction::Reverse,
+            RootRegistration {
+                ctx_id: CTX_ID,
+                resolved_path: String::new(),
+                pulse_ctx_id: CTX_ID,
+                dataobjectname: "equilibrium".to_string(),
+                key: MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
+                direction_to_stored: Direction::Reverse,
+            },
             || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
         ));
         let record = REGISTRY
