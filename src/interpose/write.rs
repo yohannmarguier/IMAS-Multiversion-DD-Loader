@@ -17,9 +17,11 @@ use crate::conversion::conversion_map::Fidelity;
 use crate::conversion::path_conversion;
 use crate::conversion::seam_policy;
 use crate::core::core_binding::{COMPLEX_DATA_ID, DOUBLE_DATA_ID, INTEGER_DATA_ID};
-use crate::registry::context_registry::{ConversionRecord, REGISTRY};
+use crate::loss::LossOperation;
+use crate::registry::context_registry::ConversionRecord;
 
 use super::dispatch::{CallFamily, call_write};
+use super::loss::retain_loss;
 use super::reentry::ReentryGuard;
 use super::refusal::{c_str_ref, context_path_refusal, live_conversion_record, read_argument_path};
 
@@ -265,10 +267,11 @@ fn write_data_impl(
 /// than left to a reader to derive from these two literals (ADR 0011).
 fn retain_unwritten_candidates(record: &ConversionRecord, unwritten: &[&str]) {
     for dd_path in unwritten {
-        REGISTRY.record_write_loss_at_root(
+        retain_loss(
             record.root_id,
             (*dd_path).to_string(),
             Fidelity::PotentiallyLossy,
+            LossOperation::Write,
         );
     }
 }
@@ -278,7 +281,12 @@ fn retain_unwritten_candidates(record: &ConversionRecord, unwritten: &[&str]) {
 /// refusal. The path was already resolved against the live record, so both
 /// effects use that same complete HLI-DD spelling.
 fn finish_write_refusal(record: &ConversionRecord, reason: &str, dd_path: &str) -> al_status_t {
-    REGISTRY.record_write_loss_at_root(record.root_id, dd_path.to_string(), Fidelity::Unmappable);
+    retain_loss(
+        record.root_id,
+        dd_path.to_string(),
+        Fidelity::Unmappable,
+        LossOperation::Write,
+    );
     context_path_refusal(record, reason, dd_path)
 }
 
@@ -289,7 +297,7 @@ mod tests {
 
     use crate::conversion::conversion_map::{ConversionMap, Direction};
     use crate::conversion::path_conversion::WritePath;
-    use crate::registry::context_registry::MapCacheKey;
+    use crate::registry::context_registry::{MapCacheKey, REGISTRY};
 
     #[test]
     fn a_declared_unmappable_write_refusal_carries_its_message_and_write_loss() {
@@ -345,16 +353,13 @@ mod tests {
              HLI DD version: 3.39.0; stored DD version: 4.1.1"
         );
         assert_eq!(REGISTRY.loss_count(CTX_ID), 1);
-        assert_eq!(
-            REGISTRY.with_loss_at(CTX_ID, 0, |path, fidelity, operation| {
-                (path.to_string(), fidelity, operation)
-            }),
-            Some((
-                "impossible".to_string(),
-                Fidelity::Unmappable,
-                crate::registry::context_registry::LossOperation::Write,
-            ))
-        );
+        REGISTRY
+            .with_loss_at(CTX_ID, 0, |path, fidelity, operation| {
+                assert_eq!(path, "impossible");
+                assert_eq!(fidelity, Fidelity::Unmappable);
+                assert_eq!(operation, crate::loss::LossOperation::Write);
+            })
+            .expect("the refused write must retain its loss");
 
         REGISTRY.remove(CTX_ID);
     }
@@ -452,18 +457,16 @@ mod tests {
 
         retain_unwritten_candidates(&record, &unwritten_candidates);
         assert_eq!(REGISTRY.loss_count(CTX_ID), 1);
-        assert_eq!(
-            REGISTRY.with_loss_at(CTX_ID, 0, |path, fidelity, operation| {
-                (path.to_string(), fidelity, operation)
-            }),
-            Some((
-                "secondary".to_string(),
-                Fidelity::PotentiallyLossy,
-                crate::registry::context_registry::LossOperation::Write,
-            )),
-            "the write seam recorded something other than one PotentiallyLossy entry \
-             for a rule the artifact declares certainly lossy"
-        );
+        REGISTRY
+            .with_loss_at(CTX_ID, 0, |path, fidelity, operation| {
+                assert_eq!(path, "secondary");
+                assert_eq!(fidelity, Fidelity::PotentiallyLossy);
+                assert_eq!(operation, crate::loss::LossOperation::Write);
+            })
+            .expect(
+                "the write seam recorded something other than one PotentiallyLossy entry \
+                 for a rule the artifact declares certainly lossy",
+            );
 
         REGISTRY.remove(CTX_ID);
     }

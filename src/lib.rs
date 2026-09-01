@@ -76,6 +76,7 @@ pub mod conversion;
 #[deprecated(note = "use imas_mvdd_loader::conversion::conversion_map instead")]
 pub use conversion::conversion_map;
 mod core;
+mod loss;
 mod registry;
 mod version;
 

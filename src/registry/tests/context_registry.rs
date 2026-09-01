@@ -130,16 +130,14 @@ fn a_non_exact_read_from_a_child_is_retained_by_its_root_context() {
     let child = registry.lookup(6).expect("the child must be live");
     registry.record_read_loss_at_root(child.root_id, "field".to_string(), Fidelity::Lossy);
 
-    let state = registry.state.lock().unwrap();
-    assert_eq!(
-        state.loss_logs.get(&5),
-        Some(&vec![LossEntry {
-            dd_path: "field".to_string(),
-            fidelity: Fidelity::Lossy,
-            operation: LossOperation::Read,
-        }])
-    );
-    assert!(!state.loss_logs.contains_key(&6));
+    registry
+        .with_loss_at(5, 0, |path, fidelity, operation| {
+            assert_eq!(path, "field");
+            assert_eq!(fidelity, Fidelity::Lossy);
+            assert_eq!(operation, crate::loss::LossOperation::Read);
+        })
+        .expect("the root must retain the child's loss");
+    assert!(!registry.state.lock().unwrap().loss_logs.contains_key(&6));
 }
 
 #[test]
@@ -155,16 +153,14 @@ fn a_refused_write_from_a_child_is_retained_by_its_root_context() {
         Fidelity::Unmappable,
     );
 
-    let state = registry.state.lock().unwrap();
-    assert_eq!(
-        state.loss_logs.get(&5),
-        Some(&vec![LossEntry {
-            dd_path: "root/path/field".to_string(),
-            fidelity: Fidelity::Unmappable,
-            operation: LossOperation::Write,
-        }])
-    );
-    assert!(!state.loss_logs.contains_key(&6));
+    registry
+        .with_loss_at(5, 0, |path, fidelity, operation| {
+            assert_eq!(path, "root/path/field");
+            assert_eq!(fidelity, Fidelity::Unmappable);
+            assert_eq!(operation, crate::loss::LossOperation::Write);
+        })
+        .expect("the root must retain the child's loss");
+    assert!(!registry.state.lock().unwrap().loss_logs.contains_key(&6));
 }
 
 #[test]

@@ -53,6 +53,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use crate::conversion::conversion_map::{ConversionMap, Direction, Fidelity};
+use crate::loss::{LossLog, LossOperation};
 use crate::version::dd_version::DdVersion;
 
 /// An IMAS-Core context ID, as passed across the C ABI.
@@ -130,30 +131,12 @@ enum Entry {
     Conversion(ConversionRecord),
 }
 
-/// Which successful or refused seam operation earned a loss-log entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LossOperation {
-    Read,
-    Write,
-}
-
-/// A non-exact path requested through one root conversion context.
-/// The log is root-owned so child contexts contribute to the same eventual
-/// conversion report (ADR 0012); the query ABI exposes its path, fidelity,
-/// and operation through separate allocation-free accessors.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LossEntry {
-    dd_path: String,
-    fidelity: Fidelity,
-    operation: LossOperation,
-}
-
 #[derive(Default)]
 struct State {
     entries: HashMap<ContextId, Entry>,
     /// Losses are separate from cloned conversion snapshots so a child never
     /// accidentally owns a copied log. A root context owns exactly one log.
-    loss_logs: HashMap<ContextId, Vec<LossEntry>>,
+    loss_logs: HashMap<ContextId, LossLog>,
     maps: HashMap<MapCacheKey, Weak<ConversionMap>>,
 }
 
@@ -218,7 +201,7 @@ impl ContextRegistry {
         };
         let mut state = self.state.lock().unwrap();
         state.entries.insert(ctx_id, Entry::Conversion(record));
-        state.loss_logs.insert(ctx_id, Vec::new());
+        state.loss_logs.insert(ctx_id, LossLog::default());
         true
     }
 
@@ -346,58 +329,44 @@ impl ContextRegistry {
         }
     }
 
-    /// Appends a non-exact read outcome directly to the loss log belonging to
-    /// the root captured in a read's conversion-record snapshot. Exact reads
-    /// never enter the log; if that root has ended, its log is gone and the
-    /// outcome is deliberately not retained.
-    ///
-    /// This deliberately does not resolve a live `ctx_id`: a read must not
-    /// attribute its outcome to a child context that was ended or recycled
-    /// while IMAS-Core was running.
-    pub(crate) fn record_read_loss_at_root(
-        &self,
-        root_id: ContextId,
-        dd_path: String,
-        fidelity: Fidelity,
-    ) {
-        self.record_loss_at_root(root_id, dd_path, fidelity, LossOperation::Read);
-    }
-
-    /// Appends a non-exact write outcome directly to the loss log belonging
-    /// to the root captured in a write's conversion-record snapshot. Exact
-    /// writes never enter the log; if that root has ended, its log is gone
-    /// and the outcome is deliberately not retained.
-    ///
-    /// This mirrors [`Self::record_read_loss_at_root`]: retaining against the
-    /// captured root prevents a child context ID recycled during a seam call
-    /// from receiving a stale loss entry.
-    pub(crate) fn record_write_loss_at_root(
-        &self,
-        root_id: ContextId,
-        dd_path: String,
-        fidelity: Fidelity,
-    ) {
-        self.record_loss_at_root(root_id, dd_path, fidelity, LossOperation::Write);
-    }
-
-    fn record_loss_at_root(
+    /// Delegates retention to the root's loss log. This deliberately does not
+    /// resolve a live `ctx_id`: an operation must not attribute its outcome
+    /// to a child context that ended or was recycled while IMAS-Core ran.
+    pub(crate) fn retain_loss_at_root(
         &self,
         root_id: ContextId,
         dd_path: String,
         fidelity: Fidelity,
         operation: LossOperation,
     ) {
-        if fidelity == Fidelity::Exact {
-            return;
-        }
         let mut state = self.state.lock().unwrap();
         if let Some(losses) = state.loss_logs.get_mut(&root_id) {
-            losses.push(LossEntry {
-                dd_path,
-                fidelity,
-                operation,
-            });
+            losses.retain(dd_path, fidelity, operation);
         }
+    }
+
+    /// Delegates a read loss to the root's loss log. Interposition uses its
+    /// shared retention helper; this remains for registry-level tests.
+    #[cfg(test)]
+    pub(crate) fn record_read_loss_at_root(
+        &self,
+        root_id: ContextId,
+        dd_path: String,
+        fidelity: Fidelity,
+    ) {
+        self.retain_loss_at_root(root_id, dd_path, fidelity, LossOperation::Read);
+    }
+
+    /// Delegates a write loss to the root's loss log. Interposition uses its
+    /// shared retention helper; this remains for registry-level tests.
+    #[cfg(test)]
+    pub(crate) fn record_write_loss_at_root(
+        &self,
+        root_id: ContextId,
+        dd_path: String,
+        fidelity: Fidelity,
+    ) {
+        self.retain_loss_at_root(root_id, dd_path, fidelity, LossOperation::Write);
     }
 
     /// Returns the number of loss-log entries retained for `ctx_id`'s root
@@ -412,7 +381,7 @@ impl ContextRegistry {
         let Some(Entry::Conversion(record)) = state.entries.get(&ctx_id) else {
             return 0;
         };
-        state.loss_logs.get(&record.root_id).map_or(0, Vec::len)
+        state.loss_logs.get(&record.root_id).map_or(0, LossLog::len)
     }
 
     /// Calls `read` with the `index`-th loss-log entry retained for `ctx_id`'s
@@ -432,8 +401,7 @@ impl ContextRegistry {
         let Some(Entry::Conversion(record)) = state.entries.get(&ctx_id) else {
             return None;
         };
-        let loss = state.loss_logs.get(&record.root_id)?.get(index)?;
-        Some(read(&loss.dd_path, loss.fidelity, loss.operation))
+        state.loss_logs.get(&record.root_id)?.with_at(index, read)
     }
 
     /// Removes exactly the record at `ctx_id`, if any (mirrors a successful
