@@ -180,7 +180,7 @@ in landing order, under `docs/history/`:
 
 Each entry describes the tree as it was when it was written and several name
 paths that have since moved; "Current path map" above is the authority on where
-code lives today. The decisions of record are `docs/adr/0001`–`0021`.
+code lives today. The decisions of record are `docs/adr/0001`–`0022`.
 
 ## Build, toolchain and tests
 
@@ -222,7 +222,7 @@ deliberately **floats** (the HLI picks it; the shim's gate is major-only) while
 `DD_VERSION` is **pinned to 4.1.1** because `src/known_artifacts.rs` embeds one
 artifact, and 20 of the HLI's `examples/` tests can *never* run in a shim build,
 so the workflow asserts the disabled count as well as the total. See
-`docs/adr/0020-hli-validation-floats-core-and-pins-the-dd.md`.
+`docs/adr/0022-hli-validation-floats-core-and-pins-the-dd.md`.
 
 `README.md` carries the build options and layout. The *why* behind the build
 lives in comments next to what it explains — `CMakeLists.txt` for the staging

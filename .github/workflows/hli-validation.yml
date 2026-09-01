@@ -13,7 +13,7 @@ name: HLI validation
 # has to be a paths-filtered workflow.
 #
 # Which versions float and which are pinned is the whole design, and it is
-# recorded in docs/adr/0020-hli-validation-floats-core-and-pins-the-dd.md.
+# recorded in docs/adr/0022-hli-validation-floats-core-and-pins-the-dd.md.
 # In short: IMAS-Core floats because the shim's version gate is major-only, the
 # Data Dictionary is pinned because the shim ships exactly one conversion-map
 # artifact, and the HLI commit is pinned so a red run is attributable.
@@ -205,7 +205,7 @@ jobs:
           cmake --install build-shim --prefix "$PWD/dist"
 
       # AL_CORE_VERSION is deliberately absent: the HLI picks its own IMAS-Core,
-      # which is the floating half of ADR 0020. AL_DOWNLOAD_DEPENDENCIES is the
+      # which is the floating half of ADR 0022. AL_DOWNLOAD_DEPENDENCIES is the
       # HLI's default and governs both the Data Dictionary and the IMAS-Core
       # that common/cmake/ALCoreRuntime.cmake builds for the shim to dlopen.
       #
@@ -304,7 +304,7 @@ jobs:
             echo "### IMAS-Core this run opened"
             echo
             echo "The HLI chooses this, not the shim: it is the floating half of"
-            echo "ADR 0020. The shim's gate is major-only, so any 5.x is"
+            echo "ADR 0022. The shim's gate is major-only, so any 5.x is"
             echo "admissible and a minor difference is tolerated drift."
             echo
             echo "| | |"
