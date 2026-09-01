@@ -5,8 +5,11 @@ If it has to been modified, apply the same changes to AGENTS.md.
 
 ## Current path map
 
-Current source ownership is `src/core/`, `src/conversion/`, `src/registry/`,
-and `src/version/`; C ABI adaptation lives under `src/interpose/`.
+Current source ownership is `src/core/`, `src/conversion/`, `src/loss.rs`,
+`src/loss_file.rs`, `src/registry/`, and `src/version/`; C ABI adaptation lives
+under `src/interpose/`. `src/loss_file.rs` owns the append-only process loss-log
+file and its written-key set; it receives copied occurrence facts and never
+holds a registry lock during filesystem I/O.
 
 The read, write and delete **loops** live in `src/conversion/seam_policy.rs`,
 not in the interposition layer: `run_read`, `run_write`, `run_delete`, the
@@ -74,7 +77,7 @@ and limitations".
 | `al_begin_arraystruct_action` (+ plugin twin) | resolves `path` and `timebase` before Core is called; on success registers the returned context as a child record inheriting the shared map, root identity and stored direction |
 | `al_read_data` / `al_plugin_read_data` | one shared `read_data_impl`: identity, `renamed`, `moved`, and `merged`/`split` candidate plans tried in declared precedence order, COCOS sign flip applied in place, three-way read-outcome classification (ADR 0012), every non-exact success retained in the root's loss log |
 | `al_write_data` / `al_plugin_write_data` | resolves `field` and `timebase` independently to one stored spelling, keeping relative/absolute child-context semantics and the caller's own `data`/`size`. An ambiguous plan writes **only** precedence 1 and records each skipped candidate's *stored* path as `POTENTIALLY_LOSSY` after Core succeeds; a non-primary source, an unservable rule, or a path with no stored slot refuses before Core is called. A value transformation executes on a shim-owned copy (ADR 0018) and leaves an unset rank-0 scalar alone, since `EMPTY_DOUBLE` is negative and flipping it would store a fabricated measurement with `code == 0` |
-| `al_delete_data` | translates identity, `renamed` and `moved` leaves; fans a candidate plan out in declared order and calls Core for **every** candidate, with no presence probe (ADR 0017 — a write asserts a value, a delete asserts an absence, so where a write must not fan out a delete must; decision 2 records why the probe that used to precede each candidate is gone: it read through the *caller's* context, so a write-mode open reported every candidate absent). The first nonzero status is retained while later candidates are still attempted, so an absent candidate can look like a backend failure — the honest limitation of an ABI with no not-found outcome. Admits a *trivial* structure delete but refuses one with an escaping rule nested underneath it (decision 4); an empty path is the caller's explicit whole-DATAOBJECT migration route; never retains a loss entry |
+| `al_delete_data` | translates identity, `renamed` and `moved` leaves; fans a candidate plan out in declared order and calls Core for **every** candidate, with no presence probe (ADR 0017 — a write asserts a value, a delete asserts an absence, so where a write must not fan out a delete must; decision 2 records why the probe that used to precede each candidate is gone: it read through the *caller's* context, so a write-mode open reported every candidate absent). The first nonzero status is retained while later candidates are still attempted, so an absent candidate can look like a backend failure — the honest limitation of an ABI with no not-found outcome. A refusal retains an `UNMAPPABLE` loss naming the caller path; a fan-out retains `POTENTIALLY_LOSSY` delete losses naming every stored candidate after all are attempted. Admits a *trivial* structure delete but refuses one with an escaping rule nested underneath it (decision 4); an empty path is the caller's explicit whole-DATAOBJECT migration route |
 | `al_end_action` / `al_plugin_end_action` | removes only its own context's record, only on success. Non-LIFO close and recycled context IDs are proven safe |
 | `al_iterate_over_arraystruct`, `al_close_pulse` | plain forwards; neither touches the registry |
 | `al_get_occurrences`, `al_list_filled_paths`, `al_bind_plugin`/`al_unbind_plugin` | deliberately **untranslated** (ADR 0002), proven to hold their passthrough contract while a read *and* a write convert |
@@ -180,7 +183,7 @@ in landing order, under `docs/history/`:
 
 Each entry describes the tree as it was when it was written and several name
 paths that have since moved; "Current path map" above is the authority on where
-code lives today. The decisions of record are `docs/adr/0001`–`0022`.
+code lives today. The decisions of record are `docs/adr/0001`–`0024`.
 
 ## Build, toolchain and tests
 

@@ -103,11 +103,19 @@ A conversion rule whose HLI-side selector falls at or under a requested DD path,
 _Avoid_: crossing rule, leaking rule, straddling rule.
 
 **loss log**:
-The list of non-exact reads and writes recorded on a root context record: for each, the relevant complete DD path, its fidelity verdict, and which operation produced it. A read loss or refused write names the HLI-DD path as the HLI asked for it. A successful ambiguous write instead names each stored-DD candidate it deliberately left unwritten, because those are the paths where stale data may remain. It is the only channel by which loss reaches the caller when the operation *succeeded*, because a success is forced to `al_status_t.code == 0`. The HLI drains it before `al_end_action` ends the context; it does not outlive the context. See `docs/adr/0012-loss-reaches-the-caller-by-a-context-log.md`.
-_Avoid_: report, journal, accumulator, diagnostics — and never call it an error channel; the reads and writes it records succeeded.
+The list of non-exact reads, writes or deletes recorded on a root context record: for each, the relevant complete DD path, its fidelity verdict, and which operation produced it. A read loss or refused write/delete names the HLI-DD path as the HLI asked for it. A successful ambiguous write instead names each stored-DD candidate it deliberately left unwritten, while a fanned-out delete names every stored candidate it visited, because those are the paths where stale data may remain or have been removed. A patched HLI can drain it before `al_end_action`; it is one delivery channel alongside the loss log file. See `docs/adr/0012-loss-reaches-the-caller-by-a-context-log.md` and `docs/adr/0023-loss-log-file-delivery.md`.
+_Avoid_: report, journal, accumulator, diagnostics — and never call it an error channel; the reads, writes and deletes it records succeeded.
+
+**loss log file**:
+The process-local, append-only tab-separated file that records each non-exact loss as it happens, independently of a root context's lifetime. It is created only on the first loss. See `docs/adr/0023-loss-log-file-delivery.md`.
+_Avoid_: report, journal, diagnostics.
+
+**written-key set**:
+The process-wide set of complete rendered loss-log lines already written to the loss log file. It prevents repeated operations from growing the file; its entries are bounded by the distinct `(URI, occurrence, version pair, operation, path)` combinations a process encounters, not by repeated reads of them.
+_Avoid_: cache, file index.
 
 **operation** (of a loss log entry):
-Which kind of call produced an entry: a read or a write. Deliberately not called a direction, because that word already names which side of a DD-version pair supplies a path.
+Which kind of call produced an entry: a read, write or delete. Deliberately not called a direction, because that word already names which side of a DD-version pair supplies a path.
 _Avoid_: direction, mode, kind.
 
 **read outcome**:
@@ -143,7 +151,7 @@ The single shim-owned catalogue of currently live IMAS-Core contexts whose store
 _Avoid_: context map, context stack.
 
 **context record**:
-The registry entry for one live mismatched context. It carries that context's resolved HLI DD path, conversion-map reference, pulse context ID, and optional parent context ID.
+The registry entry for one live mismatched context. It carries that context's resolved HLI DD path, conversion-map reference, pulse context ID and URI, complete occurrence `dataobjectname`, and optional parent context ID.
 
 **root context**:
 A context record whose root identity is its own context ID, as opposed to a child (arraystruct) context record, which resolves its root identity from a live parent snapshot instead. The registry resolves any child to its root in one lookup through the stored root identity, never by walking ancestry — ADR 0003 forbids a read-time hierarchy walk.

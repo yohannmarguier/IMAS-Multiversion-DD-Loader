@@ -7,20 +7,20 @@
 //! record here — recording under a recycled ID replaces whatever used that
 //! ID before, and looking it up never sees the old record.
 //!
-//! A record retains everything a later conversion needs — the resolved
-//! absolute HLI-DD path, the pulse context ID, a shared conversion-map
-//! reference, and its root identity — so a lookup is one operation rather
-//! than a walk. `lookup` returns a cloned snapshot and a cheap `Arc` clone
-//! of the map, then drops the lock before the caller does anything that
-//! could call back into IMAS-Core or take a while (CONTEXT.md's "context
-//! registry"; ADR 0003).
+//! A record retains everything a later conversion or loss report needs — the
+//! resolved absolute HLI-DD path, the pulse context ID and URI, the complete
+//! occurrence `dataobjectname`, a shared conversion-map reference, and its
+//! root identity — so a lookup is one operation rather than a walk. `lookup`
+//! returns a cloned snapshot and a cheap `Arc` clone of the map, then drops
+//! the lock before the caller does anything that could call back into
+//! IMAS-Core or take a while (CONTEXT.md's "context registry"; ADR 0003).
 //!
-//! A data-entry context (the pulse opened by `al_begin_dataentry_action`)
-//! is recorded with no stored DD version and no conversion-map reference of
-//! its own. It exists only so operation records opened under it can carry
-//! its context ID as their pulse context ID; recording one never resolves
-//! rules or transforms anything by itself. It also carries a small cache of
-//! discovered occurrence versions (issue #53), keyed by `dataobjectname`: the
+//! A data-entry context (the pulse opened by `al_begin_dataentry_action`) is
+//! recorded with its URI but no stored DD version or conversion-map reference
+//! of its own. It exists so operation records opened under it can carry its
+//! context ID and snapshot its URI; recording one never resolves rules or
+//! transforms anything by itself. It also carries a small cache of discovered
+//! occurrence versions (issue #53), keyed by `dataobjectname`: the
 //! fact that a stored version, once found to mismatch the HLI DD version,
 //! lets a later re-open of that same occurrence translate
 //! `al_begin_global_action`'s `datapath` argument *before* IMAS-Core is
@@ -31,9 +31,10 @@
 //! at that ID.
 //!
 //! A root's root identity is its own context ID. A child (arraystruct)
-//! record resolves its root identity, pulse context ID, and shared
-//! conversion map from a live parent snapshot instead of storing them
-//! independently, and additionally carries its direct parent's context ID.
+//! record resolves its root identity, pulse identity, occurrence identity,
+//! and shared conversion map from a live parent snapshot instead of storing
+//! them independently, and additionally carries its direct parent's context
+//! ID.
 //! The parent snapshot only supplies that starting state — it does not make
 //! the parent record own the child's lifecycle, and the registry exposes no
 //! sibling enumeration or general ancestry-walking operation.
@@ -53,6 +54,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use crate::conversion::conversion_map::{ConversionMap, Direction, Fidelity};
+use crate::loss::{LossLog, LossOperation};
 use crate::version::dd_version::DdVersion;
 
 /// An IMAS-Core context ID, as passed across the C ABI.
@@ -82,6 +84,18 @@ impl MapCacheKey {
     }
 }
 
+/// The distinct facts the occurrence-opening seam owns about a root it is
+/// about to register, bundled so `record_root` takes one clump of related
+/// data rather than each fact as its own argument.
+pub(crate) struct RootRegistration {
+    pub(crate) ctx_id: ContextId,
+    pub(crate) resolved_path: String,
+    pub(crate) pulse_ctx_id: ContextId,
+    pub(crate) dataobjectname: String,
+    pub(crate) key: MapCacheKey,
+    pub(crate) direction_to_stored: Direction,
+}
+
 /// A live conversion-eligible context: a root or a child.
 #[derive(Debug, Clone)]
 pub(crate) struct ConversionRecord {
@@ -90,6 +104,13 @@ pub(crate) struct ConversionRecord {
     pub resolved_path: String,
     /// The data-entry context this record's pulse belongs to.
     pub pulse_ctx_id: ContextId,
+    /// The complete occurrence name this root was opened for, including any
+    /// occurrence suffix. Children inherit it unchanged.
+    pub dataobjectname: String,
+    /// The URI of the pulse this record belongs to. Children inherit the
+    /// root's captured value rather than consulting a potentially recycled
+    /// pulse context ID.
+    pub pulse_uri: String,
     /// The conversion map this record resolves paths and values through,
     /// shared with every other record on the same version pair.
     pub map: Arc<ConversionMap>,
@@ -122,30 +143,15 @@ pub(crate) struct ConversionRecord {
 /// One entry in the registry's shared context-ID namespace.
 #[derive(Debug, Clone)]
 enum Entry {
-    /// A pulse context: no stored DD version, no conversion map, not
-    /// itself conversion-eligible. Carries the occurrence-version cache
+    /// A pulse context: no stored DD version, no conversion map, not itself
+    /// conversion-eligible. Carries its URI plus the occurrence-version cache
     /// described in this module's doc comment, keyed by `dataobjectname`.
-    DataEntry(HashMap<String, DdVersion>),
+    DataEntry {
+        uri: String,
+        known: HashMap<String, DdVersion>,
+    },
     /// A conversion-eligible context.
     Conversion(ConversionRecord),
-}
-
-/// Which successful or refused seam operation earned a loss-log entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LossOperation {
-    Read,
-    Write,
-}
-
-/// A non-exact path requested through one root conversion context.
-/// The log is root-owned so child contexts contribute to the same eventual
-/// conversion report (ADR 0012); the query ABI exposes its path, fidelity,
-/// and operation through separate allocation-free accessors.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LossEntry {
-    dd_path: String,
-    fidelity: Fidelity,
-    operation: LossOperation,
 }
 
 #[derive(Default)]
@@ -153,7 +159,7 @@ struct State {
     entries: HashMap<ContextId, Entry>,
     /// Losses are separate from cloned conversion snapshots so a child never
     /// accidentally owns a copied log. A root context owns exactly one log.
-    loss_logs: HashMap<ContextId, Vec<LossEntry>>,
+    loss_logs: HashMap<ContextId, LossLog>,
     maps: HashMap<MapCacheKey, Weak<ConversionMap>>,
 }
 
@@ -170,21 +176,24 @@ impl ContextRegistry {
         Self::default()
     }
 
-    /// Records `ctx_id` as a data-entry (pulse) context. Replaces whatever
-    /// record — of any kind — previously lived at `ctx_id`, so a recycled ID
-    /// starts with an empty occurrence-version cache rather than inheriting
-    /// a previous pulse's discoveries.
-    pub(crate) fn record_dataentry(&self, ctx_id: ContextId) {
+    /// Records `ctx_id` as a pulse context and retains the URI the ABI seam
+    /// received when opening it.
+    pub(crate) fn record_dataentry_with_uri(&self, ctx_id: ContextId, uri: String) {
         let mut state = self.state.lock().unwrap();
-        state
-            .entries
-            .insert(ctx_id, Entry::DataEntry(HashMap::new()));
+        state.entries.insert(
+            ctx_id,
+            Entry::DataEntry {
+                uri,
+                known: HashMap::new(),
+            },
+        );
         state.loss_logs.remove(&ctx_id);
     }
 
     /// Records `ctx_id` as a root conversion record when the stored and HLI
-    /// DD versions differ. Obtains the map through this registry's cache, so
-    /// every record for one version pair shares a map. Returns `false` for a
+    /// DD versions differ. Captures the complete occurrence `dataobjectname`
+    /// and its pulse URI, then obtains the map through this registry's cache,
+    /// so every record for one version pair shares a map. Returns `false` for a
     /// matching version pair after removing any record at `ctx_id`, so a
     /// recycled matching-version ID can never expose stale conversion state.
     ///
@@ -193,13 +202,17 @@ impl ContextRegistry {
     /// record it used to name.
     pub(crate) fn record_root(
         &self,
-        ctx_id: ContextId,
-        resolved_path: String,
-        pulse_ctx_id: ContextId,
-        key: MapCacheKey,
-        direction_to_stored: Direction,
+        registration: RootRegistration,
         create: impl FnOnce() -> ConversionMap,
     ) -> bool {
+        let RootRegistration {
+            ctx_id,
+            resolved_path,
+            pulse_ctx_id,
+            dataobjectname,
+            key,
+            direction_to_stored,
+        } = registration;
         if !key.needs_conversion() {
             self.remove(ctx_id);
             return false;
@@ -209,6 +222,8 @@ impl ContextRegistry {
         let record = ConversionRecord {
             resolved_path,
             pulse_ctx_id,
+            dataobjectname,
+            pulse_uri: self.pulse_uri(pulse_ctx_id).unwrap_or_default(),
             map: self.get_or_create_map(key, create),
             root_id: ctx_id,
             direction_to_stored,
@@ -218,7 +233,7 @@ impl ContextRegistry {
         };
         let mut state = self.state.lock().unwrap();
         state.entries.insert(ctx_id, Entry::Conversion(record));
-        state.loss_logs.insert(ctx_id, Vec::new());
+        state.loss_logs.insert(ctx_id, LossLog::default());
         true
     }
 
@@ -243,7 +258,7 @@ impl ContextRegistry {
         let mut state = self.state.lock().unwrap();
         let parent = match state.entries.get(&parent_ctx_id) {
             Some(Entry::Conversion(record)) => record.clone(),
-            Some(Entry::DataEntry(_)) | None => {
+            Some(Entry::DataEntry { .. }) | None => {
                 state.entries.remove(&ctx_id);
                 state.loss_logs.remove(&ctx_id);
                 return false;
@@ -255,6 +270,8 @@ impl ContextRegistry {
             Entry::Conversion(ConversionRecord {
                 resolved_path,
                 pulse_ctx_id: parent.pulse_ctx_id,
+                dataobjectname: parent.dataobjectname,
+                pulse_uri: parent.pulse_uri,
                 map: parent.map,
                 root_id: parent.root_id,
                 direction_to_stored: parent.direction_to_stored,
@@ -275,7 +292,7 @@ impl ContextRegistry {
     pub(crate) fn lookup(&self, ctx_id: ContextId) -> Option<ConversionRecord> {
         match self.state.lock().unwrap().entries.get(&ctx_id) {
             Some(Entry::Conversion(record)) => Some(record.clone()),
-            Some(Entry::DataEntry(_)) | None => None,
+            Some(Entry::DataEntry { .. }) | None => None,
         }
     }
 
@@ -291,7 +308,17 @@ impl ContextRegistry {
     #[allow(dead_code, reason = "the tests' only handle on data-entry entries")]
     pub(crate) fn pulse_ctx_id(&self, ctx_id: ContextId) -> Option<ContextId> {
         match self.state.lock().unwrap().entries.get(&ctx_id) {
-            Some(Entry::DataEntry(_)) => Some(ctx_id),
+            Some(Entry::DataEntry { .. }) => Some(ctx_id),
+            Some(Entry::Conversion(_)) | None => None,
+        }
+    }
+
+    /// Returns a cloned URI for a live pulse context. It is captured by each
+    /// root record at registration so later pulse-ID reuse cannot alter the
+    /// root or its children.
+    pub(crate) fn pulse_uri(&self, ctx_id: ContextId) -> Option<String> {
+        match self.state.lock().unwrap().entries.get(&ctx_id) {
+            Some(Entry::DataEntry { uri, .. }) => Some(uri.clone()),
             Some(Entry::Conversion(_)) | None => None,
         }
     }
@@ -310,7 +337,7 @@ impl ContextRegistry {
         dataobjectname: &str,
     ) -> Option<DdVersion> {
         match self.state.lock().unwrap().entries.get(&pulse_ctx_id) {
-            Some(Entry::DataEntry(known)) => known.get(dataobjectname).cloned(),
+            Some(Entry::DataEntry { known, .. }) => known.get(dataobjectname).cloned(),
             _ => None,
         }
     }
@@ -326,7 +353,7 @@ impl ContextRegistry {
         dataobjectname: String,
         version: DdVersion,
     ) {
-        if let Some(Entry::DataEntry(known)) =
+        if let Some(Entry::DataEntry { known, .. }) =
             self.state.lock().unwrap().entries.get_mut(&pulse_ctx_id)
         {
             known.insert(dataobjectname, version);
@@ -339,64 +366,26 @@ impl ContextRegistry {
     /// wrongly translate a future `datapath`. A no-op if nothing was cached
     /// or `pulse_ctx_id` no longer names a live data-entry context.
     pub(crate) fn forget_occurrence_version(&self, pulse_ctx_id: ContextId, dataobjectname: &str) {
-        if let Some(Entry::DataEntry(known)) =
+        if let Some(Entry::DataEntry { known, .. }) =
             self.state.lock().unwrap().entries.get_mut(&pulse_ctx_id)
         {
             known.remove(dataobjectname);
         }
     }
 
-    /// Appends a non-exact read outcome directly to the loss log belonging to
-    /// the root captured in a read's conversion-record snapshot. Exact reads
-    /// never enter the log; if that root has ended, its log is gone and the
-    /// outcome is deliberately not retained.
-    ///
-    /// This deliberately does not resolve a live `ctx_id`: a read must not
-    /// attribute its outcome to a child context that was ended or recycled
-    /// while IMAS-Core was running.
-    pub(crate) fn record_read_loss_at_root(
-        &self,
-        root_id: ContextId,
-        dd_path: String,
-        fidelity: Fidelity,
-    ) {
-        self.record_loss_at_root(root_id, dd_path, fidelity, LossOperation::Read);
-    }
-
-    /// Appends a non-exact write outcome directly to the loss log belonging
-    /// to the root captured in a write's conversion-record snapshot. Exact
-    /// writes never enter the log; if that root has ended, its log is gone
-    /// and the outcome is deliberately not retained.
-    ///
-    /// This mirrors [`Self::record_read_loss_at_root`]: retaining against the
-    /// captured root prevents a child context ID recycled during a seam call
-    /// from receiving a stale loss entry.
-    pub(crate) fn record_write_loss_at_root(
-        &self,
-        root_id: ContextId,
-        dd_path: String,
-        fidelity: Fidelity,
-    ) {
-        self.record_loss_at_root(root_id, dd_path, fidelity, LossOperation::Write);
-    }
-
-    fn record_loss_at_root(
+    /// Delegates retention to the root's loss log. This deliberately does not
+    /// resolve a live `ctx_id`: an operation must not attribute its outcome
+    /// to a child context that ended or was recycled while IMAS-Core ran.
+    pub(crate) fn retain_loss_at_root(
         &self,
         root_id: ContextId,
         dd_path: String,
         fidelity: Fidelity,
         operation: LossOperation,
     ) {
-        if fidelity == Fidelity::Exact {
-            return;
-        }
         let mut state = self.state.lock().unwrap();
         if let Some(losses) = state.loss_logs.get_mut(&root_id) {
-            losses.push(LossEntry {
-                dd_path,
-                fidelity,
-                operation,
-            });
+            losses.retain(dd_path, fidelity, operation);
         }
     }
 
@@ -412,7 +401,7 @@ impl ContextRegistry {
         let Some(Entry::Conversion(record)) = state.entries.get(&ctx_id) else {
             return 0;
         };
-        state.loss_logs.get(&record.root_id).map_or(0, Vec::len)
+        state.loss_logs.get(&record.root_id).map_or(0, LossLog::len)
     }
 
     /// Calls `read` with the `index`-th loss-log entry retained for `ctx_id`'s
@@ -432,8 +421,7 @@ impl ContextRegistry {
         let Some(Entry::Conversion(record)) = state.entries.get(&ctx_id) else {
             return None;
         };
-        let loss = state.loss_logs.get(&record.root_id)?.get(index)?;
-        Some(read(&loss.dd_path, loss.fidelity, loss.operation))
+        state.loss_logs.get(&record.root_id)?.with_at(index, read)
     }
 
     /// Removes exactly the record at `ctx_id`, if any (mirrors a successful

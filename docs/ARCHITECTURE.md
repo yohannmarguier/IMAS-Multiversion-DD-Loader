@@ -723,14 +723,15 @@ sequenceDiagram
                 POL->>CORE: al_delete_data(stored candidate)
                 CORE-->>POL: status — first failure retained, later candidates still attempted
             end
-            POL-->>SEAM: Complete(first failure, naming the stored candidate)
+            POL-->>SEAM: Complete(first failure, visited stored candidates)
         end
-        Note over SEAM,REG: a delete never retains a loss entry
+        Note over SEAM,REG: refusal retains UNMAPPABLE; fan-out retains<br/>POTENTIALLY_LOSSY for every visited stored candidate
     end
 ```
 
-The asymmetry in one line: **a write may touch only precedence 1 and must report
-what it left behind; a delete must touch every candidate and reports nothing.**
+The asymmetry in one line: **a write may touch only precedence 1 and reports
+what it left behind; a delete must touch every candidate and reports the
+stored candidates it visited.**
 See also `CLAUDE.md`'s open exposure #139 — real IMAS-Core's HDF5 `deleteData`
 ignores its `path` argument, so the fan-out has no per-path effect on the only
 backend that implements delete at all.
@@ -754,7 +755,7 @@ stateDiagram-v2
     Untracked --> Untracked : occurrence open with a matching, absent<br/>or unserved stamp — nothing registered
 
     PulseEntry --> PulseEntry : caches each discovered occurrence version,<br/>keyed by dataobjectname
-    RootRecord --> RootRecord : non-exact reads and writes append to this root's loss log
+    RootRecord --> RootRecord : non-exact reads, writes and deletes append to this root's loss log
     ChildRecord --> ChildRecord : a loss query resolves this child to its root
 
     RootRecord --> Untracked : al_end_action on this id, on success only

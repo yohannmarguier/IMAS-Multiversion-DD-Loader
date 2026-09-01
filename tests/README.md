@@ -88,7 +88,7 @@ refuse it, because the stub's recorder resets its integer fields on every call,
 so the probe's own rwmode is only readable while its open is the last plugin
 call made.
 
-### `read-path-*` — 39 · `shim/read_path_test.c`
+### `read-path-*` — 45 · `shim/read_path_test.c`
 
 `al_read_data`, the main conversion seam (issues #56 and #65, ADR 0014).
 
@@ -107,7 +107,9 @@ call made.
 - **Bypass** — matching, unknown, unstamped and conversion-disabled contexts.
 - **Loss log** — lossy `merged`/`moved` reads retained, log destroyed with its
   context, plus the ten safety refusals of the `imas_mvdd_context_loss_*` query
-  exports (null output, negative / out-of-range index, short buffer).
+  exports (null output, negative / out-of-range index, short buffer), and loss
+  file delivery redirected, disabled, or failing at open and append without
+  changing the successful read or its queryable in-memory entries.
 
 ### `arraystruct-path-*` — 8 · `shim/arraystruct_path_test.c`
 
@@ -168,7 +170,7 @@ field with no stored slot, and a retyped field refuses before Core. Each refusal
 keeps caller storage untouched, records an `UNMAPPABLE` `WRITE` loss, and a
 child-context refusal reaches its root under the complete joined DD path.
 
-### `delete-path-*` — 15 · `shim/write_delete_conversion_test.c`
+### `delete-path-*` — 16 · `shim/write_delete_conversion_test.c`
 
 `al_delete_data`, from the same executable as `write-path-*` above.
 
@@ -179,8 +181,11 @@ containing subtrees, non-primary aliases, no-source and unservable paths. Issue
 presence probe: a write-mode context cannot read it reliably, and the artifact
 has no type or rank for a sound replacement. Every candidate is deleted; the
 first failure returns only after the rest are attempted. An empty delete forwards as the caller's
-explicit whole-DATAOBJECT migration route, and delete never retains a loss-log
-entry.
+explicit whole-DATAOBJECT migration route. Issue #173 supersedes the former
+no-loss policy: a refusal retains one `UNMAPPABLE` `DELETE` loss naming the
+caller path, and a candidate-plan fan-out retains one `POTENTIALLY_LOSSY`
+`DELETE` loss per stored candidate after all attempts, in both the context log
+and loss-log file.
 
 Issue #131 admits a *trivial* structure delete instead of refusing every
 non-leaf path outright: `time_slice` and `time_slice/constraints` now resolve
