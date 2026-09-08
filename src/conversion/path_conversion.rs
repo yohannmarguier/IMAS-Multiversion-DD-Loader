@@ -1027,6 +1027,8 @@ mod tests {
         ConversionRecord {
             resolved_path: resolved_path.to_string(),
             pulse_ctx_id: 0,
+            dataobjectname: String::new(),
+            pulse_uri: String::new(),
             map: Arc::new(ConversionMap::load(artifact).expect("fixture artifact must load")),
             root_id: 0,
             direction_to_stored: Direction::Forward,
@@ -1042,6 +1044,8 @@ mod tests {
         ConversionRecord {
             resolved_path: String::new(),
             pulse_ctx_id: 0,
+            dataobjectname: String::new(),
+            pulse_uri: String::new(),
             map: Arc::new(ConversionMap::load(artifact).expect("fixture artifact must load")),
             root_id: 0,
             direction_to_stored: Direction::Reverse,

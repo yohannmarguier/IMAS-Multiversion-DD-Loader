@@ -12,14 +12,15 @@
 use std::ffi::{CStr, c_char, c_int, c_void};
 
 use crate::al_status_t;
-use crate::conversion::conversion_map::Fidelity;
 use crate::conversion::path_conversion;
 use crate::conversion::read_outcome::{self, ReadOutcome};
 use crate::conversion::seam_policy;
 use crate::core::core_binding::DOUBLE_DATA_ID;
-use crate::registry::context_registry::{ContextId, ConversionRecord, REGISTRY};
+use crate::loss::LossOperation;
+use crate::registry::context_registry::ConversionRecord;
 
 use super::dispatch::{CallFamily, call_read};
+use super::loss::retain_loss;
 use super::reentry::ReentryGuard;
 use super::refusal::{c_str_ref, context_path_refusal, live_conversion_record, read_argument_path};
 
@@ -257,8 +258,8 @@ fn finish_read(
     verdict: seam_policy::ReadVerdict,
     data: *mut *mut c_void,
 ) -> al_status_t {
-    record_argument_loss(record.root_id, &verdict.field);
-    record_argument_loss(record.root_id, &verdict.timebase);
+    record_argument_loss(record, &verdict.field);
+    record_argument_loss(record, &verdict.timebase);
     match verdict.outcome {
         seam_policy::SeamOutcome::Data(status) => status,
         seam_policy::SeamOutcome::NotFound => no_source_read(data),
@@ -268,12 +269,15 @@ fn finish_read(
     }
 }
 
-/// Retains one argument's fidelity on `root_id`'s loss log — skipping
-/// [`Fidelity::Exact`], which is never logged (ADR 0012).
-fn record_argument_loss(root_id: ContextId, argument: &seam_policy::ArgumentFidelity) {
-    if argument.fidelity != Fidelity::Exact {
-        REGISTRY.record_read_loss_at_root(root_id, argument.path.clone(), argument.fidelity);
-    }
+/// Retains one argument's fidelity on `record`'s root loss log — skipping
+/// exact-fidelity operations, which are never logged (ADR 0012).
+fn record_argument_loss(record: &ConversionRecord, argument: &seam_policy::ArgumentFidelity) {
+    retain_loss(
+        record,
+        argument.path.clone(),
+        argument.fidelity,
+        LossOperation::Read,
+    );
 }
 
 /// Returns the C ABI's normal not-found outcome for a path the artifact says

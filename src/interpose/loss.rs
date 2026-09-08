@@ -10,7 +10,41 @@ use std::ffi::{c_char, c_int};
 
 use crate::al_status_t;
 use crate::conversion::conversion_map::Fidelity;
-use crate::registry::context_registry::REGISTRY;
+use crate::loss::{LossOperation, fidelity_c_code};
+use crate::loss_file::{self, LossFileEntry};
+use crate::registry::context_registry::{ConversionRecord, REGISTRY};
+
+/// Retains one operation's loss against `record`'s root. `record` is the
+/// snapshot the seam already resolved before calling IMAS-Core, not a fresh
+/// lookup: a root may end while that call is in flight, and a fresh
+/// `REGISTRY.lookup` taken after the fact could already report it gone.
+/// Using the seam's own snapshot is what lets the file retain an entry whose
+/// root has already ended, per ADR 0023's documented file/export
+/// disagreement — the in-memory log still resolves independently through
+/// `record.root_id` and silently no-ops once that root is gone.
+///
+/// An exact-fidelity operation is never logged (ADR 0012) — checked once
+/// here, the one call site both sinks share, rather than in each of them.
+pub(crate) fn retain_loss(
+    record: &ConversionRecord,
+    dd_path: String,
+    fidelity: Fidelity,
+    operation: LossOperation,
+) {
+    if fidelity == Fidelity::Exact {
+        return;
+    }
+    REGISTRY.retain_loss_at_root(record.root_id, dd_path.clone(), fidelity, operation);
+    loss_file::retain(LossFileEntry::new(
+        &record.pulse_uri,
+        &record.dataobjectname,
+        &record.stored_version.to_string(),
+        &record.hli_version.to_string(),
+        operation,
+        fidelity,
+        &dd_path,
+    ));
+}
 
 /// Implements `imas_mvdd_context_loss_count` (ADR 0012): reports the number
 /// of loss-log entries retained on `ctx_id`'s root context without
@@ -81,7 +115,7 @@ pub(crate) unsafe fn context_loss_at(
         unsafe {
             std::ptr::copy_nonoverlapping(path.as_ptr().cast::<c_char>(), path_buf, path.len());
             *path_buf.add(path.len()) = 0;
-            *verdict = fidelity_verdict_code(fidelity);
+            *verdict = fidelity_c_code(fidelity);
         }
         Ok(())
     }) else {
@@ -122,7 +156,7 @@ pub(crate) unsafe fn context_loss_operation_at(
         // SAFETY: `operation` is non-null and valid for writes per this
         // function's safety contract.
         unsafe {
-            *operation = loss_operation_code(entry_operation);
+            *operation = entry_operation.c_code();
         }
     }) else {
         return crate::conversion_refusal(
@@ -130,26 +164,4 @@ pub(crate) unsafe fn context_loss_operation_at(
         );
     };
     al_status_t::default()
-}
-
-fn fidelity_verdict_code(fidelity: Fidelity) -> c_int {
-    match fidelity {
-        Fidelity::Exact => {
-            unreachable!("the loss log never retains an exact-fidelity read (ADR 0012)")
-        }
-        Fidelity::PotentiallyLossy => crate::IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY,
-        Fidelity::Lossy => crate::IMAS_MVDD_FIDELITY_LOSSY,
-        Fidelity::Unmappable => crate::IMAS_MVDD_FIDELITY_UNMAPPABLE,
-    }
-}
-
-fn loss_operation_code(operation: crate::registry::context_registry::LossOperation) -> c_int {
-    match operation {
-        crate::registry::context_registry::LossOperation::Read => {
-            crate::IMAS_MVDD_LOSS_OPERATION_READ
-        }
-        crate::registry::context_registry::LossOperation::Write => {
-            crate::IMAS_MVDD_LOSS_OPERATION_WRITE
-        }
-    }
 }

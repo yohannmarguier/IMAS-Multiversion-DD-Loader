@@ -9,7 +9,7 @@ A full commit SHA rather than a branch. It is the build cache's key, and it is
 what makes a red HLI job attributable: a moved HLI shows up as a one-line diff
 to this file in the same pull request, so a failure that arrives without one is
 the shim's or upstream IMAS-Core's. See
-docs/adr/0020-hli-validation-floats-core-and-pins-the-dd.md.
+docs/adr/0022-hli-validation-floats-core-and-pins-the-dd.md.
 
 Repository: https://github.com/yohannmarguier/IMAS-Fortran (branch develop as
 of this commit). The repository name lives in the workflow rather than here,

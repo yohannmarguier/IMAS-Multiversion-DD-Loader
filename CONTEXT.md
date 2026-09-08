@@ -39,6 +39,11 @@ _Avoid_: lock, freeze, pin, cache, memoise.
 **shim-owned export**:
 A public symbol this project defines rather than mirrors from IMAS-Core, carrying the `imas_mvdd_` prefix and listed explicitly in the export-drift check. There are four — `imas_mvdd_set_hli_dd_version`, `imas_mvdd_context_loss_count`, `imas_mvdd_context_loss_at` and `imas_mvdd_context_loss_operation_at`. None of them allocates memory that crosses the boundary.
 _Avoid_: extra symbol, extension, custom API, private API — they are public and supported.
+
+**occurrence**:
+One of possibly several stored copies of the same IDS within a pulse, told apart only by number — occurrence 0 might be a fast automatic reconstruction, occurrence 1 a later, better one, occurrence 2 from a different code. Two occurrences of one IDS can hold different stored DD versions, so the shim can convert one while passing the other through unchanged. The number rides inside `dataobjectname`: occurrence 0 is bare (`equilibrium`), occurrence 3 is suffixed (`equilibrium/3`); the suffix appears only when the occurrence number is greater than zero. The shim splits `dataobjectname` on `/` to recover the **IDS name** and discards the occurrence number, which does not affect which conversion map applies.
+_Avoid_: instance, index, copy, version — and do not use it bare where **IDS name** is meant.
+
 **IDS name**:
 The stable logical key of an IDS, such as `equilibrium`. It selects the same IDS across DD versions and is not a DD path that the shim translates.
 _Avoid_: source IDS name, stored IDS name, IDS path.
@@ -98,11 +103,19 @@ A conversion rule whose HLI-side selector falls at or under a requested DD path,
 _Avoid_: crossing rule, leaking rule, straddling rule.
 
 **loss log**:
-The list of non-exact reads and writes recorded on a root context record: for each, the relevant complete DD path, its fidelity verdict, and which operation produced it. A read loss or refused write names the HLI-DD path as the HLI asked for it. A successful ambiguous write instead names each stored-DD candidate it deliberately left unwritten, because those are the paths where stale data may remain. It is the only channel by which loss reaches the caller when the operation *succeeded*, because a success is forced to `al_status_t.code == 0`. The HLI drains it before `al_end_action` ends the context; it does not outlive the context. See `docs/adr/0012-loss-reaches-the-caller-by-a-context-log.md`.
-_Avoid_: report, journal, accumulator, diagnostics — and never call it an error channel; the reads and writes it records succeeded.
+The list of non-exact reads, writes or deletes recorded on a root context record: for each, the relevant complete DD path, its fidelity verdict, and which operation produced it. A read loss or refused write/delete names the HLI-DD path as the HLI asked for it. A successful ambiguous write instead names each stored-DD candidate it deliberately left unwritten, while a fanned-out delete names every stored candidate it visited, because those are the paths where stale data may remain or have been removed. A patched HLI can drain it before `al_end_action`; it is one delivery channel alongside the loss log file. See `docs/adr/0012-loss-reaches-the-caller-by-a-context-log.md` and `docs/adr/0023-loss-log-file-delivery.md`.
+_Avoid_: report, journal, accumulator, diagnostics — and never call it an error channel; the reads, writes and deletes it records succeeded.
+
+**loss log file**:
+The process-local, append-only tab-separated file that records each non-exact loss as it happens, independently of a root context's lifetime. It is created only on the first loss. See `docs/adr/0023-loss-log-file-delivery.md`.
+_Avoid_: report, journal, diagnostics.
+
+**written-key set**:
+The process-wide set of complete rendered loss-log lines already written to the loss log file. It prevents repeated operations from growing the file; its entries are bounded by the distinct `(URI, occurrence, version pair, operation, path)` combinations a process encounters, not by repeated reads of them.
+_Avoid_: cache, file index.
 
 **operation** (of a loss log entry):
-Which kind of call produced an entry: a read or a write. Deliberately not called a direction, because that word already names which side of a DD-version pair supplies a path.
+Which kind of call produced an entry: a read, write or delete. Deliberately not called a direction, because that word already names which side of a DD-version pair supplies a path.
 _Avoid_: direction, mode, kind.
 
 **read outcome**:
@@ -129,12 +142,20 @@ _Avoid_: coverage record — a different, hand-authored concept the proof supers
 **conversion chain**:
 An ordered in-memory representation of DD changes between two DD versions. The initial special-case artifact does not need a conversion chain. The future generator's chain and merge design is not decided yet.
 
+**pulse**:
+The context `al_begin_dataentry_action` opens; every occurrence-opening and arraystruct context that follows is opened beneath it. It carries no stored DD version and no conversion-map reference of its own — it exists only so that contexts opened beneath it can carry its context ID as their pulse context ID, the field a **context record** stores it in. `al_close_pulse` closes it.
+_Avoid_: data entry, data-entry context — those words survive only inside the fixed ABI name `al_begin_dataentry_action` and in code identifiers that mirror it.
+
 **context registry**:
 The single shim-owned catalogue of currently live IMAS-Core contexts whose stored DD version differs from the HLI DD version. It owns all conversion state and is accessed only through its own API; a context ID identifies at most one live registry record.
 _Avoid_: context map, context stack.
 
 **context record**:
-The registry entry for one live mismatched context. It carries that context's resolved HLI DD path, conversion-map reference, pulse context ID, and optional parent context ID.
+The registry entry for one live mismatched context. It carries that context's resolved HLI DD path, conversion-map reference, pulse context ID and URI, complete occurrence `dataobjectname`, and optional parent context ID.
+
+**root context**:
+A context record whose root identity is its own context ID, as opposed to a child (arraystruct) context record, which resolves its root identity from a live parent snapshot instead. The registry resolves any child to its root in one lookup through the stored root identity, never by walking ancestry — ADR 0003 forbids a read-time hierarchy walk.
+_Avoid_: top-level context, base context — and do not use "parent" for this, which names a different, direct relation.
 
 **parent context**:
 The context from which an arraystruct context was opened. The shim uses the relation to construct the child record, but it does not imply lifecycle ownership or a read-time hierarchy walk.

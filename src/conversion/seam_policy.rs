@@ -439,9 +439,17 @@ pub(crate) struct DeleteFailure<'a> {
 // the verdict consistent with every other status path in this crate.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum DeleteVerdict<'a> {
-    Forward { path: Option<&'a CStr> },
-    Complete { failure: Option<DeleteFailure<'a>> },
-    Refusal { reason: String, dd_path: String },
+    Forward {
+        path: Option<&'a CStr>,
+    },
+    Complete {
+        failure: Option<DeleteFailure<'a>>,
+        visited_candidates: Vec<&'a CStr>,
+    },
+    Refusal {
+        reason: String,
+        dd_path: String,
+    },
 }
 
 /// Runs one delete decision. An empty path deliberately forwards: it is
@@ -476,6 +484,7 @@ pub(crate) fn run_delete<'a>(
             }
             DeleteVerdict::Complete {
                 failure: first_failure,
+                visited_candidates: paths.iter().map(|path| path.as_c_str()).collect(),
             }
         }
         DeletePath::Refusal { reason, dd_path } => DeleteVerdict::Refusal {
@@ -1523,7 +1532,25 @@ mod tests {
         });
 
         assert_eq!(visited, ["first", "second", "third"]);
-        assert!(matches!(verdict, DeleteVerdict::Complete { failure: None }));
+        match verdict {
+            DeleteVerdict::Complete {
+                failure: None,
+                visited_candidates,
+            } => {
+                let reported: Vec<_> = visited_candidates
+                    .iter()
+                    .map(|path| path.to_str().expect("fixture paths are ASCII"))
+                    .collect();
+                assert_eq!(reported, ["first", "second", "third"]);
+            }
+            DeleteVerdict::Complete {
+                failure: Some(_), ..
+            }
+            | DeleteVerdict::Forward { .. }
+            | DeleteVerdict::Refusal { .. } => {
+                panic!("a successful candidate plan must report every visited candidate")
+            }
+        }
     }
 
     #[test]
@@ -1550,14 +1577,20 @@ mod tests {
         match verdict {
             DeleteVerdict::Complete {
                 failure: Some(failure),
+                visited_candidates,
             } => {
                 assert_eq!(failure.status.code, 7);
                 assert_eq!(
                     failure.path.to_str().expect("fixture paths are ASCII"),
                     "first"
                 );
+                let reported: Vec<_> = visited_candidates
+                    .iter()
+                    .map(|path| path.to_str().expect("fixture paths are ASCII"))
+                    .collect();
+                assert_eq!(reported, ["first", "second", "third"]);
             }
-            DeleteVerdict::Complete { failure: None } => {
+            DeleteVerdict::Complete { failure: None, .. } => {
                 panic!("the first failure must be retained")
             }
             DeleteVerdict::Forward { .. } | DeleteVerdict::Refusal { .. } => {

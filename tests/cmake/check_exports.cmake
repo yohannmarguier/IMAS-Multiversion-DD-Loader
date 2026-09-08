@@ -121,6 +121,11 @@ foreach(line IN LISTS owned_manifest_lines)
 endforeach()
 list(REMOVE_DUPLICATES owned_manifest_exports)
 list(SORT owned_manifest_exports)
+list(LENGTH owned_manifest_exports owned_export_count)
+if(NOT owned_export_count EQUAL 4)
+    message(FATAL_ERROR
+        "The shim-owned export manifest must retain exactly four entries, got ${owned_export_count}")
+endif()
 
 # Assertion 1: every IMAS-Core symbol is present in the shim, and the shim
 # introduces no extra symbol under IMAS-Core's own `al_`/exception surface.

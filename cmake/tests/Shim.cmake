@@ -436,6 +436,53 @@ add_stub_test(read-path-moved-read-retains-a-lossy-verdict-in-the-loss-log
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
 
+add_stub_test(loss-file-is-created-on-first-loss-and-deduplicates-lines
+    read_path_test loss-file-is-created-on-first-loss-and-deduplicates-lines
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-created")
+
+add_stub_test(loss-file-is-absent-without-loss
+    read_path_test loss-file-is-absent-without-loss
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-clean")
+
+add_stub_test(loss-file-filename-collision-gains-a-numeric-suffix
+    read_path_test loss-file-filename-collision-gains-a-numeric-suffix
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-collision")
+
+# Issue #172: the optional delivery channel can be configured away, or fail
+# once without changing the successful ABI call or its in-memory loss record.
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-disabled")
+add_stub_test(read-path-loss-file-empty-directory-value-disables-delivery
+    read_path_test loss-file-empty-directory-value-disables-delivery
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=")
+set_tests_properties(read-path-loss-file-empty-directory-value-disables-delivery PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-disabled")
+
+add_stub_test(read-path-loss-file-missing-directory-reports-once-without-failing-reads
+    read_path_test loss-file-missing-directory-reports-once-without-failing-reads
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-missing")
+
+add_stub_test(read-path-loss-file-unwritable-directory-reports-once-without-failing-reads
+    read_path_test loss-file-unwritable-directory-reports-once-without-failing-reads
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-unwritable")
+
+add_stub_test(read-path-loss-file-append-failure-reports-once-without-failing-reads
+    read_path_test loss-file-append-failure-reports-once-without-failing-reads
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-append-failure")
+
 add_stub_test(read-path-ending-context-destroys-its-loss-log
     read_path_test ending-context-destroys-its-loss-log
     HLI_DD_VERSION 3.39.0
@@ -548,6 +595,10 @@ add_write_delete_test(write-path-cocos-sentinel-forwards-unchanged-without-loss)
 add_write_delete_test(write-path-cocos-invalid-shape-or-type-refuses-before-core)
 add_write_delete_test(write-path-refuses-dd-version-stamp-but-forwards-its-siblings)
 add_write_delete_test(write-path-without-stored-slot-refuses-and-retains-a-write-loss)
+add_write_delete_test(write-path-loss-file-records-a-refused-write
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-write")
 add_write_delete_test(write-path-reverse-without-stored-slot-refuses-and-retains-a-write-loss
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
@@ -561,7 +612,14 @@ add_write_delete_test(delete-path-admits-trivial-structure-deletes)
 add_write_delete_test(delete-path-refuses-boundary-separatrix-reverse-direction
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
-add_write_delete_test(delete-path-fans-out-over-candidates-in-declared-order)
+add_write_delete_test(delete-path-fans-out-over-candidates-in-declared-order
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-delete")
+add_write_delete_test(delete-path-refusal-retains-an-unmappable-delete-loss
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-delete-refusal")
 add_write_delete_test(delete-path-reports-a-failure-and-continues)
 add_write_delete_test(delete-path-refuses-non-primary-source-before-core-call
     HLI_DD_VERSION 3.39.0

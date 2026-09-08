@@ -439,6 +439,22 @@ static void scenario_write_without_stored_slot_refuses_and_retains_a_write_loss(
            "a DD4-only field was refused before Core and retained as a write loss\n");
 }
 
+static void scenario_loss_file_records_a_refused_write(void) {
+    clear_loss_log_directory();
+    int operation_ctx = open_mismatched_equilibrium();
+    double sentinel = 42.0;
+    int size[1] = {73};
+    CHECK(write_field(operation_ctx, "time_slice/boundary/phi", "", &sentinel, size).code
+          == IMAS_MVDD_CONVERSION_ERROR);
+
+    char *contents = read_loss_log();
+    CHECK(strstr(contents,
+                 "imas:hdf5?path=/tmp/pulse\tequilibrium\t3.39.0\t4.1.1\twrite\tUNMAPPABLE\ttime_slice/boundary/phi\n")
+          != NULL);
+    free(contents);
+    printf("write_delete_conversion_test loss-file-records-a-refused-write: an unmappable write is persisted\n");
+}
+
 static void scenario_write_reverse_without_stored_slot_refuses_and_retains_a_write_loss(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int writes_before = int_from_stub("recording_stub_write_call_count");
@@ -562,6 +578,26 @@ static void scenario_delete_refuses_no_source_unservable_and_structures(void) {
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
 }
 
+static void scenario_delete_refusal_retains_an_unmappable_delete_loss(void) {
+    clear_loss_log_directory();
+    int operation_ctx = open_mismatched_equilibrium();
+    int deletes_before = int_from_stub("recording_stub_delete_call_count");
+
+    al_status_t status = al_delete_data(operation_ctx, "time_slice/boundary/phi");
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path has no stored source", "time_slice/boundary/phi",
+                          "4.1.1", "3.39.0");
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary/phi", IMAS_MVDD_FIDELITY_UNMAPPABLE,
+                  IMAS_MVDD_LOSS_OPERATION_DELETE);
+
+    char *contents = read_loss_log();
+    CHECK(strstr(contents, "\tdelete\tUNMAPPABLE\ttime_slice/boundary/phi\n") != NULL);
+    free(contents);
+}
+
 /* Issue #131 / ADR 0017 decision 4: a structure delete is trivial and
  * proceeds when no rule nested underneath it targets a stored path outside
  * the subtree it resolves to. "time_slice" and "time_slice/constraints" are
@@ -609,6 +645,7 @@ static void scenario_delete_refuses_boundary_separatrix_reverse_direction(void) 
  * the first catches any probe, the second catches a probe that skips — so
  * they belong in one scenario rather than in a near-identical second one. */
 static void scenario_delete_fans_out_over_candidates_in_declared_order(void) {
+    clear_loss_log_directory();
     int operation_ctx = open_mismatched_equilibrium();
     int reads_before = int_from_stub("recording_stub_read_call_count");
     int deletes_before = int_from_stub("recording_stub_delete_call_count");
@@ -631,7 +668,21 @@ static void scenario_delete_fans_out_over_candidates_in_declared_order(void) {
         CHECK(strcmp(data_event_path_at(events_before + index),
                      delete_path_at(deletes_before + index)) == 0);
     }
-    CHECK(loss_count(operation_ctx) == 0);
+    CHECK(loss_count(operation_ctx) == 3);
+    check_loss_at(operation_ctx, 0, "time_slice/profiles_2d/b_field_phi",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_DELETE);
+    check_loss_at(operation_ctx, 1, "time_slice/profiles_2d/b_field_tor",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_DELETE);
+    check_loss_at(operation_ctx, 2, "time_slice/profiles_2d/b_tor",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_DELETE);
+
+    char *contents = read_loss_log();
+    CHECK(strstr(contents,
+                 "\tdelete\tPOTENTIALLY_LOSSY\ttime_slice/profiles_2d/b_field_phi\n") != NULL);
+    CHECK(strstr(contents,
+                 "\tdelete\tPOTENTIALLY_LOSSY\ttime_slice/profiles_2d/b_field_tor\n") != NULL);
+    CHECK(strstr(contents, "\tdelete\tPOTENTIALLY_LOSSY\ttime_slice/profiles_2d/b_tor\n") != NULL);
+    free(contents);
 }
 
 static void scenario_delete_reports_a_failure_and_continues(void) {
@@ -654,7 +705,13 @@ static void scenario_delete_reports_a_failure_and_continues(void) {
     CHECK(strcmp(delete_path_at(deletes_before + 1), "time_slice/profiles_2d/b_field_tor") ==
           0);
     CHECK(strcmp(delete_path_at(deletes_before + 2), "time_slice/profiles_2d/b_tor") == 0);
-    CHECK(loss_count(operation_ctx) == 0);
+    CHECK(loss_count(operation_ctx) == 3);
+    check_loss_at(operation_ctx, 0, "time_slice/profiles_2d/b_field_phi",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_DELETE);
+    check_loss_at(operation_ctx, 1, "time_slice/profiles_2d/b_field_tor",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_DELETE);
+    check_loss_at(operation_ctx, 2, "time_slice/profiles_2d/b_tor",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_DELETE);
 }
 
 static void scenario_delete_refuses_non_primary_source_before_core_call(void) {
@@ -819,6 +876,7 @@ int main(int argc, char **argv) {
         {"write-path-cocos-invalid-shape-or-type-refuses-before-core", scenario_write_cocos_invalid_shape_or_type_refuses_before_core},
         {"write-path-refuses-dd-version-stamp-but-forwards-its-siblings", scenario_write_refuses_dd_version_stamp_but_forwards_its_siblings},
         {"write-path-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_without_stored_slot_refuses_and_retains_a_write_loss},
+        {"write-path-loss-file-records-a-refused-write", scenario_loss_file_records_a_refused_write},
         {"write-path-reverse-without-stored-slot-refuses-and-retains-a-write-loss", scenario_write_reverse_without_stored_slot_refuses_and_retains_a_write_loss},
         {"write-path-retyped-path-refuses-and-retains-a-write-loss", scenario_write_retyped_path_refuses_and_retains_a_write_loss},
         {"write-path-child-refusal-is-retained-on-its-root-with-a-complete-path", scenario_write_child_refusal_is_retained_on_its_root_with_a_complete_path},
@@ -826,6 +884,7 @@ int main(int argc, char **argv) {
         {"delete-path-refuses-stamp-subtrees-before-core-call", scenario_delete_refuses_stamp_subtrees_before_core_call},
         {"delete-path-empty-path-forwards-as-explicit-migration-route", scenario_delete_empty_path_forwards_as_explicit_migration_route},
         {"delete-path-refuses-no-source-unservable-and-structures", scenario_delete_refuses_no_source_unservable_and_structures},
+        {"delete-path-refusal-retains-an-unmappable-delete-loss", scenario_delete_refusal_retains_an_unmappable_delete_loss},
         {"delete-path-admits-trivial-structure-deletes", scenario_delete_admits_trivial_structure_deletes},
         {"delete-path-refuses-boundary-separatrix-reverse-direction", scenario_delete_refuses_boundary_separatrix_reverse_direction},
         {"delete-path-fans-out-over-candidates-in-declared-order", scenario_delete_fans_out_over_candidates_in_declared_order},

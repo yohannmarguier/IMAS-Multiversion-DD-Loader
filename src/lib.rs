@@ -76,6 +76,8 @@ pub mod conversion;
 #[deprecated(note = "use imas_mvdd_loader::conversion::conversion_map instead")]
 pub use conversion::conversion_map;
 mod core;
+mod loss;
+mod loss_file;
 mod registry;
 mod version;
 
@@ -102,6 +104,7 @@ pub const IMAS_MVDD_FIDELITY_UNMAPPABLE: c_int = 2;
 /// `operation` output (ADR 0012).
 pub const IMAS_MVDD_LOSS_OPERATION_READ: c_int = 0;
 pub const IMAS_MVDD_LOSS_OPERATION_WRITE: c_int = 1;
+pub const IMAS_MVDD_LOSS_OPERATION_DELETE: c_int = 2;
 
 /// Status returned by every ABI entry point. `code == 0` means success.
 ///
@@ -374,7 +377,8 @@ pub unsafe extern "C" fn imas_mvdd_context_loss_at(
 /// Shim-owned export (ADR 0012) — listed on `tests/abi/owned_exports.def`
 /// alongside the other loss-query exports. Writes the operation that produced
 /// the `index`-th entry in `ctxID`'s root loss log to caller-owned storage:
-/// `IMAS_MVDD_LOSS_OPERATION_READ` or `IMAS_MVDD_LOSS_OPERATION_WRITE`.
+/// `IMAS_MVDD_LOSS_OPERATION_READ`, `IMAS_MVDD_LOSS_OPERATION_WRITE`, or
+/// `IMAS_MVDD_LOSS_OPERATION_DELETE`.
 /// Nothing is allocated.
 ///
 /// Refuses — leaving `*operation` untouched — for a null `operation`, a

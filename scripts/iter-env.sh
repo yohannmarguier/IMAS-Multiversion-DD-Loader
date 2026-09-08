@@ -9,6 +9,7 @@
 module load Rust/1.88.0-GCCcore-14.3.0
 module load cargo-c/0.10.15-GCCcore-14.3.0
 module load CMake/3.31.8-GCCcore-14.3.0
+module load HDF5/1.14.6-GCC-14.3.0-serial
 
 export CARGO_HTTP_MULTIPLEXING=false
 

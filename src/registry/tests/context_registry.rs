@@ -37,11 +37,14 @@ fn record_dummy_root(
     pulse_ctx_id: ContextId,
 ) -> bool {
     registry.record_root(
-        ctx_id,
-        resolved_path,
-        pulse_ctx_id,
-        dummy_key(),
-        DUMMY_DIRECTION,
+        RootRegistration {
+            ctx_id,
+            resolved_path,
+            pulse_ctx_id,
+            dataobjectname: "equilibrium".to_string(),
+            key: dummy_key(),
+            direction_to_stored: DUMMY_DIRECTION,
+        },
         dummy_map,
     )
 }
@@ -57,11 +60,14 @@ fn a_root_record_retains_its_path_pulse_id_map_and_root_identity() {
     let registry = ContextRegistry::new();
     let key = dummy_key();
     assert!(registry.record_root(
-        5,
-        "time_slice/boundary/psi".to_string(),
-        1,
-        key.clone(),
-        DUMMY_DIRECTION,
+        RootRegistration {
+            ctx_id: 5,
+            resolved_path: "time_slice/boundary/psi".to_string(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium".to_string(),
+            key: key.clone(),
+            direction_to_stored: DUMMY_DIRECTION,
+        },
         dummy_map,
     ));
 
@@ -78,6 +84,38 @@ fn a_root_record_retains_its_path_pulse_id_map_and_root_identity() {
         ),
         "lookup must hand back a shared reference to the same map, not a copy"
     );
+}
+
+#[test]
+fn root_and_child_retain_their_occurrence_and_pulse_identity_across_pulse_id_reuse() {
+    let registry = ContextRegistry::new();
+    registry.record_dataentry_with_uri(1, "imas:hdf5?path=/tmp/original-pulse".to_string());
+    assert_eq!(
+        registry.pulse_uri(1).as_deref(),
+        Some("imas:hdf5?path=/tmp/original-pulse")
+    );
+    assert!(registry.record_root(
+        RootRegistration {
+            ctx_id: 5,
+            resolved_path: String::new(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium/1".to_string(),
+            key: dummy_key(),
+            direction_to_stored: DUMMY_DIRECTION,
+        },
+        dummy_map,
+    ));
+    assert!(registry.record_child(6, 5, "time_slice(0)".to_string()));
+
+    // Reusing the pulse ID must not retroactively alter a root or child that
+    // already captured the original pulse URI.
+    registry.record_dataentry_with_uri(1, "imas:hdf5?path=/tmp/replacement-pulse".to_string());
+
+    for ctx_id in [5, 6] {
+        let record = registry.lookup(ctx_id).expect("record must stay live");
+        assert_eq!(record.dataobjectname, "equilibrium/1");
+        assert_eq!(record.pulse_uri, "imas:hdf5?path=/tmp/original-pulse");
+    }
 }
 
 #[test]
@@ -128,18 +166,21 @@ fn a_non_exact_read_from_a_child_is_retained_by_its_root_context() {
     assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
 
     let child = registry.lookup(6).expect("the child must be live");
-    registry.record_read_loss_at_root(child.root_id, "field".to_string(), Fidelity::Lossy);
-
-    let state = registry.state.lock().unwrap();
-    assert_eq!(
-        state.loss_logs.get(&5),
-        Some(&vec![LossEntry {
-            dd_path: "field".to_string(),
-            fidelity: Fidelity::Lossy,
-            operation: LossOperation::Read,
-        }])
+    registry.retain_loss_at_root(
+        child.root_id,
+        "field".to_string(),
+        Fidelity::Lossy,
+        LossOperation::Read,
     );
-    assert!(!state.loss_logs.contains_key(&6));
+
+    registry
+        .with_loss_at(5, 0, |path, fidelity, operation| {
+            assert_eq!(path, "field");
+            assert_eq!(fidelity, Fidelity::Lossy);
+            assert_eq!(operation, crate::loss::LossOperation::Read);
+        })
+        .expect("the root must retain the child's loss");
+    assert!(!registry.state.lock().unwrap().loss_logs.contains_key(&6));
 }
 
 #[test]
@@ -149,22 +190,21 @@ fn a_refused_write_from_a_child_is_retained_by_its_root_context() {
     assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
 
     let child = registry.lookup(6).expect("the child must be live");
-    registry.record_write_loss_at_root(
+    registry.retain_loss_at_root(
         child.root_id,
         "root/path/field".to_string(),
         Fidelity::Unmappable,
+        LossOperation::Write,
     );
 
-    let state = registry.state.lock().unwrap();
-    assert_eq!(
-        state.loss_logs.get(&5),
-        Some(&vec![LossEntry {
-            dd_path: "root/path/field".to_string(),
-            fidelity: Fidelity::Unmappable,
-            operation: LossOperation::Write,
-        }])
-    );
-    assert!(!state.loss_logs.contains_key(&6));
+    registry
+        .with_loss_at(5, 0, |path, fidelity, operation| {
+            assert_eq!(path, "root/path/field");
+            assert_eq!(fidelity, Fidelity::Unmappable);
+            assert_eq!(operation, crate::loss::LossOperation::Write);
+        })
+        .expect("the root must retain the child's loss");
+    assert!(!registry.state.lock().unwrap().loss_logs.contains_key(&6));
 }
 
 #[test]
@@ -185,7 +225,12 @@ fn a_read_uses_its_captured_root_after_its_child_id_is_reused() {
         2
     ));
 
-    registry.record_read_loss_at_root(read_root, "old/root/field".to_string(), Fidelity::Lossy);
+    registry.retain_loss_at_root(
+        read_root,
+        "old/root/field".to_string(),
+        Fidelity::Lossy,
+        LossOperation::Read,
+    );
 
     assert_eq!(registry.loss_count(5), 1);
     assert_eq!(registry.loss_count(6), 0);
@@ -196,11 +241,14 @@ fn a_child_record_retains_its_own_path_and_parent_id_and_shares_the_parents_map(
     let registry = ContextRegistry::new();
     let key = dummy_key();
     assert!(registry.record_root(
-        5,
-        "root/path".to_string(),
-        1,
-        key.clone(),
-        DUMMY_DIRECTION,
+        RootRegistration {
+            ctx_id: 5,
+            resolved_path: "root/path".to_string(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium".to_string(),
+            key: key.clone(),
+            direction_to_stored: DUMMY_DIRECTION,
+        },
         dummy_map
     ));
 
@@ -261,7 +309,7 @@ fn a_grandchild_inherits_the_root_identity_through_its_immediate_parent() {
 #[test]
 fn recording_a_child_under_an_id_with_no_live_conversion_record_fails_and_clears_any_stale_entry() {
     let registry = ContextRegistry::new();
-    registry.record_dataentry(1);
+    registry.record_dataentry_with_uri(1, String::new());
     assert!(record_dummy_root(&registry, 9, "stale".to_string(), 1));
 
     // A data-entry context is not a conversion record: no root to inherit from.
@@ -374,7 +422,7 @@ fn recording_over_a_live_id_replaces_it_without_removal() {
 #[test]
 fn a_dataentry_context_carries_no_stored_version_and_no_map() {
     let registry = ContextRegistry::new();
-    registry.record_dataentry(10);
+    registry.record_dataentry_with_uri(10, String::new());
 
     // Not a conversion record: no path, no map, no rule resolution
     // triggered by its presence alone.
@@ -387,7 +435,7 @@ fn a_dataentry_context_carries_no_stored_version_and_no_map() {
 #[test]
 fn a_dataentry_context_never_by_itself_is_conversion_eligible() {
     let registry = ContextRegistry::new();
-    registry.record_dataentry(10);
+    registry.record_dataentry_with_uri(10, String::new());
 
     // An operation record opened under this pulse carries its ID
     // faithfully, but the pulse's mere presence never manufactured a
@@ -420,12 +468,20 @@ fn matching_versions_remove_stale_records_without_creating_a_map() {
         version("4.1.1"),
     );
 
-    assert!(
-        !registry.record_root(5, "p".to_string(), 1, matching_key, DUMMY_DIRECTION, || {
+    assert!(!registry.record_root(
+        RootRegistration {
+            ctx_id: 5,
+            resolved_path: "p".to_string(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium".to_string(),
+            key: matching_key,
+            direction_to_stored: DUMMY_DIRECTION,
+        },
+        || {
             loads.set(loads.get() + 1);
             dummy_map()
-        },)
-    );
+        },
+    ));
 
     assert!(
         registry.lookup(5).is_none(),
@@ -440,18 +496,34 @@ fn a_shared_map_survives_as_long_as_one_record_still_references_it() {
     let loads = Cell::new(0);
     let key = dummy_key();
 
-    assert!(
-        registry.record_root(5, "a".to_string(), 1, key.clone(), DUMMY_DIRECTION, || {
+    assert!(registry.record_root(
+        RootRegistration {
+            ctx_id: 5,
+            resolved_path: "a".to_string(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium".to_string(),
+            key: key.clone(),
+            direction_to_stored: DUMMY_DIRECTION,
+        },
+        || {
             loads.set(loads.get() + 1);
             dummy_map()
-        })
-    );
-    assert!(
-        registry.record_root(6, "b".to_string(), 1, key.clone(), DUMMY_DIRECTION, || {
+        }
+    ));
+    assert!(registry.record_root(
+        RootRegistration {
+            ctx_id: 6,
+            resolved_path: "b".to_string(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium".to_string(),
+            key: key.clone(),
+            direction_to_stored: DUMMY_DIRECTION,
+        },
+        || {
             loads.set(loads.get() + 1);
             dummy_map()
-        })
-    );
+        }
+    ));
 
     assert_eq!(loads.get(), 1, "the second record must hit the cache");
 
@@ -475,12 +547,20 @@ fn a_shared_map_is_released_once_no_record_references_it() {
     let loads = Cell::new(0);
     let key = dummy_key();
 
-    assert!(
-        registry.record_root(5, "a".to_string(), 1, key.clone(), DUMMY_DIRECTION, || {
+    assert!(registry.record_root(
+        RootRegistration {
+            ctx_id: 5,
+            resolved_path: "a".to_string(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium".to_string(),
+            key: key.clone(),
+            direction_to_stored: DUMMY_DIRECTION,
+        },
+        || {
             loads.set(loads.get() + 1);
             dummy_map()
-        })
-    );
+        }
+    ));
     registry.remove(5);
 
     let _new_map = registry.get_or_create_map(key, || {
@@ -505,11 +585,14 @@ fn concurrent_operations_never_observe_a_torn_record() {
             let ctx_id = i as ContextId;
             for _ in 0..200 {
                 registry.record_root(
-                    ctx_id,
-                    format!("path-{i}"),
-                    ctx_id,
-                    dummy_key(),
-                    DUMMY_DIRECTION,
+                    RootRegistration {
+                        ctx_id,
+                        resolved_path: format!("path-{i}"),
+                        pulse_ctx_id: ctx_id,
+                        dataobjectname: format!("equilibrium/{i}"),
+                        key: dummy_key(),
+                        direction_to_stored: DUMMY_DIRECTION,
+                    },
                     dummy_map,
                 );
                 if let Some(snapshot) = registry.lookup(ctx_id) {
@@ -541,11 +624,14 @@ fn concurrent_child_operations_never_observe_a_torn_record() {
             let child_id = (i + 100) as ContextId;
             for _ in 0..200 {
                 registry.record_root(
-                    root_id,
-                    format!("root-{i}"),
-                    root_id,
-                    dummy_key(),
-                    DUMMY_DIRECTION,
+                    RootRegistration {
+                        ctx_id: root_id,
+                        resolved_path: format!("root-{i}"),
+                        pulse_ctx_id: root_id,
+                        dataobjectname: format!("equilibrium/{i}"),
+                        key: dummy_key(),
+                        direction_to_stored: DUMMY_DIRECTION,
+                    },
                     dummy_map,
                 );
                 registry.record_child(child_id, root_id, format!("child-{i}"));
@@ -571,7 +657,7 @@ fn concurrent_child_operations_never_observe_a_torn_record() {
 #[test]
 fn an_occurrence_never_seen_has_no_known_stored_version() {
     let registry = ContextRegistry::new();
-    registry.record_dataentry(10);
+    registry.record_dataentry_with_uri(10, String::new());
 
     assert_eq!(registry.known_stored_version(10, "equilibrium"), None);
 }
@@ -579,7 +665,7 @@ fn an_occurrence_never_seen_has_no_known_stored_version() {
 #[test]
 fn a_remembered_mismatch_is_returned_by_known_stored_version() {
     let registry = ContextRegistry::new();
-    registry.record_dataentry(10);
+    registry.record_dataentry_with_uri(10, String::new());
 
     registry.remember_mismatched_occurrence(10, "equilibrium".to_string(), version("3.39.0"));
 
@@ -594,7 +680,7 @@ fn a_remembered_mismatch_is_returned_by_known_stored_version() {
 #[test]
 fn forgetting_an_occurrence_clears_only_that_occurrence() {
     let registry = ContextRegistry::new();
-    registry.record_dataentry(10);
+    registry.record_dataentry_with_uri(10, String::new());
     registry.remember_mismatched_occurrence(10, "equilibrium".to_string(), version("3.39.0"));
     registry.remember_mismatched_occurrence(10, "core_profiles".to_string(), version("3.39.0"));
 
@@ -610,7 +696,7 @@ fn forgetting_an_occurrence_clears_only_that_occurrence() {
 #[test]
 fn forgetting_an_unremembered_occurrence_is_a_no_op() {
     let registry = ContextRegistry::new();
-    registry.record_dataentry(10);
+    registry.record_dataentry_with_uri(10, String::new());
 
     registry.forget_occurrence_version(10, "equilibrium");
 
@@ -636,12 +722,12 @@ fn occurrence_version_methods_are_no_ops_for_a_non_dataentry_or_unrecorded_id() 
 #[test]
 fn recording_a_fresh_dataentry_at_a_recycled_id_resets_its_occurrence_cache() {
     let registry = ContextRegistry::new();
-    registry.record_dataentry(10);
+    registry.record_dataentry_with_uri(10, String::new());
     registry.remember_mismatched_occurrence(10, "equilibrium".to_string(), version("3.39.0"));
 
     // A new pulse reusing the same context ID must not inherit the old
     // pulse's discoveries.
-    registry.record_dataentry(10);
+    registry.record_dataentry_with_uri(10, String::new());
 
     assert_eq!(registry.known_stored_version(10, "equilibrium"), None);
 }
@@ -649,7 +735,7 @@ fn recording_a_fresh_dataentry_at_a_recycled_id_resets_its_occurrence_cache() {
 #[test]
 fn loss_count_is_zero_for_an_untracked_context() {
     let registry = ContextRegistry::new();
-    registry.record_dataentry(10);
+    registry.record_dataentry_with_uri(10, String::new());
 
     // A data-entry context, an unrecorded id, and (by the same code
     // path) an operation whose versions matched all report zero rather
@@ -663,8 +749,18 @@ fn loss_count_reports_the_retained_entries_on_a_root() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
 
-    registry.record_read_loss_at_root(5, "field/a".to_string(), Fidelity::Lossy);
-    registry.record_read_loss_at_root(5, "field/b".to_string(), Fidelity::Unmappable);
+    registry.retain_loss_at_root(
+        5,
+        "field/a".to_string(),
+        Fidelity::Lossy,
+        LossOperation::Read,
+    );
+    registry.retain_loss_at_root(
+        5,
+        "field/b".to_string(),
+        Fidelity::Unmappable,
+        LossOperation::Read,
+    );
 
     assert_eq!(registry.loss_count(5), 2);
 }
@@ -674,7 +770,12 @@ fn loss_count_never_counts_an_exact_read() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
 
-    registry.record_read_loss_at_root(5, "field/a".to_string(), Fidelity::Exact);
+    registry.retain_loss_at_root(
+        5,
+        "field/a".to_string(),
+        Fidelity::Exact,
+        LossOperation::Read,
+    );
 
     assert_eq!(registry.loss_count(5), 0);
 }
@@ -685,7 +786,7 @@ fn loss_count_resolves_a_child_context_to_its_root() {
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
     assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
 
-    registry.record_read_loss_at_root(5, "field".to_string(), Fidelity::Lossy);
+    registry.retain_loss_at_root(5, "field".to_string(), Fidelity::Lossy, LossOperation::Read);
 
     assert_eq!(
         registry.loss_count(6),
@@ -700,8 +801,18 @@ fn loss_at_returns_entries_in_the_order_they_were_recorded() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
 
-    registry.record_read_loss_at_root(5, "field/a".to_string(), Fidelity::Lossy);
-    registry.record_read_loss_at_root(5, "field/b".to_string(), Fidelity::Unmappable);
+    registry.retain_loss_at_root(
+        5,
+        "field/a".to_string(),
+        Fidelity::Lossy,
+        LossOperation::Read,
+    );
+    registry.retain_loss_at_root(
+        5,
+        "field/b".to_string(),
+        Fidelity::Unmappable,
+        LossOperation::Read,
+    );
 
     assert_eq!(
         registry.with_loss_at(5, 0, |path, fidelity, _| (path.to_string(), fidelity)),
@@ -717,7 +828,12 @@ fn loss_at_returns_entries_in_the_order_they_were_recorded() {
 fn loss_at_returns_none_past_the_last_entry() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
-    registry.record_read_loss_at_root(5, "field/a".to_string(), Fidelity::Lossy);
+    registry.retain_loss_at_root(
+        5,
+        "field/a".to_string(),
+        Fidelity::Lossy,
+        LossOperation::Read,
+    );
 
     assert_eq!(registry.with_loss_at(5, 1, |_, _, _| ()), None);
 }
@@ -725,7 +841,7 @@ fn loss_at_returns_none_past_the_last_entry() {
 #[test]
 fn loss_at_returns_none_for_any_index_on_an_untracked_context() {
     let registry = ContextRegistry::new();
-    registry.record_dataentry(10);
+    registry.record_dataentry_with_uri(10, String::new());
 
     assert_eq!(registry.with_loss_at(10, 0, |_, _, _| ()), None);
     assert_eq!(registry.with_loss_at(999, 0, |_, _, _| ()), None);
@@ -735,7 +851,12 @@ fn loss_at_returns_none_for_any_index_on_an_untracked_context() {
 fn ending_the_root_context_destroys_its_loss_log() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
-    registry.record_read_loss_at_root(5, "field/a".to_string(), Fidelity::Lossy);
+    registry.retain_loss_at_root(
+        5,
+        "field/a".to_string(),
+        Fidelity::Lossy,
+        LossOperation::Read,
+    );
     assert_eq!(registry.loss_count(5), 1);
 
     registry.remove(5);
@@ -750,8 +871,18 @@ fn the_loss_log_dies_with_the_root_even_when_a_child_closes_non_lifo() {
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
     assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
     assert!(registry.record_child(7, 5, "root/path/aos(2)".to_string()));
-    registry.record_read_loss_at_root(5, "field/a".to_string(), Fidelity::Lossy);
-    registry.record_read_loss_at_root(5, "field/b".to_string(), Fidelity::Unmappable);
+    registry.retain_loss_at_root(
+        5,
+        "field/a".to_string(),
+        Fidelity::Lossy,
+        LossOperation::Read,
+    );
+    registry.retain_loss_at_root(
+        5,
+        "field/b".to_string(),
+        Fidelity::Unmappable,
+        LossOperation::Read,
+    );
     assert_eq!(registry.loss_count(5), 2);
 
     // The root ends first — non-LIFO relative to the usual inner-to-outer
