@@ -3,7 +3,8 @@
 Audience: someone writing HLI-side integration tests against this shim (including
 round-trip tests) who needs to know precisely what varies by scenario, what is
 guaranteed, and what a round trip cannot prove. This is a synthesis of
-`docs/adr/0002`, `0005`, `0007`, `0008`, `0009`, `0012`, `0016`–`0021` and the
+`docs/adr/0002`, `0005`, `0007`, `0008`, `0009`, `0012`, `0016`–`0021`, `0023`,
+`0024` and the
 current `src/conversion/seam_policy.rs` / `src/lib.rs`. Where this document and
 an ADR disagree, the ADR (or the code) is authoritative — this file only
 collects and orders what they already say, with one exception: **§8 is a
@@ -256,10 +257,42 @@ from the on-disk consequence (which real HDF5 collapses to one).
   "this candidate genuinely doesn't exist and came back not-found" — a test
   reading the log should not assume every `Unmappable` entry corresponds to a
   visible failure at the call site.
-- **The log dies with its root context at `al_end_action`.** Drain it before
-  closing, or lose it — this is entirely the HLI's responsibility, and an
-  unmodified HLI has no route to it at all (it only ever sees refusals
-  through `al_status_t`).
+- **The in-memory log dies with its root context at `al_end_action`.** A
+  patched HLI must drain it through the exports before closing, or lose that
+  view of it — but the exports are no longer the *only* channel. ADR 0023
+  deliberately reverses ADR 0012 decision 7 on this point: no shipped HLI is
+  patched to call the exports, so a second, file-based channel now carries
+  the same entries without requiring any HLI change at all (below). An
+  unmodified HLI — one that never calls the exports and only ever sees
+  refusals through `al_status_t` — still gets this second channel for free.
+- **The loss log file** (ADR 0023) is process-local, append-only, and
+  tab-separated: `uri`, `ids`, `stored-dd`, `hli-dd`, `operation`, `fidelity`,
+  `path`, preceded by a `#`-comment preamble (format version, write
+  timestamp, PID, HLI DD version). The shim creates it lazily, only on the
+  first loss any seam produces, named
+  `imas-mvdd-loss-<UTC-timestamp>-<pid>.txt` (a `-N` suffix disambiguates a
+  same-second collision) in the current working directory by default. Set
+  `IMAS_MVDD_LOSS_LOG_DIR` to an existing directory to redirect it, or to an
+  empty value to disable the file entirely. Every non-exact read, write and
+  delete loss reaches it — not delete alone, though §6 mentions it there too
+  — carrying the same three fidelity verdicts and the same READ/WRITE/DELETE
+  operation tags as the exports.
+- **The file survives exactly the failure the in-memory log cannot.** If a
+  root context ends while an operation is still in flight, its in-memory log
+  is already gone and drops the entry — but the file's own process-wide
+  written-key set has no context lifetime, so the entry is retained there
+  regardless. That disagreement between the two channels is deliberate, not
+  a bug to reconcile in a test. Conversely, the file is exact-once, not
+  cumulative: the key is the complete rendered line, so the identical loss
+  encountered twice within one process is written once, while two
+  occurrences of the same IDS — or two separate processes — each still get
+  their own line. A filesystem write failure is reported once to stderr and
+  otherwise silently disables the file for the rest of the process; it never
+  changes `al_status_t`, and it never touches the in-memory log.
+- **The `uri` column is the caller-supplied URI verbatim, unredacted.** A
+  site whose URIs can carry credentials should set `IMAS_MVDD_LOSS_LOG_DIR`
+  to an empty value, or point it at an appropriately access-controlled
+  directory, before running against real data.
 - Write's loss entries name the **stored**-DD spelling of each unwritten
   candidate (where else a stale value might be found); read's (and any
   refusal's) entries name the **HLI**-DD spelling of the argument in
@@ -509,3 +542,7 @@ suite exercises, at minimum:
 9. Loss-log lifecycle: query counts/entries before `al_end_action`, confirm
    the log is unreachable (reports `0`) once queried through a context ID
    that no longer exists.
+10. Loss log file: trigger a non-exact operation, confirm a
+    `imas-mvdd-loss-*.txt` file appears under `IMAS_MVDD_LOSS_LOG_DIR` (or the
+    working directory) with a matching line, and confirm an empty
+    `IMAS_MVDD_LOSS_LOG_DIR` suppresses it.
