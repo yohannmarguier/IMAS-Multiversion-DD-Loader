@@ -716,16 +716,34 @@ static void scenario_rank_changing_retype_refuses_without_core_call(void) {
            "caller storage and never reached IMAS-Core\n");
 }
 
-static void scenario_unit_redefinition_refuses_without_core_call(void) {
+/* The four chi_squared_r/chi_squared_z paths under constraints/strike_point
+ * and constraints/x_point once carried a `<redefine>` entry that refused them
+ * in both directions over the m -> m^-2 unit change. That entry was removed
+ * after review: the shim forwards these paths verbatim and leaves the unit
+ * difference to the caller to interpret. This scenario is the C ABI proof of
+ * that decision — the same spelling reaches IMAS-Core, the read succeeds, and
+ * nothing is retained on the loss log. It is deliberately the inverted twin of
+ * the refusal scenario it replaced: if a future artifact reintroduces a
+ * `<redefine>` over these paths, this goes red rather than passing quietly. */
+static void scenario_redefined_unit_path_forwards_verbatim(void) {
     int operation_ctx = open_mismatched_equilibrium();
-    check_read_refusal(
-        operation_ctx, "time_slice/constraints/strike_point/chi_squared_r", 52 /* DOUBLE_DATA */,
-        "IMAS-MVDD: this path's unit was redefined and cannot be converted; "
-        "DD path: time_slice/constraints/strike_point/chi_squared_r; "
-        "HLI DD version: 4.1.1; stored DD version: 3.39.0");
+    const char *paths[] = {
+        "time_slice/constraints/strike_point/chi_squared_r",
+        "time_slice/constraints/strike_point/chi_squared_z",
+        "time_slice/constraints/x_point/chi_squared_r",
+        "time_slice/constraints/x_point/chi_squared_z",
+    };
 
-    printf("read_path_test unit-redefinition-refuses-without-core-call: refusal preserved "
-           "caller storage and never reached IMAS-Core\n");
+    for (size_t i = 0; i < sizeof paths / sizeof paths[0]; ++i) {
+        void *data = NULL;
+        CHECK(read_data(operation_ctx, paths[i], "", &data).code == 0);
+        CHECK(data != NULL);
+        check_stub_paths(paths[i], "");
+    }
+    check_no_loss_entry(operation_ctx);
+
+    printf("read_path_test redefined-unit-path-forwards-verbatim: all four chi_squared paths "
+           "reached IMAS-Core unchanged and retained no loss\n");
 }
 
 static void scenario_unsupported_sign_flip_types_refuse_without_core_call(void) {
@@ -960,7 +978,7 @@ int main(int argc, char **argv) {
         {"reverse-split-read-flips-its-single-stored-source", scenario_reverse_split_read_flips_its_single_stored_source},
         {"no-source-returns-null-without-core-call", scenario_no_source_returns_null_without_core_call},
         {"rank-changing-retype-refuses-without-core-call", scenario_rank_changing_retype_refuses_without_core_call},
-        {"unit-redefinition-refuses-without-core-call", scenario_unit_redefinition_refuses_without_core_call},
+        {"redefined-unit-path-forwards-verbatim", scenario_redefined_unit_path_forwards_verbatim},
         {"unsupported-sign-flip-types-refuse-without-core-call", scenario_unsupported_sign_flip_types_refuse_without_core_call},
         {"sign-flip-array-negates-values-and-preserves-empty-double", scenario_sign_flip_array_negates_values_and_preserves_empty_double},
         {"sign-flip-rank-exceeding-maxdim-refuses-without-core-call", scenario_sign_flip_rank_exceeding_maxdim_refuses_without_core_call},

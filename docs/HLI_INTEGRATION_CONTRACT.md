@@ -352,7 +352,7 @@ conversion test most wants to name.
 | Reason string | Raised by |
 |---|---|
 | `this path's container changed shape and cannot be served` | any seam, on the `retyped` rule — unconditional, even where the rule declares itself `exact` |
-| `this path's unit was redefined and cannot be converted` | any seam, on a unit-redefinition rule |
+| `this path's unit was redefined and cannot be converted` | any seam, on a unit-redefinition (`redefine`) rule. **Unreachable from the shipped artifact** and asserted to be so — its four `redefine` entries over `constraints/{strike_point,x_point}/chi_squared_{r,z}` were removed after review, so those paths now forward verbatim and the shim corrects no units. A test that hits this means a new artifact declared a `redefine` |
 | `this path has no safe conversion between DD versions` | any seam, on a declared-`unmappable` rule. **Unreachable from the shipped artifact** (ADR 0011) and asserted to be so — a test that hits it means a new artifact made it reachable |
 | `this path is unclaimed by the conversion map` | write, delete |
 | `this path has no stored source` | write, delete |

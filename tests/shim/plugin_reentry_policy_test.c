@@ -429,25 +429,33 @@ static void scenario_plugin_read_refusal_before_core(void) {
     int operation_ctx = -1;
     CHECK(open_plugin_global(1001, "equilibrium", "", &operation_ctx).code == 0);
 
+    /* The vehicle is a value-transform refusal rather than the chi_squared unit
+     * redefinition this used to ride on: those `<redefine>` entries were
+     * removed from the artifact after review, so they no longer refuse
+     * anything. "time_slice/boundary/psi" takes a COCOS sign flip, and asking
+     * for it as INTEGER_DATA refuses with the same Fidelity::Unmappable before
+     * the plugin is called. What this scenario is about — that a refusal
+     * propagates through the *plugin reentry* seam — is unchanged. */
     int plugin_calls_before = int_from_stub("recording_stub_plugin_call_count");
-    const char *field = "time_slice/constraints/strike_point/chi_squared_r";
+    const char *field = "time_slice/boundary/psi";
     void *data = (void *)1;
     int size[1] = {73};
 
     al_status_t status =
-        al_plugin_read_data(operation_ctx, field, "", &data, 52 /* DOUBLE_DATA */, 1, size);
+        al_plugin_read_data(operation_ctx, field, "", &data, IMAS_INTEGER_DATA, 1, size);
 
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
-    CHECK(strstr(status.message, "this path's unit was redefined and cannot be converted") !=
-          NULL);
+    CHECK(strstr(status.message,
+                 "value-transform execution requires DOUBLE_DATA and a rank no greater than "
+                 "MAXDIM") != NULL);
     CHECK(int_from_stub("recording_stub_plugin_call_count") == plugin_calls_before);
     CHECK(data == (void *)1);
     CHECK(size[0] == 73);
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, field, IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_READ);
 
-    printf("plugin_reentry_policy_test plugin-read-refusal-before-core: a unit redefinition "
-           "refused through the plugin reentry seam without calling IMAS-Core\n");
+    printf("plugin_reentry_policy_test plugin-read-refusal-before-core: an unmappable value "
+           "transformation refused through the plugin reentry seam without calling IMAS-Core\n");
 }
 
 static void scenario_plugin_read_no_source_returns_null_without_core_call(void) {

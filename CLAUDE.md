@@ -95,7 +95,10 @@ and limitations".
   hand-authored (ADR 0004). `moved` and `retyped` resolve; `retyped` refuses
   unconditionally as `UnservableRetype` even where it declares itself *exact*,
   because the shim cannot reshape an int array into an array of identifier
-  structures. Coverage floors are pinned in `cmake/tests/Common.cmake` (342 forward / 335
+  structures. The four `redefine` entries over
+  `constraints/{strike_point,x_point}/chi_squared_{r,z}` were removed after
+  review: those paths forward verbatim and the shim corrects no units.
+  Coverage floors are pinned in `cmake/tests/Common.cmake` (346 forward / 339
   reverse supported, each split `by rule` + `by identity default`) and gated by
   `tests/cmake/verify_artifact_coverage_floor.cmake` against real inventories
   (ADR 0013) with near-boundary fixtures generated inside the script.
@@ -109,9 +112,13 @@ and limitations".
   one formatter, asserted as a single exact string via `CHECK_REFUSAL_MESSAGE`.
 - **ADR 0011 — silence is earned by mechanism coverage.** Don't invent a rule for
   a case the shipped artifact cannot reach; an invented rule is uncovered code.
-  `RefusalReason::Unmappable` and the glob match stage are both unreachable from
-  the approved artifact, and tests assert that rather than assume it, failing with
-  instructions to add real coverage if a future artifact makes either reachable.
+  `RefusalReason::Unmappable`, `RefusalReason::UnitRedefinition` and the glob
+  match stage are all unreachable from the approved artifact, and tests assert
+  that rather than assume it, failing with instructions to add real coverage if a
+  future artifact makes one reachable. `UnitRedefinition` joined that list when
+  the four chi_squared `redefine` entries were removed, so its only coverage is
+  now synthetic (`a_redefine_entry_refuses_a_default_matched_path` and its
+  `_an_explicitly_matched_path` sibling, one per call site).
 - **ADR 0015 — seam policy never reaches global state.** See "Current path map"
   above: `src/conversion/` and `src/core/` know nothing about IMAS-Core or
   process-global state; only `src/interpose/` is C-facing.

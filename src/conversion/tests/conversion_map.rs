@@ -1374,16 +1374,132 @@ fn refusal_and_moved_outcomes_retain_the_rule_explanation() {
         "time_slice/boundary/closest_wall_point/r"
     );
 
-    let unit_redefinition = map
-        .resolve(
-            "time_slice/constraints/strike_point/chi_squared_r",
-            Direction::Forward,
-        )
-        .expect("the identity default resolves this path");
-    assert_eq!(unit_redefinition.match_kind, MatchKind::Default);
-    assert_eq!(unit_redefinition.fidelity, Fidelity::Unmappable);
+    // The four chi_squared_r/chi_squared_z paths under constraints/strike_point
+    // and constraints/x_point carried a `<redefine>` entry that refused them in
+    // both directions over the m -> m^-2 unit change. That entry was removed
+    // after review: the shim forwards these paths verbatim and leaves the unit
+    // difference to the caller. They are spelled the same on both sides, so the
+    // identity default answers -- no rule, no transform, no refusal.
+    for path in [
+        "time_slice/constraints/strike_point/chi_squared_r",
+        "time_slice/constraints/strike_point/chi_squared_z",
+        "time_slice/constraints/x_point/chi_squared_r",
+        "time_slice/constraints/x_point/chi_squared_z",
+    ] {
+        for direction in [Direction::Forward, Direction::Reverse] {
+            let forwarded = map
+                .resolve(path, direction)
+                .expect("the identity default resolves this path");
+            assert_eq!(
+                forwarded.match_kind,
+                MatchKind::Default,
+                "{path} {direction:?}"
+            );
+            assert_eq!(forwarded.rule_id, None, "{path} {direction:?}");
+            assert_eq!(forwarded.fidelity, Fidelity::Exact, "{path} {direction:?}");
+            assert_eq!(resolved_path(&forwarded), path, "{path} {direction:?}");
+            assert_eq!(
+                value_transformation(&forwarded),
+                &ValueTransformation::None,
+                "{path} {direction:?}: no value transform may reach these paths"
+            );
+        }
+    }
+}
+
+/// `default_path`'s `<redefine>` branch, on a path no rule claims.
+///
+/// This was covered by the approved artifact until its four chi_squared
+/// `<redefine>` entries were removed, so the mechanism now lives or dies by
+/// this test and its `explicit` sibling — see
+/// `the_approved_artifact_reaches_only_its_shape_refusal`.
+#[test]
+fn a_redefine_entry_refuses_a_default_matched_path() {
+    let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <default rel="identical"/>
+              <transforms>
+                <redefine glob="container/*/chi_squared_r"
+                          left-units="m" right-units="m^-2">
+                  <fidelity forward="unmappable" reverse="lossy"/>
+                </redefine>
+              </transforms>
+            </ids-map>
+        "#;
+    let map = ConversionMap::load(xml).expect("fixture artifact must load");
+
+    // Each direction takes its own declared fidelity, and both refuse.
+    for (direction, expected) in [
+        (Direction::Forward, Fidelity::Unmappable),
+        (Direction::Reverse, Fidelity::Lossy),
+    ] {
+        let refused = map
+            .resolve("container/strike_point/chi_squared_r", direction)
+            .expect("the identity default selects the path, the redefine refuses it");
+        assert_eq!(refused.match_kind, MatchKind::Default, "{direction:?}");
+        assert_eq!(refused.rule_id, None, "{direction:?}");
+        assert_eq!(refused.fidelity, expected, "{direction:?}");
+        assert_eq!(
+            refused.outcome,
+            Outcome::Refusal(RefusalReason::UnitRedefinition),
+            "{direction:?}"
+        );
+    }
+
+    // A sibling the glob does not claim still forwards through the default.
+    let untouched = map
+        .resolve("container/strike_point/chi_squared_z", Direction::Forward)
+        .expect("the identity default resolves an unclaimed path");
+    assert_eq!(untouched.fidelity, Fidelity::Exact);
     assert_eq!(
-        unit_redefinition.outcome,
+        resolved_path(&untouched),
+        "container/strike_point/chi_squared_z"
+    );
+}
+
+/// `explicit_path`'s `<redefine>` branch: the entry is matched against the
+/// *resolved right-side* path, not the path the caller asked for, so a
+/// renamed rule's left spelling refuses on a glob that names only the right
+/// spelling. The refusal keeps the rule's identity while taking the
+/// redefine's fidelity in place of the rule's own.
+#[test]
+fn a_redefine_entry_refuses_an_explicitly_matched_path() {
+    let xml = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <default rel="identical"/>
+              <rules>
+                <rule id="rename-chi" rel="renamed"
+                      left="container/chi_squared_old"
+                      right="container/chi_squared_new">
+                  <fidelity forward="exact" reverse="exact"/>
+                </rule>
+              </rules>
+              <transforms>
+                <redefine glob="container/chi_squared_new"
+                          left-units="m" right-units="m^-2">
+                  <fidelity forward="unmappable" reverse="unmappable"/>
+                </redefine>
+              </transforms>
+            </ids-map>
+        "#;
+    let map = ConversionMap::load(xml).expect("fixture artifact must load");
+
+    let refused = map
+        .resolve("container/chi_squared_old", Direction::Forward)
+        .expect("the renamed rule claims the left spelling");
+    assert_eq!(refused.match_kind, MatchKind::Explicit);
+    assert_eq!(refused.rule_id.as_deref(), Some("rename-chi"));
+    assert_eq!(
+        refused.fidelity,
+        Fidelity::Unmappable,
+        "the redefine's fidelity must displace the rule's own `exact`"
+    );
+    assert_eq!(
+        refused.outcome,
         Outcome::Refusal(RefusalReason::UnitRedefinition)
     );
 }
@@ -1627,28 +1743,38 @@ fn retyped_rule_anchor_absent_from_inventory_is_backed_by_its_shape_derived_chil
 /// `check_completeness`'s doc comment already sets the precedent for
 /// pinning a reachability fact rather than leaving a reader to derive it.
 ///
-/// Two of these facts are counter-intuitive and were both mis-read during
-/// review, which is why they are asserted rather than commented:
+/// Three of these facts are counter-intuitive — two were mis-read during
+/// review and the third was created by a later edit — which is why they are
+/// asserted rather than commented:
 ///
 /// - `RefusalReason::Unmappable` is unreachable. The artifact declares
 ///   `unmappable` thirty-six times, but every one sits on a `left_only`
 ///   rule's `reverse` or a `right_only` rule's `forward` — the direction
 ///   that rule can never be selected in, since it has no path indexed on
-///   that side (see [`Rel::LeftOnly`]). So the shipped artifact's refusals
-///   are only ever the shape one and the unit one, and this variant's real
-///   coverage is the synthetic-artifact tests, not this artifact.
+///   that side (see [`Rel::LeftOnly`]). So the shipped artifact's only
+///   refusal is the shape one, and this variant's real coverage is the
+///   synthetic-artifact tests, not this artifact.
+/// - `RefusalReason::UnitRedefinition` is unreachable for the same kind of
+///   reason, but by a deliberate content decision rather than a structural
+///   one: the artifact carried four `<redefine>` entries over the
+///   chi_squared_r/chi_squared_z unit change, and they were removed after
+///   review so those paths forward verbatim. No `<redefine>` entry remains,
+///   so nothing can select the refusal. Its coverage is now entirely
+///   synthetic — see `a_redefine_entry_refuses_a_default_matched_path` and
+///   `a_redefine_entry_refuses_an_explicitly_matched_path`, which pin both
+///   call sites (`default_path` and `explicit_path`).
 /// - The glob selector stage is unreachable too: no rule in the artifact
-///   uses a glob selector. The four `<redefine glob="...">` entries do,
-///   but they are matched by `redefine_for` against a resolved right-side
-///   path, not by `best_match`'s stage ladder.
+///   uses a glob selector. `<redefine glob="...">` entries would, but they
+///   are matched by `redefine_for` against a resolved right-side path, not
+///   by `best_match`'s stage ladder — and the artifact now declares none.
 ///
-/// Neither is a defect, and neither should be "fixed" by editing the
+/// None of the three is a defect, and none should be "fixed" by editing the
 /// artifact. They bound what a green suite proves: if a future artifact
-/// makes either reachable, this test fails and the reader is told to go
+/// makes any of them reachable, this test fails and the reader is told to go
 /// add real coverage for the mechanism rather than trusting the synthetic
 /// tests alone (ADR 0011's "silence is earned by mechanism coverage").
 #[test]
-fn the_approved_artifact_reaches_only_its_shape_and_unit_refusals() {
+fn the_approved_artifact_reaches_only_its_shape_refusal() {
     let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
     let left_inventory = parse_inventory(LEFT_INVENTORY_339);
     let right_inventory = parse_inventory(RIGHT_INVENTORY_411);
@@ -1680,7 +1806,12 @@ fn the_approved_artifact_reaches_only_its_shape_and_unit_refusals() {
         }
 
         assert_eq!(retypes, expected_retypes, "{label} retype refusals");
-        assert_eq!(unit_redefinitions, 4, "{label} unit-redefinition refusals");
+        assert_eq!(
+            unit_redefinitions, 0,
+            "{label}: RefusalReason::UnitRedefinition became reachable from the \
+                 approved artifact -- its only coverage is synthetic, so add a \
+                 real-artifact test"
+        );
         assert_eq!(
             unmappables, 0,
             "{label}: RefusalReason::Unmappable became reachable from the approved \

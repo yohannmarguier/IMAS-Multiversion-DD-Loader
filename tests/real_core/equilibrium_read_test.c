@@ -45,24 +45,26 @@
  * Issue #69 adds the refusal scenarios: every scenario above proves a read the
  * shim can serve, and a validation matrix that only ever demonstrates success
  * would not distinguish a working converter from one that silently serves the
- * wrong bytes when a rule says it must not. The two paths used refuse for
- * deliberately different reasons, and only one of them refuses because of its
- * declared fidelity:
- *   - `time_slice/constraints/strike_point/chi_squared_r` is declared
- *     `unmappable` in both directions by a `redefine` entry — its unit changed
- *     from `m` to `m^-2`, and the variance needed to invert that is not stored.
- *   - `grids_ggd/grid/space/coordinates_type` is the artifact's one `retyped`
- *     rule, and it is declared `exact` both ways ("integers preserved; only the
- *     container changes"). It still refuses, because `Rel::Retyped` resolves to
- *     `RefusalReason::UnservableRetype` regardless of fidelity: the shim cannot
- *     reshape an int array into an array of identifier structures, so a
- *     conversion that is lossless in principle is unavailable in practice.
- *     That distinction is the reason this path is worth a scenario — refusal
- *     follows what the shim can serve, not only what the artifact calls lossy.
- * Both are logged `UNMAPPABLE`: from the caller's side a refused read yielded
- * no value, whatever the rule's declared fidelity was. Both refuse before
- * IMAS-Core is called, so each is asserted against a real open pulse whose data
- * is deliberately never reached. */
+ * wrong bytes when a rule says it must not.
+ *
+ * `grids_ggd/grid/space/coordinates_type` is the artifact's one `retyped` rule,
+ * and it is declared `exact` both ways ("integers preserved; only the container
+ * changes"). It still refuses, because `Rel::Retyped` resolves to
+ * `RefusalReason::UnservableRetype` regardless of fidelity: the shim cannot
+ * reshape an int array into an array of identifier structures, so a conversion
+ * that is lossless in principle is unavailable in practice. That distinction is
+ * the reason this path is worth a scenario — refusal follows what the shim can
+ * serve, not only what the artifact calls lossy. It is logged `UNMAPPABLE`:
+ * from the caller's side a refused read yielded no value, whatever the rule's
+ * declared fidelity was. It refuses before IMAS-Core is called, so it is
+ * asserted against a real open pulse whose data is deliberately never reached.
+ *
+ * It used to have a companion. `time_slice/constraints/strike_point/chi_squared_r`
+ * was declared `unmappable` in both directions by a `redefine` entry over its
+ * `m` -> `m^-2` unit change. That entry, and its three siblings, were removed
+ * from the artifact after review: the shim forwards these paths verbatim and
+ * leaves the unit difference to the caller. All four are still read here, as
+ * the negative control — they must come back without a conversion error. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -438,38 +440,58 @@ static void check_read_refused(int op_ctx, const char *field, int datatype, cons
     CHECK(verdict == IMAS_MVDD_FIDELITY_UNMAPPABLE);
 }
 
-/* Each direction asserts both refusals, since neither is direction-specific:
- * that is what distinguishes a refusal the rule genuinely demands from one that
+/* Each direction asserts the refusal, since it is not direction-specific: that
+ * is what distinguishes a refusal the rule genuinely demands from one that
  * merely happens to fall out of whichever direction the resolver was written
- * for first. See the file header for why these two refuse for different
- * reasons. */
-static void check_both_refusals(const char *hli_version, const char *fixture_version) {
+ * for first. See the file header for why the retype refuses despite declaring
+ * itself `exact`.
+ *
+ * The four chi_squared paths are checked here too, as the negative control.
+ * They used to be the second refusal in this function, until their `<redefine>`
+ * entries were removed from the artifact after review. Asserting only that they
+ * are *not* refused keeps this independent of whether the fixture happens to
+ * populate them: a not-found read is `code == 0` with a null buffer, which is
+ * the pass-through contract just as much as a served value is. What must never
+ * happen again is a conversion error on these paths. */
+static void check_unservable_paths(const char *hli_version, const char *fixture_version) {
     CHECK_OK(imas_mvdd_set_hli_dd_version(hli_version));
     int pulse_ctx = open_fixture_pulse(fixture_version);
     int op_ctx = -1;
     CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", READ_OP, &op_ctx));
 
-    check_read_refused(op_ctx, "time_slice/constraints/strike_point/chi_squared_r", DOUBLE_DATA,
-                       "this path's unit was redefined and cannot be converted", hli_version,
-                       fixture_version, 0);
+    const char *forwarded[] = {
+        "time_slice/constraints/strike_point/chi_squared_r",
+        "time_slice/constraints/strike_point/chi_squared_z",
+        "time_slice/constraints/x_point/chi_squared_r",
+        "time_slice/constraints/x_point/chi_squared_z",
+    };
+    for (size_t i = 0; i < sizeof forwarded / sizeof forwarded[0]; ++i) {
+        void *buffer = NULL;
+        int shape[MAXDIM] = {0};
+        al_status_t status =
+            al_read_data(op_ctx, forwarded[i], "", &buffer, DOUBLE_DATA, 1, shape);
+        CHECK(status.code == 0);
+    }
+    /* The pass-throughs above must not have written the loss log, so the
+     * retype's entry is still the first one. */
     check_read_refused(op_ctx, "grids_ggd/grid/space/coordinates_type", INTEGER_DATA,
                        "this path's container changed shape and cannot be served", hli_version,
-                       fixture_version, 1);
+                       fixture_version, 0);
 
     CHECK_OK(al_end_action(op_ctx));
     close_fixture_pulse(pulse_ctx);
 }
 
 static void scenario_reverse_refuses_unservable_paths(void) {
-    check_both_refusals("3.39.0", "4.1.1");
+    check_unservable_paths("3.39.0", "4.1.1");
     printf("equilibrium_read_test reverse-refuses-unservable-paths: a 3.39.0 HLI was refused the "
-           "redefined unit and the reshaped container of the 4.1.1 fixture\n");
+           "reshaped container of the 4.1.1 fixture and served its chi_squared paths\n");
 }
 
 static void scenario_forward_refuses_unservable_paths(void) {
-    check_both_refusals("4.1.1", "3.39.0");
+    check_unservable_paths("4.1.1", "3.39.0");
     printf("equilibrium_read_test forward-refuses-unservable-paths: a 4.1.1 HLI was refused the "
-           "redefined unit and the reshaped container of the 3.39.0 fixture\n");
+           "reshaped container of the 3.39.0 fixture and served its chi_squared paths\n");
 }
 
 /* --- issue #62: reads beneath a nested, *renamed* child context --------- */

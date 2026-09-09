@@ -302,6 +302,14 @@ add_stub_test(read-path-identity-rule-returns-data read_path_test identity-rule-
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
 
+# Not a refusal scenario: the artifact's four chi_squared `<redefine>` entries
+# were removed after review, so these paths now forward verbatim. Registered
+# beside the other pass-through reads rather than with the refusal group.
+add_stub_test(read-path-redefined-unit-path-forwards-verbatim
+    read_path_test redefined-unit-path-forwards-verbatim
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
 add_stub_test(read-path-merged-read-falls-through-to-next-candidate
     read_path_test merged-read-falls-through-to-next-candidate
     HLI_DD_VERSION 4.1.1
@@ -342,8 +350,6 @@ endfunction()
 
 add_read_path_refusal_test(read-path-rank-changing-retype-refuses-without-core-call
     rank-changing-retype-refuses-without-core-call)
-add_read_path_refusal_test(read-path-unit-redefinition-refuses-without-core-call
-    unit-redefinition-refuses-without-core-call)
 add_read_path_refusal_test(read-path-unsupported-sign-flip-types-refuse-without-core-call
     unsupported-sign-flip-types-refuse-without-core-call)
 add_read_path_refusal_test(read-path-sign-flip-rank-exceeding-maxdim-refuses-without-core-call

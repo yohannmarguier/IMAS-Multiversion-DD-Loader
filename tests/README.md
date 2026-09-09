@@ -238,9 +238,11 @@ write-side rewrite to reach.
 The same conversion policy against genuine IMAS-Core and the checked-in
 equilibrium HDF5 fixture pair, in **both** fixture directions: a renamed scalar
 read through the HLI's own spelling, renamed and sign-flipped fields nested
-under `time_slice`, `merged` and `split` read plans, refusals for an unmappable
-`redefine` and for the artifact's one `retyped` rule (lossless in principle,
-unavailable in practice), the remaining mismatched delete refusal across a
+under `time_slice`, `merged` and `split` read plans, a refusal for the
+artifact's one `retyped` rule (lossless in principle, unavailable in practice)
+alongside its negative control — the four `chi_squared` paths whose `redefine`
+entries were removed after review, which must now read back without a
+conversion error — the remaining mismatched delete refusal across a
 real boundary, a real context lifecycle, and the two no-op cases (same
 version, conversion disabled). Safe writes are asserted at the recording-stub
 boundary, where their translated Core arguments are directly observable.
