@@ -13,9 +13,11 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 
 use crate::al_status_t;
 use crate::conversion::path_conversion;
-use crate::conversion::read_outcome::{self, ReadOutcome};
+use crate::conversion::read_outcome::{
+    self, EMPTY_CHAR, EMPTY_COMPLEX, EMPTY_DOUBLE, EMPTY_INT, ReadOutcome,
+};
 use crate::conversion::seam_policy;
-use crate::core::core_binding::DOUBLE_DATA_ID;
+use crate::core::core_binding::{CHAR_DATA_ID, COMPLEX_DATA_ID, DOUBLE_DATA_ID, INTEGER_DATA_ID};
 use crate::loss::LossOperation;
 use crate::registry::context_registry::ConversionRecord;
 
@@ -198,7 +200,9 @@ unsafe fn read_data_impl(
     };
 
     let verdict = seam_policy::run_read(field_argument, timebase_argument, shape, reader);
-    finish_read(&record, verdict, data)
+    // SAFETY: `data` and `size` are valid and writable, and `datatype`/`dim`
+    // describe them, by this function's own safety contract.
+    unsafe { finish_read(&record, verdict, data, datatype, dim, size) }
 }
 
 /// Builds the safe, typed view [`seam_policy::run_read`] applies a value
@@ -253,16 +257,26 @@ unsafe fn build_data_view<'a>(
 /// log for a read (issue #66): `seam_policy::ReadVerdict::field`/`timebase`
 /// are mandatory, so there is no return path left that could reach this
 /// point without both to write.
-fn finish_read(
+///
+/// # Safety
+/// `data` and `size` must satisfy `read_data_impl`'s own contract, and
+/// `datatype`/`dim` must describe the buffer they address — [`no_source_read`]
+/// writes through both.
+unsafe fn finish_read(
     record: &ConversionRecord,
     verdict: seam_policy::ReadVerdict,
     data: *mut *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
 ) -> al_status_t {
     record_argument_loss(record, &verdict.field);
     record_argument_loss(record, &verdict.timebase);
     match verdict.outcome {
         seam_policy::SeamOutcome::Data(status) => status,
-        seam_policy::SeamOutcome::NotFound => no_source_read(data),
+        // SAFETY: `data`, `size`, `datatype` and `dim` are this function's
+        // own contract, forwarded unchanged from `read_data_impl`.
+        seam_policy::SeamOutcome::NotFound => unsafe { no_source_read(data, datatype, dim, size) },
         seam_policy::SeamOutcome::Refusal { reason, dd_path } => {
             context_path_refusal(record, &reason, &dd_path)
         }
@@ -281,13 +295,153 @@ fn record_argument_loss(record: &ConversionRecord, argument: &seam_policy::Argum
 }
 
 /// Returns the C ABI's normal not-found outcome for a path the artifact says
-/// has no stored source. The caller owns `data`'s validity by the public
-/// `al_read_data` contract.
-fn no_source_read(data: *mut *mut c_void) -> al_status_t {
-    // SAFETY: forwarded from `read_data`, whose safety contract requires a
-    // valid, writable data pointer.
+/// has no stored source, leaving the caller's buffers exactly as IMAS-Core
+/// would have left them for an absent field.
+///
+/// This mirrors `Lowlevel::setDefaultValue`, and the rank branch is the whole
+/// point of doing so. For `dim > 0` IMAS-Core owns the buffer: absence is a
+/// null `*data` plus every returned extent set to zero. For `dim == 0` the
+/// *caller* owns the buffer and the pointer comes back unchanged, so absence
+/// has no channel other than the datatype's EMPTY sentinel written into it
+/// (CONTEXT.md's "read outcome"). Nulling the pointer there instead would
+/// hand a scalar caller whatever its buffer already held — indistinguishable
+/// from a real measurement, and a regression against not installing the shim
+/// at all.
+///
+/// A datatype IMAS-Core does not know is the one case that diverges: Core
+/// throws, while this leaves the buffer untouched and reports success. The
+/// four datatypes are the entire ABI (`CHAR_DATA` through `COMPLEX_DATA`) and
+/// the caller had to name one of them to get this far, so the arm is
+/// unreachable rather than lenient.
+///
+/// # Safety
+/// `data` must be a valid, writable pointer. When `dim == 0`, `*data` must
+/// address a caller-owned scalar of the type `datatype` names. When
+/// `dim > 0`, `size` must address at least `dim` writable `c_int`s. Both are
+/// the public `al_read_data` contract, forwarded unchanged.
+unsafe fn no_source_read(
+    data: *mut *mut c_void,
+    datatype: c_int,
+    dim: c_int,
+    size: *mut c_int,
+) -> al_status_t {
+    if dim == 0 {
+        // SAFETY: `data` is valid and writable by this function's contract.
+        let scalar = unsafe { *data };
+        if !scalar.is_null() {
+            // SAFETY: `dim == 0` makes `*data` a caller-owned scalar of the
+            // type `datatype` names, per this function's contract. The null
+            // guard above is the one place this is gentler than IMAS-Core,
+            // which dereferences unconditionally and so crashes; a shim that
+            // crashed the process here would be strictly worse, and it can
+            // mask nothing, because IMAS-Core is never reached on this path.
+            unsafe {
+                match datatype {
+                    CHAR_DATA_ID => *scalar.cast::<c_char>() = EMPTY_CHAR,
+                    INTEGER_DATA_ID => *scalar.cast::<c_int>() = EMPTY_INT,
+                    DOUBLE_DATA_ID => *scalar.cast::<f64>() = EMPTY_DOUBLE,
+                    COMPLEX_DATA_ID => {
+                        scalar.cast::<f64>().copy_from(EMPTY_COMPLEX.as_ptr(), 2);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        return al_status_t::default();
+    }
+    // SAFETY: `data` is valid and writable, and `size` addresses at least
+    // `dim` `c_int`s, both by this function's contract.
     unsafe {
         *data = std::ptr::null_mut();
+        if !size.is_null() {
+            std::slice::from_raw_parts_mut(size, dim.max(0) as usize).fill(0);
+        }
     }
     al_status_t::default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Calls [`no_source_read`] the way `al_read_data` would for a scalar:
+    /// `data` points at the caller's own pointer, which points at the
+    /// caller's own storage.
+    fn scalar_no_source(storage: *mut c_void, datatype: c_int) -> al_status_t {
+        let mut data = storage;
+        // SAFETY: `data` is a live local, `*data` addresses caller storage of
+        // the type `datatype` names, and `dim == 0` never touches `size`.
+        unsafe { no_source_read(&raw mut data, datatype, 0, std::ptr::null_mut()) }
+    }
+
+    #[test]
+    fn an_absent_double_scalar_receives_the_empty_double_sentinel() {
+        let mut value = 3.5f64;
+        let status = scalar_no_source((&raw mut value).cast(), DOUBLE_DATA_ID);
+        assert_eq!(status.code, 0);
+        assert_eq!(value, EMPTY_DOUBLE);
+    }
+
+    #[test]
+    fn an_absent_integer_scalar_receives_the_empty_int_sentinel() {
+        let mut value: c_int = 7;
+        let status = scalar_no_source((&raw mut value).cast(), INTEGER_DATA_ID);
+        assert_eq!(status.code, 0);
+        assert_eq!(value, EMPTY_INT);
+    }
+
+    #[test]
+    fn an_absent_char_scalar_receives_the_empty_char_sentinel() {
+        let mut value: c_char = b'x' as c_char;
+        let status = scalar_no_source((&raw mut value).cast(), CHAR_DATA_ID);
+        assert_eq!(status.code, 0);
+        assert_eq!(value, EMPTY_CHAR);
+    }
+
+    #[test]
+    fn an_absent_complex_scalar_receives_both_halves_of_the_sentinel() {
+        let mut value = [1.5f64, 2.5f64];
+        let status = scalar_no_source(value.as_mut_ptr().cast(), COMPLEX_DATA_ID);
+        assert_eq!(status.code, 0);
+        assert_eq!(value, EMPTY_COMPLEX);
+    }
+
+    /// The scalar branch must not null the caller's pointer: IMAS-Core leaves
+    /// it alone for `dim == 0`, and the caller may well read through it again.
+    #[test]
+    fn an_absent_scalar_leaves_the_caller_pointer_addressing_its_own_buffer() {
+        let mut value = 3.5f64;
+        let mut data: *mut c_void = (&raw mut value).cast();
+        // SAFETY: as `scalar_no_source`, whose body this repeats to keep the
+        // pointer observable after the call.
+        let status =
+            unsafe { no_source_read(&raw mut data, DOUBLE_DATA_ID, 0, std::ptr::null_mut()) };
+        assert_eq!(status.code, 0);
+        assert_eq!(data, (&raw mut value).cast::<c_void>());
+    }
+
+    /// A caller that passes a null scalar buffer crashes IMAS-Core; the shim
+    /// declines to crash and reports the same success it would otherwise.
+    #[test]
+    fn an_absent_scalar_with_no_caller_buffer_is_reported_without_a_write() {
+        let status = scalar_no_source(std::ptr::null_mut(), DOUBLE_DATA_ID);
+        assert_eq!(status.code, 0);
+    }
+
+    /// The nonscalar half of `Lowlevel::setDefaultValue`: a null pointer *and*
+    /// every returned extent zeroed. The extents are the half the shim used to
+    /// skip, leaving a caller reading a stale shape off a null buffer.
+    #[test]
+    fn an_absent_array_nulls_the_pointer_and_zeroes_every_returned_extent() {
+        let mut value = 3.5f64;
+        let mut data: *mut c_void = (&raw mut value).cast();
+        let mut size: [c_int; 3] = [11, 22, 33];
+        // SAFETY: `data` is a live local and `size` has at least `dim == 2`
+        // writable elements.
+        let status = unsafe { no_source_read(&raw mut data, DOUBLE_DATA_ID, 2, size.as_mut_ptr()) };
+        assert_eq!(status.code, 0);
+        assert!(data.is_null());
+        assert_eq!(size, [0, 0, 33]);
+        assert_eq!(value, 3.5f64, "an array read must not touch caller storage");
+    }
 }

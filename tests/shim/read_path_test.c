@@ -704,6 +704,79 @@ static void scenario_no_source_returns_null_without_core_call(void) {
     printf("read_path_test no-source-returns-null-without-core-call: no stored path was read\n");
 }
 
+/* The rank-zero half of the same outcome, and the one the caller cannot
+ * recover from on its own. For `dim > 0` IMAS-Core signals absence by nulling
+ * `*data`, which the scenario above pins. For `dim == 0` the caller owns the
+ * buffer, IMAS-Core leaves the pointer alone, and absence has exactly one
+ * channel: the datatype's EMPTY sentinel written into that buffer. A shim
+ * that decides not-found without calling IMAS-Core has to write it itself,
+ * because nothing below it will.
+ *
+ * The buffers start at values a caller could plausibly mistake for real
+ * measurements, so a shim that writes nothing fails here rather than passing
+ * on a zero-initialised stack.
+ *
+ * CHAR_DATA and COMPLEX_DATA are covered in `no_source_read`'s own Rust unit
+ * tests instead: the shipped artifact has no `right_only` path of either type
+ * — equilibrium 4.1.1's `time_slice/convergence/result` subtree bottoms out at
+ * `result/index` — so there is no C ABI route to reach those arms (ADR 0011).
+ */
+static void scenario_no_source_scalar_receives_the_empty_sentinel(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+
+    double real_value = 3.5;
+    void *double_data = &real_value;
+    int no_extents[1] = {0};
+    CHECK(al_read_data(operation_ctx, "time_slice/global_quantities/rho_tor_boundary", "",
+                       &double_data, IMAS_DOUBLE_DATA, 0, no_extents)
+              .code == 0);
+    CHECK(real_value == -9.0E40);
+    CHECK(double_data == (void *)&real_value);
+
+    int count_value = 7;
+    void *int_data = &count_value;
+    CHECK(al_read_data(operation_ctx, "time_slice/constraints/constraints_n", "", &int_data,
+                       IMAS_INTEGER_DATA, 0, no_extents)
+              .code == 0);
+    CHECK(count_value == -999999999);
+    CHECK(int_data == (void *)&count_value);
+
+    /* The same rule reached through the subtree entry rather than a leaf one. */
+    int index_value = 7;
+    void *index_data = &index_value;
+    CHECK(al_read_data(operation_ctx, "time_slice/convergence/result/index", "", &index_data,
+                       IMAS_INTEGER_DATA, 0, no_extents)
+              .code == 0);
+    CHECK(index_value == -999999999);
+
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
+    CHECK(loss_count(operation_ctx) == 3);
+
+    printf("read_path_test no-source-scalar-receives-the-empty-sentinel: absence reached the "
+           "caller's own buffer\n");
+}
+
+/* The other half of `Lowlevel::setDefaultValue`'s nonscalar branch, which the
+ * shim used to skip: every returned extent is zeroed, not just the pointer
+ * nulled. A caller that reads its shape back before checking the pointer would
+ * otherwise see whatever it passed in. */
+static void scenario_no_source_array_zeroes_the_returned_extents(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = (void *)1;
+    int size[2] = {73, 91};
+
+    CHECK(al_read_data(operation_ctx, "time_slice/profiles_1d/psi_norm", "", &data,
+                       IMAS_DOUBLE_DATA, 2, size)
+              .code == 0);
+    CHECK(data == NULL);
+    CHECK(size[0] == 0);
+    CHECK(size[1] == 0);
+
+    printf("read_path_test no-source-array-zeroes-the-returned-extents: the returned shape was "
+           "cleared alongside the pointer\n");
+}
+
 static void scenario_rank_changing_retype_refuses_without_core_call(void) {
     int operation_ctx = open_mismatched_equilibrium();
     check_read_refusal(
@@ -977,6 +1050,8 @@ int main(int argc, char **argv) {
         {"split-plan-reads-and-flips-its-first-stored-destination", scenario_split_plan_reads_and_flips_its_first_stored_destination},
         {"reverse-split-read-flips-its-single-stored-source", scenario_reverse_split_read_flips_its_single_stored_source},
         {"no-source-returns-null-without-core-call", scenario_no_source_returns_null_without_core_call},
+        {"no-source-scalar-receives-the-empty-sentinel", scenario_no_source_scalar_receives_the_empty_sentinel},
+        {"no-source-array-zeroes-the-returned-extents", scenario_no_source_array_zeroes_the_returned_extents},
         {"rank-changing-retype-refuses-without-core-call", scenario_rank_changing_retype_refuses_without_core_call},
         {"redefined-unit-path-forwards-verbatim", scenario_redefined_unit_path_forwards_verbatim},
         {"unsupported-sign-flip-types-refuse-without-core-call", scenario_unsupported_sign_flip_types_refuse_without_core_call},
