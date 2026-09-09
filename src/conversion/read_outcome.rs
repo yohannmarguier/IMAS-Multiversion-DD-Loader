@@ -19,12 +19,19 @@
 //! never returns a null pointer, and absence has to be read off the *value*
 //! against [`EMPTY_DOUBLE`].
 //!
-//! No seam does that today. The one that did was the delete fan-out's
-//! presence probe, removed with issue #138 because it read through the
-//! caller's context (ADR 0017 decision 2), and its classifier went with it
-//! rather than staying behind as an untested-in-production helper. A future
-//! scalar reader needs both channels — the sentinel *and* the status — since
-//! a layer below IMAS-Core may still answer through the pointer.
+//! [`classify_scalar`] is the seam that does read it off the value. It exists
+//! because the `merged` precedence loop could not otherwise advance past a
+//! scalar candidate: an absent one comes back `code == 0` with the caller's
+//! own non-null pointer, which [`classify`] can only call `Data`, so the loop
+//! stopped at precedence 1 and handed the caller the sentinel even where a
+//! later candidate held the value. It uses both channels — the sentinel *and*
+//! the status — since a layer below IMAS-Core may still answer through the
+//! pointer.
+//!
+//! An earlier scalar classifier existed and was removed: the delete fan-out's
+//! presence probe went with issue #138, because it read through the *caller's*
+//! context (ADR 0017 decision 2), rather than staying behind as an
+//! untested-in-production helper.
 
 use std::ffi::c_void;
 
@@ -44,8 +51,7 @@ pub(crate) enum ReadOutcome {
 /// Classifies one `al_read_data` outcome from its status and returned data
 /// pointer. Nothing else in the shim may compare a data pointer to null —
 /// see this module's doc comment. Not valid for a `dim == 0` read, where
-/// absence arrives as a sentinel value instead; this module's doc comment
-/// explains why, and no seam currently performs one.
+/// absence arrives as a sentinel value instead: use [`classify_scalar`].
 pub(crate) fn classify(status: &al_status_t, data: *const c_void) -> ReadOutcome {
     if status.code != 0 {
         ReadOutcome::Failure
@@ -53,6 +59,42 @@ pub(crate) fn classify(status: &al_status_t, data: *const c_void) -> ReadOutcome
         ReadOutcome::NotFound
     } else {
         ReadOutcome::Data
+    }
+}
+
+/// Classifies one `dim == 0` `al_read_data` outcome, where absence is a
+/// sentinel *value* in the caller's own buffer rather than a null pointer.
+///
+/// Both channels are consulted, in the order the ABI makes them meaningful:
+/// [`classify`] first, so a nonzero status is still a failure and a layer
+/// below IMAS-Core that does answer through the pointer is still heard, and
+/// only then the sentinel. `is_double` gates the value test because
+/// [`EMPTY_DOUBLE`] is the one sentinel this shim knows: a scalar of any
+/// other datatype keeps [`classify`]'s answer, which is what the artifact
+/// needs today, since its only scalar `merged` rules are `DOUBLE_DATA`
+/// (ADR 0011 — no rule for a case the shipped artifact cannot reach).
+///
+/// # Safety
+/// When `is_double` is set and `data` is non-null, it must point to one
+/// initialized `f64` — IMAS-Core's own contract for a `dim == 0`
+/// `DOUBLE_DATA` read that returned `code == 0`.
+pub(crate) unsafe fn classify_scalar(
+    status: &al_status_t,
+    data: *const c_void,
+    is_double: bool,
+) -> ReadOutcome {
+    match classify(status, data) {
+        ReadOutcome::Data if is_double => {
+            // SAFETY: `ReadOutcome::Data` establishes `data` non-null, and
+            // this function's own contract requires it to point at one
+            // initialized `f64` when `is_double` is set.
+            if unsafe { *data.cast::<f64>() } == EMPTY_DOUBLE {
+                ReadOutcome::NotFound
+            } else {
+                ReadOutcome::Data
+            }
+        }
+        outcome => outcome,
     }
 }
 
@@ -92,6 +134,73 @@ mod tests {
     fn a_successful_status_with_a_null_pointer_is_not_found() {
         assert_eq!(
             classify(&al_status_t::default(), std::ptr::null()),
+            ReadOutcome::NotFound
+        );
+    }
+
+    #[test]
+    fn a_scalar_holding_the_empty_sentinel_is_not_found() {
+        let mut value = EMPTY_DOUBLE;
+        assert_eq!(
+            unsafe {
+                classify_scalar(
+                    &al_status_t::default(),
+                    std::ptr::from_mut(&mut value).cast::<c_void>(),
+                    true,
+                )
+            },
+            ReadOutcome::NotFound
+        );
+    }
+
+    #[test]
+    fn a_scalar_holding_a_real_value_is_data() {
+        // Zero is the value the sentinel test must not swallow: it is a real
+        // measurement, and telling it from a hole is the whole point.
+        for mut value in [0.0f64, 5.2, -9e39, f64::MIN] {
+            assert_eq!(
+                unsafe {
+                    classify_scalar(
+                        &al_status_t::default(),
+                        std::ptr::from_mut(&mut value).cast::<c_void>(),
+                        true,
+                    )
+                },
+                ReadOutcome::Data,
+                "{value} is a value, not an absence"
+            );
+        }
+    }
+
+    #[test]
+    fn a_non_double_scalar_keeps_the_pointer_classification() {
+        // ADR 0011: the shipped artifact has no non-DOUBLE scalar `merged`
+        // rule, so no sentinel is invented for one. The bit pattern below is
+        // EMPTY_DOUBLE's precisely so this asserts the gate, not the absence
+        // of a coincidence.
+        let mut value = EMPTY_DOUBLE;
+        assert_eq!(
+            unsafe {
+                classify_scalar(
+                    &al_status_t::default(),
+                    std::ptr::from_mut(&mut value).cast::<c_void>(),
+                    false,
+                )
+            },
+            ReadOutcome::Data
+        );
+    }
+
+    #[test]
+    fn a_scalar_still_hears_the_status_and_pointer_channels() {
+        let mut value = 5.2f64;
+        let data = std::ptr::from_mut(&mut value).cast::<c_void>();
+        assert_eq!(
+            unsafe { classify_scalar(&failure_status(), data, true) },
+            ReadOutcome::Failure
+        );
+        assert_eq!(
+            unsafe { classify_scalar(&al_status_t::default(), std::ptr::null(), true) },
             ReadOutcome::NotFound
         );
     }
