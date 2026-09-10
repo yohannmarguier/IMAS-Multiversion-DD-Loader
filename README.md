@@ -572,6 +572,8 @@ The HLI also acquires the IMAS-Core fork at the committed `IMAS_CORE_REF`, so
 it exercises the same library as the shim's full CI job. The Data Dictionary is
 pinned to 4.1.1 because the shim ships exactly one conversion-map artifact; a
 different DD version does not weaken the conversion test but dissolves it.
+`docs/adr/0026-pin-imas-core-until-upstream-corrects-delete.md` records why
+Core is pinned instead of floated.
 
 Three things a green run does **not** prove. Twenty of the HLI's `examples/` I/O
 tests can never run in a shim build — they are gated on both the MDSplus and
