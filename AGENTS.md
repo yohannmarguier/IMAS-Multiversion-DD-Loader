@@ -219,10 +219,10 @@ $ cargo fmt && cargo clippy --all-targets          # lint, no CMake wrapper
 
 CI (`.github/workflows/ci.yml`) has a fast recording-stub job for fmt, clippy,
 both CMake configurations, install and downstream consumption, plus a full job
-on pull requests and `main` pushes that downloads and caches the pinned
-IMAS-Core build before the drift and real-Core seams. It is the only thing
-keeping the CMake path honest — `cargo test` alone never re-runs cargo-c, never
-regenerates the header, and never compiles the C smoke test.
+on pull requests and `main` pushes that downloads and caches the IMAS-Core fork
+at the committed `IMAS_CORE_REF` before the drift and real-Core seams. It is the
+only thing keeping the CMake path honest — `cargo test` alone never re-runs
+cargo-c, never regenerates the header, and never compiles the C smoke test.
 
 A third workflow, `.github/workflows/hli-validation.yml`, is the only place a
 real HLI calls the shim: it builds the IMAS-Fortran fork pinned in
@@ -231,10 +231,10 @@ shim and runs that HLI's own suite — 83 per-IDS round-trips over memory, ASCII
 and HDF5 for passthrough, plus `play_eq_two_dd-cross` for conversion. It runs on
 pull requests based on `develop`/`main` (fail-safe `paths-ignore`) and on
 `workflow_dispatch`. Three facts about it are easy to get wrong: it acquires
-the IMAS-Core fork at the committed `IMAS_CORE_REF`, `DD_VERSION` is **pinned
-to 4.1.1** because `src/known_artifacts.rs` embeds one artifact, and 20 of the
-HLI's `examples/` tests can *never* run in a shim build, so the workflow asserts
-the disabled count as well as the total.
+the same IMAS-Core fork and committed `IMAS_CORE_REF` as the `full` CI job,
+`DD_VERSION` is **pinned to 4.1.1** because `src/known_artifacts.rs` embeds one
+artifact, and 20 of the HLI's `examples/` tests can *never* run in a shim build,
+so the workflow asserts the disabled count as well as the total.
 
 `README.md` carries the build options and layout. The *why* behind the build
 lives in comments next to what it explains — `CMakeLists.txt` for the staging

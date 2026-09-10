@@ -4,7 +4,7 @@ CI builds a real HLI — the IMAS-Fortran fork at `yohannmarguier/IMAS-Fortran` 
 
 | Dependency | Treatment | Why |
 |---|---|---|
-| IMAS-Core | **floats** — whatever the HLI's own default acquires | The shim's version gate is major-only, so a 5.x release is a `VersionDrift` log and not a failure. Pinning it would mean editing this repository for every IMAS-Core release, which is the opposite of what the shim claims to be. |
+| IMAS-Core | **Superseded by ADR 0026.** | Formerly floated — whatever the HLI's own default acquired. |
 | Data Dictionary | **pinned to 4.1.1** | The shim ships exactly one conversion-map artifact, for 3.39.0 ⇄ 4.1.1. A different DD version does not weaken the conversion test; it dissolves it. |
 | The HLI fork | **pinned by commit** in `IMAS_FORTRAN_REF` | Gives the build cache a content-derived key, and makes a red run attributable to the shim rather than to someone else's work in progress. |
 
