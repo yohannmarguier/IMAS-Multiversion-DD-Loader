@@ -224,8 +224,8 @@ require_line(full_job "uses: actions/cache@v4"
     "cache the acquired IMAS-Core build")
 require_line(full_job "-DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON"
     "download the pinned real IMAS-Core")
-require_pin_file_output(full_job pin_output_reference)
 forbid_commit_sha(workflow_content_lines "inline an IMAS-Core commit SHA")
+require_pin_file_output(full_job pin_output_reference)
 forbid_matching_line(workflow_content_lines
     "https://github\\.com/iterorganization/IMAS-Core\\.git"
     "name the upstream IMAS-Core repository")

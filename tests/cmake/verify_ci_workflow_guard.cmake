@@ -72,15 +72,24 @@ expect_guard_rejection(
 
 string(REPLACE
     "ref=$(head -n1 \"$GITHUB_WORKSPACE/IMAS_CORE_REF\")"
-    "ref=$(head -n1 \"$GITHUB_WORKSPACE/PINNED_COMMIT\")"
+    "ref=690f5392a58e4c73131d6b723c72105e9fbdcc9f"
     inline-pin "${workflow}")
-string(REPLACE "IMAS_CORE_REF must begin" "PINNED_COMMIT must begin"
-    inline-pin "${inline-pin}")
 if(workflow STREQUAL inline-pin)
-    message(FATAL_ERROR "Could not replace the IMAS-Core pin-file read")
+    message(FATAL_ERROR "Could not inline the IMAS-Core pin")
 endif()
 expect_guard_rejection(
     inline-pin "${inline-pin}"
+    "workflow_content_lines must not inline an IMAS-Core commit SHA")
+
+string(REPLACE
+    "ref=$(head -n1 \"$GITHUB_WORKSPACE/IMAS_CORE_REF\")"
+    "ref=$(head -n1 \"$GITHUB_WORKSPACE/PINNED_COMMIT\")"
+    wrong-pin-file "${workflow}")
+if(workflow STREQUAL wrong-pin-file)
+    message(FATAL_ERROR "Could not replace the IMAS-Core pin-file read")
+endif()
+expect_guard_rejection(
+    wrong-pin-file "${wrong-pin-file}"
     "full_job must write a value read from IMAS_CORE_REF to GITHUB_OUTPUT")
 
 string(APPEND upstream-repository "${workflow}"
@@ -91,12 +100,23 @@ expect_guard_rejection(
     "workflow_content_lines must not name the upstream IMAS-Core repository")
 
 string(REPLACE
-    "key: al-core-"
-    "key: al-core-\${{ hashFiles('IMAS_CORE_VERSION') }}-"
-    release-key "${workflow}")
-if(workflow STREQUAL release-key)
+    "key: al-core-\${{ runner.os }}-Release-\${{ steps.imas_core_ref.outputs.commit }}"
+    "key: al-core-\${{ runner.os }}-Release-\${{ hashFiles('IMAS_CORE_VERSION') }}"
+    cache-key-misses-resolved-pin "${workflow}")
+if(workflow STREQUAL cache-key-misses-resolved-pin)
     message(FATAL_ERROR "Could not replace the resolved IMAS-Core cache key")
 endif()
 expect_guard_rejection(
-    release-key "${release-key}"
+    cache-key-misses-resolved-pin "${cache-key-misses-resolved-pin}"
+    "full_job must key the acquired IMAS-Core cache on the resolved pin")
+
+string(REPLACE
+    "key: al-core-"
+    "key: al-core-\${{ hashFiles('IMAS_CORE_VERSION') }}-"
+    cache-key-uses-release-version "${workflow}")
+if(workflow STREQUAL cache-key-uses-release-version)
+    message(FATAL_ERROR "Could not add IMAS_CORE_VERSION to the cache key")
+endif()
+expect_guard_rejection(
+    cache-key-uses-release-version "${cache-key-uses-release-version}"
     "full_job must not key the acquired IMAS-Core cache on IMAS_CORE_VERSION")
