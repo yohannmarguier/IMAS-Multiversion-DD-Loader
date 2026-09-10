@@ -44,6 +44,7 @@ fn record_dummy_root(
             dataobjectname: "equilibrium".to_string(),
             key: dummy_key(),
             direction_to_stored: DUMMY_DIRECTION,
+            opened_read_op: true,
         },
         dummy_map,
     )
@@ -67,6 +68,7 @@ fn a_root_record_retains_its_path_pulse_id_map_and_root_identity() {
             dataobjectname: "equilibrium".to_string(),
             key: key.clone(),
             direction_to_stored: DUMMY_DIRECTION,
+            opened_read_op: true,
         },
         dummy_map,
     ));
@@ -102,10 +104,16 @@ fn root_and_child_retain_their_occurrence_and_pulse_identity_across_pulse_id_reu
             dataobjectname: "equilibrium/1".to_string(),
             key: dummy_key(),
             direction_to_stored: DUMMY_DIRECTION,
+            opened_read_op: true,
         },
         dummy_map,
     ));
-    assert!(registry.record_child(6, 5, "time_slice(0)".to_string()));
+    assert!(registry.record_child(
+        6,
+        5,
+        "time_slice(0)".to_string(),
+        "time_slice(0)".to_string()
+    ));
 
     // Reusing the pulse ID must not retroactively alter a root or child that
     // already captured the original pulse URI.
@@ -147,7 +155,12 @@ fn removing_a_context_removes_only_that_exact_record() {
 fn removing_a_parent_record_does_not_invalidate_a_still_live_child() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
-    assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+    assert!(registry.record_child(
+        6,
+        5,
+        "root/path/aos(1)".to_string(),
+        "root/path/aos(1)".to_string()
+    ));
 
     registry.remove(5);
 
@@ -163,7 +176,12 @@ fn removing_a_parent_record_does_not_invalidate_a_still_live_child() {
 fn a_non_exact_read_from_a_child_is_retained_by_its_root_context() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
-    assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+    assert!(registry.record_child(
+        6,
+        5,
+        "root/path/aos(1)".to_string(),
+        "root/path/aos(1)".to_string()
+    ));
 
     let child = registry.lookup(6).expect("the child must be live");
     registry.retain_loss_at_root(
@@ -187,7 +205,12 @@ fn a_non_exact_read_from_a_child_is_retained_by_its_root_context() {
 fn a_refused_write_from_a_child_is_retained_by_its_root_context() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
-    assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+    assert!(registry.record_child(
+        6,
+        5,
+        "root/path/aos(1)".to_string(),
+        "root/path/aos(1)".to_string()
+    ));
 
     let child = registry.lookup(6).expect("the child must be live");
     registry.retain_loss_at_root(
@@ -211,7 +234,12 @@ fn a_refused_write_from_a_child_is_retained_by_its_root_context() {
 fn a_read_uses_its_captured_root_after_its_child_id_is_reused() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "old/root".to_string(), 1));
-    assert!(registry.record_child(6, 5, "old/root/aos(1)".to_string()));
+    assert!(registry.record_child(
+        6,
+        5,
+        "old/root/aos(1)".to_string(),
+        "old/root/aos(1)".to_string()
+    ));
     let read_root = registry.lookup(6).expect("the child must be live").root_id;
 
     // Model a child ending and its numeric ID being reused while
@@ -248,11 +276,17 @@ fn a_child_record_retains_its_own_path_and_parent_id_and_shares_the_parents_map(
             dataobjectname: "equilibrium".to_string(),
             key: key.clone(),
             direction_to_stored: DUMMY_DIRECTION,
+            opened_read_op: true,
         },
         dummy_map
     ));
 
-    assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+    assert!(registry.record_child(
+        6,
+        5,
+        "root/path/aos(1)".to_string(),
+        "root/path/aos(1)".to_string()
+    ));
 
     let child = registry
         .lookup(6)
@@ -289,9 +323,19 @@ fn a_root_record_has_no_parent_id() {
 fn a_grandchild_inherits_the_root_identity_through_its_immediate_parent() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
-    assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+    assert!(registry.record_child(
+        6,
+        5,
+        "root/path/aos(1)".to_string(),
+        "root/path/aos(1)".to_string()
+    ));
 
-    assert!(registry.record_child(7, 6, "root/path/aos(1)/nested(2)".to_string()));
+    assert!(registry.record_child(
+        7,
+        6,
+        "root/path/aos(1)/nested(2)".to_string(),
+        "root/path/aos(1)/nested(2)".to_string()
+    ));
 
     let grandchild = registry.lookup(7).unwrap();
     assert_eq!(
@@ -313,14 +357,14 @@ fn recording_a_child_under_an_id_with_no_live_conversion_record_fails_and_clears
     assert!(record_dummy_root(&registry, 9, "stale".to_string(), 1));
 
     // A data-entry context is not a conversion record: no root to inherit from.
-    assert!(!registry.record_child(9, 1, "irrelevant".to_string()));
+    assert!(!registry.record_child(9, 1, "irrelevant".to_string(), "irrelevant".to_string()));
     assert!(
         registry.lookup(9).is_none(),
         "a failed child recording must clear whatever used to live at ctx_id"
     );
 
     // An unrecorded/recycled parent id behaves the same way.
-    assert!(!registry.record_child(20, 999, "irrelevant".to_string()));
+    assert!(!registry.record_child(20, 999, "irrelevant".to_string(), "irrelevant".to_string()));
     assert!(registry.lookup(20).is_none());
 }
 
@@ -328,8 +372,8 @@ fn recording_a_child_under_an_id_with_no_live_conversion_record_fails_and_clears
 fn removing_a_child_affects_only_that_context_id() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
-    assert!(registry.record_child(6, 5, "child/a".to_string()));
-    assert!(registry.record_child(7, 5, "child/b".to_string()));
+    assert!(registry.record_child(6, 5, "child/a".to_string(), "child/a".to_string()));
+    assert!(registry.record_child(7, 5, "child/b".to_string(), "child/b".to_string()));
 
     registry.remove(6);
 
@@ -342,10 +386,10 @@ fn removing_a_child_affects_only_that_context_id() {
 fn a_recycled_child_id_never_exposes_the_record_it_used_to_name() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
-    assert!(registry.record_child(6, 5, "old/child".to_string()));
+    assert!(registry.record_child(6, 5, "old/child".to_string(), "old/child".to_string()));
     registry.remove(6);
 
-    assert!(registry.record_child(6, 5, "new/child".to_string()));
+    assert!(registry.record_child(6, 5, "new/child".to_string(), "new/child".to_string()));
 
     let snapshot = registry.lookup(6).unwrap();
     assert_eq!(snapshot.resolved_path, "new/child");
@@ -355,7 +399,7 @@ fn a_recycled_child_id_never_exposes_the_record_it_used_to_name() {
 fn a_recycled_parent_id_does_not_retroactively_change_an_already_recorded_child() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "old/root".to_string(), 1));
-    assert!(registry.record_child(6, 5, "old/child".to_string()));
+    assert!(registry.record_child(6, 5, "old/child".to_string(), "old/child".to_string()));
     registry.remove(5);
 
     // Id 5 is recycled for an unrelated new root.
@@ -382,7 +426,7 @@ fn a_recycled_parent_id_does_not_retroactively_change_an_already_recorded_child(
 fn child_lookup_releases_the_lock_before_returning() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
-    assert!(registry.record_child(6, 5, "child".to_string()));
+    assert!(registry.record_child(6, 5, "child".to_string(), "child".to_string()));
 
     let _snapshot = registry.lookup(6).unwrap();
     // If `lookup` still held the lock at this point, this call would
@@ -476,6 +520,7 @@ fn matching_versions_remove_stale_records_without_creating_a_map() {
             dataobjectname: "equilibrium".to_string(),
             key: matching_key,
             direction_to_stored: DUMMY_DIRECTION,
+            opened_read_op: true,
         },
         || {
             loads.set(loads.get() + 1);
@@ -504,6 +549,7 @@ fn a_shared_map_survives_as_long_as_one_record_still_references_it() {
             dataobjectname: "equilibrium".to_string(),
             key: key.clone(),
             direction_to_stored: DUMMY_DIRECTION,
+            opened_read_op: true,
         },
         || {
             loads.set(loads.get() + 1);
@@ -518,6 +564,7 @@ fn a_shared_map_survives_as_long_as_one_record_still_references_it() {
             dataobjectname: "equilibrium".to_string(),
             key: key.clone(),
             direction_to_stored: DUMMY_DIRECTION,
+            opened_read_op: true,
         },
         || {
             loads.set(loads.get() + 1);
@@ -555,6 +602,7 @@ fn a_shared_map_is_released_once_no_record_references_it() {
             dataobjectname: "equilibrium".to_string(),
             key: key.clone(),
             direction_to_stored: DUMMY_DIRECTION,
+            opened_read_op: true,
         },
         || {
             loads.set(loads.get() + 1);
@@ -592,6 +640,7 @@ fn concurrent_operations_never_observe_a_torn_record() {
                         dataobjectname: format!("equilibrium/{i}"),
                         key: dummy_key(),
                         direction_to_stored: DUMMY_DIRECTION,
+                        opened_read_op: true,
                     },
                     dummy_map,
                 );
@@ -631,10 +680,16 @@ fn concurrent_child_operations_never_observe_a_torn_record() {
                         dataobjectname: format!("equilibrium/{i}"),
                         key: dummy_key(),
                         direction_to_stored: DUMMY_DIRECTION,
+                        opened_read_op: true,
                     },
                     dummy_map,
                 );
-                registry.record_child(child_id, root_id, format!("child-{i}"));
+                registry.record_child(
+                    child_id,
+                    root_id,
+                    format!("child-{i}"),
+                    format!("child-{i}"),
+                );
                 if let Some(snapshot) = registry.lookup(child_id) {
                     // A torn record would show a path or root identity
                     // that does not match the root this thread always
@@ -784,7 +839,12 @@ fn loss_count_never_counts_an_exact_read() {
 fn loss_count_resolves_a_child_context_to_its_root() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
-    assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
+    assert!(registry.record_child(
+        6,
+        5,
+        "root/path/aos(1)".to_string(),
+        "root/path/aos(1)".to_string()
+    ));
 
     registry.retain_loss_at_root(5, "field".to_string(), Fidelity::Lossy, LossOperation::Read);
 
@@ -869,8 +929,18 @@ fn ending_the_root_context_destroys_its_loss_log() {
 fn the_loss_log_dies_with_the_root_even_when_a_child_closes_non_lifo() {
     let registry = ContextRegistry::new();
     assert!(record_dummy_root(&registry, 5, "root/path".to_string(), 1));
-    assert!(registry.record_child(6, 5, "root/path/aos(1)".to_string()));
-    assert!(registry.record_child(7, 5, "root/path/aos(2)".to_string()));
+    assert!(registry.record_child(
+        6,
+        5,
+        "root/path/aos(1)".to_string(),
+        "root/path/aos(1)".to_string()
+    ));
+    assert!(registry.record_child(
+        7,
+        5,
+        "root/path/aos(2)".to_string(),
+        "root/path/aos(2)".to_string()
+    ));
     registry.retain_loss_at_root(
         5,
         "field/a".to_string(),

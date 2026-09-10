@@ -302,6 +302,31 @@ al_status_t al_begin_timerange_action(int pctxID, const char *dataobjectname, in
 
 /* --- al_begin_arraystruct_action ------------------------------------------- */
 
+/* Whether `value` names one exact entry of `csv`, a comma-separated list.
+ * `RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS` is this stub's one caller: a test
+ * names which of a merged rule's stored candidates should come back an
+ * empty, successful open (issue #178), and this is how it checks whether the
+ * path a given `al_begin_arraystruct_action` call just received is one of
+ * them. Mirrors `parse_csv_doubles`/`parse_csv_ints`'s fixed-buffer-plus-strtok
+ * shape rather than their numeric parsing. */
+static int env_csv_contains(const char *csv, const char *value) {
+    if (csv == NULL || value == NULL) {
+        return 0;
+    }
+    char buffer[256];
+    strncpy(buffer, csv, sizeof buffer - 1);
+    buffer[sizeof buffer - 1] = '\0';
+
+    char *token = strtok(buffer, ",");
+    while (token != NULL) {
+        if (strcmp(token, value) == 0) {
+            return 1;
+        }
+        token = strtok(NULL, ",");
+    }
+    return 0;
+}
+
 static int g_arraystruct_call_count = 0;
 static int g_arraystruct_ctx_id = 0;
 static int g_next_arraystruct_ctx_id = 3004;
@@ -329,7 +354,8 @@ al_status_t al_begin_arraystruct_action(int ctxID, const char *path, const char 
 
     if (size != NULL) {
         g_arraystruct_size_in = *size;
-        *size = 3003;
+        const char *empty_paths = getenv("RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS");
+        *size = env_csv_contains(empty_paths, path) ? 0 : 3003;
     }
     if (actxID != NULL) {
         *actxID = g_next_arraystruct_ctx_id++;

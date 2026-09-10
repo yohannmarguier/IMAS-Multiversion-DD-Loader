@@ -39,6 +39,13 @@ arm exists only for exhaustiveness.
    blast radius of their 136 references across `path_conversion.rs`,
    `seam_policy.rs` and `interpose.rs` stays zero.
 
+   Issue #178 (ADR 0025) later gave `ContextPathResolution` a `Candidates`
+   variant, where it used to fold a `Resolved::Plan` straight into a refusal.
+   That is a change to what the arraystruct seam's narrowing can answer, not
+   to this decision: it is still one `resolve`, one narrowing per seam, and
+   `ContextPathResolution` is still the one type that carries all five shapes
+   this ADR's introduction describes.
+
 2. **`Resolved` keeps `Single` and `Plan` apart, and nothing counts the
    list.** The distinction is what the rule declared — an identity, `renamed`
    or `moved` rule gives one path result; a `merged` or `split` rule gives an

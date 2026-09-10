@@ -329,6 +329,7 @@ mod tests {
                 dataobjectname: "equilibrium".to_string(),
                 key: MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
                 direction_to_stored: Direction::Forward,
+                opened_read_op: true,
             },
             || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
         ));
@@ -419,6 +420,7 @@ mod tests {
                 dataobjectname: "equilibrium".to_string(),
                 key: MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
                 direction_to_stored: Direction::Reverse,
+                opened_read_op: true,
             },
             || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
         ));
