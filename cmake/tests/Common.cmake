@@ -7,6 +7,12 @@ add_test(NAME ci-workflow
         "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
         "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ci_workflow.cmake")
+add_test(NAME hli-validation-workflow
+    COMMAND "${CMAKE_COMMAND}"
+        "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/hli-validation.yml"
+        "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
+        "-DPINNED_CORE_JOB=hli"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ci_workflow.cmake")
 add_test(NAME ci-workflow-guard-rejects-misplaced-commands
     COMMAND "${CMAKE_COMMAND}"
         "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"

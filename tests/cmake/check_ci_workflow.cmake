@@ -185,6 +185,25 @@ function(read_top_level_mapping mapping_name output_variable)
     set("${output_variable}" "${mapping_lines}" PARENT_SCOPE)
 endfunction()
 
+function(check_pinned_core_linkage job_name job_lines_variable)
+    read_job(${job_name} ${job_lines_variable})
+    forbid_commit_sha(workflow_content_lines "inline an IMAS-Core commit SHA")
+    require_pin_file_output(${job_lines_variable} pin_output_reference)
+    forbid_matching_line(workflow_content_lines
+        "https://github\\.com/iterorganization/IMAS-Core\\.git"
+        "name the upstream IMAS-Core repository")
+    require_matching_line(${job_lines_variable}
+        "key: .*${pin_output_reference}"
+        "key the acquired IMAS-Core cache on the resolved pin")
+    forbid_matching_line(${job_lines_variable} "key: .*IMAS_CORE_VERSION"
+        "key the acquired IMAS-Core cache on IMAS_CORE_VERSION")
+endfunction()
+
+if(DEFINED PINNED_CORE_JOB)
+    check_pinned_core_linkage(${PINNED_CORE_JOB} pinned_core_job)
+    return()
+endif()
+
 read_job(fast fast_job)
 read_job(full full_job)
 read_top_level_mapping(env workflow_env)
@@ -224,16 +243,7 @@ require_line(full_job "uses: actions/cache@v4"
     "cache the acquired IMAS-Core build")
 require_line(full_job "-DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON"
     "download the pinned real IMAS-Core")
-forbid_commit_sha(workflow_content_lines "inline an IMAS-Core commit SHA")
-require_pin_file_output(full_job pin_output_reference)
-forbid_matching_line(workflow_content_lines
-    "https://github\\.com/iterorganization/IMAS-Core\\.git"
-    "name the upstream IMAS-Core repository")
-require_matching_line(full_job
-    "key: al-core-.*${pin_output_reference}"
-    "key the acquired IMAS-Core cache on the resolved pin")
-forbid_matching_line(full_job "key: .*IMAS_CORE_VERSION"
-    "key the acquired IMAS-Core cache on IMAS_CORE_VERSION")
+check_pinned_core_linkage(full full_job)
 
 require_line(workflow_env "RUST_VERSION: 1.88.0"
     "pin Rust to the deployed cluster version")

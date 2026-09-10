@@ -568,13 +568,10 @@ a 4.1.1 HLI, and requires the `retyped` refusal to name
 `grids_ggd/grid/space/coordinates_type`, so a shim that stopped registering
 conversion records fails rather than passing quietly.
 
-IMAS-Core deliberately floats — the HLI acquires whichever one its own default
-names, because the shim's version gate is major-only and pinning it would mean
-editing this repository for every IMAS-Core release. The Data Dictionary is
-pinned to 4.1.1 instead, because the shim ships exactly one conversion-map
-artifact and a different DD version does not weaken the conversion test but
-dissolves it. `docs/adr/0022-hli-validation-floats-core-and-pins-the-dd.md`
-records that asymmetry.
+The HLI also acquires the IMAS-Core fork at the committed `IMAS_CORE_REF`, so
+it exercises the same library as the shim's full CI job. The Data Dictionary is
+pinned to 4.1.1 because the shim ships exactly one conversion-map artifact; a
+different DD version does not weaken the conversion test but dissolves it.
 
 Three things a green run does **not** prove. Twenty of the HLI's `examples/` I/O
 tests can never run in a shim build — they are gated on both the MDSplus and
