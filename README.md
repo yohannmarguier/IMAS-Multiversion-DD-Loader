@@ -110,7 +110,7 @@ packaging use.
 | `IMAS_MVDD_REAL_CORE_TESTS` | `ON` | Acquire IMAS-Core and register the drift and real-Core seam tests; `OFF` is the explicit recording-stub-only CI profile |
 | `IMAS_CORE_DOWNLOAD_DEPENDENCIES` | `OFF` | Fetch and build IMAS-Core at `IMAS_CORE_GIT_TAG` instead of finding an installed one |
 | `IMAS_CORE_DEVELOPMENT_LAYOUT` | `OFF` | Build IMAS-Core from a sibling checkout at `../IMAS-Core` instead of finding an installed one |
-| `IMAS_CORE_GIT_REPOSITORY` / `IMAS_CORE_GIT_TAG` | upstream repo / the `IMAS_CORE_VERSION` pin | Where `IMAS_CORE_DOWNLOAD_DEPENDENCIES` fetches from |
+| `IMAS_CORE_GIT_REPOSITORY` / `IMAS_CORE_GIT_TAG` | project fork / the `IMAS_CORE_REF` commit | Where `IMAS_CORE_DOWNLOAD_DEPENDENCIES` fetches from |
 
 Use a single-config generator (Ninja, Unix Makefiles) and set
 `CMAKE_BUILD_TYPE`; multi-config generators are rejected at configure time.
@@ -415,6 +415,7 @@ CMakeLists.txt          drives cargo-c; owns install, package config and tests
 .github/actions/setup-toolchain/action.yml  shared pinned CI toolchain setup
 Cargo.toml              crate-type + [package.metadata.capi]
 IMAS_CORE_VERSION       supported IMAS-Core release used by the runtime compatibility gate
+IMAS_CORE_REF           exact IMAS-Core source commit download mode and CI build; distinct from the ABI release
 cbindgen.toml           generated-header settings
 cmake/imas-mvdd-loaderConfig.cmake.in  find_package template, hand-authored
 src/lib.rs              the mirrored C ABI

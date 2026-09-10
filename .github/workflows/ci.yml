@@ -80,6 +80,17 @@ jobs:
 
       - uses: ./.github/actions/setup-toolchain
 
+      - name: Resolve IMAS-Core reference
+        id: imas_core_ref
+        run: |
+          set -euo pipefail
+          ref=$(head -n1 "$GITHUB_WORKSPACE/IMAS_CORE_REF")
+          if ! [[ "$ref" =~ ^[[:xdigit:]]{40}$ ]]; then
+            echo "IMAS_CORE_REF must begin with a 40-character hexadecimal commit SHA" >&2
+            exit 1
+          fi
+          echo "commit=$ref" >> "$GITHUB_OUTPUT"
+
       - name: Install IMAS-Core build dependencies
         run: sudo apt-get update && sudo apt-get install -y libboost-filesystem-dev libhdf5-dev
 
@@ -87,12 +98,23 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/_deps
-          key: al-core-${{ runner.os }}-Release-${{ hashFiles('IMAS_CORE_VERSION') }}
+          key: al-core-${{ runner.os }}-Release-${{ steps.imas_core_ref.outputs.commit }}
 
       - name: Configure with real IMAS-Core
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
             -DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON
+
+      - name: Verify acquired IMAS-Core revision
+        run: |
+          set -euo pipefail
+          expected="${{ steps.imas_core_ref.outputs.commit }}"
+          actual=$(git -C build/_deps/al-core-src rev-parse HEAD)
+          expected=${expected,,}
+          if [[ "$actual" != "$expected" ]]; then
+            echo "acquired IMAS-Core commit $actual does not match pinned commit $expected" >&2
+            exit 1
+          fi
 
       - name: Build
         run: cmake --build build

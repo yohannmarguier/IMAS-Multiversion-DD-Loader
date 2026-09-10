@@ -69,3 +69,34 @@ string(APPEND misplaced_full_command
 expect_guard_rejection(
     misplaced-full-command "${misplaced_full_command}"
     "full_job must fail when its selected test profile registers no tests")
+
+string(REPLACE
+    "ref=$(head -n1 \"$GITHUB_WORKSPACE/IMAS_CORE_REF\")"
+    "ref=$(head -n1 \"$GITHUB_WORKSPACE/PINNED_COMMIT\")"
+    inline-pin "${workflow}")
+string(REPLACE "IMAS_CORE_REF must begin" "PINNED_COMMIT must begin"
+    inline-pin "${inline-pin}")
+if(workflow STREQUAL inline-pin)
+    message(FATAL_ERROR "Could not replace the IMAS-Core pin-file read")
+endif()
+expect_guard_rejection(
+    inline-pin "${inline-pin}"
+    "full_job must write a value read from IMAS_CORE_REF to GITHUB_OUTPUT")
+
+string(APPEND upstream-repository "${workflow}"
+    "\n  decoy:\n    runs-on: ubuntu-latest\n    steps:\n"
+    "      - run: git clone https://github.com/iterorganization/IMAS-Core.git\n")
+expect_guard_rejection(
+    upstream-repository "${upstream-repository}"
+    "workflow_content_lines must not name the upstream IMAS-Core repository")
+
+string(REPLACE
+    "key: al-core-"
+    "key: al-core-\${{ hashFiles('IMAS_CORE_VERSION') }}-"
+    release-key "${workflow}")
+if(workflow STREQUAL release-key)
+    message(FATAL_ERROR "Could not replace the resolved IMAS-Core cache key")
+endif()
+expect_guard_rejection(
+    release-key "${release-key}"
+    "full_job must not key the acquired IMAS-Core cache on IMAS_CORE_VERSION")

@@ -87,6 +87,8 @@ function(flatten_block lines_variable output_variable)
     set("${output_variable}" "${flat_lines}" PARENT_SCOPE)
 endfunction()
 
+flatten_block(workflow_lines workflow_content_lines)
+
 function(read_job job_name output_variable)
     read_raw_block(workflow_lines "  " "${job_name}" "jobs:"
         "CI workflow must define a ${job_name} job" job_raw_lines)
@@ -105,6 +107,75 @@ function(require_file_line lines_variable line description)
     if(NOT "${line}" IN_LIST stripped_lines)
         message(FATAL_ERROR "CI ${lines_variable} must ${description}")
     endif()
+endfunction()
+
+function(require_matching_line lines_variable pattern description)
+    foreach(line IN LISTS ${lines_variable})
+        if(line MATCHES "${pattern}")
+            return()
+        endif()
+    endforeach()
+    message(FATAL_ERROR "CI ${lines_variable} must ${description}")
+endfunction()
+
+function(forbid_matching_line lines_variable pattern description)
+    foreach(line IN LISTS ${lines_variable})
+        if(line MATCHES "${pattern}")
+            message(FATAL_ERROR "CI ${lines_variable} must not ${description}")
+        endif()
+    endforeach()
+endfunction()
+
+function(forbid_commit_sha lines_variable description)
+    foreach(line IN LISTS ${lines_variable})
+        string(LENGTH "${line}" line_length)
+        math(EXPR last_start "${line_length} - 40")
+        if(last_start LESS 0)
+            continue()
+        endif()
+        foreach(start RANGE 0 ${last_start})
+            string(SUBSTRING "${line}" ${start} 40 candidate)
+            if(candidate MATCHES "^[0-9a-fA-F]+$")
+                message(FATAL_ERROR "CI ${lines_variable} must not ${description}")
+            endif()
+        endforeach()
+    endforeach()
+endfunction()
+
+function(require_pin_file_output lines_variable output_variable)
+    set(current_step_id)
+    set(pin_value_variable)
+    foreach(line IN LISTS ${lines_variable})
+        string(REGEX MATCH "^id: ([A-Za-z0-9_-]+)$" step_id "${line}")
+        if(NOT step_id STREQUAL "")
+            set(current_step_id "${CMAKE_MATCH_1}")
+        endif()
+
+        set(pin_assignment "")
+        string(REGEX MATCH
+            "^([A-Za-z_][A-Za-z0-9_]*)=\\$\\([^)]*IMAS_CORE_REF[^)]*\\)"
+            pin_assignment "${line}")
+        if(NOT pin_assignment STREQUAL "")
+            set(pin_value_variable "${CMAKE_MATCH_1}")
+        endif()
+
+        string(LENGTH "${pin_value_variable}" pin_value_length)
+        if(pin_value_length GREATER 0)
+            string(FIND "${line}" "$${pin_value_variable}" value_reference)
+            string(FIND "${line}" "GITHUB_OUTPUT" output_reference)
+            set(output_assignment "")
+            string(REGEX MATCH "([A-Za-z0-9_-]+)=.*GITHUB_OUTPUT"
+                output_assignment "${line}")
+            if(value_reference GREATER -1 AND output_reference GREATER -1 AND
+                    NOT current_step_id STREQUAL "" AND NOT output_assignment STREQUAL "")
+                set("${output_variable}"
+                    "steps.${current_step_id}.outputs.${CMAKE_MATCH_1}" PARENT_SCOPE)
+                return()
+            endif()
+        endif()
+    endforeach()
+    message(FATAL_ERROR
+        "CI ${lines_variable} must write a value read from IMAS_CORE_REF to GITHUB_OUTPUT")
 endfunction()
 
 function(read_top_level_mapping mapping_name output_variable)
@@ -153,6 +224,16 @@ require_line(full_job "uses: actions/cache@v4"
     "cache the acquired IMAS-Core build")
 require_line(full_job "-DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON"
     "download the pinned real IMAS-Core")
+require_pin_file_output(full_job pin_output_reference)
+forbid_commit_sha(workflow_content_lines "inline an IMAS-Core commit SHA")
+forbid_matching_line(workflow_content_lines
+    "https://github\\.com/iterorganization/IMAS-Core\\.git"
+    "name the upstream IMAS-Core repository")
+require_matching_line(full_job
+    "key: al-core-.*${pin_output_reference}"
+    "key the acquired IMAS-Core cache on the resolved pin")
+forbid_matching_line(full_job "key: .*IMAS_CORE_VERSION"
+    "key the acquired IMAS-Core cache on IMAS_CORE_VERSION")
 
 require_line(workflow_env "RUST_VERSION: 1.88.0"
     "pin Rust to the deployed cluster version")

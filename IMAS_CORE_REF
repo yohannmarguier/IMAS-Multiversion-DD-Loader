@@ -1,0 +1,15 @@
+690f5392a58e4c73131d6b723c72105e9fbdcc9f
+
+# The IMAS-Core repository belongs in CMakeLists.txt: its location is stable;
+# this file records only the moving revision CI and download-mode builds use.
+#
+# This fork pin preserves the HDF5 delete behaviour covered by issue #139 until
+# upstream carries the required fix. Remove it when that fix is released and
+# this project can return to an upstream release tag.
+#
+# To move the pin, replace only the first line with a verified 40-hex commit,
+# then run the real-Core suite. That intentionally changes CI's cache key so it
+# cannot restore a build of the old commit.
+#
+# This is not IMAS_CORE_VERSION: that file names the public ABI release the shim
+# mirrors, while this one names the exact source revision download mode builds.
