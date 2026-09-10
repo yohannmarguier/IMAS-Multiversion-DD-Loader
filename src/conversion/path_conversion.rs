@@ -1763,4 +1763,86 @@ mod tests {
             None
         );
     }
+
+    /// Issue #178: a merged-subtree arraystruct child's own anchor
+    /// (`stored_path`) is fixed at open time to whichever stored candidate
+    /// actually won, never re-derived from the map. A relative read under it
+    /// must therefore see only the candidates that lie beneath *that* stored
+    /// spelling — a sibling candidate under a completely different top-level
+    /// group is not reachable from this context at all, and is dropped from
+    /// the plan rather than refusing the whole read.
+    ///
+    /// The shipped artifact never puts a context in this position today (a
+    /// merged-subtree anchor's own children resolve through the same
+    /// candidate this context already committed to), so this constructs the
+    /// scenario directly rather than assuming it — the two-candidate,
+    /// two-top-level-group shape a future subtree rule could reach.
+    #[test]
+    fn a_relative_read_under_a_fixed_merged_anchor_keeps_only_the_reachable_candidate() {
+        const ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="fold-anchor" rel="merged" right="group_a" subtree="yes">
+                  <from left="group_a" precedence="1"/>
+                  <from left="group_b" precedence="2"/>
+                  <fidelity forward="lossy" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let mut child = reverse_record(ARTIFACT);
+        child.resolved_path = "group_a".to_string();
+        // This context was actually opened against the precedence-2
+        // candidate (as a real arraystruct open's probe might choose).
+        child.stored_path = "group_b".to_string();
+
+        let leaf = CString::new("leaf").expect("no interior NUL");
+        match resolve(&child, leaf.as_ptr()) {
+            Resolved::Plan(candidates) => {
+                assert_eq!(
+                    candidates.len(),
+                    1,
+                    "the sibling candidate under group_a is not reachable from a context fixed \
+                     to group_b, and must be dropped rather than kept or refused"
+                );
+                assert_eq!(candidates[0].stored_dd_path, "group_b/leaf");
+            }
+            _ => panic!("one candidate lies beneath this context's fixed anchor"),
+        }
+    }
+
+    /// The other half of the same mechanism: when *no* candidate lies beneath
+    /// the context's fixed anchor, the read refuses with a named reason
+    /// instead of silently returning an empty plan `Resolved::Plan` could
+    /// never otherwise produce.
+    #[test]
+    fn a_relative_read_refuses_when_no_candidate_lies_beneath_the_fixed_anchor() {
+        const ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="fold-anchor" rel="merged" right="group_a" subtree="yes">
+                  <from left="group_a" precedence="1"/>
+                  <from left="group_b" precedence="2"/>
+                  <fidelity forward="lossy" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let mut child = reverse_record(ARTIFACT);
+        child.resolved_path = "group_a".to_string();
+        child.stored_path = "group_c".to_string();
+
+        let leaf = CString::new("leaf").expect("no interior NUL");
+        match resolve(&child, leaf.as_ptr()) {
+            Resolved::Refusal { reason, .. } => assert_eq!(
+                reason,
+                "none of this path's stored candidates lie beneath this context's stored anchor"
+            ),
+            _ => panic!("neither candidate lies beneath this context's fixed anchor"),
+        }
+    }
 }
