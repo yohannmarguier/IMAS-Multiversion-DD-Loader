@@ -84,9 +84,13 @@ jobs:
         id: imas_core_ref
         run: |
           set -euo pipefail
-          ref=$(head -n1 "$GITHUB_WORKSPACE/IMAS_CORE_REF")
-          if ! [[ "$ref" =~ ^[[:xdigit:]]{40}$ ]]; then
-            echo "IMAS_CORE_REF must begin with a 40-character hexadecimal commit SHA" >&2
+          # First line only; commentary below the pin never changes the cache.
+          # The shape rule is the one CMakeLists.txt and hli-validation.yml
+          # apply: neither entry point may accept a pin the others reject.
+          ref=$(head -n1 "$GITHUB_WORKSPACE/IMAS_CORE_REF" | tr -d '[:space:]')
+          if ! printf '%s' "$ref" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "IMAS_CORE_REF must hold a full 40-character lowercase" \
+                 "hexadecimal commit SHA on its first line; found '$ref'." >&2
             exit 1
           fi
           echo "commit=$ref" >> "$GITHUB_OUTPUT"

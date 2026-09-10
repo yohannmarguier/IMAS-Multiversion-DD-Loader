@@ -147,8 +147,8 @@ jobs:
           # First line only; commentary below the pin never changes the cache.
           ref=$(head -n1 IMAS_CORE_REF | tr -d '[:space:]')
           if ! printf '%s' "$ref" | grep -qE '^[0-9a-f]{40}$'; then
-            echo "IMAS_CORE_REF must hold a full 40-character commit SHA on" \
-                 "its first line; found '$ref'." >&2
+            echo "IMAS_CORE_REF must hold a full 40-character lowercase" \
+                 "hexadecimal commit SHA on its first line; found '$ref'." >&2
             exit 1
           fi
           echo "commit=$ref" >> "$GITHUB_OUTPUT"

@@ -51,11 +51,17 @@ set(IMAS_CORE_DRIFT_VERSION
 # that release's ABI.
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/IMAS_CORE_REF"
     IMAS_CORE_REF LIMIT_COUNT 1)
+string(STRIP "${IMAS_CORE_REF}" IMAS_CORE_REF)
+# The same rule both workflows apply to the same first line. CMake regexes
+# have no bounded repetition, so the length is checked separately; lowercase
+# is what git itself writes, and admitting uppercase here alone would let a
+# pin configure locally and be rejected by CI.
 string(LENGTH "${IMAS_CORE_REF}" IMAS_CORE_REF_LENGTH)
 if(NOT IMAS_CORE_REF_LENGTH EQUAL 40 OR
-        NOT IMAS_CORE_REF MATCHES "^[0-9a-fA-F]+$")
+        NOT IMAS_CORE_REF MATCHES "^[0-9a-f]+$")
     message(FATAL_ERROR
-        "IMAS_CORE_REF must contain a 40-character hexadecimal commit SHA")
+        "IMAS_CORE_REF must hold a full 40-character lowercase hexadecimal "
+        "commit SHA on its first line; found '${IMAS_CORE_REF}'.")
 endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/IMAS_CORE_VERSION"

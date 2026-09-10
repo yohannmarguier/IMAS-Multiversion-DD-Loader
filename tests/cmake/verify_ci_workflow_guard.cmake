@@ -71,7 +71,7 @@ expect_guard_rejection(
     "full_job must fail when its selected test profile registers no tests")
 
 string(REPLACE
-    "ref=$(head -n1 \"$GITHUB_WORKSPACE/IMAS_CORE_REF\")"
+    "ref=$(head -n1 \"$GITHUB_WORKSPACE/IMAS_CORE_REF\" | tr -d '[:space:]')"
     "ref=690f5392a58e4c73131d6b723c72105e9fbdcc9f"
     inline-pin "${workflow}")
 if(workflow STREQUAL inline-pin)
@@ -82,8 +82,8 @@ expect_guard_rejection(
     "workflow_content_lines must not inline an IMAS-Core commit SHA")
 
 string(REPLACE
-    "ref=$(head -n1 \"$GITHUB_WORKSPACE/IMAS_CORE_REF\")"
-    "ref=$(head -n1 \"$GITHUB_WORKSPACE/PINNED_COMMIT\")"
+    "ref=$(head -n1 \"$GITHUB_WORKSPACE/IMAS_CORE_REF\" | tr -d '[:space:]')"
+    "ref=$(head -n1 \"$GITHUB_WORKSPACE/PINNED_COMMIT\" | tr -d '[:space:]')"
     wrong-pin-file "${workflow}")
 if(workflow STREQUAL wrong-pin-file)
     message(FATAL_ERROR "Could not replace the IMAS-Core pin-file read")
