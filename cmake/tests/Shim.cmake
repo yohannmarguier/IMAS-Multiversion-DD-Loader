@@ -359,6 +359,16 @@ add_stub_test(read-path-no-source-returns-null-without-core-call
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
 
+add_stub_test(read-path-no-source-scalar-receives-the-empty-sentinel
+    read_path_test no-source-scalar-receives-the-empty-sentinel
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
+add_stub_test(read-path-no-source-array-zeroes-the-returned-extents
+    read_path_test no-source-array-zeroes-the-returned-extents
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
 # All conversion-refusal scenarios need the same known mismatched
 # occurrence. Keep that shared seam setup in one place.
 function(add_read_path_refusal_test name scenario)
