@@ -656,6 +656,83 @@ static void scenario_merged_read_returns_not_found_when_all_candidates_are_absen
     check_no_loss_entry(operation_ctx);
 }
 
+/* --- scalar candidate fallback (fold-axis-bphi) ----------------------------
+ *
+ * `time_slice/global_quantities/magnetic_axis/b_field_phi` is the artifact's
+ * only rule that is both a scalar and needs its fallback: DD 3.39.0 stores the
+ * value under `b_field_tor` and `b_tor`, never under the DD 4 spelling the
+ * rule lists at precedence 1. A scalar read is the ABI's one exception to the
+ * three-way read outcome — absence arrives as the EMPTY sentinel written into
+ * the caller's own buffer, not as a null data pointer — so these scenarios
+ * drive the plan through the sentinel channel rather than through
+ * RECORDING_STUB_READ_NOT_FOUND_FIELD, which can only express the array
+ * convention. */
+#define IMAS_MVDD_TEST_EMPTY_DOUBLE (-9e40)
+static const char *const SCALAR_MERGED_FIELD =
+    "time_slice/global_quantities/magnetic_axis/b_field_phi";
+
+static al_status_t read_scalar(int ctx_id, const char *field, double *value) {
+    void *data = value;
+    return al_read_data(ctx_id, field, "", &data, IMAS_DOUBLE_DATA, 0, NULL);
+}
+
+static void scenario_scalar_merged_read_falls_through_to_next_candidate(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    double value = 0.0;
+
+    CHECK(read_scalar(operation_ctx, SCALAR_MERGED_FIELD, &value).code == 0);
+
+    CHECK(value == 5.2);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 3);
+    check_stub_paths("time_slice/global_quantities/magnetic_axis/b_tor", "");
+    /* fold-axis-bphi is reverse-exact: a served fallback creates no loss. */
+    check_no_loss_entry(operation_ctx);
+
+    printf("read_path_test scalar-merged-read-falls-through-to-next-candidate: two absent scalar "
+           "candidates advanced the plan and precedence 3 served the stored value\n");
+}
+
+static void scenario_scalar_merged_read_stops_at_first_candidate_with_data(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    double value = 0.0;
+
+    CHECK(read_scalar(operation_ctx, SCALAR_MERGED_FIELD, &value).code == 0);
+
+    CHECK(value == 5.2);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 1);
+    check_stub_paths(SCALAR_MERGED_FIELD, "");
+
+    printf("read_path_test scalar-merged-read-stops-at-first-candidate-with-data: a scalar "
+           "candidate holding a real value ended the plan at precedence 1\n");
+}
+
+/* The exhausted case keeps the ABI's own answer rather than manufacturing one:
+ * the EMPTY sentinel the last candidate left in the caller's buffer is the
+ * only way a scalar read can say not-found, so the shim returns success with
+ * that buffer and the caller's pointer untouched — exactly what a
+ * single-candidate scalar read of an absent field returned before the plan
+ * could advance at all. */
+static void scenario_scalar_read_with_every_candidate_absent_keeps_the_sentinel(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    double value = 0.0;
+    void *data = &value;
+
+    al_status_t status =
+        al_read_data(operation_ctx, SCALAR_MERGED_FIELD, "", &data, IMAS_DOUBLE_DATA, 0, NULL);
+
+    CHECK(status.code == 0);
+    CHECK(value == IMAS_MVDD_TEST_EMPTY_DOUBLE);
+    CHECK(data == (void *)&value);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 3);
+    check_stub_paths("time_slice/global_quantities/magnetic_axis/b_tor", "");
+
+    printf("read_path_test scalar-read-with-every-candidate-absent-keeps-the-sentinel: every "
+           "candidate was tried and the caller kept the EMPTY sentinel and its own pointer\n");
+}
+
 static void scenario_split_plan_reads_and_flips_its_first_stored_destination(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int reads_before = int_from_stub("recording_stub_read_call_count");
@@ -1047,6 +1124,9 @@ int main(int argc, char **argv) {
         {"merged-read-falls-through-to-next-candidate", scenario_merged_read_falls_through_to_next_candidate},
         {"merged-read-stops-at-first-candidate-with-data", scenario_merged_read_stops_at_first_candidate_with_data},
         {"merged-read-returns-not-found-when-all-candidates-are-absent", scenario_merged_read_returns_not_found_when_all_candidates_are_absent},
+        {"scalar-merged-read-falls-through-to-next-candidate", scenario_scalar_merged_read_falls_through_to_next_candidate},
+        {"scalar-merged-read-stops-at-first-candidate-with-data", scenario_scalar_merged_read_stops_at_first_candidate_with_data},
+        {"scalar-read-with-every-candidate-absent-keeps-the-sentinel", scenario_scalar_read_with_every_candidate_absent_keeps_the_sentinel},
         {"split-plan-reads-and-flips-its-first-stored-destination", scenario_split_plan_reads_and_flips_its_first_stored_destination},
         {"reverse-split-read-flips-its-single-stored-source", scenario_reverse_split_read_flips_its_single_stored_source},
         {"no-source-returns-null-without-core-call", scenario_no_source_returns_null_without_core_call},

@@ -503,6 +503,58 @@ static al_status_t stamp_read_response(void **data, int *size) {
     return status;
 }
 
+/* --- scalar store knob -----------------------------------------------------
+ *
+ * Models how IMAS-Core answers a `dim == 0` read, which none of the knobs
+ * below can express. For a scalar the *caller* owns the buffer:
+ * Lowlevel::setValue copies the stored value in through `*data`, and
+ * Lowlevel::setDefaultValue writes the datatype's EMPTY sentinel there when
+ * the field is absent. Either way the returned pointer comes back exactly as
+ * the caller supplied it, so scalar absence never arrives as a null pointer —
+ * which is precisely why the array-shaped RECORDING_STUB_READ_NOT_FOUND knob
+ * cannot stand in for it. Every other read response below replaces `*data`
+ * with a stub-owned buffer; this one deliberately does not.
+ *
+ * RECORDING_STUB_READ_SCALAR_VALUES is a comma-separated list of
+ * `<field>=<value>` entries whose `<value>` is either a double literal or the
+ * word `empty`. A scalar read naming one of those fields is answered from the
+ * list; any other read falls through unchanged. */
+#define RECORDING_STUB_EMPTY_DOUBLE (-9e40)
+
+/* Defined below, next to the only other caller that tokenizes a CSV knob in
+ * place rather than copying each token's value out. */
+static int split_csv_into(char *buffer, const char **out, int capacity);
+
+static int scalar_store_response(const char *field, void **data, int dim) {
+    const char *csv = getenv("RECORDING_STUB_READ_SCALAR_VALUES");
+    if (dim != 0 || field == NULL || data == NULL || *data == NULL || csv == NULL) {
+        return 0;
+    }
+
+    /* strtok writes into its argument, so tokenize a local copy. */
+    char csv_buffer[512];
+    strncpy(csv_buffer, csv, sizeof csv_buffer - 1);
+    csv_buffer[sizeof csv_buffer - 1] = '\0';
+    const char *entries[RECORDING_STUB_CSV_CAPACITY];
+    int count = split_csv_into(csv_buffer, entries, RECORDING_STUB_CSV_CAPACITY);
+
+    for (int i = 0; i < count; ++i) {
+        const char *separator = strchr(entries[i], '=');
+        if (separator == NULL) {
+            continue;
+        }
+        size_t name_length = (size_t)(separator - entries[i]);
+        if (strlen(field) != name_length || strncmp(entries[i], field, name_length) != 0) {
+            continue;
+        }
+        const char *value = separator + 1;
+        *(double *)*data = strcmp(value, "empty") == 0 ? RECORDING_STUB_EMPTY_DOUBLE
+                                                       : strtod(value, NULL);
+        return 1;
+    }
+    return 0;
+}
+
 /* Shared by al_read_data and al_plugin_read_data (issue #68): both seams must
  * present identical not-found, failure, and value-shape behavior to the shim
  * so the same test fixtures can prove policy parity between them. Each
@@ -520,6 +572,12 @@ static al_status_t compute_read_response(const char *field, void **data, int dim
         status.code = -23;
         memset(status.message, 0, sizeof status.message);
         strncpy(status.message, "recording-stub: read refused", sizeof status.message - 1);
+        return status;
+    }
+
+    if (scalar_store_response(field, data, dim)) {
+        al_status_t status = ok_status();
+        strncpy(status.message, "recording-stub: scalar read ok", sizeof status.message - 1);
         return status;
     }
 

@@ -324,6 +324,25 @@ add_stub_test(read-path-merged-read-returns-not-found-when-all-candidates-are-ab
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0
     ENV "RECORDING_STUB_READ_NOT_FOUND=1")
+# The scalar half of the same plan. RECORDING_STUB_READ_SCALAR_VALUES is the
+# only knob that can express scalar absence at all: for `dim == 0` the caller
+# owns the buffer, so IMAS-Core reports a missing field by writing the EMPTY
+# sentinel into it rather than by handing back a null data pointer.
+add_stub_test(read-path-scalar-merged-read-falls-through-to-next-candidate
+    read_path_test scalar-merged-read-falls-through-to-next-candidate
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_READ_SCALAR_VALUES=time_slice/global_quantities/magnetic_axis/b_field_phi=empty,time_slice/global_quantities/magnetic_axis/b_field_tor=empty,time_slice/global_quantities/magnetic_axis/b_tor=5.2")
+add_stub_test(read-path-scalar-merged-read-stops-at-first-candidate-with-data
+    read_path_test scalar-merged-read-stops-at-first-candidate-with-data
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_READ_SCALAR_VALUES=time_slice/global_quantities/magnetic_axis/b_field_phi=5.2,time_slice/global_quantities/magnetic_axis/b_tor=1.0")
+add_stub_test(read-path-scalar-read-with-every-candidate-absent-keeps-the-sentinel
+    read_path_test scalar-read-with-every-candidate-absent-keeps-the-sentinel
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_READ_SCALAR_VALUES=time_slice/global_quantities/magnetic_axis/b_field_phi=empty,time_slice/global_quantities/magnetic_axis/b_field_tor=empty,time_slice/global_quantities/magnetic_axis/b_tor=empty")
 add_stub_test(read-path-split-plan-reads-and-flips-its-first-stored-destination
     read_path_test split-plan-reads-and-flips-its-first-stored-destination
     HLI_DD_VERSION 3.39.0

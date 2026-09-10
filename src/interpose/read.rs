@@ -187,8 +187,26 @@ unsafe fn read_data_impl(
         // safety contract, and the just-finished IMAS-Core call has
         // initialized it.
         let data_ptr = unsafe { *data };
-        match read_outcome::classify(&status, data_ptr) {
+        // A `dim == 0` read has no not-found channel in the pointer: the
+        // caller owns the buffer and IMAS-Core reports absence by writing the
+        // EMPTY sentinel into it, so the sentinel has to be read to classify
+        // one at all. Everything else keeps the pointer classification.
+        let outcome = if dim == 0 {
+            // SAFETY: `data` is valid per this function's own contract and the
+            // just-finished IMAS-Core call has initialized `*data`; a
+            // `DOUBLE_DATA` scalar read that returned it points at one `f64`.
+            unsafe { read_outcome::classify_scalar(&status, data_ptr, datatype == DOUBLE_DATA_ID) }
+        } else {
+            read_outcome::classify(&status, data_ptr)
+        };
+        match outcome {
             ReadOutcome::Failure => seam_policy::Attempt::Failure(status),
+            // A scalar absence is already expressed in the caller's buffer.
+            // Say so, so the plan can advance without that answer being lost
+            // if no later candidate has data.
+            ReadOutcome::NotFound if dim == 0 && !data_ptr.is_null() => {
+                seam_policy::Attempt::Absent(status)
+            }
             ReadOutcome::NotFound => seam_policy::Attempt::NotFound,
             // SAFETY: `data`/`size` are valid per this function's own safety
             // contract, and `ReadOutcome::Data` establishes `data_ptr`
