@@ -257,6 +257,24 @@ static void scenario_merged_subtree_write_mode_takes_the_primary_candidate_witho
            "deprecated alias\n");
 }
 
+static void scenario_refusal_retains_an_unmappable_read_loss(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    check_no_loss_entry(operation_ctx);
+
+    int size = -1;
+    int arraystruct_ctx = 1777;
+    al_status_t status = al_begin_arraystruct_action(
+        operation_ctx, "time_slice/constraints/j_parallel", "", &size, &arraystruct_ctx);
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+
+    CHECK(loss_count(operation_ctx) == 1);
+    check_loss_at(operation_ctx, 0, "time_slice/constraints/j_parallel",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_READ);
+
+    printf("arraystruct_path_test refusal-retains-an-unmappable-read-loss: an arraystruct-open "
+           "refusal now reaches the loss log exactly as a refused write or delete already does\n");
+}
+
 int main(int argc, char **argv) {
     static const shim_test_scenario scenarios[] = {
         {"translates-renamed-container-and-timebase", scenario_translates_renamed_container_and_timebase},
@@ -271,6 +289,7 @@ int main(int argc, char **argv) {
          scenario_merged_subtree_opens_empty_when_every_candidate_is_absent},
         {"merged-subtree-write-mode-takes-the-primary-candidate-without-probing",
          scenario_merged_subtree_write_mode_takes_the_primary_candidate_without_probing},
+        {"refusal-retains-an-unmappable-read-loss", scenario_refusal_retains_an_unmappable_read_loss},
     };
     return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

@@ -251,12 +251,14 @@ from the on-disk consequence (which real HDF5 collapses to one).
   **whole root's** log — there is no per-child scoping. An untracked
   context — including any occurrence with no registered root — reports a
   count of `0`, not a refusal.
-- **A refused read, write or delete is logged too, at `Unmappable`**, in addition to
-  being returned through `al_status_t`. This is deliberate redundancy, not a
-  bug: it means `Unmappable` in the log conflates "this was refused" with
-  "this candidate genuinely doesn't exist and came back not-found" — a test
-  reading the log should not assume every `Unmappable` entry corresponds to a
-  visible failure at the call site.
+- **A refused read, write, delete, or context open is logged too, at
+  `Unmappable`** (`Read` is the operation tag a refused context open uses —
+  issue #178; before that, this was the one shim-decided refusal that never
+  reached the log), in addition to being returned through `al_status_t`. This
+  is deliberate redundancy, not a bug: it means `Unmappable` in the log
+  conflates "this was refused" with "this candidate genuinely doesn't exist
+  and came back not-found" — a test reading the log should not assume every
+  `Unmappable` entry corresponds to a visible failure at the call site.
 - **The in-memory log dies with its root context at `al_end_action`.** A
   patched HLI must drain it through the exports before closing, or lose that
   view of it — but the exports are no longer the *only* channel. ADR 0023
@@ -273,10 +275,10 @@ from the on-disk consequence (which real HDF5 collapses to one).
   `imas-mvdd-loss-<UTC-timestamp>-<pid>.txt` (a `-N` suffix disambiguates a
   same-second collision) in the current working directory by default. Set
   `IMAS_MVDD_LOSS_LOG_DIR` to an existing directory to redirect it, or to an
-  empty value to disable the file entirely. Every non-exact read, write and
-  delete loss reaches it — not delete alone, though §6 mentions it there too
-  — carrying the same three fidelity verdicts and the same READ/WRITE/DELETE
-  operation tags as the exports.
+  empty value to disable the file entirely. Every non-exact read, write,
+  delete, or refused context-open loss reaches it — not delete alone, though
+  §6 mentions it there too — carrying the same three fidelity verdicts and
+  the same READ/WRITE/DELETE operation tags as the exports.
 - **The file survives exactly the failure the in-memory log cannot.** If a
   root context ends while an operation is still in flight, its in-memory log
   is already gone and drops the entry — but the file's own process-wide

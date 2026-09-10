@@ -13,10 +13,14 @@
 use std::ffi::{CStr, c_char, c_int};
 
 use crate::al_status_t;
+use crate::conversion::conversion_map::Fidelity;
 use crate::conversion::path_conversion;
+use crate::loss::LossOperation;
 use crate::registry::context_registry::{ConversionRecord, REGISTRY};
 #[cfg(test)]
 use crate::registry::context_registry::{MapCacheKey, RootRegistration};
+
+use super::loss::retain_loss;
 
 /// `ptr` as a borrowed `&CStr`, or `None` if it is null.
 ///
@@ -85,6 +89,16 @@ pub(super) fn context_path_refusal(
 /// this function's original caller, and #129/#131 replaced it with real path
 /// resolution, so `delete_data` now refuses through `context_path_refusal`
 /// with a resolved spelling in hand.
+///
+/// Retains an `UNMAPPABLE` loss before formatting the refusal (issue #178):
+/// this is the arraystruct-open seam's only refusal path, and until now it
+/// was the one shim-decided refusal that never reached the loss log, while a
+/// refused write and a refused delete both already do. It is logged as a read
+/// loss (`LossOperation::Read`) because that is what the caller was
+/// ultimately prevented from doing — opening a context exists to read or
+/// write through it, and every reachable refusal here (issue #178's
+/// candidate-plan case included) is refusing to *read*, never a write in
+/// flight.
 pub(super) fn contextual_refusal(
     record: &ConversionRecord,
     reason: &str,
@@ -93,6 +107,12 @@ pub(super) fn contextual_refusal(
     let dd_path = joined_argument_path(record, raw_path)
         .or_else(|| (!record.resolved_path.is_empty()).then(|| record.resolved_path.clone()))
         .unwrap_or_else(|| "(no path argument)".to_string());
+    retain_loss(
+        record,
+        dd_path.clone(),
+        Fidelity::Unmappable,
+        LossOperation::Read,
+    );
     context_path_refusal(record, reason, &dd_path)
 }
 

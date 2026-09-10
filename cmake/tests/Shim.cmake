@@ -781,6 +781,11 @@ add_stub_test(arraystruct-path-merged-subtree-write-mode-takes-the-primary-candi
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
 
+add_stub_test(arraystruct-path-refusal-retains-an-unmappable-read-loss
+    arraystruct_path_test refusal-retains-an-unmappable-read-loss
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
 # --- Issue #62: al_read_data through a live arraystruct context -------
 add_executable(nested_context_read_test
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/nested_context_read_test.c")
