@@ -415,7 +415,7 @@ CMakeLists.txt          drives cargo-c; owns install, package config and tests
 .github/actions/setup-toolchain/action.yml  shared pinned CI toolchain setup
 Cargo.toml              crate-type + [package.metadata.capi]
 IMAS_CORE_VERSION       supported IMAS-Core release used by the runtime compatibility gate
-IMAS_CORE_REF           exact IMAS-Core source commit download mode and CI build; distinct from the ABI release
+IMAS_CORE_REF           exact IMAS-Core source commit that download mode and CI build; not the ABI release above
 cbindgen.toml           generated-header settings
 cmake/imas-mvdd-loaderConfig.cmake.in  find_package template, hand-authored
 src/lib.rs              the mirrored C ABI
