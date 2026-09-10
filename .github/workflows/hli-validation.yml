@@ -219,12 +219,23 @@ jobs:
             -DAL_PLUGINS=OFF \
             -DAL_HLI_DOCS=OFF
 
+      # The HLI reaches its run-time IMAS-Core through ExternalProject, not
+      # FetchContent, so the clone happens at *build* time and lands under that
+      # project's own prefix -- neither the moment nor the directory ci.yml
+      # checks. Building the one target first puts the assertion ahead of the
+      # HLI build rather than after it, so a wrong library is reported before
+      # the suite is compiled against it.
+      - name: Build the pinned IMAS-Core
+        working-directory: hli
+        run: cmake --build build --target al-core-runtime -j"$(nproc)"
+
       - name: Verify acquired IMAS-Core revision
         working-directory: hli
         run: |
           set -euo pipefail
           expected="${{ steps.imas_core_pin.outputs.commit }}"
-          actual=$(git -C build/_deps/al-core-src rev-parse HEAD)
+          source_dir=build/_deps/al-core-runtime/src/al-core-runtime
+          actual=$(git -C "$source_dir" rev-parse HEAD)
           expected=${expected,,}
           if [[ "$actual" != "$expected" ]]; then
             echo "acquired IMAS-Core commit $actual does not match pinned commit $expected" >&2
