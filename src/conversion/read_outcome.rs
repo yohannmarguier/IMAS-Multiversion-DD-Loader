@@ -81,7 +81,10 @@ pub(crate) fn classify(status: &al_status_t, data: *const c_void) -> ReadOutcome
 /// const double               Lowlevel::EMPTY_DOUBLE  = -9.0E40;
 /// const std::complex<double> Lowlevel::EMPTY_COMPLEX = {-9.0E40, -9.0E40};
 /// ```
-pub(crate) const EMPTY_CHAR: c_char = 0;
+/// Spelled as the NUL byte rather than as `0` on purpose: unlike the other
+/// three this is not a distinctive magic number, just a terminator, which is
+/// why the write side's emptiness check deliberately leaves `CHAR_DATA` out.
+pub(crate) const EMPTY_CHAR: c_char = b'\0' as c_char;
 /// See [`EMPTY_CHAR`].
 pub(crate) const EMPTY_INT: c_int = -999_999_999;
 /// See [`EMPTY_CHAR`].
