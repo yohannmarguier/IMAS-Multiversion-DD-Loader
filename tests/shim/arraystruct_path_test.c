@@ -1,6 +1,8 @@
 /* Issue #61: public al_begin_arraystruct_action scenarios against the
- * recording stub. */
+ * recording stub. Issue #178 adds the merged/subtree candidate-plan
+ * scenarios below `scenario_unknown_parent_forwards_unchanged`. */
 
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef RECORDING_STUB_PATH
@@ -146,6 +148,115 @@ static void scenario_unknown_parent_forwards_unchanged(void) {
            "artifact left both arguments untouched\n");
 }
 
+/* --- Issue #178: merged/subtree candidate plans -------------------------- */
+
+/* fold-constraints-j (docs/3.39.0--4.1.1.xml) is `rel="merged" subtree="yes"`:
+ * right="time_slice/constraints/j_phi", from left="time_slice/constraints/j_phi"
+ * precedence 1, from left="time_slice/constraints/j_tor" precedence 2
+ * (deprecated). The HLI's own spelling and the precedence-1 stored spelling
+ * happen to be textually identical here, which is exactly the ordinary case:
+ * only the deprecated alias differs. */
+
+static void scenario_merged_subtree_falls_through_to_populated_candidate(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    CHECK(setenv("RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS", "time_slice/constraints/j_phi", 1) ==
+          0);
+
+    int size = -1;
+    int arraystruct_ctx = -1;
+    CHECK(al_begin_arraystruct_action(operation_ctx, "time_slice/constraints/j_phi", "", &size,
+                                       &arraystruct_ctx)
+              .code == 0);
+
+    /* Precedence 1 ("j_phi") opened empty and was closed; precedence 2
+     * ("j_tor"), which actually held data, was tried next and kept. */
+    CHECK(strcmp(string_from_stub("recording_stub_arraystruct_path"),
+                 "time_slice/constraints/j_tor") == 0);
+    CHECK(int_from_stub("recording_stub_arraystruct_call_count") == 2);
+    CHECK(int_from_stub("recording_stub_end_action_call_count") == 1);
+    CHECK(size == 3003);
+
+    void *data = NULL;
+    int shape[1] = {0};
+    CHECK(al_read_data(arraystruct_ctx, "measured", "", &data, 52, 1, shape).code == 0);
+    CHECK(data != NULL);
+
+    CHECK(unsetenv("RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS") == 0);
+
+    printf("arraystruct_path_test merged-subtree-falls-through-to-populated-candidate: an empty "
+           "precedence-1 candidate was closed and the deprecated alias, which actually held "
+           "data, was opened and registered as the child context instead\n");
+}
+
+static void scenario_merged_subtree_opens_empty_when_every_candidate_is_absent(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    CHECK(setenv("RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS",
+                 "time_slice/constraints/j_phi,time_slice/constraints/j_tor", 1) == 0);
+
+    int size = -1;
+    int arraystruct_ctx = -1;
+    CHECK(al_begin_arraystruct_action(operation_ctx, "time_slice/constraints/j_phi", "", &size,
+                                       &arraystruct_ctx)
+              .code == 0);
+
+    /* Every candidate came back empty, so the last one tried is kept rather
+     * than refusing: a subtree with no data anywhere is a legitimate empty
+     * array-of-structures, not an error (issue #178). */
+    CHECK(strcmp(string_from_stub("recording_stub_arraystruct_path"),
+                 "time_slice/constraints/j_tor") == 0);
+    CHECK(int_from_stub("recording_stub_arraystruct_call_count") == 2);
+    CHECK(int_from_stub("recording_stub_end_action_call_count") == 1);
+    CHECK(size == 0);
+
+    CHECK(unsetenv("RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS") == 0);
+
+    printf("arraystruct_path_test merged-subtree-opens-empty-when-every-candidate-is-absent: a "
+           "wholly unpopulated merged subtree opened successfully with zero elements instead of "
+           "refusing\n");
+}
+
+/* WRITE_OP (31, al_const.h) has no reader IMAS-Core's HDF5 backend can
+ * guarantee (ADR 0020), so a candidate reporting "empty" through it cannot be
+ * trusted to mean "absent" the way it can under READ_OP. This opens the same
+ * occurrence and rule as the two scenarios above, but under WRITE_OP. */
+static int open_mismatched_equilibrium_write(void) {
+    int pulse_ctx = -1;
+    CHECK(al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, &pulse_ctx).code == 0);
+    int operation_ctx = -1;
+    CHECK(al_begin_global_action(pulse_ctx, "equilibrium", "", 31, &operation_ctx).code == 0);
+    return operation_ctx;
+}
+
+static void scenario_merged_subtree_write_mode_takes_the_primary_candidate_without_probing(void) {
+    int operation_ctx = open_mismatched_equilibrium_write();
+    CHECK(setenv("RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS", "time_slice/constraints/j_phi", 1) ==
+          0);
+
+    int calls_before = int_from_stub("recording_stub_arraystruct_call_count");
+    int ends_before = int_from_stub("recording_stub_end_action_call_count");
+
+    int size = -1;
+    int arraystruct_ctx = -1;
+    CHECK(al_begin_arraystruct_action(operation_ctx, "time_slice/constraints/j_phi", "", &size,
+                                       &arraystruct_ctx)
+              .code == 0);
+
+    /* The declared precedence-1 candidate was opened once and kept, even
+     * though the stub reported it empty: a WRITE_OP open never tries the
+     * deprecated alias. */
+    CHECK(strcmp(string_from_stub("recording_stub_arraystruct_path"),
+                 "time_slice/constraints/j_phi") == 0);
+    CHECK(int_from_stub("recording_stub_arraystruct_call_count") == calls_before + 1);
+    CHECK(int_from_stub("recording_stub_end_action_call_count") == ends_before);
+    CHECK(size == 0);
+
+    CHECK(unsetenv("RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS") == 0);
+
+    printf("arraystruct_path_test merged-subtree-write-mode-takes-the-primary-candidate-without-"
+           "probing: a WRITE_OP open kept the declared precedence-1 candidate without trying the "
+           "deprecated alias\n");
+}
+
 int main(int argc, char **argv) {
     static const shim_test_scenario scenarios[] = {
         {"translates-renamed-container-and-timebase", scenario_translates_renamed_container_and_timebase},
@@ -154,6 +265,12 @@ int main(int argc, char **argv) {
         {"no-source-refuses-before-core", scenario_no_source_refuses_before_core},
         {"plain-parent-forwards-unchanged", scenario_plain_parent_forwards_unchanged},
         {"unknown-parent-forwards-unchanged", scenario_unknown_parent_forwards_unchanged},
+        {"merged-subtree-falls-through-to-populated-candidate",
+         scenario_merged_subtree_falls_through_to_populated_candidate},
+        {"merged-subtree-opens-empty-when-every-candidate-is-absent",
+         scenario_merged_subtree_opens_empty_when_every_candidate_is_absent},
+        {"merged-subtree-write-mode-takes-the-primary-candidate-without-probing",
+         scenario_merged_subtree_write_mode_takes_the_primary_candidate_without_probing},
     };
     return RUN_NAMED_SCENARIO(argc, argv, scenarios);
 }

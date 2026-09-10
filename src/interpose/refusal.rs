@@ -159,6 +159,7 @@ mod tests {
                 dataobjectname: "equilibrium".to_string(),
                 key: MapCacheKey::new("equilibrium".to_string(), stored, hli),
                 direction_to_stored: direction,
+                opened_read_op: true,
             },
             || load_artifact(&artifact),
         ));

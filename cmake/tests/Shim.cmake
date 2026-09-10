@@ -765,6 +765,22 @@ add_stub_test(arraystruct-path-unknown-parent-forwards-unchanged
 add_stub_test(arraystruct-path-conversion-disabled-parent-forwards-unchanged
     arraystruct_path_test plain-parent-forwards-unchanged)
 
+# --- Issue #178: merged/subtree candidate plans at arraystruct open -----
+add_stub_test(arraystruct-path-merged-subtree-falls-through-to-populated-candidate
+    arraystruct_path_test merged-subtree-falls-through-to-populated-candidate
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
+add_stub_test(arraystruct-path-merged-subtree-opens-empty-when-every-candidate-is-absent
+    arraystruct_path_test merged-subtree-opens-empty-when-every-candidate-is-absent
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
+add_stub_test(arraystruct-path-merged-subtree-write-mode-takes-the-primary-candidate-without-probing
+    arraystruct_path_test merged-subtree-write-mode-takes-the-primary-candidate-without-probing
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
 # --- Issue #62: al_read_data through a live arraystruct context -------
 add_executable(nested_context_read_test
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/nested_context_read_test.c")

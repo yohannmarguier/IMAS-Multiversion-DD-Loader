@@ -111,12 +111,16 @@ call made.
   file delivery redirected, disabled, or failing at open and append without
   changing the successful read or its queryable in-memory entries.
 
-### `arraystruct-path-*` — 8 · `shim/arraystruct_path_test.c`
+### `arraystruct-path-*` — 11 · `shim/arraystruct_path_test.c`
 
 `al_begin_arraystruct_action` (issue #61): renamed container `path` and
 `timebase` translated before Core is called, absolute/relative mixes, a
 no-source refusal, a failed open leaving no child record, and the four
-forwarding cases (matching / unstamped / unknown / conversion disabled).
+forwarding cases (matching / unstamped / unknown / conversion disabled). Issue
+#178 adds a merged/subtree rule's candidate plan: falling through an empty
+precedence-1 candidate to the deprecated alias that actually holds data,
+opening empty rather than refusing when every candidate is, and a `WRITE_OP`
+open taking the declared primary without probing.
 
 ### `nested-context-read-*` — 8 · `shim/nested_context_read_test.c`
 

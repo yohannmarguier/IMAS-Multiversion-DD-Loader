@@ -57,12 +57,38 @@ pub(crate) enum ContextPathResolution {
     Forward,
     /// A real path argument no rule and no document-level default claims.
     Unclaimed,
-    /// A concrete stored-DD spelling for IMAS-Core to receive.
-    Translated(CString),
+    /// A concrete stored-DD spelling for IMAS-Core to receive, alongside its
+    /// complete stored-DD path from the IDS root — what a child context
+    /// opened against it must remember as its own anchor (issue #178), since
+    /// nothing else records which spelling this context now stands for.
+    Translated {
+        path: CString,
+        stored_dd_path: String,
+    },
+    /// A merged or split rule's stored candidates, in declared precedence
+    /// order. Unlike a read, a context open cannot try one candidate's *data*
+    /// and fall back on absence — there is none to inspect yet — so the seam
+    /// that opens a context decides for itself how to use this ordered list
+    /// (issue #178): a read-mode open may ask IMAS-Core in turn, since that
+    /// backend has a reader to answer honestly, while any other access mode
+    /// settles for the declared primary alone (ADR 0016 decision 12's
+    /// reasoning for a write, extended here).
+    Candidates(Vec<ContextCandidate>),
     /// The artifact says no stored counterpart exists.
     NoSource,
     /// The artifact or this seam deliberately declines to serve the path.
     Refusal(String),
+}
+
+/// One candidate a context-opening seam may try against IMAS-Core: the
+/// Core-facing spelling (already anchor-stripped when relative) and its
+/// complete stored-DD path, which a successful open must remember as its own
+/// new anchor (issue #178) — the only fact that later lets a relative
+/// argument under this context resolve without re-deriving which of several
+/// possible candidates IMAS-Core actually opened.
+pub(crate) struct ContextCandidate {
+    pub(crate) path: CString,
+    pub(crate) stored_dd_path: String,
 }
 
 /// The richer path result used only by `al_read_data`: an ordered candidate
@@ -541,7 +567,7 @@ pub(crate) fn resolve(record: &ConversionRecord, raw: *const c_char) -> Resolved
             } else {
                 candidates
             };
-            candidates
+            let resolved: Result<Vec<Option<Candidate>>, String> = candidates
                 .into_iter()
                 .map(|candidate| {
                     candidate_from_path(
@@ -553,27 +579,55 @@ pub(crate) fn resolve(record: &ConversionRecord, raw: *const c_char) -> Resolved
                         Some(candidate.precedence),
                     )
                 })
-                .collect::<Result<Vec<_>, _>>()
-                .map(Resolved::Plan)
-                .unwrap_or_else(refusal)
+                .collect();
+            match resolved {
+                Err(message) => refusal(message),
+                Ok(candidates) => {
+                    // A candidate whose stored spelling does not lie beneath
+                    // this context's own fixed stored anchor is not reachable
+                    // from here at all (issue #178): this context is already
+                    // opened against one specific stored candidate, so a
+                    // sibling candidate under a different top-level path is
+                    // dropped from the plan rather than refusing the whole
+                    // read over a candidate that was never really an option
+                    // from this context.
+                    let candidates: Vec<Candidate> = candidates.into_iter().flatten().collect();
+                    if candidates.is_empty() {
+                        refusal(
+                            "none of this path's stored candidates lie beneath this context's \
+                             stored anchor"
+                                .to_string(),
+                        )
+                    } else {
+                        Resolved::Plan(candidates)
+                    }
+                }
+            }
         }
         Outcome::Path {
             resolved_path,
             value_transformation,
             ..
-        } => candidate_from_path(
+        } => match candidate_from_path(
             record,
             resolved_path,
             is_absolute,
             &metadata,
             value_transformation,
             None,
-        )
-        .map(Resolved::Single)
-        .unwrap_or_else(refusal),
+        ) {
+            Ok(Some(candidate)) => Resolved::Single(candidate),
+            Ok(None) => refusal(
+                "translated path does not lie beneath this context's stored anchor".to_string(),
+            ),
+            Err(message) => refusal(message),
+        },
     }
 }
 
+/// `Ok(None)` means `stored_dd_path` does not lie beneath this context's own
+/// stored anchor at all — see [`stored_c_path`]'s doc comment for when that is
+/// a candidate being dropped from a plan rather than a hard failure.
 fn candidate_from_path(
     record: &ConversionRecord,
     stored_dd_path: String,
@@ -581,33 +635,60 @@ fn candidate_from_path(
     metadata: &ResolutionMetadata,
     value_transformation: ValueTransformation,
     precedence: Option<u32>,
-) -> Result<Candidate, String> {
-    stored_c_path(record, &stored_dd_path, is_absolute).map(|path| Candidate {
-        path,
-        stored_dd_path,
-        dd_path: metadata.dd_path.clone(),
-        fidelity: metadata.fidelity,
-        value_transformation,
-        precedence,
-        requested_precedence: metadata.requested_precedence,
+) -> Result<Option<Candidate>, String> {
+    stored_c_path(record, &stored_dd_path, is_absolute).map(|maybe_path| {
+        maybe_path.map(|path| Candidate {
+            path,
+            stored_dd_path,
+            dd_path: metadata.dd_path.clone(),
+            fidelity: metadata.fidelity,
+            value_transformation,
+            precedence,
+            requested_precedence: metadata.requested_precedence,
+        })
     })
 }
 
 /// ADR 0016 decision 3 / user story 47: each seam receives only the answers
-/// it can enact.  Context opens cannot execute transformations or plans.
+/// it can enact. Context opens cannot execute a value transformation, so a
+/// plan whose candidates need one still refuses (issue #178) — but a plan
+/// whose candidates carry no transformation is handed to the arraystruct seam
+/// as an ordered list rather than refused outright, since that seam, not this
+/// resolver, decides whether and how to try more than one (ADR 0015).
 pub(crate) fn narrow_context_path(resolved: Resolved) -> ContextPathResolution {
     match resolved {
         Resolved::Forward => ContextPathResolution::Forward,
         Resolved::Unclaimed => ContextPathResolution::Unclaimed,
         Resolved::NoSource { .. } => ContextPathResolution::NoSource,
         Resolved::Refusal { reason, .. } => ContextPathResolution::Refusal(reason),
-        Resolved::Single(candidate) if candidate.value_transformation == ValueTransformation::None =>
-            ContextPathResolution::Translated(candidate.path),
+        Resolved::Single(candidate)
+            if candidate.value_transformation == ValueTransformation::None =>
+        {
+            ContextPathResolution::Translated {
+                path: candidate.path,
+                stored_dd_path: candidate.stored_dd_path,
+            }
+        }
         Resolved::Single(_) => ContextPathResolution::Refusal(
             "this path needs a value transformation, which only a data read can apply".to_string(),
         ),
+        Resolved::Plan(candidates)
+            if candidates
+                .iter()
+                .all(|candidate| candidate.value_transformation == ValueTransformation::None) =>
+        {
+            ContextPathResolution::Candidates(
+                candidates
+                    .into_iter()
+                    .map(|candidate| ContextCandidate {
+                        path: candidate.path,
+                        stored_dd_path: candidate.stored_dd_path,
+                    })
+                    .collect(),
+            )
+        }
         Resolved::Plan(_) => ContextPathResolution::Refusal(
-            "this path is served by several stored candidates, and only a data read can try them in turn".to_string(),
+            "this path needs a value transformation, which only a data read can apply".to_string(),
         ),
     }
 }
@@ -926,48 +1007,37 @@ fn read_fidelity(fidelity: Fidelity, rel: Option<Rel>) -> Fidelity {
 /// otherwise stripped back to this context's own stored anchor. Both
 /// path-bearing seam resolves this spelling through the shared resolver, so
 /// its relative-anchor behavior and failures are worded once.
+///
+/// `record.stored_path` is this context's own anchor, already in the stored
+/// DD's spelling — recorded once, at the seam that opened this context,
+/// rather than re-derived from the map here on every call (issue #178). A
+/// merged/split rule's anchor has no single map-derivable stored spelling
+/// once more than one stored candidate could serve it: only the seam that
+/// actually opened it, by trying candidates or by declared primary, knows
+/// which one IMAS-Core is holding.
+///
+/// Returns `Ok(None)` when a relative `resolved_path` does not lie beneath
+/// that anchor at all. This is not necessarily a failure: a merged/split
+/// rule can name a sibling candidate under a completely different top-level
+/// path than the one this context is actually opened against (issue #178),
+/// and such a candidate is simply not reachable from here — a fact its
+/// caller, not this function, decides what to do with.
 fn stored_c_path(
     record: &ConversionRecord,
     resolved_path: &str,
     is_absolute: bool,
-) -> Result<CString, String> {
+) -> Result<Option<CString>, String> {
     let translated = if is_absolute {
         format!("/{resolved_path}")
     } else {
-        let anchor = stored_anchor(record)?;
-        strip_anchor(&anchor, resolved_path).ok_or_else(|| {
-            "translated path does not lie beneath this context's stored anchor".to_string()
-        })?
+        match strip_anchor(&record.stored_path, resolved_path) {
+            Some(stripped) => stripped,
+            None => return Ok(None),
+        }
     };
     CString::new(translated)
+        .map(Some)
         .map_err(|_| "translated field contains an interior NUL byte".to_string())
-}
-
-/// Resolves the context's HLI-DD anchor to its stored-DD spelling. A child
-/// record deliberately retains its HLI-DD anchor, so a renamed AOS container
-/// must be converted here before a relative Core argument can be formed.
-fn stored_anchor(record: &ConversionRecord) -> Result<String, String> {
-    if record.resolved_path.is_empty() {
-        return Ok(String::new());
-    }
-    let Some(explanation) = record
-        .map
-        .resolve(&record.resolved_path, record.direction_to_stored)
-    else {
-        return Err("context anchor has no stored-DD conversion rule".to_string());
-    };
-    match explanation.outcome {
-        Outcome::Refusal(reason) => Err(refusal_reason_message(reason)),
-        Outcome::NoSource => Err("context anchor has no stored source".to_string()),
-        Outcome::Path { .. } if matches!(explanation.rel, Some(Rel::Merged | Rel::Split)) => Err(
-            "this path is served by several stored candidates, and only a data read can try them in turn".to_string(),
-        ),
-        Outcome::Path { value_transformation, .. }
-            if value_transformation != ValueTransformation::None => Err(
-                "this path needs a value transformation, which only a data read can apply".to_string(),
-            ),
-        Outcome::Path { resolved_path, .. } => Ok(resolved_path),
-    }
 }
 
 /// Joins `anchor` (a context's own resolved path, in the HLI's own DD
@@ -1026,12 +1096,14 @@ mod tests {
     fn record(artifact: &str, resolved_path: &str) -> ConversionRecord {
         ConversionRecord {
             resolved_path: resolved_path.to_string(),
+            stored_path: String::new(),
             pulse_ctx_id: 0,
             dataobjectname: String::new(),
             pulse_uri: String::new(),
             map: Arc::new(ConversionMap::load(artifact).expect("fixture artifact must load")),
             root_id: 0,
             direction_to_stored: Direction::Forward,
+            opened_read_op: true,
             stored_version: "4.1.1".parse().expect("known release"),
             hli_version: "3.39.0".parse().expect("known release"),
             parent_id: None,
@@ -1043,12 +1115,14 @@ mod tests {
     fn reverse_record(artifact: &str) -> ConversionRecord {
         ConversionRecord {
             resolved_path: String::new(),
+            stored_path: String::new(),
             pulse_ctx_id: 0,
             dataobjectname: String::new(),
             pulse_uri: String::new(),
             map: Arc::new(ConversionMap::load(artifact).expect("fixture artifact must load")),
             root_id: 0,
             direction_to_stored: Direction::Reverse,
+            opened_read_op: true,
             stored_version: "3.39.0".parse().expect("known release"),
             hli_version: "4.1.1".parse().expect("known release"),
             parent_id: None,

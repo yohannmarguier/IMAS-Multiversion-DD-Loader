@@ -372,16 +372,22 @@ anchor resolution beneath every relative path argument.
 
 | Reason string | Raised when |
 |---|---|
-| `this path needs a value transformation, which only a data read can apply` | a context open resolves to a rule carrying a value transformation — an open has no buffer to transform |
-| `this path is served by several stored candidates, and only a data read can try them in turn` | a context open resolves to a `merged`/`split` candidate plan |
+| `this path needs a value transformation, which only a data read can apply` | a context open resolves to a rule carrying a value transformation — an open has no buffer to transform. Also covers a `merged`/`split` plan whose candidates carry one; a plan whose candidates carry none is served (see below) rather than refused (issue #178) |
 | `arraystruct path has no stored source` | the AOS `path` argument resolves to nothing on the stored side |
 | `arraystruct timebase has no stored source` | same, for `timebase` |
 | `arraystruct path is unclaimed by the conversion map` | the AOS `path` argument is claimed by no rule |
 | `arraystruct timebase is unclaimed by the conversion map` | same, for `timebase` |
-| `translated path does not lie beneath this context's stored anchor` | a relative argument translated to a path outside its own context |
+| `translated path does not lie beneath this context's stored anchor` | a relative argument (a single-candidate rule) translated to a path outside its own context's stored anchor |
+| `none of this path's stored candidates lie beneath this context's stored anchor` | every candidate of a `merged`/`split` plan names a stored path outside this context's own fixed stored anchor — reachable only from a relative read nested under an already-served merged-subtree context (issue #178), not from the shipped artifact today |
 | `translated field contains an interior NUL byte` | the translated spelling cannot be formed as a C string |
-| `context anchor has no stored-DD conversion rule` | the enclosing context's own anchor is unclaimed |
-| `context anchor has no stored source` | the enclosing context's anchor has nothing on the stored side |
+
+Issue #178: a merged/split rule whose candidates carry no value transformation
+is no longer refused outright. A `READ_OP` context open tries each stored
+candidate against IMAS-Core in declared precedence order, keeping the first
+that reports a populated array (or the last, if every candidate is empty); any
+other access mode takes the declared primary without trying the rest, exactly
+as an ambiguous `al_write_data` plan already does. See
+`docs/adr/0025-merged-subtree-arraystruct-open-serves-a-candidate.md`.
 
 The two `arraystruct ...` families are built from a `{label}` substitution
 over `path` and `timebase`; those four are the only spellings the shipped
