@@ -87,8 +87,6 @@ function(flatten_block lines_variable output_variable)
     set("${output_variable}" "${flat_lines}" PARENT_SCOPE)
 endfunction()
 
-flatten_block(workflow_lines workflow_content_lines)
-
 function(read_job job_name output_variable)
     read_raw_block(workflow_lines "  " "${job_name}" "jobs:"
         "CI workflow must define a ${job_name} job" job_raw_lines)
@@ -185,11 +183,20 @@ function(read_top_level_mapping mapping_name output_variable)
     set("${output_variable}" "${mapping_lines}" PARENT_SCOPE)
 endfunction()
 
-function(check_pinned_core_linkage job_name job_lines_variable)
+# Assert that `job_name` is genuinely wired to the committed pin. The first
+# two checks are given the whole workflow rather than the job: a decoy commit
+# SHA or upstream URL anywhere in the file is still a second source of truth
+# for what CI builds. The cache-key checks are bounded to the job, since only
+# that job has an IMAS-Core cache. `workflow_lines_variable` is passed rather
+# than reached for, so the two scopes a check runs over are both visible in
+# its signature; both names also serve as the diagnostic's subject.
+function(check_pinned_core_linkage job_name workflow_lines_variable)
+    set(job_lines_variable "${job_name}_job")
     read_job(${job_name} ${job_lines_variable})
-    forbid_commit_sha(workflow_content_lines "inline an IMAS-Core commit SHA")
+    forbid_commit_sha(${workflow_lines_variable}
+        "inline an IMAS-Core commit SHA")
     require_pin_file_output(${job_lines_variable} pin_output_reference)
-    forbid_matching_line(workflow_content_lines
+    forbid_matching_line(${workflow_lines_variable}
         "https://github\\.com/iterorganization/IMAS-Core\\.git"
         "name the upstream IMAS-Core repository")
     require_matching_line(${job_lines_variable}
@@ -199,8 +206,13 @@ function(check_pinned_core_linkage job_name job_lines_variable)
         "key the acquired IMAS-Core cache on IMAS_CORE_VERSION")
 endfunction()
 
+# Every check below reads one of these two: `workflow_lines` keeps its
+# indentation, for the nested-key parsing read_raw_block does; `workflow` is
+# the flat, comment-free form the containment checks want.
+flatten_block(workflow_lines workflow)
+
 if(DEFINED PINNED_CORE_JOB)
-    check_pinned_core_linkage(${PINNED_CORE_JOB} pinned_core_job)
+    check_pinned_core_linkage(${PINNED_CORE_JOB} workflow)
     return()
 endif()
 
@@ -243,7 +255,7 @@ require_line(full_job "uses: actions/cache@v4"
     "cache the acquired IMAS-Core build")
 require_line(full_job "-DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON"
     "download the pinned real IMAS-Core")
-check_pinned_core_linkage(full full_job)
+check_pinned_core_linkage(full workflow)
 
 require_line(workflow_env "RUST_VERSION: 1.88.0"
     "pin Rust to the deployed cluster version")

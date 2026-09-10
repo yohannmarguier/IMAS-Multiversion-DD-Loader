@@ -22,6 +22,7 @@ fn main() {
     let version = version
         .lines()
         .next()
+        .map(str::trim)
         .expect("IMAS_CORE_VERSION must begin with the supported IMAS-Core release");
     assert!(
         is_release_version(version),
