@@ -98,11 +98,12 @@ jobs:
       - name: Install IMAS-Core build dependencies
         run: sudo apt-get update && sudo apt-get install -y libboost-filesystem-dev libhdf5-dev
 
+      # Rebuild trees configured before the fork acquired upstream version tags.
       - name: Cache acquired IMAS-Core
         uses: actions/cache@v4
         with:
           path: build/_deps
-          key: al-core-${{ runner.os }}-Release-${{ steps.imas_core_ref.outputs.commit }}
+          key: al-core-${{ runner.os }}-Release-${{ steps.imas_core_ref.outputs.commit }}-tags-v1
 
       - name: Configure with real IMAS-Core
         run: |

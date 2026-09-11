@@ -142,15 +142,11 @@ and limitations".
 
 ### Open exposures
 
-- **#139** — real IMAS-Core's `HDF5Writer::deleteData` ignores its `path`
-  argument entirely and deletes the whole IDS pulse file plus its master-file
-  link, so ADR 0017's per-path fan-out has no per-path effect on the only backend
-  that implements delete at all. Nothing masks this any more: #138 removed the
-  probe whose silence used to stop the fan-out before Core was reached, so a
-  converted candidate-plan delete now destroys the occurrence, and
-  `reverse-delete-fan-out-reaches-disk` pins that as today's behaviour rather
-  than asserting it is desirable. Stated for users in README.md's "Scope and
-  limitations".
+- **#139 — corrected by the pinned Core fork.** `IMAS_CORE_REF` now includes
+  IMAS-Core #64's path-aware HDF5 delete fix. The real-Core delete oracle
+  verifies both stored candidates disappear while unrelated data and the
+  stamp survive. Older Core builds, including upstream 5.7.2, still delete
+  the whole occurrence; ABI version compatibility does not guarantee the fix.
 - **`timebase` inherits the read path wholesale** (ADR 0016 decision 10) — it
   resolves independently of `field`, either one refusing refuses the write, and
   both feed the fidelity verdict. The named hazard — a write whose timebase

@@ -302,9 +302,9 @@ stamp: the probe's own open fails, the caller's succeeds, and the value reaches
 disk spelled the HLI's own way, as ADR 0007 requires.
 
 The real-Core `reverse-delete-fan-out-reaches-disk` scenario proves that a
-write-mode fan-out reaches the backend rather than returning a successful
-no-op. IMAS-Core's HDF5 backend still ignores the delete path and removes the
-whole occurrence (issue #139), so it cannot prove per-candidate deletion.
+write-mode fan-out removes both stored candidate datasets with the pinned
+Core, while preserving the occurrence, unrelated values and its DD stamp.
+This rejects both a silent no-op and the old whole-occurrence delete (#139).
 
 ### `runtime-binding-real-core-forwarding` — 1, `real-core` · `real_core/real_core_forwarding_test.c`
 

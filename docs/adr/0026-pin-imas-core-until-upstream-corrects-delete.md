@@ -28,3 +28,17 @@ change in this repository.
   silently altering the delete behaviour exercised by CI.
 - ADR 0022's IMAS-Core row is superseded in place. Its Data Dictionary and HLI
   rows remain in force.
+
+## Follow-up — 2026-09-11
+
+The pin moved to `dae4abdd9428bd28f47063f8f575bdc8abd915f2`, which includes
+IMAS-Core #64's path-aware HDF5 delete correction. The delete oracle now
+requires both mapped datasets to disappear while unrelated values and the
+stamp survive. The initial pin's behavior described above is historical.
+
+The fork initially had no release tags. Core's `git describe` consequently
+fell back to `0.0.0`, which the shim's major-version gate correctly refused.
+The original upstream 5.7.1 and 5.7.2 tags were restored in the fork without
+changing their objects or moving the source pin; the new pin reports
+`5.7.2.86`. Both CI dependency cache keys were advanced to discard builds
+configured without those tags. The runtime compatibility gate remains intact.

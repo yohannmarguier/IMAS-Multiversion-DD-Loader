@@ -165,12 +165,13 @@ jobs:
       # Restore and save are split so that a failing *test* run keeps the warm
       # tree. That is the common case for a regression gate: ctest goes red, a
       # fix is pushed, and the next run should not pay 40 minutes again.
+      # Discard trees whose Core was configured without upstream version tags.
       - name: Restore the HLI build tree
         id: hli_cache
         uses: actions/cache/restore@v4
         with:
           path: hli/build
-          key: hli-${{ runner.os }}-dd${{ env.HLI_DD_VERSION }}-fortran${{ steps.hli_pin.outputs.ref }}-core${{ steps.imas_core_pin.outputs.commit }}
+          key: hli-${{ runner.os }}-dd${{ env.HLI_DD_VERSION }}-fortran${{ steps.hli_pin.outputs.ref }}-core${{ steps.imas_core_pin.outputs.commit }}-tags-v1
 
       # IMAS_MVDD_REAL_CORE_TESTS=OFF because this job needs the shim built and
       # installed, not the shim's own suite -- ci.yml's fast and full jobs own

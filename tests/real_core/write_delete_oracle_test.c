@@ -38,15 +38,9 @@
  *     claim below is about one leaf dataset's contents, which a slice without
  *     its time coordinate still shows.
  *
- * Of #133's five claims, four are proven below and one is not. Claim 4 has
- * two halves — the precedence-2 candidate is left alone by a write and removed
- * by a delete — and only the write half is observable on this backend. The
- * delete half had two independent obstacles. Issue #138 removed the first by
- * dropping the presence probe, so a fan-out now reaches IMAS-Core at all; the
- * second stands, because this backend's `deleteData` ignores its path and
- * removes the whole occurrence (issue #139), leaving no per-candidate effect
- * to observe. `scenario_delete_reverse_fan_out_reaches_disk` asserts what is
- * observable today: the fan-out is no longer a silent successful no-op.
+ * Claim 4 has two halves: a write leaves the precedence-2 candidate alone,
+ * while a delete removes both candidates. The pinned Core honors delete paths,
+ * so the delete oracle also checks that unrelated data and the stamp survive.
  *
  * Direction labels follow equilibrium_read_test.c's convention, which names
  * the *fixture* under test rather than `conversion_map::Direction`: `forward`
@@ -491,12 +485,18 @@ static void scenario_write_forward_no_stored_slot_refuses(void) {
 /* A delete fan-out cannot use a presence probe through its WRITE_OP context:
  * real IMAS-Core only prepares that context for writing, so every probe looks
  * absent and the old shim returned success without forwarding a delete. The
- * fan-out now attempts every candidate directly. This backend's deleteData
- * ignores the path and removes the whole occurrence (issue #139). A zero
- * result is therefore valid only with that observable deletion: it proves at
- * least one candidate reached Core rather than becoming a successful no-op. */
+ * fan-out now attempts every candidate directly. Both stored datasets must
+ * disappear, while the occurrence, unrelated data and its stamp survive. */
 static void scenario_delete_reverse_fan_out_reaches_disk(void) {
     copy_fixture_pair("4.1.1");
+    char equilibrium_file[1024];
+    equilibrium_file_path(equilibrium_file, sizeof equilibrium_file);
+    CHECK(dataset_exists_on_disk(equilibrium_file, PSI_AXIS_DATASET));
+    CHECK(dataset_exists_on_disk(equilibrium_file, PSI_MAGNETIC_AXIS_DATASET));
+    double before[FIXTURE_SLICE_CAPACITY];
+    int slices = read_double_slices_from_disk(equilibrium_file, IP_DATASET, before,
+                                               FIXTURE_SLICE_CAPACITY);
+    CHECK(slices == FIXTURE_SLICES);
     CHECK_OK(imas_mvdd_set_hli_dd_version("3.39.0"));
     int pulse_ctx = open_copied_fixture_pulse();
 
@@ -507,13 +507,18 @@ static void scenario_delete_reverse_fan_out_reaches_disk(void) {
     CHECK_OK(al_end_action(op_ctx));
     close_fixture_pulse(pulse_ctx);
 
-    char equilibrium_file[1024];
-    equilibrium_file_path(equilibrium_file, sizeof equilibrium_file);
-    CHECK(access(equilibrium_file, F_OK) != 0);
+    CHECK(access(equilibrium_file, F_OK) == 0);
+    CHECK(!dataset_exists_on_disk(equilibrium_file, PSI_AXIS_DATASET));
+    CHECK(!dataset_exists_on_disk(equilibrium_file, PSI_MAGNETIC_AXIS_DATASET));
+    double after[FIXTURE_SLICE_CAPACITY];
+    CHECK(read_double_slices_from_disk(equilibrium_file, IP_DATASET, after,
+                                       FIXTURE_SLICE_CAPACITY) == slices);
+    for (int i = 0; i < slices; ++i) CHECK(after[i] == before[i]);
+    check_stamp_still_reads("4.1.1");
 
     remove_fixture_pair();
     printf("write_delete_oracle_test delete-oracle-reverse-fan-out-reaches-disk: a fan-out reached "
-           "IMAS-Core instead of reporting a successful no-op\n");
+           "both stored candidates and preserved unrelated data and the stamp\n");
 }
 
 /* --- claim 5: a refused write leaves no trace on disk -------------------- */
