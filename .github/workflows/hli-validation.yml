@@ -71,15 +71,10 @@ env:
   # longer a guess, so a mismatch is now a report about the pinned HLI rather
   # than about the calibration -- read it that way before editing these.
   #
-  # 114, not the 115 a Linux run confirmed under the previous pin, because
-  # IMAS_FORTRAN_REF moved to eb35d93, which drops the
-  # playground-play_eq_two_dd-self test (the same-version control that read one
-  # pulse down both columns). That is the *only* enabled test the bump removed:
-  # the run that caught this reported enabled 95 -> 94 with disabled unchanged
-  # at 20, which is what makes the drop attributable rather than a suite that
-  # quietly shrank. Any future move of this number must come with the same
-  # accounting.
-  HLI_TOTAL_TESTS: 114
+  # ea28cc1 adds the put-policy test and expands tests/shim from the linkage
+  # check to 30 registered tests (including fixture setup): 114 + 1 + 29.
+  # The 20 disabled backend-dependent examples are unchanged.
+  HLI_TOTAL_TESTS: 144
   HLI_DISABLED_TESTS: 20
 
 jobs:
