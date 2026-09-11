@@ -74,6 +74,9 @@ env:
   # ea28cc1 adds the put-policy test and expands tests/shim from the linkage
   # check to 30 registered tests (including fixture setup): 114 + 1 + 29.
   # The 20 disabled backend-dependent examples are unchanged.
+  # Four need fixture tooling: provenance (imas-python + h5diff), and the
+  # absent/malformed/unsupported-version stamps (h5py). Without it Linux
+  # registers only 140 tests; install it before configuring the HLI below.
   HLI_TOTAL_TESTS: 144
   HLI_DISABLED_TESTS: 20
 
@@ -102,7 +105,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libboost-filesystem-dev libhdf5-dev gfortran-14 g++-14 gcc-14
+            libboost-filesystem-dev libhdf5-dev hdf5-tools gfortran-14 g++-14 gcc-14
 
       # CMake builds its own venv and installs saxonche into it
       # (common/cmake/ALBuildDataDictionary.cmake); all this needs to supply is
@@ -134,6 +137,14 @@ jobs:
           repository: yohannmarguier/IMAS-Fortran
           ref: ${{ steps.hli_pin.outputs.ref }}
           path: hli
+
+      - name: Install HLI fixture tooling
+        run: |
+          set -euo pipefail
+          python -m venv hli/imas-python-fixtures/.venv
+          hli/imas-python-fixtures/.venv/bin/python -m pip install -r .github/hli-fixture-requirements.txt
+          hli/imas-python-fixtures/.venv/bin/python -c "import imas, h5py"
+          command -v h5diff
 
       - name: Resolve the pinned IMAS-Core commit
         id: imas_core_pin
@@ -250,12 +261,24 @@ jobs:
         run: |
           set -euo pipefail
           listing=$(ctest -N)
+          printf '%s\n' "$listing"
           total=$(printf '%s\n' "$listing" | sed -n 's/^Total Tests: *//p')
           disabled=$(printf '%s\n' "$listing" | grep -c '(Disabled)' || true)
           enabled=$(( total - disabled ))
           expected_enabled=$(( HLI_TOTAL_TESTS - HLI_DISABLED_TESTS ))
 
           echo "registered=$total enabled=$enabled disabled=$disabled"
+
+          for required in \
+            al-fortran-test-shim-fixture-provenance \
+            al-fortran-test-shim-stamp-absent \
+            al-fortran-test-shim-stamp-malformed \
+            al-fortran-test-shim-stamp-mismatch-no-artifact; do
+            if ! printf '%s\n' "$listing" | grep -qE ": ${required}$"; then
+              echo "Missing required HLI fixture test: $required" >&2
+              exit 1
+            fi
+          done
 
           if [ "$total" != "$HLI_TOTAL_TESTS" ] || \
              [ "$disabled" != "$HLI_DISABLED_TESTS" ]; then

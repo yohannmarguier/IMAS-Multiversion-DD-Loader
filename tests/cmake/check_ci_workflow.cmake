@@ -213,6 +213,16 @@ flatten_block(workflow_lines workflow)
 
 if(DEFINED PINNED_CORE_JOB)
     check_pinned_core_linkage(${PINNED_CORE_JOB} workflow)
+    if(PINNED_CORE_JOB STREQUAL "hli")
+        read_job(hli hli_job)
+        require_matching_line(hli_job "libhdf5-dev hdf5-tools"
+            "install h5diff for fixture provenance")
+        require_line(hli_job "python -m venv hli/imas-python-fixtures/.venv"
+            "create the HLI fixture Python environment")
+        require_line(hli_job
+            "hli/imas-python-fixtures/.venv/bin/python -m pip install -r .github/hli-fixture-requirements.txt"
+            "install the HLI fixture dependencies")
+    endif()
     return()
 endif()
 
