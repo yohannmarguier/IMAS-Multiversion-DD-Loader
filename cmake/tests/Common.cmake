@@ -7,6 +7,12 @@ add_test(NAME ci-workflow
         "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
         "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ci_workflow.cmake")
+add_test(NAME hli-validation-workflow
+    COMMAND "${CMAKE_COMMAND}"
+        "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/hli-validation.yml"
+        "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
+        "-DPINNED_CORE_JOB=hli"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ci_workflow.cmake")
 add_test(NAME ci-workflow-guard-rejects-misplaced-commands
     COMMAND "${CMAKE_COMMAND}"
         "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
@@ -186,8 +192,13 @@ set_tests_properties(rust-unit PROPERTIES ENVIRONMENT "IMAS_MVDD_LOSS_LOG_DIR=")
 # derive from a checked-in file, so they are pinned here where a reviewer
 # reads them next to the test that enforces them. They are floors, not
 # equalities: coverage rising is the point of every new rule. Measured
-# 342/428 forward and 335/370 reverse on the approved artifact -- raise a
+# 346/428 forward and 339/370 reverse on the approved artifact -- raise a
 # floor deliberately when new rules earn it, never to make a red gate green.
+# Both rose by 4 when the four chi_squared `<redefine>` entries were removed
+# from the artifact: those paths are spelled the same on both sides, so
+# dropping the refusal moved them from "deliberate refusal" into "by identity
+# default". That is a rule being *removed* earning a floor raise, which is the
+# unusual direction -- it is deliberate, and the floors are raised to match.
 add_test(NAME equilibrium-artifact-coverage-floor
     COMMAND "${CMAKE_COMMAND}"
         "-DCARGO_EXECUTABLE=${CARGO_EXECUTABLE}"
@@ -199,7 +210,7 @@ add_test(NAME equilibrium-artifact-coverage-floor
         "-DBASELINE_TSV=${CMAKE_CURRENT_SOURCE_DIR}/docs/inventory/equilibrium-3.39.0--4.1.1-imas-python-renames.tsv"
         "-DNEAR_BOUNDARY_RULE_ID=rename-beta-normal"
         "-DCOMPLETENESS_RULE_ID=drop-b-flux-pol-norm"
-        "-DFORWARD_SUPPORTED_FLOOR=342"
-        "-DREVERSE_SUPPORTED_FLOOR=335"
+        "-DFORWARD_SUPPORTED_FLOOR=346"
+        "-DREVERSE_SUPPORTED_FLOOR=339"
         "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify_artifact_coverage_floor.cmake")

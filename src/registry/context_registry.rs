@@ -94,6 +94,12 @@ pub(crate) struct RootRegistration {
     pub(crate) dataobjectname: String,
     pub(crate) key: MapCacheKey,
     pub(crate) direction_to_stored: Direction,
+    /// Whether the caller opened this root under `READ_OP`. A backend only
+    /// guarantees a reader for a `READ_OP` open (ADR 0020), so this is what
+    /// tells a merged-rule arraystruct open whether trying a stored candidate
+    /// against Core can trust what it reports back, or must settle for the
+    /// declared primary without asking (issue #178).
+    pub(crate) opened_read_op: bool,
 }
 
 /// A live conversion-eligible context: a root or a child.
@@ -102,6 +108,14 @@ pub(crate) struct ConversionRecord {
     /// The path this context resolves to, in the HLI's own DD spelling,
     /// already made absolute.
     pub resolved_path: String,
+    /// `resolved_path`'s counterpart in the stored DD's own spelling — empty
+    /// for a root, exactly like `resolved_path`. A child's is fixed at
+    /// registration to whichever stored candidate the opening seam actually
+    /// used, rather than re-derived from the map on every later relative
+    /// argument: a merged/split rule's anchor has no single map-derivable
+    /// answer once more than one stored candidate could serve it, only the
+    /// one IMAS-Core actually opened (issue #178).
+    pub stored_path: String,
     /// The data-entry context this record's pulse belongs to.
     pub pulse_ctx_id: ContextId,
     /// The complete occurrence name this root was opened for, including any
@@ -121,6 +135,12 @@ pub(crate) struct ConversionRecord {
     /// that resolves a path expressed in the HLI's own DD spelling to the
     /// stored DD spelling. Inherited unchanged from a root by every child.
     pub direction_to_stored: Direction,
+    /// Whether the root was opened under `READ_OP`. Inherited unchanged from
+    /// a root by every child, exactly like `direction_to_stored`: an
+    /// arraystruct opened under a non-`READ_OP` occurrence stays non-`READ_OP`
+    /// for the whole nesting, since IMAS-Core's reader/writer group split
+    /// (ADR 0020) is a property of the occurrence, not of one nested context.
+    pub opened_read_op: bool,
     /// The stored DD version for this occurrence. It is retained with the
     /// record so a later rule refusal can identify both ends of the failed
     /// conversion without reopening or rediscovering the occurrence.
@@ -212,6 +232,7 @@ impl ContextRegistry {
             dataobjectname,
             key,
             direction_to_stored,
+            opened_read_op,
         } = registration;
         if !key.needs_conversion() {
             self.remove(ctx_id);
@@ -221,12 +242,14 @@ impl ContextRegistry {
         let hli_version = key.hli_version.clone();
         let record = ConversionRecord {
             resolved_path,
+            stored_path: String::new(),
             pulse_ctx_id,
             dataobjectname,
             pulse_uri: self.pulse_uri(pulse_ctx_id).unwrap_or_default(),
             map: self.get_or_create_map(key, create),
             root_id: ctx_id,
             direction_to_stored,
+            opened_read_op,
             stored_version,
             hli_version,
             parent_id: None,
@@ -240,7 +263,9 @@ impl ContextRegistry {
     /// Records `ctx_id` as a child conversion record beneath the live
     /// conversion record at `parent_ctx_id`, inheriting its pulse context ID,
     /// shared conversion map, and root identity. `resolved_path` is this
-    /// child's own resolved absolute HLI-DD path.
+    /// child's own resolved absolute HLI-DD path; `stored_path` is its
+    /// counterpart in the stored DD's own spelling — the actual stored
+    /// candidate the opening seam used, not one this registry derives.
     ///
     /// Returns `false` and removes any record at `ctx_id` if `parent_ctx_id`
     /// names no live conversion record — a data-entry context, an unrecorded
@@ -254,6 +279,7 @@ impl ContextRegistry {
         ctx_id: ContextId,
         parent_ctx_id: ContextId,
         resolved_path: String,
+        stored_path: String,
     ) -> bool {
         let mut state = self.state.lock().unwrap();
         let parent = match state.entries.get(&parent_ctx_id) {
@@ -269,12 +295,14 @@ impl ContextRegistry {
             ctx_id,
             Entry::Conversion(ConversionRecord {
                 resolved_path,
+                stored_path,
                 pulse_ctx_id: parent.pulse_ctx_id,
                 dataobjectname: parent.dataobjectname,
                 pulse_uri: parent.pulse_uri,
                 map: parent.map,
                 root_id: parent.root_id,
                 direction_to_stored: parent.direction_to_stored,
+                opened_read_op: parent.opened_read_op,
                 stored_version: parent.stored_version,
                 hli_version: parent.hli_version,
                 parent_id: Some(parent_ctx_id),

@@ -318,6 +318,7 @@ unsafe fn open_occurrence(
         &hli,
         status,
         decision,
+        rwmode == READ_OP_ID,
     )
 }
 
@@ -407,6 +408,7 @@ fn apply_discovery_decision(
     hli: &crate::version::dd_version::DdVersion,
     status: al_status_t,
     decision: seam_policy::DiscoveryDecision,
+    opened_read_op: bool,
 ) -> OpenOccurrenceResult {
     match decision {
         seam_policy::DiscoveryDecision::RefuseAndEnd {
@@ -447,6 +449,7 @@ fn apply_discovery_decision(
                     dataobjectname: dataobjectname.to_string(),
                     key,
                     direction_to_stored: direction,
+                    opened_read_op,
                 },
                 || load_artifact(&artifact),
             );
@@ -758,7 +761,7 @@ unsafe fn begin_arraystruct_action_impl(
     };
 
     let translated_path = match resolve_arraystruct_argument(&parent, path, "path") {
-        Ok(path) => path,
+        Ok(resolved) => resolved,
         Err(message) => return contextual_refusal(&parent, &message, path),
     };
     let translated_timebase = match resolve_arraystruct_argument(&parent, timebase, "timebase") {
@@ -766,27 +769,99 @@ unsafe fn begin_arraystruct_action_impl(
         Err(message) => return contextual_refusal(&parent, &message, timebase),
     };
 
-    let status = call_begin_arraystruct(
-        family,
-        ctx_id,
-        translated_path.as_deref().map(CStr::as_ptr).unwrap_or(path),
-        translated_timebase
-            .as_deref()
-            .map(CStr::as_ptr)
-            .unwrap_or(timebase),
-        size,
-        actx_id,
-    );
+    // A timebase candidate plan is unreached by the shipped artifact — no
+    // rule's timebase is `merged`/`split` (CLAUDE.md's "Open exposures":
+    // "time" stays identity throughout). Its declared primary is taken
+    // without trying candidates neither this seam nor any test can exercise
+    // (ADR 0011), leaving the read-mode probe below for `path` alone, which
+    // is where issue #178's three rules actually need it. Its own stored
+    // spelling is never remembered as an anchor: only `path` decides that.
+    let timebase_owned = match translated_timebase {
+        ArraystructArgument::Forward => None,
+        ArraystructArgument::Translated { path, .. } => Some(path),
+        ArraystructArgument::Candidates(candidates) => candidates
+            .into_iter()
+            .next()
+            .map(|candidate| candidate.path),
+    };
+    let timebase_ptr = timebase_owned
+        .as_deref()
+        .map(CStr::as_ptr)
+        .unwrap_or(timebase);
+
+    // `chosen_stored_dd_path` is what a successful open must remember as this
+    // context's own new anchor (issue #178): `None` only for `Forward`, where
+    // no translation happened and the child sits at the same stored anchor as
+    // its parent.
+    let (status, chosen_stored_dd_path): (al_status_t, Option<String>) = match translated_path {
+        ArraystructArgument::Forward => (
+            call_begin_arraystruct(family, ctx_id, path, timebase_ptr, size, actx_id),
+            None,
+        ),
+        ArraystructArgument::Translated {
+            path: stored_path,
+            stored_dd_path,
+        } => (
+            call_begin_arraystruct(
+                family,
+                ctx_id,
+                stored_path.as_ptr(),
+                timebase_ptr,
+                size,
+                actx_id,
+            ),
+            Some(stored_dd_path),
+        ),
+        // Only a `READ_OP` open is guaranteed a reader (ADR 0020), so only
+        // there can "IMAS-Core reports this candidate empty" be trusted as
+        // "this candidate has no data" rather than "this backend cannot tell
+        // me" — the same hazard ADR 0017 decision 2 records for a delete
+        // fan-out probe. Any other access mode settles for the declared
+        // primary, exactly as an ambiguous write does (ADR 0016 decision 12).
+        ArraystructArgument::Candidates(candidates) if parent.opened_read_op => {
+            // SAFETY: carries the same contract as the `call_begin_arraystruct`
+            // calls above.
+            let (status, stored_dd_path) = unsafe {
+                open_first_populated_candidate(
+                    family,
+                    ctx_id,
+                    candidates,
+                    timebase_ptr,
+                    size,
+                    actx_id,
+                )
+            };
+            (status, Some(stored_dd_path))
+        }
+        ArraystructArgument::Candidates(candidates) => {
+            let primary = candidates
+                .into_iter()
+                .next()
+                .expect("a candidate plan always names at least one stored path");
+            (
+                call_begin_arraystruct(
+                    family,
+                    ctx_id,
+                    primary.path.as_ptr(),
+                    timebase_ptr,
+                    size,
+                    actx_id,
+                ),
+                Some(primary.stored_dd_path),
+            )
+        }
+    };
     if status.code == 0 {
         let resolved_path = path_conversion::join_hli_path(
             &parent.resolved_path,
             c_str_or_none(path).unwrap_or_default(),
         );
+        let stored_path = chosen_stored_dd_path.unwrap_or_else(|| parent.stored_path.clone());
         // SAFETY: IMAS-Core's own contract, already relied on by the
         // forwarded call above, requires `actx_id` to be a valid, writable
         // pointer on success.
         let opened_actx_id = unsafe { *actx_id };
-        REGISTRY.record_child(opened_actx_id, ctx_id, resolved_path);
+        REGISTRY.record_child(opened_actx_id, ctx_id, resolved_path, stored_path);
     }
     status
 }
@@ -819,6 +894,24 @@ fn end_action_impl(family: CallFamily, ctx_id: c_int) -> al_status_t {
     status
 }
 
+/// One resolved arraystruct argument. Unlike [`path_conversion::ReadPath`], a
+/// candidate plan is not tried here: this module's own seam decides how far
+/// it can safely go with one (issue #178), so it is kept intact rather than
+/// narrowed further.
+enum ArraystructArgument {
+    /// Nothing to translate: forward the caller's own pointer unchanged.
+    Forward,
+    /// One concrete stored-DD spelling for IMAS-Core to receive, plus its
+    /// complete stored-DD path — what a successful open must remember as
+    /// this new context's own anchor (issue #178).
+    Translated {
+        path: CString,
+        stored_dd_path: String,
+    },
+    /// A merged/split rule's stored candidates, in declared precedence order.
+    Candidates(Vec<path_conversion::ContextCandidate>),
+}
+
 /// Resolves one arraystruct argument. Unlike a data read, a nonempty path
 /// which the map does not claim cannot safely be forwarded: the new context's
 /// stored anchor would be unknown, so the seam refuses before IMAS-Core opens
@@ -827,14 +920,86 @@ fn resolve_arraystruct_argument(
     record: &crate::registry::context_registry::ConversionRecord,
     raw: *const c_char,
     label: &str,
-) -> Result<Option<CString>, String> {
+) -> Result<ArraystructArgument, String> {
     match path_conversion::narrow_context_path(path_conversion::resolve(record, raw)) {
-        ContextPathResolution::Translated(path) => Ok(Some(path)),
+        ContextPathResolution::Translated {
+            path,
+            stored_dd_path,
+        } => Ok(ArraystructArgument::Translated {
+            path,
+            stored_dd_path,
+        }),
+        ContextPathResolution::Candidates(candidates) => {
+            Ok(ArraystructArgument::Candidates(candidates))
+        }
         ContextPathResolution::Refusal(reason) => Err(reason),
         ContextPathResolution::NoSource => Err(format!("arraystruct {label} has no stored source")),
         ContextPathResolution::Unclaimed => Err(format!(
             "arraystruct {label} is unclaimed by the conversion map"
         )),
-        ContextPathResolution::Forward => Ok(None),
+        ContextPathResolution::Forward => Ok(ArraystructArgument::Forward),
     }
+}
+
+/// Tries a merged/split rule's stored candidates against IMAS-Core in
+/// declared precedence order, keeping the first whose open reports a
+/// populated array. Once every earlier candidate has come back both
+/// successful and empty, the last candidate is kept regardless of its own
+/// size, so a subtree with no data anywhere still opens — empty, as an
+/// ordinary array-of-structures may legitimately be — rather than refusing
+/// (issue #178). A candidate whose open itself fails is skipped the same way
+/// a candidate reporting no data is; if every candidate fails, the last
+/// failure is returned, since a genuine backend error is Core's own and not
+/// this seam's to reword.
+///
+/// Reachable only when the parent occurrence was opened `READ_OP`
+/// ([`begin_arraystruct_action_impl`] guards the call): closing a candidate
+/// that turned out empty relies on IMAS-Core actually reporting emptiness
+/// rather than "this backend has no reader for the context I just gave you",
+/// which is what a non-`READ_OP` open would silently get back instead (ADR
+/// 0020; ADR 0017 decision 2 records the same hazard for a delete fan-out
+/// probe that used to make this mistake).
+///
+/// Returns the winning candidate's complete stored-DD path alongside the
+/// status IMAS-Core gave for it — what a successful open must remember as
+/// this new context's own anchor (issue #178).
+///
+/// # Safety
+/// Same contract as [`begin_arraystruct_action`].
+unsafe fn open_first_populated_candidate(
+    family: CallFamily,
+    ctx_id: c_int,
+    candidates: Vec<path_conversion::ContextCandidate>,
+    timebase: *const c_char,
+    size: *mut c_int,
+    actx_id: *mut c_int,
+) -> (al_status_t, String) {
+    let last_index = candidates.len().saturating_sub(1);
+    let mut last_failure = None;
+    for (index, candidate) in candidates.into_iter().enumerate() {
+        let status = call_begin_arraystruct(
+            family,
+            ctx_id,
+            candidate.path.as_ptr(),
+            timebase,
+            size,
+            actx_id,
+        );
+        if status.code != 0 {
+            last_failure = Some((status, candidate.stored_dd_path));
+            continue;
+        }
+        let is_last = index == last_index;
+        // SAFETY: IMAS-Core's own contract requires `size`, when non-null, to
+        // be a valid, writable pointer once this call reports success.
+        let reported_empty = !size.is_null() && unsafe { *size } == 0;
+        if is_last || !reported_empty {
+            return (status, candidate.stored_dd_path);
+        }
+        // SAFETY: IMAS-Core's own contract requires `actx_id` to be a valid,
+        // writable pointer once this call reports success.
+        let opened_actx_id = unsafe { *actx_id };
+        let _ = call_end(family, opened_actx_id);
+    }
+    last_failure.expect("a candidate plan always names at least one stored path")
 }

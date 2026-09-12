@@ -69,3 +69,58 @@ string(APPEND misplaced_full_command
 expect_guard_rejection(
     misplaced-full-command "${misplaced_full_command}"
     "full_job must fail when its selected test profile registers no tests")
+
+string(REPLACE
+    "ref=$(head -n1 \"$GITHUB_WORKSPACE/IMAS_CORE_REF\" | tr -d '[:space:]')"
+    "ref=690f5392a58e4c73131d6b723c72105e9fbdcc9f"
+    inline_pin "${workflow}")
+if(workflow STREQUAL inline_pin)
+    message(FATAL_ERROR "Could not inline the IMAS-Core pin")
+endif()
+expect_guard_rejection(
+    inline-pin "${inline_pin}"
+    "workflow must not inline an IMAS-Core commit SHA")
+
+string(REPLACE
+    "ref=$(head -n1 \"$GITHUB_WORKSPACE/IMAS_CORE_REF\" | tr -d '[:space:]')"
+    "ref=$(head -n1 \"$GITHUB_WORKSPACE/PINNED_COMMIT\" | tr -d '[:space:]')"
+    wrong_pin_file "${workflow}")
+if(workflow STREQUAL wrong_pin_file)
+    message(FATAL_ERROR "Could not replace the IMAS-Core pin-file read")
+endif()
+expect_guard_rejection(
+    wrong-pin-file "${wrong_pin_file}"
+    "full_job must write a value read from IMAS_CORE_REF to GITHUB_OUTPUT")
+
+set(upstream_repository "${workflow}")
+string(APPEND upstream_repository
+    "\n  decoy:\n    runs-on: ubuntu-latest\n    steps:\n"
+    "      - run: git clone https://github.com/iterorganization/IMAS-Core.git\n")
+if(workflow STREQUAL upstream_repository)
+    message(FATAL_ERROR "Could not append an upstream IMAS-Core clone")
+endif()
+expect_guard_rejection(
+    upstream-repository "${upstream_repository}"
+    "workflow must not name the upstream IMAS-Core repository")
+
+string(REPLACE
+    "key: al-core-\${{ runner.os }}-Release-\${{ steps.imas_core_ref.outputs.commit }}"
+    "key: al-core-\${{ runner.os }}-Release-\${{ hashFiles('IMAS_CORE_VERSION') }}"
+    cache_key_misses_resolved_pin "${workflow}")
+if(workflow STREQUAL cache_key_misses_resolved_pin)
+    message(FATAL_ERROR "Could not replace the resolved IMAS-Core cache key")
+endif()
+expect_guard_rejection(
+    cache-key-misses-resolved-pin "${cache_key_misses_resolved_pin}"
+    "full_job must key the acquired IMAS-Core cache on the resolved pin")
+
+string(REPLACE
+    "key: al-core-"
+    "key: al-core-\${{ hashFiles('IMAS_CORE_VERSION') }}-"
+    cache_key_uses_release_version "${workflow}")
+if(workflow STREQUAL cache_key_uses_release_version)
+    message(FATAL_ERROR "Could not add IMAS_CORE_VERSION to the cache key")
+endif()
+expect_guard_rejection(
+    cache-key-uses-release-version "${cache_key_uses_release_version}"
+    "full_job must not key the acquired IMAS-Core cache on IMAS_CORE_VERSION")

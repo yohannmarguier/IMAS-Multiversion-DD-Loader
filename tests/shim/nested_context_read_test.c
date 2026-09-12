@@ -125,6 +125,16 @@ static void scenario_no_source_returns_null_through_nested_child(void) {
            "stored counterpart returned success with no data, without calling IMAS-Core\n");
 }
 
+/* This scenario is about *nesting*, not about which rule refuses: a refusal
+ * addressed relative to a live arraystruct child must still stop before
+ * IMAS-Core and still be retained under the complete DD path. It used to ride
+ * on the chi_squared unit-redefinition refusal; those `<redefine>` entries were
+ * removed from the artifact after review, and the retype refusal that remains
+ * lives under grids_ggd, outside any time_slice child. So it now rides on the
+ * value-transform guard instead: "boundary/psi" takes a COCOS sign flip, and
+ * asking for it as INTEGER_DATA trips validate_value_transformation, which
+ * refuses with Fidelity::Unmappable before the reader is ever called — the same
+ * shape of outcome the redefine produced. */
 static void scenario_refusal_stops_before_core_through_nested_child(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int time_slice_ctx = open_time_slice(operation_ctx);
@@ -132,13 +142,14 @@ static void scenario_refusal_stops_before_core_through_nested_child(void) {
 
     void *data = (void *)1;
     int shape[1] = {73};
-    al_status_t status = al_read_data(
-        time_slice_ctx, "constraints/strike_point/chi_squared_r", "", &data, 52, 1, shape);
+    al_status_t status =
+        al_read_data(time_slice_ctx, "boundary/psi", "", &data, IMAS_INTEGER_DATA, 1, shape);
 
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
     CHECK(strcmp(status.message,
-                 "IMAS-MVDD: this path's unit was redefined and cannot be converted; "
-                 "DD path: time_slice/constraints/strike_point/chi_squared_r; "
+                 "IMAS-MVDD: value-transform execution requires DOUBLE_DATA and a rank no "
+                 "greater than MAXDIM; "
+                 "DD path: time_slice/boundary/psi; "
                  "HLI DD version: 4.1.1; stored DD version: 3.39.0") == 0);
     CHECK(data == (void *)1);
     CHECK(shape[0] == 73);
@@ -149,14 +160,14 @@ static void scenario_refusal_stops_before_core_through_nested_child(void) {
      * argument the HLI actually passed — and a query on either the live
      * child or the root resolves to the same entry (issue #66). */
     CHECK(loss_count(time_slice_ctx) == 1);
-    check_loss_at(time_slice_ctx, 0, "time_slice/constraints/strike_point/chi_squared_r",
-                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_READ);
+    check_loss_at(time_slice_ctx, 0, "time_slice/boundary/psi", IMAS_MVDD_FIDELITY_UNMAPPABLE,
+                  IMAS_MVDD_LOSS_OPERATION_READ);
     CHECK(loss_count(operation_ctx) == 1);
-    check_loss_at(operation_ctx, 0, "time_slice/constraints/strike_point/chi_squared_r",
-                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_READ);
+    check_loss_at(operation_ctx, 0, "time_slice/boundary/psi", IMAS_MVDD_FIDELITY_UNMAPPABLE,
+                  IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("nested_context_read_test refusal-stops-before-core-through-nested-child: an "
-           "unmappable unit redefinition refused before IMAS-Core, addressed relative to a "
+           "unmappable value transformation refused before IMAS-Core, addressed relative to a "
            "live arraystruct context\n");
 }
 

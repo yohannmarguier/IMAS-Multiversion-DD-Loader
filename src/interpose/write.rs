@@ -15,6 +15,7 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 use crate::al_status_t;
 use crate::conversion::conversion_map::Fidelity;
 use crate::conversion::path_conversion;
+use crate::conversion::read_outcome::{EMPTY_COMPLEX, EMPTY_DOUBLE, EMPTY_INT};
 use crate::conversion::seam_policy;
 use crate::core::core_binding::{COMPLEX_DATA_ID, DOUBLE_DATA_ID, INTEGER_DATA_ID};
 use crate::loss::LossOperation;
@@ -78,15 +79,19 @@ unsafe fn build_source_view<'a>(
 /// Whether a scalar is one of IMAS-Core's own unset sentinels. This mirrors
 /// the rank-zero half of `Lowlevel::data_has_non_zero_shape`: forwarding the
 /// original bytes preserves Core's silent skip instead of letting a COCOS
-/// flip fabricate a measurement (ADR 0018).
+/// flip fabricate a measurement (ADR 0018). The sentinels come from
+/// [`crate::conversion::read_outcome`], which the no-source read writes out
+/// of, so the two directions cannot drift apart.
+///
+/// `CHAR_DATA` is deliberately absent: Core's own rank-zero emptiness check
+/// does not test it either, and `EMPTY_CHAR` is `'\0'`, which is a legitimate
+/// value to write rather than a hole.
 ///
 /// # Safety
 /// When non-null, `data` must point to the scalar representation declared by
 /// `datatype`. IMAS-Core's C ABI represents `COMPLEX_DATA` as consecutive
 /// real and imaginary `double` values, matching its `complex_t` HDF5 bridge.
 unsafe fn is_empty_scalar(data: *mut c_void, datatype: c_int, dim: c_int) -> bool {
-    const EMPTY_INT: c_int = -999_999_999;
-    const EMPTY_DOUBLE: f64 = -9e40;
     if dim != 0 || data.is_null() {
         return false;
     }
@@ -95,7 +100,7 @@ unsafe fn is_empty_scalar(data: *mut c_void, datatype: c_int, dim: c_int) -> boo
         DOUBLE_DATA_ID => unsafe { *data.cast::<f64>() == EMPTY_DOUBLE },
         COMPLEX_DATA_ID => {
             let values = unsafe { std::slice::from_raw_parts(data.cast::<f64>(), 2) };
-            values == [EMPTY_DOUBLE, EMPTY_DOUBLE]
+            values == EMPTY_COMPLEX
         }
         _ => false,
     }
@@ -324,6 +329,7 @@ mod tests {
                 dataobjectname: "equilibrium".to_string(),
                 key: MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
                 direction_to_stored: Direction::Forward,
+                opened_read_op: true,
             },
             || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
         ));
@@ -414,6 +420,7 @@ mod tests {
                 dataobjectname: "equilibrium".to_string(),
                 key: MapCacheKey::new(FIXTURE_IDS.to_string(), stored, hli),
                 direction_to_stored: Direction::Reverse,
+                opened_read_op: true,
             },
             || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
         ));

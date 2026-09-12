@@ -1,10 +1,19 @@
 # The HLI validation job floats IMAS-Core and pins the Data Dictionary
 
+**The IMAS-Core row of this ADR is superseded by
+`docs/adr/0026-pin-imas-core-until-upstream-corrects-delete.md`.** CI now pins
+IMAS-Core to the committed `IMAS_CORE_REF` in this repository's fork, so
+everything below about IMAS-Core floating is the record of the decision as it
+was taken and is no longer in force. The Data Dictionary and HLI-fork rows, and
+the reasoning behind them, stand. The title stays as it is: every
+cross-reference names this file, and the churn of a rename outweighs the
+inaccuracy.
+
 CI builds a real HLI — the IMAS-Fortran fork at `yohannmarguier/IMAS-Fortran` — against the installed shim with `AL_USE_MULTIVERSION_SHIM=ON`, and runs that HLI's own test suite. Of the three moving parts that job depends on, two are pinned and one is deliberately not:
 
 | Dependency | Treatment | Why |
 |---|---|---|
-| IMAS-Core | **floats** — whatever the HLI's own default acquires | The shim's version gate is major-only, so a 5.x release is a `VersionDrift` log and not a failure. Pinning it would mean editing this repository for every IMAS-Core release, which is the opposite of what the shim claims to be. |
+| IMAS-Core | **floats** — whatever the HLI's own default acquires *(superseded — see ADR 0026)* | The shim's version gate is major-only, so a 5.x release is a `VersionDrift` log and not a failure. Pinning it would mean editing this repository for every IMAS-Core release, which is the opposite of what the shim claims to be. |
 | Data Dictionary | **pinned to 4.1.1** | The shim ships exactly one conversion-map artifact, for 3.39.0 ⇄ 4.1.1. A different DD version does not weaken the conversion test; it dissolves it. |
 | The HLI fork | **pinned by commit** in `IMAS_FORTRAN_REF` | Gives the build cache a content-derived key, and makes a red run attributable to the shim rather than to someone else's work in progress. |
 

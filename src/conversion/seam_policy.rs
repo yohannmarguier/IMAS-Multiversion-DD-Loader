@@ -198,6 +198,18 @@ pub(crate) enum SourceView<'a> {
 pub(crate) enum Attempt<'a> {
     Failure(al_status_t),
     NotFound,
+    /// Absent, but said so *in the caller's own buffer* — the `dim == 0` case,
+    /// where the ABI has no not-found channel and IMAS-Core reports a missing
+    /// field by writing the EMPTY sentinel where the caller will look for it.
+    ///
+    /// The plan advances exactly as for [`Attempt::NotFound`]. The status is
+    /// carried because it is also the answer if no candidate has data: the
+    /// sentinel is already in place, so returning it is both what the ABI
+    /// means by not-found for a scalar and what a one-candidate scalar read of
+    /// an absent field returned before a plan could advance at all. Reporting
+    /// [`SeamOutcome::NotFound`] instead would null the caller's pointer and
+    /// throw that answer away.
+    Absent(al_status_t),
     Data(al_status_t, DataView<'a>),
 }
 
@@ -749,6 +761,11 @@ pub(crate) fn run_read<'a>(
         TranslatedReadPath::attempts,
     );
 
+    // The most recent scalar candidate to report absence through the caller's
+    // own buffer, if any: the buffer holds *its* sentinel, so its status is
+    // the one that describes what the caller is now looking at.
+    let mut absent_in_place: Option<al_status_t> = None;
+
     for field_attempt in &field_attempts {
         if let Err(reason) =
             validate_value_transformation(&field_attempt.value_transformation, &shape)
@@ -814,13 +831,18 @@ pub(crate) fn run_read<'a>(
                         },
                     );
                 }
+                Attempt::Absent(status) => absent_in_place = Some(status),
                 Attempt::NotFound => {}
             }
         }
     }
 
     verdict(
-        SeamOutcome::NotFound,
+        // A scalar plan that reached the end has already answered: the last
+        // candidate left the EMPTY sentinel in the caller's buffer, which is
+        // the only not-found a `dim == 0` read has. Keep it rather than
+        // reporting a not-found that would null the caller's pointer.
+        absent_in_place.map_or(SeamOutcome::NotFound, SeamOutcome::Data),
         FieldFidelity {
             path: &field_dd_path,
             fidelity: path_conversion::translated_read_fidelity(field_translated.as_ref()),
@@ -1181,6 +1203,156 @@ mod tests {
             verdict.field.fidelity,
             Fidelity::PotentiallyLossy,
             "a merged candidate's own declared fidelity must be retained"
+        );
+    }
+
+    /// A scalar candidate that reported its absence in the caller's own
+    /// buffer advances the plan just as a null-pointer not-found does. Without
+    /// this the loop stopped at precedence 1 for every scalar, because a
+    /// `dim == 0` read never hands back a null pointer to stop on.
+    #[test]
+    fn an_absent_scalar_candidate_advances_the_plan() {
+        let field = ReadArgument {
+            resolution: ReadPath::Translated(TranslatedReadPath {
+                paths: vec![
+                    resolved(
+                        "axis/b_field_phi",
+                        Fidelity::Exact,
+                        ValueTransformation::None,
+                    ),
+                    resolved("axis/b_tor", Fidelity::Exact, ValueTransformation::None),
+                ],
+            }),
+            forward: None,
+            dd_path: "axis/b_field_phi".to_string(),
+        };
+        let timebase = ReadArgument {
+            resolution: ReadPath::Forward,
+            forward: None,
+            dd_path: String::new(),
+        };
+        let shape = BufferShape {
+            datatype: BufferDataType::Double,
+            rank: 0,
+        };
+
+        let mut buffer = [5.2_f64];
+        let seen_fields: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        let mut remaining_buffer = Some(&mut buffer[..]);
+        let reader = |field: Option<&CStr>, _timebase: Option<&CStr>| {
+            seen_fields.borrow_mut().push(
+                field
+                    .expect("both candidates are translated")
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+            );
+            if seen_fields.borrow().len() == 1 {
+                Attempt::Absent(al_status_t::default())
+            } else {
+                Attempt::Data(
+                    al_status_t::default(),
+                    DataView::Double(remaining_buffer.take().expect("only one Data outcome")),
+                )
+            }
+        };
+
+        let verdict = run_read(field, timebase, shape, reader);
+
+        assert_eq!(
+            seen_fields.into_inner(),
+            vec!["axis/b_field_phi".to_string(), "axis/b_tor".to_string()],
+            "an absent scalar candidate must not end the plan"
+        );
+        assert!(
+            matches!(verdict.outcome, SeamOutcome::Data(status) if status.code == 0),
+            "the candidate that held the value must be the one reported"
+        );
+    }
+
+    /// The exhausted scalar plan keeps IMAS-Core's own answer. Reporting
+    /// `NotFound` here would null the caller's pointer and discard the EMPTY
+    /// sentinel that is the only not-found a `dim == 0` read has.
+    #[test]
+    fn an_all_absent_scalar_plan_returns_the_last_status_rather_than_not_found() {
+        let field = ReadArgument {
+            resolution: ReadPath::Translated(TranslatedReadPath {
+                paths: vec![
+                    resolved(
+                        "axis/b_field_phi",
+                        Fidelity::Exact,
+                        ValueTransformation::None,
+                    ),
+                    resolved("axis/b_tor", Fidelity::Exact, ValueTransformation::None),
+                ],
+            }),
+            forward: None,
+            dd_path: "axis/b_field_phi".to_string(),
+        };
+        let timebase = ReadArgument {
+            resolution: ReadPath::Forward,
+            forward: None,
+            dd_path: String::new(),
+        };
+        let shape = BufferShape {
+            datatype: BufferDataType::Double,
+            rank: 0,
+        };
+
+        let calls = RefCell::new(0u32);
+        let reader = |_field: Option<&CStr>, _timebase: Option<&CStr>| {
+            *calls.borrow_mut() += 1;
+            Attempt::Absent(al_status_t::default())
+        };
+
+        let verdict = run_read(field, timebase, shape, reader);
+
+        assert_eq!(*calls.borrow(), 2, "every candidate must be tried");
+        assert!(
+            matches!(verdict.outcome, SeamOutcome::Data(status) if status.code == 0),
+            "an exhausted scalar plan must keep the sentinel already in the caller's buffer"
+        );
+    }
+
+    /// An array plan is unaffected: with no scalar absence to remember, an
+    /// exhausted plan still reports not-found and nulls the caller's pointer.
+    #[test]
+    fn an_all_absent_array_plan_still_reports_not_found() {
+        let field = ReadArgument {
+            resolution: ReadPath::Translated(TranslatedReadPath {
+                paths: vec![
+                    resolved(
+                        "ggd/b_field_phi",
+                        Fidelity::Exact,
+                        ValueTransformation::None,
+                    ),
+                    resolved(
+                        "ggd/b_field_tor",
+                        Fidelity::Exact,
+                        ValueTransformation::None,
+                    ),
+                ],
+            }),
+            forward: None,
+            dd_path: "ggd/b_field_phi".to_string(),
+        };
+        let timebase = ReadArgument {
+            resolution: ReadPath::Forward,
+            forward: None,
+            dd_path: String::new(),
+        };
+        let shape = BufferShape {
+            datatype: BufferDataType::Double,
+            rank: 1,
+        };
+
+        let reader = |_field: Option<&CStr>, _timebase: Option<&CStr>| Attempt::NotFound;
+
+        let verdict = run_read(field, timebase, shape, reader);
+
+        assert!(
+            matches!(verdict.outcome, SeamOutcome::NotFound),
+            "an array plan with no candidate found must still report not-found"
         );
     }
 

@@ -1,1 +1,6 @@
 5.7.1
+
+# This is the public IMAS-Core ABI release the shim mirrors. It supplies the
+# Rust compatibility gate, recording stub's default version and drift fixtures.
+# Keep it separate from IMAS_CORE_REF, which selects the exact source revision
+# CI and download-mode builds acquire.

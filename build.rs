@@ -19,7 +19,11 @@ fn main() {
 
     let version = fs::read_to_string(VERSION_FILE)
         .expect("IMAS_CORE_VERSION must contain the supported IMAS-Core release");
-    let version = version.trim();
+    let version = version
+        .lines()
+        .next()
+        .map(str::trim)
+        .expect("IMAS_CORE_VERSION must begin with the supported IMAS-Core release");
     assert!(
         is_release_version(version),
         "IMAS_CORE_VERSION must have numeric major.minor.patch components"

@@ -110,7 +110,7 @@ packaging use.
 | `IMAS_MVDD_REAL_CORE_TESTS` | `ON` | Acquire IMAS-Core and register the drift and real-Core seam tests; `OFF` is the explicit recording-stub-only CI profile |
 | `IMAS_CORE_DOWNLOAD_DEPENDENCIES` | `OFF` | Fetch and build IMAS-Core at `IMAS_CORE_GIT_TAG` instead of finding an installed one |
 | `IMAS_CORE_DEVELOPMENT_LAYOUT` | `OFF` | Build IMAS-Core from a sibling checkout at `../IMAS-Core` instead of finding an installed one |
-| `IMAS_CORE_GIT_REPOSITORY` / `IMAS_CORE_GIT_TAG` | upstream repo / the `IMAS_CORE_VERSION` pin | Where `IMAS_CORE_DOWNLOAD_DEPENDENCIES` fetches from |
+| `IMAS_CORE_GIT_REPOSITORY` / `IMAS_CORE_GIT_TAG` | project fork / the `IMAS_CORE_REF` commit | Where `IMAS_CORE_DOWNLOAD_DEPENDENCIES` fetches from |
 
 Use a single-config generator (Ninja, Unix Makefiles) and set
 `CMAKE_BUILD_TYPE`; multi-config generators are rejected at configure time.
@@ -385,28 +385,15 @@ is itself worth knowing when reading a green suite.
   plugin manager would be `abort()`, not a returned failure, which is why the
   reentry guard keeps IMAS-Core's internal traffic out of the conversion path
   entirely (`docs/adr/0014-reentrant-reads-forward-untouched.md`).
-- **A converted delete destroys the whole occurrence on the HDF5 backend.**
-  This is the most destructive limitation on the list, and it is IMAS-Core's
-  behaviour rather than the shim's: `HDF5Writer::deleteData` ignores its `path`
-  argument entirely and removes the IDS pulse file plus its master-file link,
-  and HDF5 is the only backend that implements delete at all. So a candidate-plan
-  delete that the shim fans out per stored path has no per-path effect — the
-  first call takes the occurrence with it, and the remaining candidates find
-  nothing. Until this is fixed upstream, **treat any `al_delete_data` through a
-  mismatched occurrence as a whole-occurrence delete**, whatever path you named.
-  Nothing in the shim masked this until recently: the delete fan-out used to
-  probe each candidate for presence through the caller's own context, and under
-  a write-mode open every probe reported absent, so no delete was forwarded and
-  the call returned success having done nothing. That silence was itself a
-  defect — the shim reporting `code == 0` for work it never did — and removing
-  it (issue #138, `docs/adr/0017-a-write-asserts-a-value-a-delete-asserts-an-absence.md`
-  decision 2) made this hazard reachable. Every fanned-out delete now leaves
-  its stored candidate paths in the loss log file as the evidence trail.
-  Tracked at
-  [#139](https://github.com/yohannmarguier/IMAS-Multiversion-DD-Loader/issues/139),
-  and pinned as today's behaviour by the
-  `delete-oracle-reverse-fan-out-reaches-disk` test, which asserts
-  the occurrence is gone rather than asserting that it should be.
+- **HDF5 path deletion requires the corrected Core.** The fork commit in
+  `IMAS_CORE_REF` includes the path-aware delete fix
+  ([IMAS-Core #64](https://github.com/yohannmarguier/IMAS-Core/pull/64)).
+  The real-Core oracle verifies that a converted delete removes both stored
+  candidates while preserving unrelated data and the DD-version stamp.
+  Older Core builds, including upstream 5.7.2, ignore the path and can delete
+  the whole occurrence ([#139](https://github.com/yohannmarguier/IMAS-Multiversion-DD-Loader/issues/139)).
+  The ABI compatibility check alone does not distinguish those builds; use
+  the pinned fork or a Core carrying the same correction.
 
 ## Layout
 
@@ -415,6 +402,7 @@ CMakeLists.txt          drives cargo-c; owns install, package config and tests
 .github/actions/setup-toolchain/action.yml  shared pinned CI toolchain setup
 Cargo.toml              crate-type + [package.metadata.capi]
 IMAS_CORE_VERSION       supported IMAS-Core release used by the runtime compatibility gate
+IMAS_CORE_REF           exact IMAS-Core source commit that download mode and CI build; not the ABI release above
 cbindgen.toml           generated-header settings
 cmake/imas-mvdd-loaderConfig.cmake.in  find_package template, hand-authored
 src/lib.rs              the mirrored C ABI
@@ -567,13 +555,12 @@ a 4.1.1 HLI, and requires the `retyped` refusal to name
 `grids_ggd/grid/space/coordinates_type`, so a shim that stopped registering
 conversion records fails rather than passing quietly.
 
-IMAS-Core deliberately floats — the HLI acquires whichever one its own default
-names, because the shim's version gate is major-only and pinning it would mean
-editing this repository for every IMAS-Core release. The Data Dictionary is
-pinned to 4.1.1 instead, because the shim ships exactly one conversion-map
-artifact and a different DD version does not weaken the conversion test but
-dissolves it. `docs/adr/0022-hli-validation-floats-core-and-pins-the-dd.md`
-records that asymmetry.
+The HLI also acquires the IMAS-Core fork at the committed `IMAS_CORE_REF`, so
+it exercises the same library as the shim's full CI job. The Data Dictionary is
+pinned to 4.1.1 because the shim ships exactly one conversion-map artifact; a
+different DD version does not weaken the conversion test but dissolves it.
+`docs/adr/0026-pin-imas-core-until-upstream-corrects-delete.md` records why
+Core is pinned instead of floated.
 
 Three things a green run does **not** prove. Twenty of the HLI's `examples/` I/O
 tests can never run in a shim build — they are gated on both the MDSplus and

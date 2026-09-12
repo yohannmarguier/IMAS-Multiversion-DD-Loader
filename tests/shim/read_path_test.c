@@ -656,6 +656,83 @@ static void scenario_merged_read_returns_not_found_when_all_candidates_are_absen
     check_no_loss_entry(operation_ctx);
 }
 
+/* --- scalar candidate fallback (fold-axis-bphi) ----------------------------
+ *
+ * `time_slice/global_quantities/magnetic_axis/b_field_phi` is the artifact's
+ * only rule that is both a scalar and needs its fallback: DD 3.39.0 stores the
+ * value under `b_field_tor` and `b_tor`, never under the DD 4 spelling the
+ * rule lists at precedence 1. A scalar read is the ABI's one exception to the
+ * three-way read outcome — absence arrives as the EMPTY sentinel written into
+ * the caller's own buffer, not as a null data pointer — so these scenarios
+ * drive the plan through the sentinel channel rather than through
+ * RECORDING_STUB_READ_NOT_FOUND_FIELD, which can only express the array
+ * convention. */
+#define IMAS_MVDD_TEST_EMPTY_DOUBLE (-9e40)
+static const char *const SCALAR_MERGED_FIELD =
+    "time_slice/global_quantities/magnetic_axis/b_field_phi";
+
+static al_status_t read_scalar(int ctx_id, const char *field, double *value) {
+    void *data = value;
+    return al_read_data(ctx_id, field, "", &data, IMAS_DOUBLE_DATA, 0, NULL);
+}
+
+static void scenario_scalar_merged_read_falls_through_to_next_candidate(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    double value = 0.0;
+
+    CHECK(read_scalar(operation_ctx, SCALAR_MERGED_FIELD, &value).code == 0);
+
+    CHECK(value == 5.2);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 3);
+    check_stub_paths("time_slice/global_quantities/magnetic_axis/b_tor", "");
+    /* fold-axis-bphi is reverse-exact: a served fallback creates no loss. */
+    check_no_loss_entry(operation_ctx);
+
+    printf("read_path_test scalar-merged-read-falls-through-to-next-candidate: two absent scalar "
+           "candidates advanced the plan and precedence 3 served the stored value\n");
+}
+
+static void scenario_scalar_merged_read_stops_at_first_candidate_with_data(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    double value = 0.0;
+
+    CHECK(read_scalar(operation_ctx, SCALAR_MERGED_FIELD, &value).code == 0);
+
+    CHECK(value == 5.2);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 1);
+    check_stub_paths(SCALAR_MERGED_FIELD, "");
+
+    printf("read_path_test scalar-merged-read-stops-at-first-candidate-with-data: a scalar "
+           "candidate holding a real value ended the plan at precedence 1\n");
+}
+
+/* The exhausted case keeps the ABI's own answer rather than manufacturing one:
+ * the EMPTY sentinel the last candidate left in the caller's buffer is the
+ * only way a scalar read can say not-found, so the shim returns success with
+ * that buffer and the caller's pointer untouched — exactly what a
+ * single-candidate scalar read of an absent field returned before the plan
+ * could advance at all. */
+static void scenario_scalar_read_with_every_candidate_absent_keeps_the_sentinel(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    double value = 0.0;
+    void *data = &value;
+
+    al_status_t status =
+        al_read_data(operation_ctx, SCALAR_MERGED_FIELD, "", &data, IMAS_DOUBLE_DATA, 0, NULL);
+
+    CHECK(status.code == 0);
+    CHECK(value == IMAS_MVDD_TEST_EMPTY_DOUBLE);
+    CHECK(data == (void *)&value);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 3);
+    check_stub_paths("time_slice/global_quantities/magnetic_axis/b_tor", "");
+
+    printf("read_path_test scalar-read-with-every-candidate-absent-keeps-the-sentinel: every "
+           "candidate was tried and the caller kept the EMPTY sentinel and its own pointer\n");
+}
+
 static void scenario_split_plan_reads_and_flips_its_first_stored_destination(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int reads_before = int_from_stub("recording_stub_read_call_count");
@@ -704,6 +781,79 @@ static void scenario_no_source_returns_null_without_core_call(void) {
     printf("read_path_test no-source-returns-null-without-core-call: no stored path was read\n");
 }
 
+/* The rank-zero half of the same outcome, and the one the caller cannot
+ * recover from on its own. For `dim > 0` IMAS-Core signals absence by nulling
+ * `*data`, which the scenario above pins. For `dim == 0` the caller owns the
+ * buffer, IMAS-Core leaves the pointer alone, and absence has exactly one
+ * channel: the datatype's EMPTY sentinel written into that buffer. A shim
+ * that decides not-found without calling IMAS-Core has to write it itself,
+ * because nothing below it will.
+ *
+ * The buffers start at values a caller could plausibly mistake for real
+ * measurements, so a shim that writes nothing fails here rather than passing
+ * on a zero-initialised stack.
+ *
+ * CHAR_DATA and COMPLEX_DATA are covered in `no_source_read`'s own Rust unit
+ * tests instead: the shipped artifact has no `right_only` path of either type
+ * — equilibrium 4.1.1's `time_slice/convergence/result` subtree bottoms out at
+ * `result/index` — so there is no C ABI route to reach those arms (ADR 0011).
+ */
+static void scenario_no_source_scalar_receives_the_empty_sentinel(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+
+    double real_value = 3.5;
+    void *double_data = &real_value;
+    int no_extents[1] = {0};
+    CHECK(al_read_data(operation_ctx, "time_slice/global_quantities/rho_tor_boundary", "",
+                       &double_data, IMAS_DOUBLE_DATA, 0, no_extents)
+              .code == 0);
+    CHECK(real_value == -9.0E40);
+    CHECK(double_data == (void *)&real_value);
+
+    int count_value = 7;
+    void *int_data = &count_value;
+    CHECK(al_read_data(operation_ctx, "time_slice/constraints/constraints_n", "", &int_data,
+                       IMAS_INTEGER_DATA, 0, no_extents)
+              .code == 0);
+    CHECK(count_value == -999999999);
+    CHECK(int_data == (void *)&count_value);
+
+    /* The same rule reached through the subtree entry rather than a leaf one. */
+    int index_value = 7;
+    void *index_data = &index_value;
+    CHECK(al_read_data(operation_ctx, "time_slice/convergence/result/index", "", &index_data,
+                       IMAS_INTEGER_DATA, 0, no_extents)
+              .code == 0);
+    CHECK(index_value == -999999999);
+
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
+    CHECK(loss_count(operation_ctx) == 3);
+
+    printf("read_path_test no-source-scalar-receives-the-empty-sentinel: absence reached the "
+           "caller's own buffer\n");
+}
+
+/* The other half of `Lowlevel::setDefaultValue`'s nonscalar branch, which the
+ * shim used to skip: every returned extent is zeroed, not just the pointer
+ * nulled. A caller that reads its shape back before checking the pointer would
+ * otherwise see whatever it passed in. */
+static void scenario_no_source_array_zeroes_the_returned_extents(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = (void *)1;
+    int size[2] = {73, 91};
+
+    CHECK(al_read_data(operation_ctx, "time_slice/profiles_1d/psi_norm", "", &data,
+                       IMAS_DOUBLE_DATA, 2, size)
+              .code == 0);
+    CHECK(data == NULL);
+    CHECK(size[0] == 0);
+    CHECK(size[1] == 0);
+
+    printf("read_path_test no-source-array-zeroes-the-returned-extents: the returned shape was "
+           "cleared alongside the pointer\n");
+}
+
 static void scenario_rank_changing_retype_refuses_without_core_call(void) {
     int operation_ctx = open_mismatched_equilibrium();
     check_read_refusal(
@@ -716,16 +866,34 @@ static void scenario_rank_changing_retype_refuses_without_core_call(void) {
            "caller storage and never reached IMAS-Core\n");
 }
 
-static void scenario_unit_redefinition_refuses_without_core_call(void) {
+/* The four chi_squared_r/chi_squared_z paths under constraints/strike_point
+ * and constraints/x_point once carried a `<redefine>` entry that refused them
+ * in both directions over the m -> m^-2 unit change. That entry was removed
+ * after review: the shim forwards these paths verbatim and leaves the unit
+ * difference to the caller to interpret. This scenario is the C ABI proof of
+ * that decision — the same spelling reaches IMAS-Core, the read succeeds, and
+ * nothing is retained on the loss log. It is deliberately the inverted twin of
+ * the refusal scenario it replaced: if a future artifact reintroduces a
+ * `<redefine>` over these paths, this goes red rather than passing quietly. */
+static void scenario_redefined_unit_path_forwards_verbatim(void) {
     int operation_ctx = open_mismatched_equilibrium();
-    check_read_refusal(
-        operation_ctx, "time_slice/constraints/strike_point/chi_squared_r", 52 /* DOUBLE_DATA */,
-        "IMAS-MVDD: this path's unit was redefined and cannot be converted; "
-        "DD path: time_slice/constraints/strike_point/chi_squared_r; "
-        "HLI DD version: 4.1.1; stored DD version: 3.39.0");
+    const char *paths[] = {
+        "time_slice/constraints/strike_point/chi_squared_r",
+        "time_slice/constraints/strike_point/chi_squared_z",
+        "time_slice/constraints/x_point/chi_squared_r",
+        "time_slice/constraints/x_point/chi_squared_z",
+    };
 
-    printf("read_path_test unit-redefinition-refuses-without-core-call: refusal preserved "
-           "caller storage and never reached IMAS-Core\n");
+    for (size_t i = 0; i < sizeof paths / sizeof paths[0]; ++i) {
+        void *data = NULL;
+        CHECK(read_data(operation_ctx, paths[i], "", &data).code == 0);
+        CHECK(data != NULL);
+        check_stub_paths(paths[i], "");
+    }
+    check_no_loss_entry(operation_ctx);
+
+    printf("read_path_test redefined-unit-path-forwards-verbatim: all four chi_squared paths "
+           "reached IMAS-Core unchanged and retained no loss\n");
 }
 
 static void scenario_unsupported_sign_flip_types_refuse_without_core_call(void) {
@@ -956,11 +1124,16 @@ int main(int argc, char **argv) {
         {"merged-read-falls-through-to-next-candidate", scenario_merged_read_falls_through_to_next_candidate},
         {"merged-read-stops-at-first-candidate-with-data", scenario_merged_read_stops_at_first_candidate_with_data},
         {"merged-read-returns-not-found-when-all-candidates-are-absent", scenario_merged_read_returns_not_found_when_all_candidates_are_absent},
+        {"scalar-merged-read-falls-through-to-next-candidate", scenario_scalar_merged_read_falls_through_to_next_candidate},
+        {"scalar-merged-read-stops-at-first-candidate-with-data", scenario_scalar_merged_read_stops_at_first_candidate_with_data},
+        {"scalar-read-with-every-candidate-absent-keeps-the-sentinel", scenario_scalar_read_with_every_candidate_absent_keeps_the_sentinel},
         {"split-plan-reads-and-flips-its-first-stored-destination", scenario_split_plan_reads_and_flips_its_first_stored_destination},
         {"reverse-split-read-flips-its-single-stored-source", scenario_reverse_split_read_flips_its_single_stored_source},
         {"no-source-returns-null-without-core-call", scenario_no_source_returns_null_without_core_call},
+        {"no-source-scalar-receives-the-empty-sentinel", scenario_no_source_scalar_receives_the_empty_sentinel},
+        {"no-source-array-zeroes-the-returned-extents", scenario_no_source_array_zeroes_the_returned_extents},
         {"rank-changing-retype-refuses-without-core-call", scenario_rank_changing_retype_refuses_without_core_call},
-        {"unit-redefinition-refuses-without-core-call", scenario_unit_redefinition_refuses_without_core_call},
+        {"redefined-unit-path-forwards-verbatim", scenario_redefined_unit_path_forwards_verbatim},
         {"unsupported-sign-flip-types-refuse-without-core-call", scenario_unsupported_sign_flip_types_refuse_without_core_call},
         {"sign-flip-array-negates-values-and-preserves-empty-double", scenario_sign_flip_array_negates_values_and_preserves_empty_double},
         {"sign-flip-rank-exceeding-maxdim-refuses-without-core-call", scenario_sign_flip_rank_exceeding_maxdim_refuses_without_core_call},

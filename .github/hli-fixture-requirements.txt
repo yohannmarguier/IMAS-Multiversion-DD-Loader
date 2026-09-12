@@ -1,0 +1,5 @@
+# Fixture generation and stamp variants only. The Fortran HLI itself uses
+# the fork pinned by IMAS_CORE_REF, not this Python wheel's Core.
+imas-python==2.3.0
+imas-core==5.7.2
+h5py==3.16.0

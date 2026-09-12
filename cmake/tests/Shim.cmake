@@ -302,6 +302,14 @@ add_stub_test(read-path-identity-rule-returns-data read_path_test identity-rule-
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
 
+# Not a refusal scenario: the artifact's four chi_squared `<redefine>` entries
+# were removed after review, so these paths now forward verbatim. Registered
+# beside the other pass-through reads rather than with the refusal group.
+add_stub_test(read-path-redefined-unit-path-forwards-verbatim
+    read_path_test redefined-unit-path-forwards-verbatim
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
 add_stub_test(read-path-merged-read-falls-through-to-next-candidate
     read_path_test merged-read-falls-through-to-next-candidate
     HLI_DD_VERSION 4.1.1
@@ -316,6 +324,25 @@ add_stub_test(read-path-merged-read-returns-not-found-when-all-candidates-are-ab
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0
     ENV "RECORDING_STUB_READ_NOT_FOUND=1")
+# The scalar half of the same plan. RECORDING_STUB_READ_SCALAR_VALUES is the
+# only knob that can express scalar absence at all: for `dim == 0` the caller
+# owns the buffer, so IMAS-Core reports a missing field by writing the EMPTY
+# sentinel into it rather than by handing back a null data pointer.
+add_stub_test(read-path-scalar-merged-read-falls-through-to-next-candidate
+    read_path_test scalar-merged-read-falls-through-to-next-candidate
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_READ_SCALAR_VALUES=time_slice/global_quantities/magnetic_axis/b_field_phi=empty,time_slice/global_quantities/magnetic_axis/b_field_tor=empty,time_slice/global_quantities/magnetic_axis/b_tor=5.2")
+add_stub_test(read-path-scalar-merged-read-stops-at-first-candidate-with-data
+    read_path_test scalar-merged-read-stops-at-first-candidate-with-data
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_READ_SCALAR_VALUES=time_slice/global_quantities/magnetic_axis/b_field_phi=5.2,time_slice/global_quantities/magnetic_axis/b_tor=1.0")
+add_stub_test(read-path-scalar-read-with-every-candidate-absent-keeps-the-sentinel
+    read_path_test scalar-read-with-every-candidate-absent-keeps-the-sentinel
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_READ_SCALAR_VALUES=time_slice/global_quantities/magnetic_axis/b_field_phi=empty,time_slice/global_quantities/magnetic_axis/b_field_tor=empty,time_slice/global_quantities/magnetic_axis/b_tor=empty")
 add_stub_test(read-path-split-plan-reads-and-flips-its-first-stored-destination
     read_path_test split-plan-reads-and-flips-its-first-stored-destination
     HLI_DD_VERSION 3.39.0
@@ -332,6 +359,16 @@ add_stub_test(read-path-no-source-returns-null-without-core-call
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
 
+add_stub_test(read-path-no-source-scalar-receives-the-empty-sentinel
+    read_path_test no-source-scalar-receives-the-empty-sentinel
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
+add_stub_test(read-path-no-source-array-zeroes-the-returned-extents
+    read_path_test no-source-array-zeroes-the-returned-extents
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
 # All conversion-refusal scenarios need the same known mismatched
 # occurrence. Keep that shared seam setup in one place.
 function(add_read_path_refusal_test name scenario)
@@ -342,8 +379,6 @@ endfunction()
 
 add_read_path_refusal_test(read-path-rank-changing-retype-refuses-without-core-call
     rank-changing-retype-refuses-without-core-call)
-add_read_path_refusal_test(read-path-unit-redefinition-refuses-without-core-call
-    unit-redefinition-refuses-without-core-call)
 add_read_path_refusal_test(read-path-unsupported-sign-flip-types-refuse-without-core-call
     unsupported-sign-flip-types-refuse-without-core-call)
 add_read_path_refusal_test(read-path-sign-flip-rank-exceeding-maxdim-refuses-without-core-call
@@ -729,6 +764,27 @@ add_stub_test(arraystruct-path-unknown-parent-forwards-unchanged
 
 add_stub_test(arraystruct-path-conversion-disabled-parent-forwards-unchanged
     arraystruct_path_test plain-parent-forwards-unchanged)
+
+# --- Issue #178: merged/subtree candidate plans at arraystruct open -----
+add_stub_test(arraystruct-path-merged-subtree-falls-through-to-populated-candidate
+    arraystruct_path_test merged-subtree-falls-through-to-populated-candidate
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
+add_stub_test(arraystruct-path-merged-subtree-opens-empty-when-every-candidate-is-absent
+    arraystruct_path_test merged-subtree-opens-empty-when-every-candidate-is-absent
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
+add_stub_test(arraystruct-path-merged-subtree-write-mode-takes-the-primary-candidate-without-probing
+    arraystruct_path_test merged-subtree-write-mode-takes-the-primary-candidate-without-probing
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
+add_stub_test(arraystruct-path-refusal-retains-an-unmappable-read-loss
+    arraystruct_path_test refusal-retains-an-unmappable-read-loss
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
 
 # --- Issue #62: al_read_data through a live arraystruct context -------
 add_executable(nested_context_read_test

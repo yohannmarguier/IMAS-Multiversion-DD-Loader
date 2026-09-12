@@ -74,8 +74,8 @@ and limitations".
 | `al_begin_dataentry_action` | registers its pulse in the context registry (ADR 0003) on success |
 | `al_begin_global_action` (+ `al_plugin_*` twin) | `seam_policy::decide_occurrence_registration` decides stored-version discovery and registration, while its sibling `decide_datapath_translation` decides the pre-forward translation from a cached mismatch; both occurrence-opening policy functions live in `src/conversion/seam_policy.rs`. A root conversion record is registered **only** when a present, valid stamp names a stored version that differs from the latched HLI version *and* has an embedded artifact to serve it (`src/conversion/known_artifacts.rs`). A matching or absent stamp registers nothing (ADR 0007); a malformed present stamp refuses and ends the just-opened context rather than leaking it (ADR 0009). `datapath` is translated only once a prior open of the same occurrence cached a mismatch. When the caller's `rwmode != READ_OP`, the stamp is read through a shim-owned `READ_OP` probe context of its own (ADR 0020) |
 | `al_begin_slice_action`, `al_begin_timerange_action` | same discovery/registration rule; no `datapath` argument, so only the discovery half applies |
-| `al_begin_arraystruct_action` (+ plugin twin) | resolves `path` and `timebase` before Core is called; on success registers the returned context as a child record inheriting the shared map, root identity and stored direction |
-| `al_read_data` / `al_plugin_read_data` | one shared `read_data_impl`: identity, `renamed`, `moved`, and `merged`/`split` candidate plans tried in declared precedence order, COCOS sign flip applied in place, three-way read-outcome classification (ADR 0012), every non-exact success retained in the root's loss log |
+| `al_begin_arraystruct_action` (+ plugin twin) | resolves `path` and `timebase` before Core is called; on success registers the returned context as a child record inheriting the shared map, root identity, stored direction, and `opened_read_op`. A `renamed`/`moved` anchor translates to one stored spelling; a `merged`/`split` anchor whose candidates carry no value transformation is a candidate plan the seam itself decides how to use (issue #178, ADR 0025) — under `READ_OP` it tries each stored candidate against Core in declared precedence order, keeping the first that reports a populated array (or the last, if every candidate comes back empty, since a wholly empty subtree is not a refusal); any other access mode takes the declared primary without trying the rest, mirroring `al_write_data`'s own ambiguous-plan policy. Whichever candidate actually opens is remembered as the child's own `stored_path`, since a merged anchor has no single map-derivable stored spelling the way a renamed one does — a relative argument under it filters out any sibling candidate that does not lie beneath that fixed anchor rather than refusing the whole read. A refusal here retains an `UNMAPPABLE` read loss, closing the one gap left after write and delete refusals already did |
+| `al_read_data` / `al_plugin_read_data` | one shared `read_data_impl`: identity, `renamed`, `moved`, and `merged`/`split` candidate plans tried in declared precedence order, COCOS sign flip applied in place, three-way read-outcome classification (ADR 0012), every non-exact success retained in the root's loss log. A `dim == 0` candidate is classified through the EMPTY sentinel in the caller's own buffer rather than the data pointer, since a scalar read has no null-pointer channel; an exhausted scalar plan returns that sentinel where an array plan reports not-found. A shim-decided not-found — the artifact says the path has no stored source, so IMAS-Core is never called — leaves the caller's buffers as `Lowlevel::setDefaultValue` would: for `dim > 0` a null `*data` and every returned extent zeroed, for `dim == 0` the datatype's EMPTY sentinel written into the caller's own scalar, which is absence's only channel at rank zero |
 | `al_write_data` / `al_plugin_write_data` | resolves `field` and `timebase` independently to one stored spelling, keeping relative/absolute child-context semantics and the caller's own `data`/`size`. An ambiguous plan writes **only** precedence 1 and records each skipped candidate's *stored* path as `POTENTIALLY_LOSSY` after Core succeeds; a non-primary source, an unservable rule, or a path with no stored slot refuses before Core is called. A value transformation executes on a shim-owned copy (ADR 0018) and leaves an unset rank-0 scalar alone, since `EMPTY_DOUBLE` is negative and flipping it would store a fabricated measurement with `code == 0` |
 | `al_delete_data` | translates identity, `renamed` and `moved` leaves; fans a candidate plan out in declared order and calls Core for **every** candidate, with no presence probe (ADR 0017 — a write asserts a value, a delete asserts an absence, so where a write must not fan out a delete must; decision 2 records why the probe that used to precede each candidate is gone: it read through the *caller's* context, so a write-mode open reported every candidate absent). The first nonzero status is retained while later candidates are still attempted, so an absent candidate can look like a backend failure — the honest limitation of an ABI with no not-found outcome. A refusal retains an `UNMAPPABLE` loss naming the caller path; a fan-out retains `POTENTIALLY_LOSSY` delete losses naming every stored candidate after all are attempted. Admits a *trivial* structure delete but refuses one with an escaping rule nested underneath it (decision 4); an empty path is the caller's explicit whole-DATAOBJECT migration route |
 | `al_end_action` / `al_plugin_end_action` | removes only its own context's record, only on success. Non-LIFO close and recycled context IDs are proven safe |
@@ -95,7 +95,10 @@ and limitations".
   hand-authored (ADR 0004). `moved` and `retyped` resolve; `retyped` refuses
   unconditionally as `UnservableRetype` even where it declares itself *exact*,
   because the shim cannot reshape an int array into an array of identifier
-  structures. Coverage floors are pinned in `cmake/tests/Common.cmake` (342 forward / 335
+  structures. The four `redefine` entries over
+  `constraints/{strike_point,x_point}/chi_squared_{r,z}` were removed after
+  review: those paths forward verbatim and the shim corrects no units.
+  Coverage floors are pinned in `cmake/tests/Common.cmake` (346 forward / 339
   reverse supported, each split `by rule` + `by identity default`) and gated by
   `tests/cmake/verify_artifact_coverage_floor.cmake` against real inventories
   (ADR 0013) with near-boundary fixtures generated inside the script.
@@ -104,14 +107,21 @@ and limitations".
   (`tests/abi/owned_exports.def`). A query on a child context resolves to its
   root; an untracked context reports zero rather than a refusal. The two entry
   kinds differ deliberately: a read loss and a refused write name *your* path, a
-  successful write's leftovers name the *stored* ones.
+  successful write's leftovers name the *stored* ones. A refused context open
+  logs as a read loss too (issue #178, ADR 0025) — it was the one shim-decided
+  refusal that used to reach neither the log nor the loss log file, while a
+  refused write and a refused delete already did both.
 - **Every refusal names reason, DD path, HLI version and stored version**, from
   one formatter, asserted as a single exact string via `CHECK_REFUSAL_MESSAGE`.
 - **ADR 0011 — silence is earned by mechanism coverage.** Don't invent a rule for
   a case the shipped artifact cannot reach; an invented rule is uncovered code.
-  `RefusalReason::Unmappable` and the glob match stage are both unreachable from
-  the approved artifact, and tests assert that rather than assume it, failing with
-  instructions to add real coverage if a future artifact makes either reachable.
+  `RefusalReason::Unmappable`, `RefusalReason::UnitRedefinition` and the glob
+  match stage are all unreachable from the approved artifact, and tests assert
+  that rather than assume it, failing with instructions to add real coverage if a
+  future artifact makes one reachable. `UnitRedefinition` joined that list when
+  the four chi_squared `redefine` entries were removed, so its only coverage is
+  now synthetic (`a_redefine_entry_refuses_a_default_matched_path` and its
+  `_an_explicitly_matched_path` sibling, one per call site).
 - **ADR 0015 — seam policy never reaches global state.** See "Current path map"
   above: `src/conversion/` and `src/core/` know nothing about IMAS-Core or
   process-global state; only `src/interpose/` is C-facing.
@@ -132,15 +142,11 @@ and limitations".
 
 ### Open exposures
 
-- **#139** — real IMAS-Core's `HDF5Writer::deleteData` ignores its `path`
-  argument entirely and deletes the whole IDS pulse file plus its master-file
-  link, so ADR 0017's per-path fan-out has no per-path effect on the only backend
-  that implements delete at all. Nothing masks this any more: #138 removed the
-  probe whose silence used to stop the fan-out before Core was reached, so a
-  converted candidate-plan delete now destroys the occurrence, and
-  `reverse-delete-fan-out-reaches-disk` pins that as today's behaviour rather
-  than asserting it is desirable. Stated for users in README.md's "Scope and
-  limitations".
+- **#139 — corrected by the pinned Core fork.** `IMAS_CORE_REF` now includes
+  IMAS-Core #64's path-aware HDF5 delete fix. The real-Core delete oracle
+  verifies both stored candidates disappear while unrelated data and the
+  stamp survive. Older Core builds, including upstream 5.7.2, still delete
+  the whole occurrence; ABI version compatibility does not guarantee the fix.
 - **`timebase` inherits the read path wholesale** (ADR 0016 decision 10) — it
   resolves independently of `field`, either one refusing refuses the write, and
   both feed the fidelity verdict. The named hazard — a write whose timebase
@@ -183,7 +189,7 @@ in landing order, under `docs/history/`:
 
 Each entry describes the tree as it was when it was written and several name
 paths that have since moved; "Current path map" above is the authority on where
-code lives today. The decisions of record are `docs/adr/0001`–`0024`.
+code lives today. The decisions of record are `docs/adr/0001`–`0026`.
 
 ## Build, toolchain and tests
 
@@ -209,10 +215,10 @@ $ cargo fmt && cargo clippy --all-targets          # lint, no CMake wrapper
 
 CI (`.github/workflows/ci.yml`) has a fast recording-stub job for fmt, clippy,
 both CMake configurations, install and downstream consumption, plus a full job
-on pull requests and `main` pushes that downloads and caches the pinned
-IMAS-Core build before the drift and real-Core seams. It is the only thing
-keeping the CMake path honest — `cargo test` alone never re-runs cargo-c, never
-regenerates the header, and never compiles the C smoke test.
+on pull requests and `main` pushes that downloads and caches the IMAS-Core fork
+at the committed `IMAS_CORE_REF` before the drift and real-Core seams. It is the
+only thing keeping the CMake path honest — `cargo test` alone never re-runs
+cargo-c, never regenerates the header, and never compiles the C smoke test.
 
 A third workflow, `.github/workflows/hli-validation.yml`, is the only place a
 real HLI calls the shim: it builds the IMAS-Fortran fork pinned in
@@ -220,12 +226,13 @@ real HLI calls the shim: it builds the IMAS-Fortran fork pinned in
 shim and runs that HLI's own suite — 83 per-IDS round-trips over memory, ASCII
 and HDF5 for passthrough, plus `play_eq_two_dd-cross` for conversion. It runs on
 pull requests based on `develop`/`main` (fail-safe `paths-ignore`) and on
-`workflow_dispatch`. Two facts about it are easy to get wrong: IMAS-Core
-deliberately **floats** (the HLI picks it; the shim's gate is major-only) while
+`workflow_dispatch`. Three facts about it are easy to get wrong: it acquires
+the same IMAS-Core fork and committed `IMAS_CORE_REF` as the `full` CI job,
 `DD_VERSION` is **pinned to 4.1.1** because `src/known_artifacts.rs` embeds one
 artifact, and 20 of the HLI's `examples/` tests can *never* run in a shim build,
 so the workflow asserts the disabled count as well as the total. See
-`docs/adr/0022-hli-validation-floats-core-and-pins-the-dd.md`.
+`docs/adr/0026-pin-imas-core-until-upstream-corrects-delete.md` for why Core is
+pinned rather than floated.
 
 `README.md` carries the build options and layout. The *why* behind the build
 lives in comments next to what it explains — `CMakeLists.txt` for the staging

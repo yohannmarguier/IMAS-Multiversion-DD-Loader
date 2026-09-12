@@ -107,12 +107,124 @@ function(require_file_line lines_variable line description)
     endif()
 endfunction()
 
+function(require_matching_line lines_variable pattern description)
+    foreach(line IN LISTS ${lines_variable})
+        if(line MATCHES "${pattern}")
+            return()
+        endif()
+    endforeach()
+    message(FATAL_ERROR "CI ${lines_variable} must ${description}")
+endfunction()
+
+function(forbid_matching_line lines_variable pattern description)
+    foreach(line IN LISTS ${lines_variable})
+        if(line MATCHES "${pattern}")
+            message(FATAL_ERROR "CI ${lines_variable} must not ${description}")
+        endif()
+    endforeach()
+endfunction()
+
+function(forbid_commit_sha lines_variable description)
+    foreach(line IN LISTS ${lines_variable})
+        string(LENGTH "${line}" line_length)
+        math(EXPR last_start "${line_length} - 40")
+        if(last_start LESS 0)
+            continue()
+        endif()
+        foreach(start RANGE 0 ${last_start})
+            string(SUBSTRING "${line}" ${start} 40 candidate)
+            if(candidate MATCHES "^[0-9a-fA-F]+$")
+                message(FATAL_ERROR "CI ${lines_variable} must not ${description}")
+            endif()
+        endforeach()
+    endforeach()
+endfunction()
+
+function(require_pin_file_output lines_variable output_variable)
+    set(current_step_id)
+    set(pin_value_variable)
+    foreach(line IN LISTS ${lines_variable})
+        string(REGEX MATCH "^id: ([A-Za-z0-9_-]+)$" step_id "${line}")
+        if(NOT step_id STREQUAL "")
+            set(current_step_id "${CMAKE_MATCH_1}")
+        endif()
+
+        set(pin_assignment "")
+        string(REGEX MATCH
+            "^([A-Za-z_][A-Za-z0-9_]*)=\\$\\([^)]*IMAS_CORE_REF[^)]*\\)"
+            pin_assignment "${line}")
+        if(NOT pin_assignment STREQUAL "")
+            set(pin_value_variable "${CMAKE_MATCH_1}")
+        endif()
+
+        string(LENGTH "${pin_value_variable}" pin_value_length)
+        if(pin_value_length GREATER 0)
+            string(FIND "${line}" "$${pin_value_variable}" value_reference)
+            string(FIND "${line}" "GITHUB_OUTPUT" output_reference)
+            set(output_assignment "")
+            string(REGEX MATCH "([A-Za-z0-9_-]+)=.*GITHUB_OUTPUT"
+                output_assignment "${line}")
+            if(value_reference GREATER -1 AND output_reference GREATER -1 AND
+                    NOT current_step_id STREQUAL "" AND NOT output_assignment STREQUAL "")
+                set("${output_variable}"
+                    "steps.${current_step_id}.outputs.${CMAKE_MATCH_1}" PARENT_SCOPE)
+                return()
+            endif()
+        endif()
+    endforeach()
+    message(FATAL_ERROR
+        "CI ${lines_variable} must write a value read from IMAS_CORE_REF to GITHUB_OUTPUT")
+endfunction()
+
 function(read_top_level_mapping mapping_name output_variable)
     read_raw_block(workflow_lines "" "${mapping_name}" ""
         "CI workflow must define a top-level ${mapping_name} mapping" mapping_raw_lines)
     flatten_block(mapping_raw_lines mapping_lines)
     set("${output_variable}" "${mapping_lines}" PARENT_SCOPE)
 endfunction()
+
+# Assert that `job_name` is genuinely wired to the committed pin. The first
+# two checks are given the whole workflow rather than the job: a decoy commit
+# SHA or upstream URL anywhere in the file is still a second source of truth
+# for what CI builds. The cache-key checks are bounded to the job, since only
+# that job has an IMAS-Core cache. `workflow_lines_variable` is passed rather
+# than reached for, so the two scopes a check runs over are both visible in
+# its signature; both names also serve as the diagnostic's subject.
+function(check_pinned_core_linkage job_name workflow_lines_variable)
+    set(job_lines_variable "${job_name}_job")
+    read_job(${job_name} ${job_lines_variable})
+    forbid_commit_sha(${workflow_lines_variable}
+        "inline an IMAS-Core commit SHA")
+    require_pin_file_output(${job_lines_variable} pin_output_reference)
+    forbid_matching_line(${workflow_lines_variable}
+        "https://github\\.com/iterorganization/IMAS-Core\\.git"
+        "name the upstream IMAS-Core repository")
+    require_matching_line(${job_lines_variable}
+        "key: .*${pin_output_reference}"
+        "key the acquired IMAS-Core cache on the resolved pin")
+    forbid_matching_line(${job_lines_variable} "key: .*IMAS_CORE_VERSION"
+        "key the acquired IMAS-Core cache on IMAS_CORE_VERSION")
+endfunction()
+
+# Every check below reads one of these two: `workflow_lines` keeps its
+# indentation, for the nested-key parsing read_raw_block does; `workflow` is
+# the flat, comment-free form the containment checks want.
+flatten_block(workflow_lines workflow)
+
+if(DEFINED PINNED_CORE_JOB)
+    check_pinned_core_linkage(${PINNED_CORE_JOB} workflow)
+    if(PINNED_CORE_JOB STREQUAL "hli")
+        read_job(hli hli_job)
+        require_matching_line(hli_job "libhdf5-dev hdf5-tools"
+            "install h5diff for fixture provenance")
+        require_line(hli_job "python -m venv hli/imas-python-fixtures/.venv"
+            "create the HLI fixture Python environment")
+        require_line(hli_job
+            "hli/imas-python-fixtures/.venv/bin/python -m pip install -r .github/hli-fixture-requirements.txt"
+            "install the HLI fixture dependencies")
+    endif()
+    return()
+endif()
 
 read_job(fast fast_job)
 read_job(full full_job)
@@ -153,6 +265,7 @@ require_line(full_job "uses: actions/cache@v4"
     "cache the acquired IMAS-Core build")
 require_line(full_job "-DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON"
     "download the pinned real IMAS-Core")
+check_pinned_core_linkage(full workflow)
 
 require_line(workflow_env "RUST_VERSION: 1.88.0"
     "pin Rust to the deployed cluster version")

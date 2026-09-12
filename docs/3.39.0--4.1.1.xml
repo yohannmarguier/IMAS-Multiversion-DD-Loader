@@ -565,31 +565,16 @@
     </cocos>
 
     <!--
-      The imas-dd guide reports these as "unit changes", but m -> m^-2 is a
-      dimensional redefinition, not a rescale: chi-squared is now normalised by
-      the measurement variance. No factor inverts it without the variance used
-      at reconstruction time, so the engine must refuse rather than guess.
+      The imas-dd guide reports the four chi_squared_r/chi_squared_z paths under
+      constraints/strike_point and constraints/x_point as "unit changes"
+      (m -> m^-2). They carried a <redefine> entry here that refused them in
+      both directions. That refusal was removed after review: the shim forwards
+      these paths unchanged, with no path translation and no value transform,
+      so a caller reads and writes exactly the stored number. The unit
+      difference is real and is not corrected by this shim; it is the caller's
+      to interpret. They are present by the same spelling on both sides and so
+      fall through to <default rel="identical"/> like any other unclaimed path.
     -->
-    <redefine glob="time_slice/constraints/strike_point/chi_squared_r"
-              left-units="m" right-units="m^-2">
-      <fidelity forward="unmappable" reverse="unmappable"
-                reason="variance_not_recoverable"/>
-    </redefine>
-    <redefine glob="time_slice/constraints/strike_point/chi_squared_z"
-              left-units="m" right-units="m^-2">
-      <fidelity forward="unmappable" reverse="unmappable"
-                reason="variance_not_recoverable"/>
-    </redefine>
-    <redefine glob="time_slice/constraints/x_point/chi_squared_r"
-              left-units="m" right-units="m^-2">
-      <fidelity forward="unmappable" reverse="unmappable"
-                reason="variance_not_recoverable"/>
-    </redefine>
-    <redefine glob="time_slice/constraints/x_point/chi_squared_z"
-              left-units="m" right-units="m^-2">
-      <fidelity forward="unmappable" reverse="unmappable"
-                reason="variance_not_recoverable"/>
-    </redefine>
 
     <!--
       profiles_1d/psi and profiles_2d/psi also appear in the imas-dd output as

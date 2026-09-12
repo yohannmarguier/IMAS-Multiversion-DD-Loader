@@ -27,7 +27,7 @@ option(IMAS_MVDD_REAL_CORE_TESTS
 set(IMAS_MVDD_PACKAGE imas-mvdd-loader)   # cargo package name
 set(IMAS_MVDD_LIB_NAME imas_mvdd_loader)  # resulting library / header name
 
-# One committed pin feeds the Rust compatibility gate and both sides of the
+# The supported release feeds the Rust compatibility gate and both sides of the
 # recording-stub test. Keeping the value out of those sources prevents a test
 # fixture from drifting away from the release the shim actually supports.
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/IMAS_CORE_VERSION"
@@ -45,6 +45,27 @@ math(EXPR IMAS_CORE_DRIFT_MINOR "${IMAS_CORE_SUPPORTED_MINOR} + 1")
 set(IMAS_CORE_INCOMPATIBLE_VERSION "${IMAS_CORE_INCOMPATIBLE_MAJOR}.0.0")
 set(IMAS_CORE_DRIFT_VERSION
     "${IMAS_CORE_SUPPORTED_MAJOR}.${IMAS_CORE_DRIFT_MINOR}.0")
+
+# Download mode builds a committed source revision, which is separate from the
+# release baseline above: the shim may need a fork fix while still mirroring
+# that release's ABI.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/IMAS_CORE_REF"
+    IMAS_CORE_REF LIMIT_COUNT 1)
+string(STRIP "${IMAS_CORE_REF}" IMAS_CORE_REF)
+# The same rule both workflows apply to the same first line. CMake regexes
+# have no bounded repetition, so the length is checked separately; lowercase
+# is what git itself writes, and admitting uppercase here alone would let a
+# pin configure locally and be rejected by CI.
+string(LENGTH "${IMAS_CORE_REF}" IMAS_CORE_REF_LENGTH)
+if(NOT IMAS_CORE_REF_LENGTH EQUAL 40 OR
+        NOT IMAS_CORE_REF MATCHES "^[0-9a-f]+$")
+    message(FATAL_ERROR
+        "IMAS_CORE_REF must hold a full 40-character lowercase hexadecimal "
+        "commit SHA on its first line; found '${IMAS_CORE_REF}'.")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/IMAS_CORE_VERSION"
+    "${CMAKE_CURRENT_SOURCE_DIR}/IMAS_CORE_REF")
 
 # ---------------------------------------------------------------------------
 # IMAS-Core acquisition
@@ -86,14 +107,21 @@ if(IMAS_CORE_DEVELOPMENT_LAYOUT AND IMAS_CORE_DOWNLOAD_DEPENDENCIES)
         FORCE)
 endif()
 
-set(IMAS_CORE_GIT_REPOSITORY "https://github.com/iterorganization/IMAS-Core.git"
+set(IMAS_CORE_GIT_REPOSITORY "https://github.com/yohannmarguier/IMAS-Core.git"
     CACHE STRING "Git repository of IMAS-Core, for IMAS_CORE_DOWNLOAD_DEPENDENCIES")
 # Defaults to the pin above rather than a floating branch: nothing here
 # links against IMAS-Core for a linker to validate signatures against, so a
 # drifted upstream would corrupt memory silently at runtime instead of
 # failing the build, and CI would stop being reproducible across days.
-set(IMAS_CORE_GIT_TAG "${IMAS_CORE_VERSION}"
-    CACHE STRING "Git tag of IMAS-Core, for IMAS_CORE_DOWNLOAD_DEPENDENCIES")
+# Keep a user-supplied tag intact, while moving a cache entry that still holds
+# the previous pin forward with IMAS_CORE_REF after CMake reconfigures.
+if(NOT DEFINED IMAS_CORE_GIT_TAG OR
+        IMAS_CORE_GIT_TAG STREQUAL IMAS_CORE_GIT_TAG_DEFAULT)
+    set(IMAS_CORE_GIT_TAG "${IMAS_CORE_REF}"
+        CACHE STRING "Git tag of IMAS-Core, for IMAS_CORE_DOWNLOAD_DEPENDENCIES" FORCE)
+endif()
+set(IMAS_CORE_GIT_TAG_DEFAULT "${IMAS_CORE_REF}" CACHE INTERNAL
+    "Last IMAS-Core git tag supplied as the project default" FORCE)
 
 set(IMAS_CORE_MODULE_HINT "module load IMAS-Core/${IMAS_CORE_VERSION}")
 

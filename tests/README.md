@@ -111,12 +111,17 @@ call made.
   file delivery redirected, disabled, or failing at open and append without
   changing the successful read or its queryable in-memory entries.
 
-### `arraystruct-path-*` — 8 · `shim/arraystruct_path_test.c`
+### `arraystruct-path-*` — 12 · `shim/arraystruct_path_test.c`
 
 `al_begin_arraystruct_action` (issue #61): renamed container `path` and
 `timebase` translated before Core is called, absolute/relative mixes, a
 no-source refusal, a failed open leaving no child record, and the four
-forwarding cases (matching / unstamped / unknown / conversion disabled).
+forwarding cases (matching / unstamped / unknown / conversion disabled). Issue
+#178 adds a merged/subtree rule's candidate plan: falling through an empty
+precedence-1 candidate to the deprecated alias that actually holds data,
+opening empty rather than refusing when every candidate is, a `WRITE_OP` open
+taking the declared primary without probing, and the loss-log entry a refused
+open now retains.
 
 ### `nested-context-read-*` — 8 · `shim/nested_context_read_test.c`
 
@@ -238,9 +243,11 @@ write-side rewrite to reach.
 The same conversion policy against genuine IMAS-Core and the checked-in
 equilibrium HDF5 fixture pair, in **both** fixture directions: a renamed scalar
 read through the HLI's own spelling, renamed and sign-flipped fields nested
-under `time_slice`, `merged` and `split` read plans, refusals for an unmappable
-`redefine` and for the artifact's one `retyped` rule (lossless in principle,
-unavailable in practice), the remaining mismatched delete refusal across a
+under `time_slice`, `merged` and `split` read plans, a refusal for the
+artifact's one `retyped` rule (lossless in principle, unavailable in practice)
+alongside its negative control — the four `chi_squared` paths whose `redefine`
+entries were removed after review, which must now read back without a
+conversion error — the remaining mismatched delete refusal across a
 real boundary, a real context lifecycle, and the two no-op cases (same
 version, conversion disabled). Safe writes are asserted at the recording-stub
 boundary, where their translated Core arguments are directly observable.
@@ -295,9 +302,9 @@ stamp: the probe's own open fails, the caller's succeeds, and the value reaches
 disk spelled the HLI's own way, as ADR 0007 requires.
 
 The real-Core `reverse-delete-fan-out-reaches-disk` scenario proves that a
-write-mode fan-out reaches the backend rather than returning a successful
-no-op. IMAS-Core's HDF5 backend still ignores the delete path and removes the
-whole occurrence (issue #139), so it cannot prove per-candidate deletion.
+write-mode fan-out removes both stored candidate datasets with the pinned
+Core, while preserving the occurrence, unrelated values and its DD stamp.
+This rejects both a silent no-op and the old whole-occurrence delete (#139).
 
 ### `runtime-binding-real-core-forwarding` — 1, `real-core` · `real_core/real_core_forwarding_test.c`
 
