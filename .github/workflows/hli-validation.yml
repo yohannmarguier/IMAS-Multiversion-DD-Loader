@@ -1,22 +1,20 @@
 name: HLI validation
 
-# Builds a real HLI against the installed shim and runs that HLI's own suite.
+# Builds real HLIs against the installed shim and runs their own suites.
 #
 # ci.yml proves the shim's C ABI against a recording stub and against genuine
 # IMAS-Core. Neither of those is a client: both call the ABI directly, with
-# arguments a test author chose. This job puts the IMAS-Fortran HLI in front of
-# the shim instead, so the calls are the ones a real HLI makes, in the order it
-# makes them, and the assertions are the HLI's own.
+# arguments a test author chose. These jobs put the Fortran and C++ HLIs in
+# front of the shim, with calls and assertions from their own test suites.
 #
 # It is a separate workflow rather than a job in ci.yml for one mechanical
 # reason: GitHub Actions has no job-level paths filter, so a paths-filtered job
 # has to be a paths-filtered workflow.
 #
-# The HLI, IMAS-Core and Data Dictionary are all pinned: a red run can therefore
-# be attributed to the shim rather than to a dependency that moved underneath
-# it. The Data Dictionary is pinned because the shim ships exactly one
-# conversion-map artifact, and the other two pins make the acquired sources
-# reproducible.
+# The HLIs, IMAS-Core and Data Dictionary are pinned so failures can be
+# investigated against fixed sources. MDSplus packages come from its stable
+# repository and their versions are recorded. The DD is pinned because the
+# shim ships one conversion-map artifact.
 
 on:
   pull_request:
@@ -474,6 +472,8 @@ jobs:
           import json
           from pathlib import Path
           tests = json.loads(Path('test-inventory.json').read_text())['tests']
+          # 6738409 registers the generated suite and 21 non-plugin examples.
+          assert len(tests) == 22, f'Expected 22 C++ tests, got {len(tests)}'
           names = {t['name'] for t in tests}
           assert 'cpp-TestSuite' in names, names
           assert 'example-cpp-test_version' in names, names
