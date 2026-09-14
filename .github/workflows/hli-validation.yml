@@ -79,10 +79,11 @@ env:
   HLI_DISABLED_TESTS: 20
 
 jobs:
-  hli:
+  fortran-hli:
     # Pinned rather than ubuntu-latest, unlike ci.yml. The test counts above are
     # sensitive to what registers, and a runner image bump can move that; the
     # HLI's own CI is also proven on 24.04.
+    name: IMAS-Fortran through the shim
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -366,8 +367,8 @@ jobs:
           path: hli/build
           key: ${{ steps.hli_cache.outputs.cache-primary-key }}
 
-  cpp:
-    name: C++ HLI through the shim
+  cpp-hli:
+    name: Imas-Cpp through the shim
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
