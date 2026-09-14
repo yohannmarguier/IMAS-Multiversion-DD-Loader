@@ -220,8 +220,8 @@ at the committed `IMAS_CORE_REF` before the drift and real-Core seams. It is the
 only thing keeping the CMake path honest — `cargo test` alone never re-runs
 cargo-c, never regenerates the header, and never compiles the C smoke test.
 
-A third workflow, `.github/workflows/hli-validation.yml`, is the only place a
-real HLI calls the shim: it builds the IMAS-Fortran fork pinned in
+A third workflow, `.github/workflows/hli-validation.yml`, runs real
+HLIs through the shim. Its Fortran job builds the IMAS-Fortran fork pinned in
 `IMAS_FORTRAN_REF` with `AL_USE_MULTIVERSION_SHIM=ON` against the *installed*
 shim and runs that HLI's own suite — 83 per-IDS round-trips over memory, ASCII
 and HDF5 for passthrough, plus `play_eq_two_dd-cross` for conversion. It runs on
@@ -233,6 +233,14 @@ artifact, and 20 of the HLI's `examples/` tests can *never* run in a shim build,
 so the workflow asserts the disabled count as well as the total. See
 `docs/adr/0026-pin-imas-core-until-upstream-corrects-delete.md` for why Core is
 pinned rather than floated.
+
+Its C++ job builds `yohannmarguier/IMAS-Cpp` at `IMAS_CPP_REF` against the
+installed shim and the same Core fork pin, with DD 4.1.1. The generated C++
+suite only implements MDSplus, so this job installs the MDSplus runtime,
+development and Java packages, builds the DD models, and enables MDSplus and
+HDF5 in Core. It checks that tests are enabled and select the shim's runtime
+Core, checks HLI linkage, and runs the existing suite and examples serially.
+MDSplus package versions and CTest diagnostics are retained with the run.
 
 `README.md` carries the build options and layout. The *why* behind the build
 lives in comments next to what it explains — `CMakeLists.txt` for the staging

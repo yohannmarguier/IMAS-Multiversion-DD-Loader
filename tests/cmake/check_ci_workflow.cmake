@@ -206,23 +206,61 @@ function(check_pinned_core_linkage job_name workflow_lines_variable)
         "key the acquired IMAS-Core cache on IMAS_CORE_VERSION")
 endfunction()
 
+# The C++ HLI resolves both its own and IMAS-Core's pin in one loop and has no
+# Core cache. Its static contract is therefore distinct from the Fortran HLI's
+# cached ExternalProject contract above: ensure it reads both committed pin
+# files, passes Core's resolved output to CMake, and verifies the checkout it
+# acquired.
+function(check_cpp_pinned_core_linkage job_name workflow_lines_variable)
+    set(job_lines_variable "${job_name}_job")
+    read_job(${job_name} ${job_lines_variable})
+    forbid_commit_sha(${workflow_lines_variable}
+        "inline an IMAS-Core commit SHA")
+    forbid_matching_line(${workflow_lines_variable}
+        "https://github\\.com/iterorganization/IMAS-Core\\.git"
+        "name the upstream IMAS-Core repository")
+    require_matching_line(${job_lines_variable} "^for component in CPP CORE"
+        "resolve the committed C++ and IMAS-Core pins")
+    require_matching_line(${job_lines_variable}
+        "^ref=\\$\\(head -n1 \"IMAS_.*_REF\""
+        "read each HLI component pin from its committed file")
+    require_matching_line(${job_lines_variable}
+        "^echo \".*=\\$ref\" >> \"\\$GITHUB_OUTPUT\"$"
+        "publish each resolved component pin")
+    require_matching_line(${job_lines_variable}
+        "^-DAL_CORE_GIT_REPOSITORY=https://github\\.com/yohannmarguier/IMAS-Core\\.git"
+        "acquire IMAS-Core from the pinned fork")
+    require_matching_line(${job_lines_variable}
+        "^-DAL_CORE_VERSION=.*steps\\.pins\\.outputs\\.core"
+        "configure the C++ HLI with the resolved IMAS-Core pin")
+    require_matching_line(${job_lines_variable}
+        "^test \"\\$actual\" = \".*steps\\.pins\\.outputs\\.core"
+        "verify the acquired IMAS-Core revision")
+endfunction()
+
 # Every check below reads one of these two: `workflow_lines` keeps its
 # indentation, for the nested-key parsing read_raw_block does; `workflow` is
 # the flat, comment-free form the containment checks want.
 flatten_block(workflow_lines workflow)
 
-if(DEFINED PINNED_CORE_JOB)
-    check_pinned_core_linkage(${PINNED_CORE_JOB} workflow)
-    if(PINNED_CORE_JOB STREQUAL "hli")
-        read_job(hli hli_job)
-        require_matching_line(hli_job "libhdf5-dev hdf5-tools"
+if(DEFINED PINNED_FORTRAN_CORE_JOB OR DEFINED PINNED_CPP_CORE_JOB)
+    foreach(required_variable IN ITEMS PINNED_FORTRAN_CORE_JOB PINNED_CPP_CORE_JOB)
+        if(NOT DEFINED ${required_variable})
+            message(FATAL_ERROR
+                "CI HLI workflow validation requires ${required_variable}")
+        endif()
+    endforeach()
+
+    check_pinned_core_linkage(${PINNED_FORTRAN_CORE_JOB} workflow)
+    read_job(${PINNED_FORTRAN_CORE_JOB} fortran_hli_job)
+    require_matching_line(fortran_hli_job "libhdf5-dev hdf5-tools"
             "install h5diff for fixture provenance")
-        require_line(hli_job "python -m venv hli/imas-python-fixtures/.venv"
+    require_line(fortran_hli_job "python -m venv hli/imas-python-fixtures/.venv"
             "create the HLI fixture Python environment")
-        require_line(hli_job
+    require_line(fortran_hli_job
             "hli/imas-python-fixtures/.venv/bin/python -m pip install -r .github/hli-fixture-requirements.txt"
             "install the HLI fixture dependencies")
-    endif()
+    check_cpp_pinned_core_linkage(${PINNED_CPP_CORE_JOB} workflow)
     return()
 endif()
 

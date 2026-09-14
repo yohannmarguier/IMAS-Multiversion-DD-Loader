@@ -539,15 +539,29 @@ module versions.
 ### HLI validation
 
 Both jobs above call the C ABI directly, with arguments a test author chose.
-`.github/workflows/hli-validation.yml` is the only place a *real HLI* calls the
-shim. It installs the shim, builds the IMAS-Fortran fork pinned in
+`.github/workflows/hli-validation.yml` runs real Fortran and C++ HLIs through
+the installed shim. Its Fortran job builds the IMAS-Fortran fork pinned in
 `IMAS_FORTRAN_REF` with `AL_USE_MULTIVERSION_SHIM=ON` and
 `find_package(imas-mvdd-loader CONFIG)`, and runs that HLI's own suite. It runs
 on pull requests based on `develop` or `main` whose diff can affect the result,
 and on demand.
 
-It makes two claims from one build. The 83 generated per-IDS tests write and read
-every IDS across the memory, ASCII and HDF5 backends with the HLI DD version
+The C++ job builds `yohannmarguier/IMAS-Cpp` at `IMAS_CPP_REF`, using the same
+`IMAS_CORE_REF` fork and DD 4.1.1. It enables the generated suite and examples,
+checks that the HLI links the shim and that each test selects the acquired Core,
+and requires 22 enabled tests (the generated suite and 21 examples). It runs
+CTest serially because examples share pulses. Plugins are disabled.
+
+Unlike the Fortran job, C++ needs MDSplus: at the pinned commit its generated
+`cpp-TestSuite` implements only that backend and disables itself without it.
+CI installs `mdsplus`, `mdsplus-devel` and `mdsplus-java` from the MDSplus
+Ubuntu 24 repository, plus OpenJDK to build the DD models. Core links MDSplus;
+the HLI links the shim. The installed package versions are recorded in the
+run summary and diagnostics artifact. HDF5 is also enabled in Core. This job
+runs the fork's existing tests; it adds no cross-version C++ test cases.
+
+The Fortran job makes two claims from one build. The 83 generated per-IDS tests
+write and read every IDS across the memory, ASCII and HDF5 backends with the HLI DD version
 equal to the stored DD version, so nothing converts and every value must return
 unchanged — far more seam traffic than the C ABI suite drives, asserting only
 that the shim is not there. `play_eq_two_dd-cross` then reads a 3.39.0 pulse with

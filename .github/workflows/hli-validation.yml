@@ -1,22 +1,20 @@
 name: HLI validation
 
-# Builds a real HLI against the installed shim and runs that HLI's own suite.
+# Builds real HLIs against the installed shim and runs their own suites.
 #
 # ci.yml proves the shim's C ABI against a recording stub and against genuine
 # IMAS-Core. Neither of those is a client: both call the ABI directly, with
-# arguments a test author chose. This job puts the IMAS-Fortran HLI in front of
-# the shim instead, so the calls are the ones a real HLI makes, in the order it
-# makes them, and the assertions are the HLI's own.
+# arguments a test author chose. These jobs put the Fortran and C++ HLIs in
+# front of the shim, with calls and assertions from their own test suites.
 #
 # It is a separate workflow rather than a job in ci.yml for one mechanical
 # reason: GitHub Actions has no job-level paths filter, so a paths-filtered job
 # has to be a paths-filtered workflow.
 #
-# The HLI, IMAS-Core and Data Dictionary are all pinned: a red run can therefore
-# be attributed to the shim rather than to a dependency that moved underneath
-# it. The Data Dictionary is pinned because the shim ships exactly one
-# conversion-map artifact, and the other two pins make the acquired sources
-# reproducible.
+# The HLIs, IMAS-Core and Data Dictionary are pinned so failures can be
+# investigated against fixed sources. MDSplus packages come from its stable
+# repository and their versions are recorded. The DD is pinned because the
+# shim ships one conversion-map artifact.
 
 on:
   pull_request:
@@ -81,10 +79,11 @@ env:
   HLI_DISABLED_TESTS: 20
 
 jobs:
-  hli:
+  fortran-hli:
     # Pinned rather than ubuntu-latest, unlike ci.yml. The test counts above are
     # sensitive to what registers, and a runner image bump can move that; the
     # HLI's own CI is also proven on 24.04.
+    name: IMAS-Fortran through the shim
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -367,3 +366,157 @@ jobs:
         with:
           path: hli/build
           key: ${{ steps.hli_cache.outputs.cache-primary-key }}
+
+  cpp-hli:
+    name: Imas-Cpp through the shim
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      MDSPLUS_DIR: /usr/local/mdsplus
+      LD_LIBRARY_PATH: /usr/local/mdsplus/lib
+      CLASSPATH: /usr/local/mdsplus/java/classes/jTraverser.jar
+    steps:
+      - name: Check out the shim
+        uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-toolchain
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Resolve pinned sources
+        id: pins
+        run: |
+          set -euo pipefail
+          for component in CPP CORE; do
+            ref=$(head -n1 "IMAS_${component}_REF" | tr -d '[:space:]')
+            if ! [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "IMAS_${component}_REF must start with a full commit SHA" >&2
+              exit 1
+            fi
+            echo "${component,,}=$ref" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Check out pinned IMAS-Cpp
+        uses: actions/checkout@v4
+        with:
+          repository: yohannmarguier/IMAS-Cpp
+          ref: ${{ steps.pins.outputs.cpp }}
+          fetch-depth: 0
+          path: hli-cpp
+
+      # The generated C++ suite only implements MDSplus. OFF would silently
+      # disable cpp-TestSuite. Follow the Core fork's docker/mdsplus recipe:
+      # runtime + headers/libraries, and Java's CompileTree for the DD models.
+      - name: Install MDSplus and build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates gnupg wget
+          wget -qO- http://www.mdsplus.org/dist/mdsplus.gpg.key | \
+            gpg --dearmor | sudo tee /usr/share/keyrings/mdsplus.gpg >/dev/null
+          echo 'deb [signed-by=/usr/share/keyrings/mdsplus.gpg] http://www.mdsplus.org/dist/Ubuntu24/repo MDSplus stable' | \
+            sudo tee /etc/apt/sources.list.d/mdsplus.list
+          sudo apt-get update
+          sudo apt-get install -y mdsplus mdsplus-devel mdsplus-java \
+            openjdk-21-jdk-headless libboost-filesystem-dev libhdf5-dev \
+            libblitz0-dev gcc-14 g++-14
+          echo "$MDSPLUS_DIR/bin" >> "$GITHUB_PATH"
+          dpkg-query -W 'mdsplus*' | tee mdsplus-packages.txt
+          {
+            echo '### C++ MDSplus dependencies'
+            echo 'MDSplus is linked by IMAS-Core; the C++ HLI links the shim.'
+            echo 'DD 4.1.1 models are built with Java CompileTree.'
+            echo '```'
+            cat mdsplus-packages.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and install the shim
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-shim -DCMAKE_BUILD_TYPE=Release \
+            -DIMAS_MVDD_REAL_CORE_TESTS=OFF
+          cmake --build build-shim
+          cmake --install build-shim --prefix "$PWD/dist"
+
+      - name: Configure C++ against the shim and pinned Core
+        run: |
+          set -euo pipefail
+          cmake -S hli-cpp -B hli-cpp/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14 \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_PREFIX_PATH="$PWD/dist" \
+            -DAL_USE_MULTIVERSION_SHIM=ON \
+            -DAL_DOWNLOAD_DEPENDENCIES=ON \
+            -DAL_CORE_GIT_REPOSITORY=https://github.com/yohannmarguier/IMAS-Core.git \
+            -DAL_CORE_VERSION="${{ steps.pins.outputs.core }}" \
+            -DDD_VERSION="$HLI_DD_VERSION" \
+            -DAL_BACKEND_MDSPLUS=ON -DAL_BUILD_MDSPLUS_MODELS=ON \
+            -DAL_BACKEND_HDF5=ON -DAL_BACKEND_UDA=OFF \
+            -DAL_TESTS=ON -DAL_EXAMPLES=ON -DAL_PLUGINS=OFF \
+            -DAL_BUILD_TESTS=OFF -DAL_PYTHON_BINDINGS=OFF -DAL_HLI_DOCS=OFF
+          actual=$(git -C hli-cpp/build/_deps/al-core-src rev-parse HEAD)
+          test "$actual" = "${{ steps.pins.outputs.core }}"
+
+      - name: Build C++, Core and MDSplus models
+        run: cmake --build hli-cpp/build --parallel 2
+
+      - name: Verify the C++ test suite and linkage
+        working-directory: hli-cpp/build
+        run: |
+          set -euo pipefail
+          ctest --show-only=json-v1 > test-inventory.json
+          python - <<'PYCODE'
+          import json
+          from pathlib import Path
+          tests = json.loads(Path('test-inventory.json').read_text())['tests']
+          # 6738409 registers the generated suite and 21 non-plugin examples.
+          assert len(tests) == 22, f'Expected 22 C++ tests, got {len(tests)}'
+          names = {t['name'] for t in tests}
+          assert 'cpp-TestSuite' in names, names
+          assert 'example-cpp-test_version' in names, names
+          disabled = [t['name'] for t in tests for p in t['properties']
+                      if p['name'] == 'DISABLED' and p['value']]
+          assert not disabled, disabled
+          for test in tests:
+              props = {p['name']: p['value'] for p in test['properties']}
+              env = props.get('ENVIRONMENT', [])
+              assert any(e.startswith('IMAS_CORE_LIBRARY=') for e in env), test['name']
+              assert 'IMAS_MVDD_HLI_DD_VERSION=4.1.1' in env, test['name']
+          print(f'{len(tests)} enabled C++ tests, all configured for the shim')
+          PYCODE
+          readelf -d libal-cpp-4.1.1.so | tee cpp-linkage.txt
+          grep -q 'Shared library: \[libimas_mvdd_loader' cpp-linkage.txt
+          if grep -q 'Shared library: \[libal\.so' cpp-linkage.txt; then
+            echo 'C++ links directly to Core and would bypass the shim' >&2
+            exit 1
+          fi
+          for file in ids_model.tree ids_model.characteristics; do
+            test -s "_deps/al-core-build/models/mdsplus/$file"
+          done
+          test -e _deps/al-core-build/models/mdsplus/ids_model.datafile
+
+      # The examples share pulses, so keep CTest serial. Core interpolates
+      # USER into legacy pulse paths; keep all test data inside this build.
+      - name: Run the C++ HLI tests
+        working-directory: hli-cpp/build
+        run: |
+          set -euo pipefail
+          mkdir -p "$PWD/testdb"
+          export USER="$PWD/testdb"
+          ctest --output-on-failure --no-tests=error --parallel 1
+
+      - name: Preserve C++ test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpp-hli-diagnostics
+          path: |
+            mdsplus-packages.txt
+            hli-cpp/build/Testing/Temporary/
+            hli-cpp/build/test-inventory.json
+            hli-cpp/build/cpp-linkage.txt
+            hli-cpp/build/CMakeCache.txt

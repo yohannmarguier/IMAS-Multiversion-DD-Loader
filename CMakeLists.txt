@@ -278,9 +278,11 @@ set(CARGO_STAGE_ARGS
     --includedir "${IMAS_MVDD_STAGE_DIR}/include")
 
 # The shim opens IMAS-Core by bare soname. Give only the build-tree cdylib an
-# RPATH to the acquired Core so tests and in-tree consumers need no override or
-# loader-path environment setup. build.rs tracks this private environment
-# variable and the install rule explicitly unsets it, forcing cargo to relink
+# build-only search path to the acquired Core so tests and in-tree consumers
+# need no override or loader-path environment setup. On Linux, build.rs emits
+# a RUNPATH so LD_LIBRARY_PATH can still select the recording stub. build.rs
+# tracks this private environment variable and the install rule explicitly
+# unsets it, forcing cargo to relink
 # the installed cdylib without the build-machine path.
 set(IMAS_MVDD_CARGO_STAGE_COMMAND
     "${CMAKE_COMMAND}" -E env --unset=MAKEFLAGS --unset=MFLAGS)

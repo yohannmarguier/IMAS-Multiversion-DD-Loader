@@ -27,9 +27,9 @@ test -f "$install_prefix/include/imas_mvdd_loader.h"
 # output record no dependency on IMAS-Core at all.
 #
 # None of that can be checked by running the shim: the build tree deliberately
-# *does* carry an RPATH to the acquired Core (that is what lets ctest run with
-# no setup), and a leaked copy of it in the installed artifact still passes
-# every functional test on the machine that produced it. The regression is only
+# *does* carry a build-only search path to the acquired Core (that is what lets
+# ctest run with no setup), and a leaked copy of it in the installed artifact
+# still passes every functional test on the machine that produced it. The regression is only
 # visible in the artifact's own load commands, so read those.
 
 # -type f deliberately: the unversioned name is a symlink to the versioned

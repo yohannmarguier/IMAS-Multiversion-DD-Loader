@@ -11,7 +11,8 @@ add_test(NAME hli-validation-workflow
     COMMAND "${CMAKE_COMMAND}"
         "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/hli-validation.yml"
         "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
-        "-DPINNED_CORE_JOB=hli"
+        "-DPINNED_FORTRAN_CORE_JOB=fortran-hli"
+        "-DPINNED_CPP_CORE_JOB=cpp-hli"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ci_workflow.cmake")
 add_test(NAME ci-workflow-guard-rejects-misplaced-commands
     COMMAND "${CMAKE_COMMAND}"
@@ -128,6 +129,19 @@ function(imas_mvdd_begin_real_core_tests)
     set_property(DIRECTORY PROPERTY IMAS_MVDD_REAL_CORE_TESTS_BEFORE "${_tests_before}")
 endfunction()
 
+# Keep a module-provided libal from taking precedence over the acquired Core
+# when the shim's Linux RUNPATH is searched after LD_LIBRARY_PATH. This leaves
+# the rest of the caller's library path available for Core's dependencies.
+function(imas_mvdd_prefer_acquired_core test_name)
+    if(APPLE)
+        set(search_path_variable DYLD_LIBRARY_PATH)
+    else()
+        set(search_path_variable LD_LIBRARY_PATH)
+    endif()
+    set_property(TEST "${test_name}" APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "${search_path_variable}=path_list_prepend:$<TARGET_FILE_DIR:${IMAS_CORE_AL_TARGET}>")
+endfunction()
+
 function(imas_mvdd_end_real_core_tests)
     get_property(_open DIRECTORY PROPERTY IMAS_MVDD_REAL_CORE_TESTS_BEFORE SET)
     if(NOT _open)
@@ -144,11 +158,12 @@ function(imas_mvdd_end_real_core_tests)
     endif()
     foreach(test IN LISTS _real_core_tests)
         set_property(TEST "${test}" APPEND PROPERTY LABELS real-core)
+        imas_mvdd_prefer_acquired_core("${test}")
     endforeach()
 endfunction()
 
 # Registers one real-IMAS-Core scenario. The shim must resolve IMAS-Core through
-# its build RPATH, rather than the recording-stub override used by stub suites,
+# the acquired Core search path, rather than the recording-stub override used by stub suites,
 # so the IMAS_CORE_LIBRARY unset is unconditional and has no opt-out: a real-Core
 # test that wanted the stub would not be one.
 #

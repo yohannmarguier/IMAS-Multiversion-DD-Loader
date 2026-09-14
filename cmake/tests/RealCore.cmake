@@ -13,7 +13,7 @@ imas_mvdd_begin_real_core_tests()
 # context ever having been opened (al_lowlevel.cpp's "NULL context"
 # branch), which is what makes this runnable with no fixture beyond the
 # acquired library itself. Explicitly remove the override so this test
-# proves the shim's build-only RPATH finds Core by bare soname.
+# proves the shim reaches the acquired Core by bare soname.
 add_real_core_test(runtime-binding-real-core $<TARGET_FILE:runtime_binding_test> real-core)
 if(IMAS_CORE_BUILT_FROM_SOURCE)
     # Built from source, EXCLUDE_FROM_ALL: nothing else pulls it into the
