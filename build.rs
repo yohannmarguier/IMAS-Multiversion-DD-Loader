@@ -14,6 +14,11 @@ fn main() {
             Path::new(&build_rpath).is_absolute(),
             "{BUILD_RPATH_ENV} must be an absolute path"
         );
+        // On Linux, DT_RPATH is searched before LD_LIBRARY_PATH. Preserve the
+        // caller's ability to override this build-only Core path by requesting
+        // DT_RUNPATH even when the site linker defaults to old dynamic tags.
+        #[cfg(target_os = "linux")]
+        println!("cargo::rustc-link-arg-cdylib=-Wl,--enable-new-dtags");
         println!("cargo::rustc-link-arg-cdylib=-Wl,-rpath,{build_rpath}");
     }
 

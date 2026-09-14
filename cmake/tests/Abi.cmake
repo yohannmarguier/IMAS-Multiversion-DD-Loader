@@ -14,6 +14,7 @@ if(IMAS_MVDD_REAL_CORE_TESTS)
     add_test(NAME abi-smoke
         COMMAND "${CMAKE_COMMAND}" -E env
             --unset=IMAS_CORE_LIBRARY -- $<TARGET_FILE:abi_smoke>)
+    imas_mvdd_prefer_acquired_core(abi-smoke)
 else()
     add_stub_test(abi-smoke abi_smoke)
 endif()
