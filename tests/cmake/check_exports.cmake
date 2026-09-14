@@ -15,11 +15,17 @@ foreach(required_variable CORE_LIBRARY SHIM_LIBRARY NM_EXECUTABLE)
 endforeach()
 
 function(all_exported_symbols library output_variable)
+    # Apple's nm accepts -U for defined symbols. The ITER cluster's GNU nm
+    # consumes the following library argument with that short option, so use
+    # the unambiguous long spelling on Linux.
+    if(APPLE)
+        set(defined_only_option -U)
+    else()
+        set(defined_only_option --defined-only)
+    endif()
     execute_process(
-        # Both nm variants used by CI spell “defined symbols only” as `-U`:
-        # GNU nm otherwise prints imports such as GLIBC functions, while
-        # Apple's spelling produces the same defined external-symbol set.
-        COMMAND "${NM_EXECUTABLE}" -g -U "${library}"
+        # Both variants must omit imports such as GLIBC functions.
+        COMMAND "${NM_EXECUTABLE}" -g "${defined_only_option}" "${library}"
         RESULT_VARIABLE nm_result
         OUTPUT_VARIABLE nm_output
         ERROR_VARIABLE nm_error)
