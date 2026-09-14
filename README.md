@@ -539,8 +539,8 @@ module versions.
 ### HLI validation
 
 Both jobs above call the C ABI directly, with arguments a test author chose.
-`.github/workflows/hli-validation.yml` runs real Fortran and C++ HLIs through
-the installed shim. Its Fortran job builds the IMAS-Fortran fork pinned in
+`.github/workflows/hli-validation.yml` runs real Fortran, C++, MATLAB and Java
+HLIs through the installed shim. Its Fortran job builds the IMAS-Fortran fork pinned in
 `IMAS_FORTRAN_REF` with `AL_USE_MULTIVERSION_SHIM=ON` and
 `find_package(imas-mvdd-loader CONFIG)`, and runs that HLI's own suite. It runs
 on pull requests based on `develop` or `main` whose diff can affect the result,
@@ -559,6 +559,31 @@ Ubuntu 24 repository, plus OpenJDK to build the DD models. Core links MDSplus;
 the HLI links the shim. The installed package versions are recorded in the
 run summary and diagnostics artifact. HDF5 is also enabled in Core. This job
 runs the fork's existing tests; it adds no cross-version C++ test cases.
+
+The MATLAB job builds `yohannmarguier/IMAS-MATLAB` at `IMAS_MATLAB_REF` against
+the same Core fork and DD 4.1.1, adding `matlab-actions/setup-matlab` for a
+MATLAB R2023b install. That needs no MathWorks token only because these
+repositories are public and the runner is GitHub-hosted; a private repository
+or a self-hosted runner would need a `MATLAB_BATCH_TOKEN` secret. MDSplus is
+required rather than optional: `tests/imas_unit_tests.m` parameterises its class
+setup over both backends unconditionally, and seven of the eight examples are
+MDSplus-only, so turning it off would halve `al-mex-test` instead of skipping
+it. The job requires 11 enabled tests with none disabled, and relies on the two
+linkage tests the fork registers itself — `al-mex-shim-linkage` and
+`mex-imas_open-shim-linkage` — rather than running `readelf` from the workflow.
+
+The Java job builds `yohannmarguier/IMAS-Java` at `IMAS_JAVA_REF` the same way,
+also with MDSplus and the DD models, which is what the fork's own
+`ci/build_and_test.sh` defaults to. IMAS-Java adds no `tests/` subdirectory to
+its CMake graph, so its whole suite is the 21 example programs; the job requires
+all 21 enabled and checks `lib/libal-java-binding.so` with `readelf`, because
+this fork registers no linkage test of its own.
+
+Both of those counts are first estimates read off the pinned forks' CMake and
+have not yet been corrected against a real run, unlike the Fortran and C++
+counts. Read a first mismatch as a calibration report rather than a regression.
+Like the C++ job, neither adds cross-version test cases: they prove the HLI
+builds against, links and runs through the shim.
 
 The Fortran job makes two claims from one build. The 83 generated per-IDS tests
 write and read every IDS across the memory, ASCII and HDF5 backends with the HLI DD version

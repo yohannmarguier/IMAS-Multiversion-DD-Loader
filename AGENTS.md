@@ -221,7 +221,9 @@ only thing keeping the CMake path honest — `cargo test` alone never re-runs
 cargo-c, never regenerates the header, and never compiles the C smoke test.
 
 A third workflow, `.github/workflows/hli-validation.yml`, runs real
-HLIs through the shim. Its Fortran job builds the IMAS-Fortran fork pinned in
+HLIs through the shim — one job each for Fortran, C++, MATLAB and Java, pinned
+in `IMAS_FORTRAN_REF`, `IMAS_CPP_REF`, `IMAS_MATLAB_REF` and `IMAS_JAVA_REF`.
+Its Fortran job builds the IMAS-Fortran fork pinned in
 `IMAS_FORTRAN_REF` with `AL_USE_MULTIVERSION_SHIM=ON` against the *installed*
 shim and runs that HLI's own suite — 83 per-IDS round-trips over memory, ASCII
 and HDF5 for passthrough, plus `play_eq_two_dd-cross` for conversion. It runs on
@@ -241,6 +243,32 @@ development and Java packages, builds the DD models, and enables MDSplus and
 HDF5 in Core. It checks that tests are enabled and select the shim's runtime
 Core, checks HLI linkage, and runs the existing suite and examples serially.
 MDSplus package versions and CTest diagnostics are retained with the run.
+
+Its MATLAB job builds `yohannmarguier/IMAS-MATLAB` at `IMAS_MATLAB_REF` the same
+way, adding `matlab-actions/setup-matlab` — MathWorks batch licensing needs no
+token only because these repositories are public and the runner is
+GitHub-hosted. MDSplus is **not** optional here: `tests/imas_unit_tests.m`
+parameterises its class setup over `struct('MDSplus',12,'HDF5',13)`
+unconditionally, and seven of the eight examples are MDSplus-only, so dropping
+it would halve `al-mex-test` rather than skip it. The job requires 11 enabled
+tests and none disabled, and leans on the two linkage tests the fork registers
+itself (`al-mex-shim-linkage`, `mex-imas_open-shim-linkage`) instead of running
+`readelf`; those two are excluded from the per-test environment assertion
+because they inspect a file and never open a data entry. Its timeout is 150
+minutes, since `al-mex-test` alone carries a CMake `TIMEOUT` of 3600.
+
+Its Java job builds `yohannmarguier/IMAS-Java` at `IMAS_JAVA_REF`, also with
+MDSplus and the DD models, because the fork's own `ci/build_and_test.sh`
+defaults to that backend and `examples/CMakeLists.txt` asks `al-mdsplus-model`
+for its model directory. IMAS-Java adds no `tests/` subdirectory to its CMake
+graph, so the whole suite is the 21 example programs; the job requires all 21
+enabled and checks `lib/libal-java-binding.so` with `readelf`, since this fork
+registers no linkage test of its own.
+
+The MATLAB and Java test counts are **first estimates read off the pinned
+forks' CMake, not yet corrected against a real run** — unlike the Fortran and
+C++ counts, which were calibrated on Linux. Read a first mismatch as a
+calibration report, not as a regression.
 
 `README.md` carries the build options and layout. The *why* behind the build
 lives in comments next to what it explains — `CMakeLists.txt` for the staging

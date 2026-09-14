@@ -520,3 +520,361 @@ jobs:
             hli-cpp/build/test-inventory.json
             hli-cpp/build/cpp-linkage.txt
             hli-cpp/build/CMakeCache.txt
+
+  matlab-hli:
+    name: IMAS-MATLAB through the shim
+    runs-on: ubuntu-24.04
+    # Longer than the other jobs because al-mex-test alone carries a CMake
+    # TIMEOUT of 3600: it runs every IDS across two backends and both
+    # homogeneous-time settings from a single MATLAB session.
+    timeout-minutes: 150
+    env:
+      MDSPLUS_DIR: /usr/local/mdsplus
+      LD_LIBRARY_PATH: /usr/local/mdsplus/lib
+      CLASSPATH: /usr/local/mdsplus/java/classes/jTraverser.jar
+    steps:
+      - name: Check out the shim
+        uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-toolchain
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Resolve pinned sources
+        id: pins
+        run: |
+          set -euo pipefail
+          for component in MATLAB CORE; do
+            ref=$(head -n1 "IMAS_${component}_REF" | tr -d '[:space:]')
+            if ! [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "IMAS_${component}_REF must start with a full commit SHA" >&2
+              exit 1
+            fi
+            echo "${component,,}=$ref" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Check out pinned IMAS-MATLAB
+        uses: actions/checkout@v4
+        with:
+          repository: yohannmarguier/IMAS-MATLAB
+          ref: ${{ steps.pins.outputs.matlab }}
+          fetch-depth: 0
+          path: hli-matlab
+
+      # tests/imas_unit_tests.m parameterises its class setup over *both*
+      # backends -- struct('MDSplus',12,'HDF5',13) -- unconditionally, and
+      # seven of the eight examples are MDSplus-only. So this job cannot drop
+      # MDSplus the way the MATLAB fork's own CI does without silently reducing
+      # al-mex-test to half a suite and disabling most of the examples. Same
+      # recipe as cpp-hli above: runtime + headers/libraries, and Java's
+      # CompileTree for the DD models.
+      - name: Install MDSplus and build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates gnupg wget
+          wget -qO- http://www.mdsplus.org/dist/mdsplus.gpg.key | \
+            gpg --dearmor | sudo tee /usr/share/keyrings/mdsplus.gpg >/dev/null
+          echo 'deb [signed-by=/usr/share/keyrings/mdsplus.gpg] http://www.mdsplus.org/dist/Ubuntu24/repo MDSplus stable' | \
+            sudo tee /etc/apt/sources.list.d/mdsplus.list
+          sudo apt-get update
+          sudo apt-get install -y mdsplus mdsplus-devel mdsplus-java \
+            openjdk-21-jdk-headless libboost-filesystem-dev libhdf5-dev \
+            hdf5-tools gcc-14 g++-14
+          echo "$MDSPLUS_DIR/bin" >> "$GITHUB_PATH"
+          dpkg-query -W 'mdsplus*' | tee mdsplus-packages.txt
+
+      # The forks are public and this runs on a GitHub-hosted runner, which is
+      # what MathWorks' batch licensing requires; a private repository or a
+      # self-hosted runner would need a MATLAB_BATCH_TOKEN secret instead.
+      # R2023b is the release the MATLAB fork's own CI is proven on.
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2023b
+          products: MATLAB
+
+      # Matlab_ROOT_DIR is what find_package(Matlab) keys on, and CMake does
+      # not derive it from PATH. Resolving it here also proves batch mode works
+      # before an hour of building rather than after it.
+      - name: Record the MATLAB installation
+        run: |
+          set -euo pipefail
+          matlab_root=$(dirname "$(dirname "$(command -v matlab)")")
+          echo "MATLAB_ROOT=$matlab_root" >> "$GITHUB_ENV"
+          matlab -batch "disp(version)"
+          {
+            echo '### MATLAB and MDSplus dependencies'
+            echo "MATLAB root: \`$matlab_root\`"
+            echo 'MDSplus is linked by IMAS-Core; the MEX layer links the shim.'
+            echo '```'
+            cat mdsplus-packages.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and install the shim
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-shim -DCMAKE_BUILD_TYPE=Release \
+            -DIMAS_MVDD_REAL_CORE_TESTS=OFF
+          cmake --build build-shim
+          cmake --install build-shim --prefix "$PWD/dist"
+
+      # AL_CREATE_TOOLBOX stays OFF: packaging the toolbox runs MATLAB again at
+      # install time and proves nothing about conversion.
+      - name: Configure MATLAB against the shim and pinned Core
+        run: |
+          set -euo pipefail
+          cmake -S hli-matlab -B hli-matlab/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14 \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_PREFIX_PATH="$PWD/dist" \
+            -DMatlab_ROOT_DIR="$MATLAB_ROOT" \
+            -DAL_USE_MULTIVERSION_SHIM=ON \
+            -DAL_DOWNLOAD_DEPENDENCIES=ON \
+            -DAL_CORE_GIT_REPOSITORY=https://github.com/yohannmarguier/IMAS-Core.git \
+            -DAL_CORE_VERSION="${{ steps.pins.outputs.core }}" \
+            -DDD_VERSION="$HLI_DD_VERSION" \
+            -DAL_BACKEND_MDSPLUS=ON -DAL_BUILD_MDSPLUS_MODELS=ON \
+            -DAL_BACKEND_HDF5=ON -DAL_BACKEND_UDA=OFF \
+            -DAL_TESTS=ON -DAL_EXAMPLES=ON -DAL_PLUGINS=OFF \
+            -DAL_CREATE_TOOLBOX=OFF -DAL_HLI_DOCS=OFF
+          actual=$(git -C hli-matlab/build/_deps/al-core-src rev-parse HEAD)
+          test "$actual" = "${{ steps.pins.outputs.core }}"
+
+      - name: Build MATLAB, Core and MDSplus models
+        id: build_matlab
+        run: cmake --build hli-matlab/build --parallel 2
+
+      # The fork registers its own linkage tests (tests/shim/), so this step
+      # asserts they exist and are wired rather than re-implementing readelf
+      # the way cpp-hli has to. The two linkage tests are deliberately excluded
+      # from the environment assertion: they inspect a file and never open a
+      # data entry, so tests/CMakeLists.txt never gives them the shim variables.
+      - name: Verify the MATLAB test suite and linkage
+        working-directory: hli-matlab/build
+        run: |
+          set -euo pipefail
+          ctest --show-only=json-v1 > test-inventory.json
+          python - <<'PYCODE'
+          import json
+          from pathlib import Path
+          tests = json.loads(Path('test-inventory.json').read_text())['tests']
+          # bdef77a registers al-mex-test, two MEX shim-linkage checks, and
+          # eight examples (seven MDSplus + one HDF5). AL_PLUGINS=OFF, so there
+          # is no -with-plugins twin and no al-partial-get-test.
+          assert len(tests) == 11, f'Expected 11 MATLAB tests, got {len(tests)}'
+          names = {t['name'] for t in tests}
+          for required in ('al-mex-test',
+                           'al-mex-shim-linkage',
+                           'mex-imas_open-shim-linkage',
+                           'example-mex-test_get',
+                           'example-mex-test_put',
+                           'example-mex-test_get_sample_magnetics'):
+              assert required in names, (required, sorted(names))
+          disabled = [t['name'] for t in tests for p in t['properties']
+                      if p['name'] == 'DISABLED' and p['value']]
+          assert not disabled, disabled
+          linkage = {'al-mex-shim-linkage', 'mex-imas_open-shim-linkage'}
+          for test in tests:
+              if test['name'] in linkage:
+                  continue
+              props = {p['name']: p['value'] for p in test['properties']}
+              env = props.get('ENVIRONMENT', [])
+              assert any(e.startswith('IMAS_CORE_LIBRARY=') for e in env), test['name']
+              assert 'IMAS_MVDD_HLI_DD_VERSION=4.1.1' in env, test['name']
+          print(f'{len(tests)} enabled MATLAB tests, all configured for the shim')
+          PYCODE
+          for file in ids_model.tree ids_model.characteristics; do
+            test -s "_deps/al-core-build/models/mdsplus/$file"
+          done
+          test -e _deps/al-core-build/models/mdsplus/ids_model.datafile
+
+      # The examples share pulses, so keep CTest serial. Core interpolates USER
+      # into legacy pulse paths; keep all test data inside this build.
+      - name: Run the MATLAB HLI tests
+        working-directory: hli-matlab/build
+        run: |
+          set -euo pipefail
+          mkdir -p "$PWD/testdb"
+          export USER="$PWD/testdb"
+          ctest --output-on-failure --no-tests=error --parallel 1
+
+      - name: Preserve MATLAB test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matlab-hli-diagnostics
+          path: |
+            mdsplus-packages.txt
+            hli-matlab/build/Testing/Temporary/
+            hli-matlab/build/test-inventory.json
+
+  java-hli:
+    name: IMAS-Java through the shim
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      MDSPLUS_DIR: /usr/local/mdsplus
+      LD_LIBRARY_PATH: /usr/local/mdsplus/lib
+      CLASSPATH: /usr/local/mdsplus/java/classes/jTraverser.jar
+    steps:
+      - name: Check out the shim
+        uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-toolchain
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Resolve pinned sources
+        id: pins
+        run: |
+          set -euo pipefail
+          for component in JAVA CORE; do
+            ref=$(head -n1 "IMAS_${component}_REF" | tr -d '[:space:]')
+            if ! [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "IMAS_${component}_REF must start with a full commit SHA" >&2
+              exit 1
+            fi
+            echo "${component,,}=$ref" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Check out pinned IMAS-Java
+        uses: actions/checkout@v4
+        with:
+          repository: yohannmarguier/IMAS-Java
+          ref: ${{ steps.pins.outputs.java }}
+          fetch-depth: 0
+          path: hli-java
+
+      # examples/CMakeLists.txt prefers MDSplus (IMAS_AL_DEFAULT_BACKEND=12)
+      # and asks al-mdsplus-model for its model directory, which only exists
+      # when the models are built. HDF5 is its declared fallback, but MDSplus
+      # is what the Java fork's own ci/build_and_test.sh defaults to, so that
+      # is the configuration this job proves. Same package recipe as cpp-hli.
+      # The JDK is not optional here the way it is for C++: it builds the jars
+      # and runs every test.
+      - name: Install MDSplus, the JDK and build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates gnupg wget
+          wget -qO- http://www.mdsplus.org/dist/mdsplus.gpg.key | \
+            gpg --dearmor | sudo tee /usr/share/keyrings/mdsplus.gpg >/dev/null
+          echo 'deb [signed-by=/usr/share/keyrings/mdsplus.gpg] http://www.mdsplus.org/dist/Ubuntu24/repo MDSplus stable' | \
+            sudo tee /etc/apt/sources.list.d/mdsplus.list
+          sudo apt-get update
+          sudo apt-get install -y mdsplus mdsplus-devel mdsplus-java \
+            openjdk-21-jdk-headless libboost-filesystem-dev libhdf5-dev \
+            hdf5-tools gcc-14 g++-14
+          echo "$MDSPLUS_DIR/bin" >> "$GITHUB_PATH"
+          echo "JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64" >> "$GITHUB_ENV"
+          dpkg-query -W 'mdsplus*' | tee mdsplus-packages.txt
+          {
+            echo '### Java MDSplus dependencies'
+            echo 'MDSplus is linked by IMAS-Core; the JNI binding links the shim.'
+            echo 'DD 4.1.1 models are built with Java CompileTree.'
+            echo '```'
+            cat mdsplus-packages.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and install the shim
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-shim -DCMAKE_BUILD_TYPE=Release \
+            -DIMAS_MVDD_REAL_CORE_TESTS=OFF
+          cmake --build build-shim
+          cmake --install build-shim --prefix "$PWD/dist"
+
+      - name: Configure Java against the shim and pinned Core
+        run: |
+          set -euo pipefail
+          cmake -S hli-java -B hli-java/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14 \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_PREFIX_PATH="$PWD/dist" \
+            -DAL_USE_MULTIVERSION_SHIM=ON \
+            -DAL_DOWNLOAD_DEPENDENCIES=ON \
+            -DAL_CORE_GIT_REPOSITORY=https://github.com/yohannmarguier/IMAS-Core.git \
+            -DAL_CORE_VERSION="${{ steps.pins.outputs.core }}" \
+            -DDD_VERSION="$HLI_DD_VERSION" \
+            -DAL_BACKEND_MDSPLUS=ON -DAL_BUILD_MDSPLUS_MODELS=ON \
+            -DAL_BACKEND_HDF5=ON -DAL_BACKEND_UDA=OFF \
+            -DAL_TESTS=ON -DAL_EXAMPLES=ON -DAL_PLUGINS=OFF \
+            -DAL_HLI_DOCS=OFF
+          actual=$(git -C hli-java/build/_deps/al-core-src rev-parse HEAD)
+          test "$actual" = "${{ steps.pins.outputs.core }}"
+
+      - name: Build Java, Core and MDSplus models
+        id: build_java
+        run: cmake --build hli-java/build --parallel 2
+
+      # IMAS-Java has no tests/ subdirectory in its CMake graph -- the root
+      # CMakeLists.txt adds only examples/ -- so the whole suite is the 21
+      # example programs. Unlike MATLAB, the Java fork registers no linkage
+      # test of its own, so readelf is checked here the way cpp-hli does it.
+      - name: Verify the Java test suite and linkage
+        working-directory: hli-java/build
+        run: |
+          set -euo pipefail
+          ctest --show-only=json-v1 > test-inventory.json
+          python - <<'PYCODE'
+          import json
+          from pathlib import Path
+          tests = json.loads(Path('test-inventory.json').read_text())['tests']
+          # 879c7b2 registers the 21 example programs listed in
+          # examples/CMakeLists.txt. AL_PLUGINS=OFF, so no -with-plugins twin.
+          assert len(tests) == 21, f'Expected 21 Java tests, got {len(tests)}'
+          names = {t['name'] for t in tests}
+          for required in ('example-java-TestCoreProfilesPut',
+                           'example-java-TestCoreProfilesGet',
+                           'example-java-TestVersion'):
+              assert required in names, (required, sorted(names))
+          disabled = [t['name'] for t in tests for p in t['properties']
+                      if p['name'] == 'DISABLED' and p['value']]
+          assert not disabled, disabled
+          for test in tests:
+              props = {p['name']: p['value'] for p in test['properties']}
+              env = props.get('ENVIRONMENT', [])
+              assert any(e.startswith('IMAS_CORE_LIBRARY=') for e in env), test['name']
+              assert 'IMAS_MVDD_HLI_DD_VERSION=4.1.1' in env, test['name']
+          print(f'{len(tests)} enabled Java tests, all configured for the shim')
+          PYCODE
+          readelf -d lib/libal-java-binding.so | tee java-linkage.txt
+          grep -q 'Shared library: \[libimas_mvdd_loader' java-linkage.txt
+          if grep -q 'Shared library: \[libal\.so' java-linkage.txt; then
+            echo 'The JNI binding links directly to Core and would bypass the shim' >&2
+            exit 1
+          fi
+          for file in ids_model.tree ids_model.characteristics; do
+            test -s "_deps/al-core-build/models/mdsplus/$file"
+          done
+          test -e _deps/al-core-build/models/mdsplus/ids_model.datafile
+
+      # The examples share pulses, so keep CTest serial. Core interpolates USER
+      # into legacy pulse paths; keep all test data inside this build.
+      - name: Run the Java HLI tests
+        working-directory: hli-java/build
+        run: |
+          set -euo pipefail
+          mkdir -p "$PWD/testdb"
+          export USER="$PWD/testdb"
+          ctest --output-on-failure --no-tests=error --parallel 1
+
+      - name: Preserve Java test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-hli-diagnostics
+          path: |
+            mdsplus-packages.txt
+            hli-java/build/Testing/Temporary/
+            hli-java/build/test-inventory.json
+            hli-java/build/java-linkage.txt
