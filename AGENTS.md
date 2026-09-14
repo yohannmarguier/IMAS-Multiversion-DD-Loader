@@ -221,7 +221,9 @@ only thing keeping the CMake path honest — `cargo test` alone never re-runs
 cargo-c, never regenerates the header, and never compiles the C smoke test.
 
 A third workflow, `.github/workflows/hli-validation.yml`, runs real
-HLIs through the shim. Its Fortran job builds the IMAS-Fortran fork pinned in
+HLIs through the shim — one job each for Fortran, C++, MATLAB and Java, pinned
+in `IMAS_FORTRAN_REF`, `IMAS_CPP_REF`, `IMAS_MATLAB_REF` and `IMAS_JAVA_REF`.
+Its Fortran job builds the IMAS-Fortran fork pinned in
 `IMAS_FORTRAN_REF` with `AL_USE_MULTIVERSION_SHIM=ON` against the *installed*
 shim and runs that HLI's own suite — 83 per-IDS round-trips over memory, ASCII
 and HDF5 for passthrough, plus `play_eq_two_dd-cross` for conversion. It runs on
@@ -241,6 +243,61 @@ development and Java packages, builds the DD models, and enables MDSplus and
 HDF5 in Core. It checks that tests are enabled and select the shim's runtime
 Core, checks HLI linkage, and runs the existing suite and examples serially.
 MDSplus package versions and CTest diagnostics are retained with the run.
+
+Its MATLAB job builds `yohannmarguier/IMAS-MATLAB` at `IMAS_MATLAB_REF` the same
+way, adding `matlab-actions/setup-matlab`. MDSplus is **not** optional here:
+`tests/imas_unit_tests.m` parameterises its class setup over
+`struct('MDSplus',12,'HDF5',13)` unconditionally, and seven of the eight
+examples are MDSplus-only, so dropping it would halve `al-mex-test` rather than
+skip it. The job requires 11 enabled tests and none disabled, and leans on the
+two linkage tests the fork registers itself (`al-mex-shim-linkage`,
+`mex-imas_open-shim-linkage`) instead of running `readelf`; those two are
+excluded from the per-test environment assertion because they inspect a file
+and never open a data entry.
+
+**`setup-matlab` installs MATLAB but does not license it**, and that shapes the
+whole job. On a public project only MathWorks' own Run MATLAB
+Command/Tests/Build actions license MATLAB automatically, and each licenses the
+single process it starts; there is no documented job-wide token a
+CTest-spawned `matlab -batch` would pick up. A direct `matlab -batch` fails
+with `License checkout failed. License Manager Error -1`. Compiling MEX files
+needs the installation and not a licence, so **only the two linkage tests
+actually run**: the job proves IMAS-MATLAB configures against the installed
+shim, that every MEX target compiles against it, and that the inspected ones
+link `libimas_mvdd_loader` rather than `libal`. It does *not* prove MATLAB code
+round-trips through the shim.
+
+That limit is **measured, not assumed**. Run 34852296651 drove the other nine
+through `matlab-actions/run-command`, the supported auto-licensed entry point,
+and **0 of 9 passed** — every one died on `Licensing error: -1,359`, because
+run-command licenses the single MATLAB it starts and that licence does not
+reach the `matlab -batch` processes CTest starts underneath it. The probe was
+removed once it had answered; re-add it only if MathWorks documents a job-wide
+batch licence. Note that the IMAS-MATLAB fork's own CI does not contradict
+this — it tolerates the same failure with `continue-on-error: true` and
+`|| echo "MATLAB batch mode failed"`, so it never ran MATLAB either.
+
+Its Java job builds `yohannmarguier/IMAS-Java` at `IMAS_JAVA_REF`, also with
+MDSplus and the DD models, because the fork's own `ci/build_and_test.sh`
+defaults to that backend and `examples/CMakeLists.txt` asks `al-mdsplus-model`
+for its model directory. IMAS-Java adds no `tests/` subdirectory to its CMake
+graph, so the whole suite is the 21 example programs; the job requires all 21
+enabled and checks `lib/libal-java-binding.so` with `readelf`, since this fork
+registers no linkage test of its own. It is the one job needing the **full**
+`openjdk-21-jdk`: it calls `find_package(JNI)`, which wants the AWT native
+libraries `-headless` omits, and fails at configure with
+`Could NOT find JNI (missing: AWT)` without them. The C++ and MATLAB jobs stay
+on `-headless` because they only need Java for MDSplus CompileTree. Expect a
+harmless `Failed to determine VERSION from git tags` warning: the fork carries
+no tags and `ALDetermineVersion.cmake` falls back to `0.0.0`. That is the
+HLI's own version, not IMAS-Core's, so the Core version tags this repo depends
+on are unaffected.
+
+The MATLAB and Java counts were first read off the pinned forks' CMake and have
+since been **confirmed on Linux by run 34852296651** — 11 registered for MATLAB
+and 21 for Java, none disabled in either. Like the Fortran and C++ counts they
+are now assertions about the pinned fork rather than guesses, so a mismatch is
+a report about a moved pin.
 
 `README.md` carries the build options and layout. The *why* behind the build
 lives in comments next to what it explains — `CMakeLists.txt` for the staging

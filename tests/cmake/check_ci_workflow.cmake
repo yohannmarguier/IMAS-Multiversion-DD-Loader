@@ -6,15 +6,30 @@ foreach(required_variable WORKFLOW_FILE TOOLCHAIN_ACTION_FILE)
     endif()
 endforeach()
 
+# Protect the characters CMake lists interpret specially, so that one physical
+# file line stays one list element. A shell `\` at end of line must not escape
+# the list separator and hide the following line's comment. An *unmatched*
+# square bracket is the nastier case: CMake treats `[`/`]` as grouping when it
+# splits a value into list elements, so a single `grep -q '...\[libal...'` in a
+# workflow collapses every line after it into one element -- silently, with no
+# error, hiding whole jobs from every check below.
+#
+# Exact-match helpers put their expected text through this too, so call sites
+# keep writing brackets naturally. A regex helper cannot: its pattern is
+# matched against already-protected lines, so a pattern that needs a *literal*
+# bracket must spell the placeholder.
+function(protect_list_characters value output_variable)
+    string(REPLACE "\\" "@IMAS_CI_BACKSLASH@" value "${value}")
+    string(REPLACE ";" "@IMAS_CI_SEMICOLON@" value "${value}")
+    string(REPLACE "[" "@IMAS_CI_LBRACKET@" value "${value}")
+    string(REPLACE "]" "@IMAS_CI_RBRACKET@" value "${value}")
+    set("${output_variable}" "${value}" PARENT_SCOPE)
+endfunction()
+
 function(read_file_lines path output_variable)
     file(READ "${path}" contents)
     string(REPLACE "\r\n" "\n" contents "${contents}")
-    # Protect characters that CMake lists interpret specially before turning
-    # physical file lines into list elements. In particular, a shell `\` at
-    # end of line must not escape the list separator and hide a comment on the
-    # following line from the checks below.
-    string(REPLACE "\\" "@IMAS_CI_BACKSLASH@" contents "${contents}")
-    string(REPLACE ";" "@IMAS_CI_SEMICOLON@" contents "${contents}")
+    protect_list_characters("${contents}" contents)
     string(REPLACE "\n" ";" lines "${contents}")
     set("${output_variable}" "${lines}" PARENT_SCOPE)
 endfunction()
@@ -95,12 +110,14 @@ function(read_job job_name output_variable)
 endfunction()
 
 function(require_line container line description)
+    protect_list_characters("${line}" line)
     if(NOT "${line}" IN_LIST ${container})
         message(FATAL_ERROR "CI ${container} must ${description}")
     endif()
 endfunction()
 
 function(require_file_line lines_variable line description)
+    protect_list_characters("${line}" line)
     flatten_block(${lines_variable} stripped_lines)
     if(NOT "${line}" IN_LIST stripped_lines)
         message(FATAL_ERROR "CI ${lines_variable} must ${description}")
@@ -206,12 +223,14 @@ function(check_pinned_core_linkage job_name workflow_lines_variable)
         "key the acquired IMAS-Core cache on IMAS_CORE_VERSION")
 endfunction()
 
-# The C++ HLI resolves both its own and IMAS-Core's pin in one loop and has no
-# Core cache. Its static contract is therefore distinct from the Fortran HLI's
-# cached ExternalProject contract above: ensure it reads both committed pin
-# files, passes Core's resolved output to CMake, and verifies the checkout it
-# acquired.
-function(check_cpp_pinned_core_linkage job_name workflow_lines_variable)
+# The C++, MATLAB and Java HLIs each resolve their own and IMAS-Core's pin in
+# one loop and have no Core cache. Their static contract is therefore distinct
+# from the Fortran HLI's cached ExternalProject contract above: ensure each
+# reads both committed pin files, passes Core's resolved output to CMake, and
+# verifies the checkout it acquired. `component` is the token that job's
+# resolve loop iterates -- CPP, MATLAB or JAVA -- so a job wired to the wrong
+# pin file is a failure rather than a silent pass.
+function(check_component_pinned_core_linkage job_name component workflow_lines_variable)
     set(job_lines_variable "${job_name}_job")
     read_job(${job_name} ${job_lines_variable})
     forbid_commit_sha(${workflow_lines_variable}
@@ -219,8 +238,9 @@ function(check_cpp_pinned_core_linkage job_name workflow_lines_variable)
     forbid_matching_line(${workflow_lines_variable}
         "https://github\\.com/iterorganization/IMAS-Core\\.git"
         "name the upstream IMAS-Core repository")
-    require_matching_line(${job_lines_variable} "^for component in CPP CORE"
-        "resolve the committed C++ and IMAS-Core pins")
+    require_matching_line(${job_lines_variable}
+        "^for component in ${component} CORE"
+        "resolve the committed ${component} and IMAS-Core pins")
     require_matching_line(${job_lines_variable}
         "^ref=\\$\\(head -n1 \"IMAS_.*_REF\""
         "read each HLI component pin from its committed file")
@@ -232,7 +252,7 @@ function(check_cpp_pinned_core_linkage job_name workflow_lines_variable)
         "acquire IMAS-Core from the pinned fork")
     require_matching_line(${job_lines_variable}
         "^-DAL_CORE_VERSION=.*steps\\.pins\\.outputs\\.core"
-        "configure the C++ HLI with the resolved IMAS-Core pin")
+        "configure the ${component} HLI with the resolved IMAS-Core pin")
     require_matching_line(${job_lines_variable}
         "^test \"\\$actual\" = \".*steps\\.pins\\.outputs\\.core"
         "verify the acquired IMAS-Core revision")
@@ -243,8 +263,10 @@ endfunction()
 # the flat, comment-free form the containment checks want.
 flatten_block(workflow_lines workflow)
 
-if(DEFINED PINNED_FORTRAN_CORE_JOB OR DEFINED PINNED_CPP_CORE_JOB)
-    foreach(required_variable IN ITEMS PINNED_FORTRAN_CORE_JOB PINNED_CPP_CORE_JOB)
+if(DEFINED PINNED_FORTRAN_CORE_JOB OR DEFINED PINNED_CPP_CORE_JOB
+        OR DEFINED PINNED_MATLAB_CORE_JOB OR DEFINED PINNED_JAVA_CORE_JOB)
+    foreach(required_variable IN ITEMS PINNED_FORTRAN_CORE_JOB PINNED_CPP_CORE_JOB
+            PINNED_MATLAB_CORE_JOB PINNED_JAVA_CORE_JOB)
         if(NOT DEFINED ${required_variable})
             message(FATAL_ERROR
                 "CI HLI workflow validation requires ${required_variable}")
@@ -260,7 +282,28 @@ if(DEFINED PINNED_FORTRAN_CORE_JOB OR DEFINED PINNED_CPP_CORE_JOB)
     require_line(fortran_hli_job
             "hli/imas-python-fixtures/.venv/bin/python -m pip install -r .github/hli-fixture-requirements.txt"
             "install the HLI fixture dependencies")
-    check_cpp_pinned_core_linkage(${PINNED_CPP_CORE_JOB} workflow)
+    check_component_pinned_core_linkage(${PINNED_CPP_CORE_JOB} CPP workflow)
+    check_component_pinned_core_linkage(${PINNED_MATLAB_CORE_JOB} MATLAB workflow)
+    check_component_pinned_core_linkage(${PINNED_JAVA_CORE_JOB} JAVA workflow)
+
+    # MATLAB is the one HLI whose toolchain this workflow installs rather than
+    # receiving from the runner image, and the whole job is pointless without
+    # it: al-mex-test and every example invoke the MATLAB interpreter.
+    read_job(${PINNED_MATLAB_CORE_JOB} matlab_hli_job)
+    require_matching_line(matlab_hli_job "uses: matlab-actions/setup-matlab"
+        "install MATLAB for the MEX suite")
+    require_matching_line(matlab_hli_job "^-DMatlab_ROOT_DIR="
+        "point find_package(Matlab) at the installed MATLAB")
+
+    # Both jobs need MDSplus: the MATLAB unit tests parameterise over it and
+    # the Java examples ask al-mdsplus-model for their model directory. Neither
+    # skips without it -- MATLAB halves al-mex-test, Java fails to configure --
+    # so dropping the models would quietly shrink what a green run proves.
+    read_job(${PINNED_JAVA_CORE_JOB} java_hli_job)
+    require_matching_line(matlab_hli_job "-DAL_BUILD_MDSPLUS_MODELS=ON"
+        "build the MDSplus DD models its unit tests open")
+    require_matching_line(java_hli_job "-DAL_BUILD_MDSPLUS_MODELS=ON"
+        "build the MDSplus DD models its examples open")
     return()
 endif()
 
