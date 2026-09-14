@@ -578,9 +578,11 @@ for the other nine tests. Compiling MEX files needs the installation rather than
 a licence, so this job is a build-and-link check: IMAS-MATLAB configures against
 the installed shim, every MEX target compiles against it, and the inspected ones
 link the shim rather than IMAS-Core. It does not show MATLAB code round-tripping
-through the shim. A non-blocking probe runs the remaining nine through
-`matlab-actions/run-command` and reports in the run summary whether batch
-licensing reaches them, so that gap can be closed if it ever becomes reachable.
+through the shim. That was measured rather than assumed: driving the remaining
+nine through `matlab-actions/run-command`, the supported auto-licensed entry
+point, failed all nine with `Licensing error: -1,359`, because the licence
+covers only the single MATLAB that action starts and not the `matlab -batch`
+processes CTest starts underneath it.
 
 The Java job builds `yohannmarguier/IMAS-Java` at `IMAS_JAVA_REF` the same way,
 also with MDSplus and the DD models, which is what the fork's own
@@ -591,11 +593,11 @@ this fork registers no linkage test of its own. It needs the full
 `openjdk-21-jdk` rather than the `-headless` package the other jobs use, because
 `find_package(JNI)` looks for the AWT native libraries `-headless` omits.
 
-Both of those counts are first estimates read off the pinned forks' CMake and
-have not yet been corrected against a real run, unlike the Fortran and C++
-counts. Read a first mismatch as a calibration report rather than a regression.
-Like the C++ job, neither adds cross-version test cases: they prove the HLI
-builds against, links and runs through the shim.
+Both counts have been confirmed against a real Linux run, so like the Fortran
+and C++ counts they are assertions about the pinned fork rather than estimates;
+a mismatch reports a moved pin. Like the C++ job, neither adds cross-version
+test cases: Java proves the HLI builds against, links and runs through the
+shim, and MATLAB proves the first two.
 
 The Fortran job makes two claims from one build. The 83 generated per-IDS tests
 write and read every IDS across the memory, ASCII and HDF5 backends with the HLI DD version

@@ -265,10 +265,15 @@ needs the installation and not a licence, so **only the two linkage tests
 actually run**: the job proves IMAS-MATLAB configures against the installed
 shim, that every MEX target compiles against it, and that the inspected ones
 link `libimas_mvdd_loader` rather than `libal`. It does *not* prove MATLAB code
-round-trips through the shim. A non-blocking probe step runs the other nine
-through `matlab-actions/run-command` and reports to the step summary whether
-batch licensing reaches them; if it ever goes green, promote them out of the
-probe into the gate. Note that the IMAS-MATLAB fork's own CI does not disprove
+round-trips through the shim.
+
+That limit is **measured, not assumed**. Run 34852296651 drove the other nine
+through `matlab-actions/run-command`, the supported auto-licensed entry point,
+and **0 of 9 passed** — every one died on `Licensing error: -1,359`, because
+run-command licenses the single MATLAB it starts and that licence does not
+reach the `matlab -batch` processes CTest starts underneath it. The probe was
+removed once it had answered; re-add it only if MathWorks documents a job-wide
+batch licence. Note that the IMAS-MATLAB fork's own CI does not contradict
 this — it tolerates the same failure with `continue-on-error: true` and
 `|| echo "MATLAB batch mode failed"`, so it never ran MATLAB either.
 
@@ -288,10 +293,11 @@ no tags and `ALDetermineVersion.cmake` falls back to `0.0.0`. That is the
 HLI's own version, not IMAS-Core's, so the Core version tags this repo depends
 on are unaffected.
 
-The MATLAB and Java test counts are **first estimates read off the pinned
-forks' CMake, not yet corrected against a real run** — unlike the Fortran and
-C++ counts, which were calibrated on Linux. Read a first mismatch as a
-calibration report, not as a regression.
+The MATLAB and Java counts were first read off the pinned forks' CMake and have
+since been **confirmed on Linux by run 34852296651** — 11 registered for MATLAB
+and 21 for Java, none disabled in either. Like the Fortran and C++ counts they
+are now assertions about the pinned fork rather than guesses, so a mismatch is
+a report about a moved pin.
 
 `README.md` carries the build options and layout. The *why* behind the build
 lives in comments next to what it explains — `CMakeLists.txt` for the staging

@@ -729,41 +729,16 @@ jobs:
             exit 1
           fi
 
-      # A report, never a gate: it cannot fail the job. Run MATLAB Command is
-      # the supported auto-licensed entry point for a public project, so this
-      # asks the one question the documentation does not answer -- whether the
-      # MATLAB it licenses passes that licence to the `matlab -batch`
-      # processes CTest starts underneath it. A green probe means these nine
-      # tests can be promoted to a real gate; a red one means the MATLAB job
-      # is a build-and-link check by nature, and the summary says which.
-      - name: Probe whether CTest-spawned MATLAB can be licensed
-        id: matlab_probe
-        continue-on-error: true
-        uses: matlab-actions/run-command@v2
-        with:
-          command: cd('hli-matlab/build'); setenv('USER', fullfile(pwd, 'testdb')); exit(system('ctest --output-on-failure --no-tests=error --parallel 1 -E ''shim-linkage$'''))
-
-      - name: Report the licensing probe
-        if: always()
-        run: |
-          set -euo pipefail
-          {
-            echo '### Can CTest-spawned MATLAB be licensed?'
-            echo
-            echo "Probe outcome: \`${{ steps.matlab_probe.outcome }}\`"
-            echo
-            if [ "${{ steps.matlab_probe.outcome }}" = "success" ]; then
-              echo 'The nine MATLAB-interpreter tests ran under batch licensing.'
-              echo 'Promote them out of the probe and into the gate above.'
-            else
-              echo 'The nine MATLAB-interpreter tests could not be licensed.'
-              echo 'This job stays a build-and-link check: it proves IMAS-MATLAB'
-              echo 'builds against the installed shim and that its MEX targets'
-              echo 'link the shim rather than IMAS-Core, and asserts the other'
-              echo 'nine register correctly without running them.'
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
+      # The remaining nine are NOT run, and that question is settled rather
+      # than open. Run 34852296651 drove them through
+      # matlab-actions/run-command -- the supported auto-licensed entry point
+      # for a public project -- and all nine failed with
+      # "Licensing error: -1,359": run-command licenses the one MATLAB it
+      # starts, and that licence does not reach the `matlab -batch` processes
+      # CTest starts underneath it. 0 of 9 passed. The probe that established
+      # this was removed once it had answered; re-add it only if MathWorks
+      # documents a job-wide batch licence, since a permanently red step that
+      # cannot fail the job is noise nobody reads.
       - name: Preserve MATLAB test diagnostics
         if: always()
         uses: actions/upload-artifact@v4
