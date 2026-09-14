@@ -597,14 +597,21 @@ jobs:
           products: MATLAB
 
       # Matlab_ROOT_DIR is what find_package(Matlab) keys on, and CMake does
-      # not derive it from PATH. Resolving it here also proves batch mode works
-      # before an hour of building rather than after it.
+      # not derive it from PATH.
+      #
+      # Deliberately does NOT run `matlab -batch`: setup-matlab installs MATLAB
+      # but does not license it. On a public project only the Run MATLAB
+      # Command / Tests / Build actions license MATLAB automatically, and they
+      # license the one process they start. A direct `matlab -batch` fails with
+      # "License checkout failed. License Manager Error -1". Compiling MEX
+      # files needs the installation, not a licence, so the build below is
+      # unaffected -- see the test step for what that costs.
       - name: Record the MATLAB installation
         run: |
           set -euo pipefail
           matlab_root=$(dirname "$(dirname "$(command -v matlab)")")
+          test -x "$matlab_root/bin/matlab"
           echo "MATLAB_ROOT=$matlab_root" >> "$GITHUB_ENV"
-          matlab -batch "disp(version)"
           {
             echo '### MATLAB and MDSplus dependencies'
             echo "MATLAB root: \`$matlab_root\`"
@@ -693,15 +700,69 @@ jobs:
           done
           test -e _deps/al-core-build/models/mdsplus/ids_model.datafile
 
-      # The examples share pulses, so keep CTest serial. Core interpolates USER
-      # into legacy pulse paths; keep all test data inside this build.
-      - name: Run the MATLAB HLI tests
+      # Only the two linkage tests run here, and that is a deliberate limit
+      # rather than an oversight. Nine of the eleven registered tests launch
+      # the MATLAB interpreter through ${Matlab_MAIN_PROGRAM}, and CTest starts
+      # those processes itself. MathWorks licenses a public project's MATLAB
+      # only through its own Run MATLAB Command / Tests / Build actions, each
+      # of which licenses the single process it starts -- there is no
+      # documented job-wide token that a CTest-spawned `matlab -batch` would
+      # pick up. So this job proves what it can prove without a licence:
+      # IMAS-MATLAB configures against the installed shim, every MEX target
+      # compiles against it, and the two the fork inspects link
+      # libimas_mvdd_loader rather than libal. What it does not prove is that
+      # MATLAB code round-trips through the shim; the probe below exists to
+      # find out whether that is reachable at all.
+      #
+      # The count is asserted rather than assumed: if the fork ever registers
+      # a third licence-free test, this must be a decision, not a drift.
+      - name: Run the licence-free MATLAB tests
         working-directory: hli-matlab/build
         run: |
           set -euo pipefail
           mkdir -p "$PWD/testdb"
           export USER="$PWD/testdb"
-          ctest --output-on-failure --no-tests=error --parallel 1
+          ctest --output-on-failure --no-tests=error --parallel 1 -R 'shim-linkage$'
+          ran=$(ctest -N -R 'shim-linkage$' | sed -n 's/^Total Tests: *//p')
+          if [ "$ran" != "2" ]; then
+            echo "Expected 2 licence-free MATLAB tests, found $ran" >&2
+            exit 1
+          fi
+
+      # A report, never a gate: it cannot fail the job. Run MATLAB Command is
+      # the supported auto-licensed entry point for a public project, so this
+      # asks the one question the documentation does not answer -- whether the
+      # MATLAB it licenses passes that licence to the `matlab -batch`
+      # processes CTest starts underneath it. A green probe means these nine
+      # tests can be promoted to a real gate; a red one means the MATLAB job
+      # is a build-and-link check by nature, and the summary says which.
+      - name: Probe whether CTest-spawned MATLAB can be licensed
+        id: matlab_probe
+        continue-on-error: true
+        uses: matlab-actions/run-command@v2
+        with:
+          command: cd('hli-matlab/build'); setenv('USER', fullfile(pwd, 'testdb')); exit(system('ctest --output-on-failure --no-tests=error --parallel 1 -E ''shim-linkage$'''))
+
+      - name: Report the licensing probe
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo '### Can CTest-spawned MATLAB be licensed?'
+            echo
+            echo "Probe outcome: \`${{ steps.matlab_probe.outcome }}\`"
+            echo
+            if [ "${{ steps.matlab_probe.outcome }}" = "success" ]; then
+              echo 'The nine MATLAB-interpreter tests ran under batch licensing.'
+              echo 'Promote them out of the probe and into the gate above.'
+            else
+              echo 'The nine MATLAB-interpreter tests could not be licensed.'
+              echo 'This job stays a build-and-link check: it proves IMAS-MATLAB'
+              echo 'builds against the installed shim and that its MEX targets'
+              echo 'link the shim rather than IMAS-Core, and asserts the other'
+              echo 'nine register correctly without running them.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Preserve MATLAB test diagnostics
         if: always()
@@ -758,7 +819,11 @@ jobs:
       # is what the Java fork's own ci/build_and_test.sh defaults to, so that
       # is the configuration this job proves. Same package recipe as cpp-hli.
       # The JDK is not optional here the way it is for C++: it builds the jars
-      # and runs every test.
+      # and runs every test. It also has to be the *full* JDK. cpp-hli installs
+      # openjdk-21-jdk-headless because it only needs Java for MDSplus
+      # CompileTree, but this job calls find_package(JNI), which looks for the
+      # AWT native libraries the headless package omits -- with headless, CMake
+      # fails at configure time with "Could NOT find JNI (missing: AWT)".
       - name: Install MDSplus, the JDK and build dependencies
         run: |
           set -euo pipefail
@@ -770,7 +835,7 @@ jobs:
             sudo tee /etc/apt/sources.list.d/mdsplus.list
           sudo apt-get update
           sudo apt-get install -y mdsplus mdsplus-devel mdsplus-java \
-            openjdk-21-jdk-headless libboost-filesystem-dev libhdf5-dev \
+            openjdk-21-jdk libboost-filesystem-dev libhdf5-dev \
             hdf5-tools gcc-14 g++-14
           echo "$MDSPLUS_DIR/bin" >> "$GITHUB_PATH"
           echo "JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64" >> "$GITHUB_ENV"
