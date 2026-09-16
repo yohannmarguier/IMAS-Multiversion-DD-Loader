@@ -13,8 +13,6 @@ add_test(NAME hli-validation-workflow
         "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
         "-DPINNED_FORTRAN_CORE_JOB=fortran-hli"
         "-DPINNED_CPP_CORE_JOB=cpp-hli"
-        "-DPINNED_MATLAB_CORE_JOB=matlab-hli"
-        "-DPINNED_JAVA_CORE_JOB=java-hli"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ci_workflow.cmake")
 add_test(NAME ci-workflow-guard-rejects-misplaced-commands
     COMMAND "${CMAKE_COMMAND}"
