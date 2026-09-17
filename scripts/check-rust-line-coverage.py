@@ -6,54 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
-
-GROUP_NAMES = {
-    "conversion",
-    "dd-version",
-    "context-registry",
-    "loss",
-    "artifact-validation",
-    "deterministic-runtime-binding-policy",
-}
-
-
-class ScopeError(ValueError):
-    """The checked-in measurement scope is malformed or ambiguous."""
-
-
-@dataclass(frozen=True)
-class SourceRange:
-    path: str
-    start_line: int | None
-    end_line: int | None
-
-    def contains(self, line: int) -> bool:
-        return (self.start_line is None or self.start_line <= line) and (
-            self.end_line is None or line <= self.end_line
-        )
-
-    def overlaps(self, other: "SourceRange") -> bool:
-        if self.path != other.path:
-            return False
-        self_start = self.start_line or 1
-        self_end = self.end_line or sys.maxsize
-        other_start = other.start_line or 1
-        other_end = other.end_line or sys.maxsize
-        return self_start <= other_end and other_start <= self_end
-
-    def display(self) -> str:
-        if self.start_line is None:
-            return self.path
-        return f"{self.path}:{self.start_line}-{self.end_line}"
-
-
-@dataclass(frozen=True)
-class Group:
-    name: str
-    sources: tuple[SourceRange, ...]
+from rust_audit_scope import Group, ScopeError, SourceRange, load_groups
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,43 +45,7 @@ def load_scope(path: Path) -> tuple[float, float, list[Group], set[str]]:
     if not all(isinstance(value, (int, float)) and 0 <= value <= 100 for value in (aggregate, group)):
         raise ScopeError("coverage minimums must be percentages from 0 through 100")
 
-    raw_groups = value.get("groups")
-    if not isinstance(raw_groups, list):
-        raise ScopeError("scope must define groups")
-    groups: list[Group] = []
-    assigned: list[tuple[str, SourceRange]] = []
-    for raw_group in raw_groups:
-        if not isinstance(raw_group, dict) or not isinstance(raw_group.get("name"), str):
-            raise ScopeError("each group needs a name")
-        raw_sources = raw_group.get("sources")
-        if not isinstance(raw_sources, list) or not raw_sources:
-            raise ScopeError(f"group {raw_group['name']} must own at least one source")
-        sources: list[SourceRange] = []
-        for raw_source in raw_sources:
-            if not isinstance(raw_source, dict) or not isinstance(raw_source.get("path"), str):
-                raise ScopeError(f"group {raw_group['name']} has a source without a path")
-            start = raw_source.get("start_line")
-            end = raw_source.get("end_line")
-            if (start is None) != (end is None) or (
-                start is not None
-                and (not isinstance(start, int) or not isinstance(end, int) or start < 1 or end < start)
-            ):
-                raise ScopeError(
-                    f"source {raw_source['path']} must give a valid start_line/end_line pair"
-                )
-            source = SourceRange(raw_source["path"], start, end)
-            for owner, existing in assigned:
-                if source.overlaps(existing):
-                    raise ScopeError(
-                        f"source {source.display()} is assigned to both {owner} and {raw_group['name']}"
-                    )
-            assigned.append((raw_group["name"], source))
-            sources.append(source)
-        groups.append(Group(raw_group["name"], tuple(sources)))
-
-    names = {group.name for group in groups}
-    if names != GROUP_NAMES or len(names) != len(groups):
-        raise ScopeError("scope must declare each of the six required logical groups exactly once")
+    groups = load_groups(value, path)
     raw_exclusions = value.get("exclusions", [])
     if not isinstance(raw_exclusions, list):
         raise ScopeError("scope exclusions must be a list")

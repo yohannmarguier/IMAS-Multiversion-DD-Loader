@@ -10,6 +10,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from rust_audit_scope import Group, ScopeError, SourceRange, load_groups
+
 
 OUTCOME_NAMES = {
     "CaughtMutant": "Caught",
@@ -20,26 +22,8 @@ OUTCOME_NAMES = {
 EXCLUSION_NAMES = {"equivalent", "integration-only"}
 
 
-class AuditError(ValueError):
+class AuditError(ScopeError):
     """The audit's checked-in scope or cargo-mutants report is incomplete."""
-
-
-@dataclass(frozen=True)
-class SourceRange:
-    path: str
-    start_line: int | None
-    end_line: int | None
-
-    def contains(self, start: int, end: int) -> bool:
-        return (self.start_line is None or self.start_line <= start) and (
-            self.end_line is None or end <= self.end_line
-        )
-
-
-@dataclass(frozen=True)
-class Group:
-    name: str
-    sources: tuple[SourceRange, ...]
 
 
 @dataclass(frozen=True)
@@ -100,46 +84,10 @@ def load_json(path: Path, what: str) -> object:
         raise AuditError(f"cannot read {what} {path}: {error}") from error
 
 
-def load_groups(path: Path) -> list[Group]:
-    value = load_json(path, "line scope")
-    if not isinstance(value, dict) or value.get("schema_version") != 1:
-        raise AuditError("line scope must be a schema_version 1 JSON object")
-    raw_groups = value.get("groups")
-    if not isinstance(raw_groups, list):
-        raise AuditError("line scope must define groups")
-    groups: list[Group] = []
-    assigned: list[tuple[str, SourceRange]] = []
-    for raw_group in raw_groups:
-        if not isinstance(raw_group, dict) or not isinstance(raw_group.get("name"), str):
-            raise AuditError("each line-scope group needs a name")
-        raw_sources = raw_group.get("sources")
-        if not isinstance(raw_sources, list) or not raw_sources:
-            raise AuditError(f"line-scope group {raw_group['name']} must own sources")
-        sources: list[SourceRange] = []
-        for raw_source in raw_sources:
-            if not isinstance(raw_source, dict) or not isinstance(raw_source.get("path"), str):
-                raise AuditError(f"line-scope group {raw_group['name']} has a source without a path")
-            start, end = raw_source.get("start_line"), raw_source.get("end_line")
-            if (start is None) != (end is None) or (
-                start is not None
-                and (not isinstance(start, int) or not isinstance(end, int) or start < 1 or end < start)
-            ):
-                raise AuditError(f"line-scope source {raw_source['path']} has invalid line bounds")
-            source = SourceRange(raw_source["path"], start, end)
-            for owner, existing in assigned:
-                if source.path != existing.path:
-                    continue
-                source_start, source_end = source.start_line or 1, source.end_line or sys.maxsize
-                existing_start, existing_end = existing.start_line or 1, existing.end_line or sys.maxsize
-                if source_start <= existing_end and existing_start <= source_end:
-                    raise AuditError(f"line-scope source {source.path} has multiple owners")
-            assigned.append((raw_group["name"], source))
-            sources.append(source)
-        groups.append(Group(raw_group["name"], tuple(sources)))
-    names = {group.name for group in groups}
-    if len(groups) != 6 or len(names) != len(groups):
-        raise AuditError("line scope must declare six uniquely named logical groups")
-    return groups
+def load_line_scope_groups(path: Path) -> list[Group]:
+    """The line audit's own group ownership, reused verbatim: the mutation
+    audit scores the same ranges and must never re-derive them."""
+    return load_groups(load_json(path, "line scope"), path)
 
 
 def load_audit(path: Path) -> tuple[str, Path, float, float]:
@@ -313,7 +261,7 @@ def report_line(name: str, totals: Totals, minimum: float) -> tuple[str, bool]:
 def main() -> int:
     args = parse_args()
     try:
-        groups = load_groups(args.line_scope)
+        groups = load_line_scope_groups(args.line_scope)
         if args.candidate_mutants:
             write_selection(
                 args.candidate_mutants,
@@ -360,7 +308,7 @@ def main() -> int:
             totals = group_totals[group.name]
             if totals.caught + totals.missed + totals.timed_out == 0:
                 raise AuditError(f"group {group.name} has no scoreable mutants")
-    except AuditError as error:
+    except ScopeError as error:
         print(f"mutation audit input error: {error}", file=sys.stderr)
         return 2
 
