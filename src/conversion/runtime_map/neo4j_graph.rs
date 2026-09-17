@@ -7,6 +7,7 @@
 //! module is a lineage limit: it is only a page size and every page is counted.
 
 use std::collections::{BTreeMap, HashSet};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use neo4j::driver::auth::AuthToken;
@@ -14,7 +15,7 @@ use neo4j::driver::{ConnectionConfig, Driver, DriverConfig, RoutingControl};
 use neo4j::transaction::TransactionTimeout;
 use neo4j::{ValueReceive, ValueSend};
 
-use super::GraphSourceError;
+use super::{AcquisitionAttempt, AcquisitionStage, AttemptExpired, GraphSourceError};
 use crate::conversion::conversion_map::{ArtifactDdVersion, CocosConvention};
 
 const VERSIONS: &str = "MATCH (v:DDVersion) RETURN v.id AS release, v.cocos AS cocos ORDER BY v.id SKIP $skip LIMIT $limit";
@@ -36,7 +37,7 @@ pub(crate) enum GraphValue {
     List(Vec<GraphValue>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub(crate) struct BoundQuery {
     pub text: &'static str,
     pub parameters: BTreeMap<String, GraphValue>,
@@ -66,28 +67,38 @@ pub(crate) struct Neo4jConfig {
 
 /// The official Bolt driver has bounded TCP connection/acquisition settings,
 /// a server-side transaction timeout, and fully consumes each result stream.
-/// The caller supplies remaining attempt time; the whole-attempt clock belongs
-/// above this boundary, which only applies its supplied remainder per query.
+/// Connection and query bounds consume the same caller-owned attempt rather
+/// than starting a per-operation timer.
 pub(crate) struct BoltExecutor {
-    driver: Driver,
+    driver: std::sync::Arc<Driver>,
     database: std::sync::Arc<String>,
 }
 
 impl BoltExecutor {
-    pub(crate) fn connect(config: &Neo4jConfig) -> Result<Self, GraphSourceError> {
+    pub(crate) fn connect(
+        config: &Neo4jConfig,
+        attempt: &AcquisitionAttempt,
+    ) -> Result<Self, GraphSourceError> {
+        let remaining = attempt
+            .enter(AcquisitionStage::Connection)
+            .map_err(attempt_error)?;
         let connection: ConnectionConfig = config
             .uri
             .parse()
             .map_err(|error| GraphSourceError(format!("invalid Neo4j URI: {error}")))?;
+        let connection_timeout = config.connection_timeout.min(remaining);
         let driver_config = DriverConfig::new()
             .with_auth(std::sync::Arc::new(AuthToken::new_basic_auth(
                 &config.username,
                 &config.password,
             )))
-            .with_connection_timeout(config.connection_timeout)
-            .with_connection_acquisition_timeout(config.connection_timeout);
+            .with_connection_timeout(connection_timeout)
+            .with_connection_acquisition_timeout(connection_timeout);
+        attempt
+            .check(AcquisitionStage::Connection)
+            .map_err(attempt_error)?;
         Ok(Self {
-            driver: Driver::new(connection, driver_config),
+            driver: std::sync::Arc::new(Driver::new(connection, driver_config)),
             database: std::sync::Arc::new(config.database.clone()),
         })
     }
@@ -98,33 +109,64 @@ impl CypherExecutor for BoltExecutor {
         &self,
         query: BoundQuery,
     ) -> Result<Vec<BTreeMap<String, GraphValue>>, GraphSourceError> {
-        let timeout = i64::try_from(query.timeout.as_millis())
-            .ok()
-            .and_then(TransactionTimeout::from_millis)
-            .ok_or_else(|| GraphSourceError("query has no remaining time".to_string()))?;
-        let parameters = query
-            .parameters
-            .into_iter()
-            .map(|(key, value)| (key, to_bolt(value)))
-            .collect::<std::collections::HashMap<_, _>>();
-        self.driver
-            .execute_query(query.text)
-            .with_database(std::sync::Arc::clone(&self.database))
-            .with_routing_control(RoutingControl::Read)
-            .with_parameters(parameters)
-            .with_transaction_timeout(timeout)
-            .run()
-            .map_err(|error| GraphSourceError(format!("Neo4j query failed: {error}")))?
-            .records
-            .into_iter()
-            .map(|record| {
-                record
-                    .entries()
-                    .map(|(key, value)| Ok((key.to_string(), from_bolt(value)?)))
-                    .collect::<Result<BTreeMap<_, _>, GraphSourceError>>()
-            })
-            .collect()
+        let deadline = query.timeout;
+        let driver = std::sync::Arc::clone(&self.driver);
+        let database = std::sync::Arc::clone(&self.database);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let _ = sender.send(run_bolt_query(driver, database, query));
+        });
+        receive_before_deadline(receiver, deadline)
     }
+}
+
+fn receive_before_deadline<T>(
+    receiver: mpsc::Receiver<Result<T, GraphSourceError>>,
+    deadline: Duration,
+) -> Result<T, GraphSourceError> {
+    receiver
+        .recv_timeout(deadline)
+        .map_err(|error| match error {
+            mpsc::RecvTimeoutError::Timeout => {
+                GraphSourceError("Neo4j query exceeded the acquisition deadline".to_string())
+            }
+            mpsc::RecvTimeoutError::Disconnected => {
+                GraphSourceError("Neo4j query worker ended without a result".to_string())
+            }
+        })?
+}
+
+fn run_bolt_query(
+    driver: std::sync::Arc<Driver>,
+    database: std::sync::Arc<String>,
+    query: BoundQuery,
+) -> Result<Vec<BTreeMap<String, GraphValue>>, GraphSourceError> {
+    let timeout = i64::try_from(query.timeout.as_millis())
+        .ok()
+        .and_then(TransactionTimeout::from_millis)
+        .ok_or_else(|| GraphSourceError("query has no remaining time".to_string()))?;
+    let parameters = query
+        .parameters
+        .into_iter()
+        .map(|(key, value)| (key, to_bolt(value)))
+        .collect::<std::collections::HashMap<_, _>>();
+    driver
+        .execute_query(query.text)
+        .with_database(database)
+        .with_routing_control(RoutingControl::Read)
+        .with_parameters(parameters)
+        .with_transaction_timeout(timeout)
+        .run()
+        .map_err(|error| GraphSourceError(format!("Neo4j query failed: {error}")))?
+        .records
+        .into_iter()
+        .map(|record| {
+            record
+                .entries()
+                .map(|(key, value)| Ok((key.to_string(), from_bolt(value)?)))
+                .collect::<Result<BTreeMap<_, _>, GraphSourceError>>()
+        })
+        .collect()
 }
 
 fn to_bolt(value: GraphValue) -> ValueSend {
@@ -154,19 +196,15 @@ fn from_bolt(value: &ValueReceive) -> Result<GraphValue, GraphSourceError> {
 
 /// Complete raw scope retrieval. Endpoint reconstruction deliberately stays
 /// out of this type: the graph stores lifecycle/history facts, and a later
-/// interpreter must turn those facts into exact endpoint metadata.
+/// interpreter must turn those facts into exact endpoint metadata. Every
+/// query and decoding check consumes the supplied acquisition attempt.
 pub(crate) struct Neo4jScopeSource<E> {
     executor: E,
     page_size: usize,
-    remaining: Duration,
 }
 
 impl<E> Neo4jScopeSource<E> {
-    pub(crate) fn new(
-        executor: E,
-        page_size: usize,
-        remaining: Duration,
-    ) -> Result<Self, GraphSourceError> {
+    pub(crate) fn new(executor: E, page_size: usize) -> Result<Self, GraphSourceError> {
         if page_size == 0 {
             return Err(GraphSourceError(
                 "Neo4j page size must be nonzero".to_string(),
@@ -175,7 +213,6 @@ impl<E> Neo4jScopeSource<E> {
         Ok(Self {
             executor,
             page_size,
-            remaining,
         })
     }
 }
@@ -184,12 +221,19 @@ impl<E: CypherExecutor> Neo4jScopeSource<E> {
     /// Retrieves and validates all four graph streams.  `IdsGraphFacts` is
     /// intentionally not manufactured here: doing so would make current node
     /// properties pretend to be historical endpoint metadata.
-    pub(crate) fn load_raw_scope(&self, ids: &str) -> Result<Neo4jRawScope, GraphSourceError> {
-        let versions = self.pages(VERSIONS_COUNT, VERSIONS, None)?;
-        let nodes = self.pages(NODES_COUNT, NODES, Some(ids))?;
-        let events = self.pages(EVENTS_COUNT, EVENTS, Some(ids))?;
-        let successors = self.pages(SUCCESSORS_COUNT, SUCCESSORS, Some(ids))?;
-        validate_raw_scope(ids, &versions, &nodes, &events, &successors)?;
+    pub(crate) fn load_raw_scope(
+        &self,
+        ids: &str,
+        attempt: &AcquisitionAttempt,
+    ) -> Result<Neo4jRawScope, GraphSourceError> {
+        let versions = self.pages(VERSIONS_COUNT, VERSIONS, None, attempt)?;
+        let nodes = self.pages(NODES_COUNT, NODES, Some(ids), attempt)?;
+        let events = self.pages(EVENTS_COUNT, EVENTS, Some(ids), attempt)?;
+        let successors = self.pages(SUCCESSORS_COUNT, SUCCESSORS, Some(ids), attempt)?;
+        attempt
+            .enter(AcquisitionStage::Decoding)
+            .map_err(attempt_error)?;
+        validate_raw_scope(ids, &versions, &nodes, &events, &successors, attempt)?;
         Ok(Neo4jRawScope {
             versions,
             nodes,
@@ -203,12 +247,18 @@ impl<E: CypherExecutor> Neo4jScopeSource<E> {
         count_query: &'static str,
         page_query: &'static str,
         ids: Option<&str>,
+        attempt: &AcquisitionAttempt,
     ) -> Result<Vec<BTreeMap<String, GraphValue>>, GraphSourceError> {
-        let count_rows = self.executor.execute(BoundQuery {
-            text: count_query,
-            parameters: parameters(ids, 0, self.page_size),
-            timeout: self.remaining,
-        })?;
+        let count_rows = self.execute(
+            BoundQuery {
+                text: count_query,
+                parameters: parameters(ids, 0, self.page_size),
+                timeout: attempt
+                    .enter(AcquisitionStage::Query)
+                    .map_err(attempt_error)?,
+            },
+            attempt,
+        )?;
         let count = count_rows
             .as_slice()
             .first()
@@ -223,11 +273,16 @@ impl<E: CypherExecutor> Neo4jScopeSource<E> {
             })?;
         let mut rows = Vec::with_capacity(count);
         while rows.len() < count {
-            let page = self.executor.execute(BoundQuery {
-                text: page_query,
-                parameters: parameters(ids, rows.len(), self.page_size),
-                timeout: self.remaining,
-            })?;
+            let page = self.execute(
+                BoundQuery {
+                    text: page_query,
+                    parameters: parameters(ids, rows.len(), self.page_size),
+                    timeout: attempt
+                        .enter(AcquisitionStage::Query)
+                        .map_err(attempt_error)?,
+                },
+                attempt,
+            )?;
             if page.is_empty() {
                 return Err(GraphSourceError(format!(
                     "pagination ended at {} rows but count was {count}",
@@ -243,6 +298,25 @@ impl<E: CypherExecutor> Neo4jScopeSource<E> {
         }
         Ok(rows)
     }
+
+    fn execute(
+        &self,
+        query: BoundQuery,
+        attempt: &AcquisitionAttempt,
+    ) -> Result<Vec<BTreeMap<String, GraphValue>>, GraphSourceError> {
+        let rows = self.executor.execute(query)?;
+        attempt
+            .check(AcquisitionStage::Query)
+            .map_err(attempt_error)?;
+        Ok(rows)
+    }
+}
+
+fn attempt_error(expired: AttemptExpired) -> GraphSourceError {
+    GraphSourceError(format!(
+        "acquisition attempt timed out during {:?}",
+        expired.stage
+    ))
 }
 
 fn parameters(ids: Option<&str>, skip: usize, limit: usize) -> BTreeMap<String, GraphValue> {
@@ -285,9 +359,13 @@ fn validate_raw_scope(
     nodes: &[BTreeMap<String, GraphValue>],
     events: &[BTreeMap<String, GraphValue>],
     successors: &[BTreeMap<String, GraphValue>],
+    attempt: &AcquisitionAttempt,
 ) -> Result<(), GraphSourceError> {
     let mut releases = HashSet::new();
     for row in versions {
+        attempt
+            .check(AcquisitionStage::Decoding)
+            .map_err(attempt_error)?;
         let release = required_string(row, "release")?;
         ArtifactDdVersion::new(&release)
             .map_err(|error| GraphSourceError(format!("invalid release {release}: {error}")))?;
@@ -314,6 +392,9 @@ fn validate_raw_scope(
     }
     let mut paths = HashSet::new();
     for row in nodes {
+        attempt
+            .check(AcquisitionStage::Decoding)
+            .map_err(attempt_error)?;
         if required_string(row, "ids")? != ids {
             return Err(GraphSourceError(
                 "node stream escaped its requested IDS".to_string(),
@@ -339,6 +420,9 @@ fn validate_raw_scope(
             };
             let mut lifecycle_releases = HashSet::new();
             for value in values {
+                attempt
+                    .check(AcquisitionStage::Decoding)
+                    .map_err(attempt_error)?;
                 let GraphValue::String(release) = value else {
                     return Err(GraphSourceError(format!(
                         "{lifecycle_column} contains a non-string release"
@@ -359,6 +443,9 @@ fn validate_raw_scope(
     }
     let mut event_ids = HashSet::new();
     for row in events {
+        attempt
+            .check(AcquisitionStage::Decoding)
+            .map_err(attempt_error)?;
         let id = required_string(row, "id")?;
         if !event_ids.insert(id) {
             return Err(GraphSourceError("duplicate event ID".to_string()));
@@ -389,6 +476,9 @@ fn validate_raw_scope(
     }
     let mut successor_pairs = HashSet::new();
     for row in successors {
+        attempt
+            .check(AcquisitionStage::Decoding)
+            .map_err(attempt_error)?;
         let from_path = required_string(row, "from_path")?;
         let to_path = required_string(row, "to_path")?;
         if !paths.contains(&from_path) || !paths.contains(&to_path) {
