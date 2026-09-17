@@ -130,6 +130,15 @@ the clean-load check. Do not place the password in a selection file, shell
 history, or Git. It is supplied only through `IMAS_MVDD_GRAPH_PASSWORD` when a
 new service is created or queried.
 
+CI uses the same script through the reusable
+[`setup-dd-graph` action](.github/actions/setup-dd-graph/action.yml). It caches
+only the verified archive under its immutable archive digest; a fresh CI job
+always loads a new task-owned database and starts Neo4j before its query smoke
+check. That job is provisioning evidence, not proof that the shim converts
+through the graph. Graph-backed C ABI, real-Core and HLI scenarios can reuse
+the action's exported `NEO4J_URI`, `NEO4J_USERNAME` and `NEO4J_PASSWORD` when
+their own tickets add them.
+
 Between HLI runs, stop and later restart the same recorded pin without any
 release lookup or download:
 

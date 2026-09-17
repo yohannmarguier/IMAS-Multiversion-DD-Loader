@@ -23,6 +23,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Provisioning evidence only: runtime conversion scenarios consume this
+  # reusable setup in their own tickets. A green job proves neither conversion
+  # map construction nor the shim's C ABI behavior.
+  graph-provisioning:
+    name: Pinned DD graph provisioning smoke check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-dd-graph
+
+      - name: Record provisioning scope
+        run: echo 'DD graph provisioning smoke check passed'
+
   fast:
     runs-on: ubuntu-latest
 
