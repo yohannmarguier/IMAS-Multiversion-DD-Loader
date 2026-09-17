@@ -398,6 +398,11 @@ add_stub_test(read-path-reentrant-read-is-forwarded-unchanged
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
 
+add_stub_test(read-path-reentry-depth-gate-restores-conversion-after-nested-read
+    read_path_test reentry-depth-gate-restores-conversion-after-nested-read
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+
 add_stub_test(read-path-reentrant-read-does-not-reapply-a-sign-flip
     read_path_test reentrant-read-does-not-reapply-a-sign-flip
     HLI_DD_VERSION 4.1.1
