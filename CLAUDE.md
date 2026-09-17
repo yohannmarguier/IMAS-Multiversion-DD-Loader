@@ -244,6 +244,23 @@ HDF5 in Core. It checks that tests are enabled and select the shim's runtime
 Core, checks HLI linkage, and runs the existing suite and examples serially.
 MDSplus package versions and CTest diagnostics are retained with the run.
 
+Since `IMAS_CPP_REF` moved to `38b9460` that fork also carries a **Tier-1 shim
+conformance suite** under `tests/shim/`, registered only when
+`AL_USE_MULTIVERSION_SHIM=ON`: eighteen catalogue scenarios in six families,
+thirteen of them contract assertions held red while the shim disagrees rather
+than inverted or quarantined. A DD 4.1.1 HLI reads and writes a checked-in DD
+3.39.0 pulse through the shim and is compared against the same HLI reading the
+DD 4.1.1 pulse of the same equilibrium, which makes this **the only HLI job
+that asserts on what conversion returns** rather than only that the HLI builds,
+links and runs. One direction only: the reverse needs a second `al-cpp` built
+against DD 3.39.0. The asserted count is 65 — the generated suite, 21 examples,
+two generator refusal-policy tests, and 41 from that suite. Five of its
+contract assertions register only when `imas-python-fixtures/.venv` can import
+h5py, so the job provisions that venv before configuring; it deliberately stops
+short of the fixtures' full requirements, which would also register the
+fixture-provenance check and make a green run depend on whatever Data
+Dictionary pip resolved that morning.
+
 Its MATLAB job builds `yohannmarguier/IMAS-MATLAB` at `IMAS_MATLAB_REF` the same
 way, adding `matlab-actions/setup-matlab`. MDSplus is **not** optional here:
 `tests/imas_unit_tests.m` parameterises its class setup over

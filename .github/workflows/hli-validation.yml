@@ -421,7 +421,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mdsplus mdsplus-devel mdsplus-java \
             openjdk-21-jdk-headless libboost-filesystem-dev libhdf5-dev \
-            libblitz0-dev gcc-14 g++-14
+            libblitz0-dev gcc-14 g++-14 python3-venv
           echo "$MDSPLUS_DIR/bin" >> "$GITHUB_PATH"
           dpkg-query -W 'mdsplus*' | tee mdsplus-packages.txt
           {
@@ -432,6 +432,33 @@ jobs:
             cat mdsplus-packages.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # tests/shim registers its five stamp-state contract assertions
+      # (F2.1-F2.4, F3.1) only when imas-python-fixtures/.venv can import
+      # h5py: the three stamp fixtures they read are derived from the
+      # checked-in DD 3.39.0 pulse at build time. Registration is decided at
+      # configure time, so this has to run before it -- and without it the job
+      # would run five of the thirteen contract assertions short and still
+      # report success.
+      #
+      # h5py alone, not the fixtures' full requirements. Those pull in
+      # imas-python, which would also register F1.4 fixture-provenance (it
+      # additionally needs h5diff, not installed here): that test regenerates
+      # the fixture pair and h5diffs it against the checked-in oracle, so it
+      # would compare against whatever Data Dictionary pip resolved that
+      # morning and could go red for a reason living in neither the shim nor
+      # this HLI. It is a provenance check on the fixtures rather than a
+      # statement about conversion, so it stays unregistered here. The count
+      # asserted below pins that choice: if either prerequisite ever appears,
+      # the inventory grows and the assertion reports it by name.
+      - name: Provision the shim suite's fixture venv
+        run: |
+          set -euo pipefail
+          python3 -m venv hli-cpp/imas-python-fixtures/.venv
+          venv=hli-cpp/imas-python-fixtures/.venv/bin/python
+          "$venv" -m pip install --quiet --upgrade pip
+          "$venv" -m pip install --quiet h5py
+          "$venv" -c 'import h5py; print("h5py", h5py.__version__)'
 
       - name: Build and install the shim
         run: |
@@ -473,20 +500,92 @@ jobs:
           import json
           from pathlib import Path
           tests = json.loads(Path('test-inventory.json').read_text())['tests']
-          # 6738409 registers the generated suite and 21 non-plugin examples.
-          assert len(tests) == 22, f'Expected 22 C++ tests, got {len(tests)}'
           names = {t['name'] for t in tests}
-          assert 'cpp-TestSuite' in names, names
-          assert 'example-cpp-test_version' in names, names
+          # 38b9460 registers the generated suite, 21 non-plugin examples, the
+          # two generator refusal-policy tests, and tests/shim's Tier-1 shim
+          # conformance suite. That suite's own README observed 42 registered
+          # on macOS with both its prerequisites present; this job installs
+          # h5py but not h5diff, so F1.4 fixture-provenance is the one that
+          # does not register here. 22 + 2 + 41.
+          assert len(tests) == 65, (
+              f'Expected 65 C++ tests, got {len(tests)}: {sorted(names)}')
+          required = (
+              'cpp-TestSuite',
+              'example-cpp-test_version',
+              # Registered unconditionally by tests/generator: a truth table
+              # over the refusal-tolerance chokepoint and a check on the
+              # generated write traversal. Neither opens a data entry.
+              'cpp-test-refusal-policy',
+              'cpp-test-generated-write-refusal-policy',
+              # F1.1. Every other test in the suite passes just as well
+              # against a build that resolved straight to Core, so this is
+              # the one that makes the rest mean anything.
+              'cpp-test-shim-linkage',
+              # The thirteen contract assertions and the one behaviour-pin --
+              # the catalogue in hli-cpp/tests/shim/README.md. Named rather
+              # than counted so a renamed or dropped scenario is a failure
+              # here and not a silently smaller suite.
+              'cpp-test-shim-version-unset',
+              'cpp-test-shim-stamp-equal',
+              'cpp-test-shim-stamp-absent',
+              'cpp-test-shim-stamp-mismatch-no-artifact',
+              'cpp-test-shim-stamp-malformed',
+              'cpp-test-shim-structural-rules',
+              'cpp-test-shim-cocos-rules',
+              'cpp-test-shim-right-only-rules',
+              'cpp-test-shim-refusal-channels',
+              'cpp-test-shim-nested-loss',
+              'cpp-test-shim-roundtrip-cross-dd',
+              'cpp-test-shim-roundtrip-same-dd',
+              'cpp-test-shim-full-put-stamp',
+              'cpp-test-shim-torn-write',
+          )
+          missing = [n for n in required if n not in names]
+          assert not missing, f'missing: {missing} from {sorted(names)}'
           disabled = [t['name'] for t in tests for p in t['properties']
                       if p['name'] == 'DISABLED' and p['value']]
           assert not disabled, disabled
+          # Two rules, because one no longer fits the whole inventory.
+          #
+          # The examples and the generated suite must each name the shim's
+          # runtime Core and the DD version they were generated against --
+          # that is what this step was written to prove, and it still holds
+          # for every test outside tests/shim, bar the two generator policy
+          # tests, which drive hand-made statuses and read generated source
+          # without opening a data entry.
+          #
+          # tests/shim is deliberately mixed: its linkage, comparator and
+          # fixture helpers inspect files, and its two round-trip contract
+          # assertions read a result marker the pair runner wrote, so
+          # requiring the environment of all of them would assert something
+          # untrue. What keeps that suite honest is not this environment but
+          # cpp-test-shim-linkage (F1.1) above, which fails unless the built
+          # library actually depends on the shim.
+          inspection_only = {
+              'cpp-test-refusal-policy',
+              'cpp-test-generated-write-refusal-policy',
+          }
+          checked = 0
           for test in tests:
               props = {p['name']: p['value'] for p in test['properties']}
               env = props.get('ENVIRONMENT', [])
-              assert any(e.startswith('IMAS_CORE_LIBRARY=') for e in env), test['name']
-              assert 'IMAS_MVDD_HLI_DD_VERSION=4.1.1' in env, test['name']
-          print(f'{len(tests)} enabled C++ tests, all configured for the shim')
+              labels = props.get('LABELS', [])
+              shim_suite = 'shim' in labels
+              names_core = any(e.startswith('IMAS_CORE_LIBRARY=') for e in env)
+              names_dd = 'IMAS_MVDD_HLI_DD_VERSION=4.1.1' in env
+              if not shim_suite and test['name'] not in inspection_only:
+                  assert names_core, test['name']
+                  assert names_dd, test['name']
+                  checked += 1
+                  continue
+              # A shim test that sets half the environment is a mistake the
+              # test itself cannot report: it would load the shim and then
+              # convert against the wrong HLI version, or fail to find Core.
+              if names_core or names_dd:
+                  assert names_core, test['name']
+                  assert names_dd, test['name']
+                  checked += 1
+          print(f'{len(tests)} enabled C++ tests, {checked} configured for the shim')
           PYCODE
           readelf -d libal-cpp-4.1.1.so | tee cpp-linkage.txt
           grep -q 'Shared library: \[libimas_mvdd_loader' cpp-linkage.txt
