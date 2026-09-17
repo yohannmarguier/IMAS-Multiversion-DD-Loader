@@ -143,6 +143,9 @@ pub(super) fn live_conversion_record(ctx_id: c_int) -> Option<ConversionRecord> 
     )
 }
 
+/// The gate's decision as a value, so both halves of it can be proven without
+/// touching the process-wide latch: the registry is consulted only when
+/// conversion is possible, and never before that answer is known.
 fn conversion_record_if_enabled(
     conversion_is_possible: bool,
     lookup: impl FnOnce() -> Option<ConversionRecord>,
@@ -156,9 +159,6 @@ mod tests {
     use crate::conversion::known_artifacts;
     use crate::interpose::occurrence::load_artifact;
     use std::ffi::CString;
-    use std::process::Command;
-
-    const ENABLED_GATE_CHILD: &str = "IMAS_MVDD_ENABLED_GATE_CHILD";
 
     fn register_equilibrium_root(ctx_id: c_int, resolved_path: &str) -> ConversionRecord {
         let stored: crate::version::dd_version::DdVersion =
@@ -201,40 +201,22 @@ mod tests {
         );
     }
 
+    /// The other half of the same gate: once conversion is possible the seam
+    /// reports exactly what the registry holds, and invents nothing for a
+    /// context that was never registered. The public entry point over the
+    /// process-wide latch stays the business of the process-isolated C
+    /// scenarios (ADR 0005).
     #[test]
     fn a_data_path_seam_sees_only_a_registered_record_when_conversion_is_enabled() {
-        let output = Command::new(std::env::current_exe().expect("test executable path"))
-            .args([
-                "--exact",
-                "interpose::refusal::tests::enabled_conversion_record_child",
-            ])
-            .env(ENABLED_GATE_CHILD, "1")
-            .output()
-            .expect("fresh test process");
-        assert!(
-            output.status.success(),
-            "enabled gate child failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    #[test]
-    fn enabled_conversion_record_child() {
-        if std::env::var_os(ENABLED_GATE_CHILD).is_none() {
-            return;
-        }
-
         const REGISTERED_CTX_ID: c_int = 0x5D01;
         const UNREGISTERED_CTX_ID: c_int = 0x5D02;
-        crate::version::hli_version::set("4.1.1")
-            .expect("the fresh test process accepts its HLI version");
         register_equilibrium_root(REGISTERED_CTX_ID, "time_slice");
 
-        let record = live_conversion_record(REGISTERED_CTX_ID)
+        let record = conversion_record_if_enabled(true, || REGISTRY.lookup(REGISTERED_CTX_ID))
             .expect("an enabled seam must see the registered conversion record");
         assert_eq!(record.resolved_path, "time_slice");
         assert!(
-            live_conversion_record(UNREGISTERED_CTX_ID).is_none(),
+            conversion_record_if_enabled(true, || REGISTRY.lookup(UNREGISTERED_CTX_ID)).is_none(),
             "an enabled seam must not invent a record for an unregistered context"
         );
 
