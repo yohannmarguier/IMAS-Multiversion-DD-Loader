@@ -146,6 +146,10 @@ fn rejects_renamed_rules_with_the_same_source_path() {
             pattern: "a".to_string(),
         }
     );
+    assert_eq!(
+        err.to_string(),
+        "duplicate exact source selector on the left side: `a`"
+    );
 }
 
 #[test]
@@ -187,6 +191,37 @@ fn rejects_invalid_cocos_convention() {
     assert_eq!(
         err,
         LoadError::InvalidCocosConvention("not-a-convention".to_string())
+    );
+}
+
+#[test]
+fn parser_accepts_nonoverlapping_glob_selectors() {
+    let xml = map_with(
+        "3.39.0",
+        "4.1.1",
+        r#"
+          <rules>
+            <rule id="first" rel="left_only" left="a/*/c" glob="yes"><fidelity forward="lossy" reverse="unmappable"/></rule>
+            <rule id="second" rel="left_only" left="d/b/*" glob="yes"><fidelity forward="lossy" reverse="unmappable"/></rule>
+          </rules>
+        "#,
+    );
+
+    ConversionMap::load(&xml).expect("nonoverlapping globs must not conflict");
+}
+
+#[test]
+fn parser_rejects_unknown_ids_map_children() {
+    let xml = map_with("3.39.0", "4.1.1", r#"<unrecognised-metadata/>"#);
+
+    let error = ConversionMap::load(&xml).expect_err("only documented metadata may be ignored");
+    assert_eq!(
+        error,
+        LoadError::UnknownIdsMapChild("unrecognised-metadata".to_string())
+    );
+    assert_eq!(
+        error.to_string(),
+        "unrecognised <ids-map> child <unrecognised-metadata>"
     );
 }
 
@@ -485,6 +520,8 @@ fn include_and_coverage_metadata_are_ignored_without_changing_default_resolution
         "#,
     );
     let map = ConversionMap::load(&xml).expect("ignored metadata must not be loaded or validated");
+    assert_eq!(map.left.cocos.to_string(), "11");
+    assert_eq!(map.right.cocos.to_string(), "17");
     let explanation = map
         .resolve("time_slice/boundary/type", Direction::Forward)
         .expect("default identity must still resolve");
@@ -1382,6 +1419,10 @@ fn overlapping_glob_selectors_on_the_same_source_role_invalidate_the_map() {
             first: "a/*/c".to_string(),
             second: "a/b/*".to_string(),
         }
+    );
+    assert_eq!(
+        err.to_string(),
+        "overlapping glob source selectors on the left side: `a/*/c` and `a/b/*`"
     );
 }
 
