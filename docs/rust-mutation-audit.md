@@ -68,28 +68,31 @@ The CTest fixture `rust-mutation-audit-fixtures` verifies threshold boundaries,
 timeouts, unviable mutants, a precisely documented equivalent exclusion, scope
 selection and incomplete-run refusal. It does not run a full mutation campaign.
 
-## Initial scoped outcome (2026-09-17)
+GitHub Actions exposes the same command only through the **Rust mutation
+audit** `workflow_dispatch` workflow. It is neither scheduled nor a pull-request
+requirement. It retains the complete `target/rust-mutation-audit.*` directory
+even when the audit fails; download that artifact to inspect the selected list,
+raw cargo-mutants outcomes, and survivor inventory. A raw miss is not silently
+accepted: it passes only when `rust-mutation-dispositions.json` supplies a
+specific equivalent or integration-only rationale, and any timeout fails.
 
-A clean detached worktree at `11457ef` completed 603 selected mutants in
-18m18s. The durable [normalized baseline report](mutation-audits/issue-191-scoped-baseline.md)
-records its result. At that baseline revision, no survivor had been excluded:
-`rust-mutation-dispositions.json` was empty, so every
-missed mutant remained visible in the command's survivor inventory for
-follow-up. The current manifest classifies the two `path_conversion` shape-
-refusal fallback omissions as equivalent: their shared-refusal checks return
-before either fallback can run. Future exclusions still require the same
-code-local observable-behavior evidence.
+## Integrated scoped outcome (2026-09-17)
+
+A clean worktree completed 592 selected mutants in 17m13s. Two raw misses are
+explicitly classified equivalent fallbacks in
+`rust-mutation-dispositions.json`; both remain printed in the survivor
+inventory and are excluded from the score. No mutant timed out.
 
 | Group | Caught | Missed | Timed out | Unviable | Excluded | Score |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| conversion | 262 | 21 | 0 | 61 | 0 | 92.6% |
-| DD-version | 53 | 1 | 0 | 8 | 0 | 98.1% |
+| conversion | 272 | 0 | 0 | 61 | 2 | 100.0% |
+| DD-version | 54 | 0 | 0 | 8 | 0 | 100.0% |
 | context-registry | 24 | 0 | 0 | 4 | 0 | 100.0% |
-| loss | 19 | 9 | 2 | 3 | 0 | 63.3% |
+| loss | 26 | 0 | 0 | 5 | 0 | 100.0% |
 | artifact-validation | 69 | 0 | 0 | 5 | 0 | 100.0% |
-| deterministic runtime-binding policy | 57 | 4 | 0 | 1 | 0 | 93.4% |
-| aggregate | 484 | 35 | 2 | 82 | 0 | 92.9% |
+| deterministic runtime-binding policy | 61 | 0 | 0 | 1 | 0 | 100.0% |
+| aggregate | 506 | 0 | 0 | 84 | 2 | 100.0% |
 
-The aggregate numeric score clears its floor, but the loss group is below 75%
-and its two timeouts independently fail the audit. These are baseline findings,
-not a reason to lower either floor or classify a survivor without evidence.
+The two exclusions are narrow by construction: a changed resolution shape or
+write/delete check that makes either fallback reachable returns it to the
+score. Do not add a broad exclusion to make a future failed audit pass.

@@ -350,7 +350,8 @@ suite for the local Rust decision-coverage audit. It proves that the checker
 adds covered and total lines across groups, does not average percentages, fails
 an aggregate pass with one below-floor group, and refuses reports that omit or
 empty a required source measurement. It does not run the full audit: the
-checked-in baseline remains below the target until the follow-on test work.
+ordinary CI job runs the checked-in command and uploads its LCOV report even
+when the threshold rejects it.
 
 ### `rust-mutation-audit-fixtures`
 
@@ -372,7 +373,7 @@ completeness check, and requires rejection of two near-boundary fixtures
 generated inside the script (the approved artifact minus exactly one rule) so
 the gate cannot pass by matching a substring.
 
-### `ci-workflow`, `script-policy-versions` (+ their two guards)
+### `ci-workflow`, `rust-audit-workflows`, `script-policy-versions` (+ guards)
 
 Configuration-as-tested.
 
@@ -385,6 +386,11 @@ Configuration-as-tested.
   `IN_LIST` pass locally and fail only on CI.
 - Each has a `verify_*_guard` companion feeding it throwaway mutated fixtures,
   to prove it rejects them.
+- `check_rust_audit_workflows.cmake` proves the ordinary line gate and the
+  dispatch-only mutation workflow run their checked-in commands with pinned
+  tools, retain reports on failure, and preserve the exact floors and scope.
+  Its guard rejects a missing or decoy line command, threshold or scope drift,
+  and loss of the manual trigger.
 
 ### `scripts/` — CI only, not in ctest
 

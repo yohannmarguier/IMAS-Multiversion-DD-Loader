@@ -56,28 +56,27 @@ LCOV input, overlapping source assignments, or a scope that does not name all
 six groups. A source absent from the scope is an explicit test-layer exclusion
 recorded in the same JSON file; it is not part of the denominator.
 
-The floors are 90% aggregate and 80% for every group. They are intentionally
-not in CI yet. The compact fixture test is registered as
+The floors are 90% aggregate and 80% for every group. Ordinary CI runs this
+same command in its `rust-line-coverage` job and blocks on its verdict. Its
+LCOV report is uploaded even if the audit fails, so inspect the group totals
+before changing scope or tests. The compact fixture test is registered as
 `rust-line-coverage-audit-fixtures` and proves the aggregate/per-group boundary
-and malformed-data behavior without requiring the baseline to pass.
+and malformed-data behavior without requiring a full coverage run.
 
-## Initial baseline (2026-09-17)
+## Integrated baseline (2026-09-17)
 
-The pinned tool and Rust 1.88.0 reported the following after 281 Rust unit
-tests. The expected nonzero result is the audit's enforcement result, not a
-broken command.
+The pinned tool reported the following from the integrated 299-unit-test audit.
+`cargo-llvm-cov 0.9.1` and `cargo-mutants 27.1.0` are both available under
+Rust 1.88.0, which is the CI toolchain; the recorded line run also passes on
+the local Rust toolchain. All floors pass, so the command is suitable for CI
+enforcement.
 
 | Group | Covered/total | Coverage |
 | --- | ---: | ---: |
-| conversion | 1,843 / 2,104 | 87.6% |
-| DD-version | 147 / 161 | 91.3% |
+| conversion | 1,900 / 2,095 | 90.7% |
+| DD-version | 154 / 161 | 95.7% |
 | context-registry | 183 / 183 | 100.0% |
-| loss | 140 / 163 | 85.9% |
-| artifact-validation | 227 / 232 | 97.8% |
-| deterministic runtime-binding policy | 86 / 111 | 77.5% |
-| aggregate | 2,626 / 2,954 | 88.9% |
-
-The aggregate and deterministic-runtime-binding-policy group are below their
-floors. Later work must raise coverage or revise this documented scope
-deliberately; this ticket records the measurement and its enforcement mechanism
-without pretending the baseline has already passed.
+| loss | 148 / 149 | 99.3% |
+| artifact-validation | 222 / 227 | 97.8% |
+| deterministic runtime-binding policy | 102 / 110 | 92.7% |
+| aggregate | 2,709 / 2,925 | 92.6% |

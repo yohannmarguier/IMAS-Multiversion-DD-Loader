@@ -24,6 +24,23 @@ add_test(NAME ci-workflow-guard-rejects-misplaced-commands
         "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify_ci_workflow_guard.cmake")
 
+add_test(NAME rust-audit-workflows
+    COMMAND "${CMAKE_COMMAND}"
+        "-DCI_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
+        "-DMUTATION_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/rust-mutation-audit.yml"
+        "-DLINE_SCOPE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-line-coverage-scope.json"
+        "-DMUTATION_AUDIT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-mutation-audit.json"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_rust_audit_workflows.cmake")
+add_test(NAME rust-audit-workflow-guard
+    COMMAND "${CMAKE_COMMAND}"
+        "-DCI_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
+        "-DMUTATION_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/rust-mutation-audit.yml"
+        "-DLINE_SCOPE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-line-coverage-scope.json"
+        "-DMUTATION_AUDIT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-mutation-audit.json"
+        "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_rust_audit_workflows.cmake"
+        "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify_rust_audit_workflow_guard.cmake")
+
 # Scripts run with `cmake -P` inherit no policies, so each one must pin its
 # own version. CMake 4.x defaults those policies to NEW and CMake 3.x does
 # not, which once let an unpinned `IN_LIST` pass locally and fail only on
