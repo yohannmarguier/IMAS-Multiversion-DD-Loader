@@ -352,11 +352,13 @@ mod tests {
     use std::fs;
     use std::io;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        LossFileEffects, LossFileEntry, LossFileFacts, LossFileWriter, select_directory,
-        utc_timestamp,
+        LossFileEffects, LossFileEntry, LossFileFacts, LossFileWriter, ProcessFacts,
+        select_directory, utc_timestamp,
     };
     use crate::conversion::conversion_map::Fidelity;
     use crate::loss::LossOperation;
@@ -435,13 +437,181 @@ mod tests {
         )
     }
 
+    fn second_entry() -> LossFileEntry {
+        LossFileEntry::new(
+            "imas:hdf5?path=/tmp/pulse",
+            "equilibrium/3",
+            "4.1.1",
+            "3.39.0",
+            LossOperation::Read,
+            Fidelity::Lossy,
+            "time_slice/boundary_separatrix/gap/r",
+        )
+    }
+
     fn only_log(directory: &TestDirectory) -> PathBuf {
-        let paths = fs::read_dir(directory.path())
+        only_log_path(directory.path())
+    }
+
+    const PROCESS_CONTRACT_CHILD_MODE: &str = "IMAS_MVDD_LOSS_FILE_TEST_CHILD_MODE";
+
+    fn process_seconds() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    fn assert_production_facts_match_the_child_process() {
+        let facts = ProcessFacts;
+        assert_eq!(
+            facts.configured_directory(),
+            std::env::var_os("IMAS_MVDD_LOSS_LOG_DIR")
+        );
+        assert_eq!(
+            facts.current_directory().unwrap(),
+            std::env::current_dir().unwrap()
+        );
+        let started = process_seconds();
+        let seconds = facts.epoch_seconds().unwrap();
+        let finished = process_seconds();
+        assert!(finished >= started);
+        assert!(finished - started <= 60);
+        assert!((started..=finished).contains(&seconds));
+        assert_eq!(facts.process_id(), std::process::id());
+    }
+
+    fn assert_production_log(directory: &std::path::Path) {
+        let log = only_log_path(directory);
+        let name = log.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("imas-mvdd-loss-"));
+        assert!(name.ends_with(&format!("-{}.txt", std::process::id())));
+        let timestamp = &name["imas-mvdd-loss-".len()..20 + "imas-mvdd-loss-".len()];
+        assert!(timestamp.contains('T'));
+
+        let contents = fs::read_to_string(&log).unwrap();
+        assert!(contents.starts_with("# imas-mvdd loss log format 1\n# written "));
+        assert!(contents.contains(&format!("# written {timestamp}\n")));
+        assert!(contents.contains(&format!("# process {}\n", std::process::id())));
+        assert!(contents.contains("uri\tids\tstored-dd\thli-dd\toperation\tfidelity\tpath\n"));
+        assert!(contents.contains(
+            "\tequilibrium/3\t4.1.1\t3.39.0\tread\tPOTENTIALLY_LOSSY\ttime_slice/ggd/b_field_phi\n"
+        ));
+    }
+
+    fn write_with_production_facts_and_effects(directory: &std::path::Path) {
+        let started = process_seconds();
+        let writer = LossFileWriter::new(ProcessFacts);
+        writer.retain(entry());
+        let finished = process_seconds();
+        assert!(finished >= started);
+        assert!(finished - started <= 60);
+        assert_production_log(directory);
+
+        let name = only_log_path(directory)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let timestamp = &name["imas-mvdd-loss-".len()..20 + "imas-mvdd-loss-".len()];
+        assert!((started..=finished).any(|seconds| utc_timestamp(seconds) == timestamp));
+    }
+
+    fn only_log_path(directory: &std::path::Path) -> PathBuf {
+        let paths = fs::read_dir(directory)
             .unwrap()
             .map(|entry| entry.unwrap().path())
             .collect::<Vec<_>>();
         assert_eq!(paths.len(), 1);
         paths.into_iter().next().unwrap()
+    }
+
+    fn run_process_contract_child(
+        mode: &str,
+        working_directory: &TestDirectory,
+        configured_directory: Option<&std::path::Path>,
+    ) -> std::process::Output {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "loss_file::tests::production_process_contract",
+                "--nocapture",
+            ])
+            .current_dir(working_directory.path())
+            .env(PROCESS_CONTRACT_CHILD_MODE, mode);
+        if let Some(directory) = configured_directory {
+            command.env("IMAS_MVDD_LOSS_LOG_DIR", directory);
+        } else {
+            command.env_remove("IMAS_MVDD_LOSS_LOG_DIR");
+        }
+        command.output().unwrap()
+    }
+
+    fn assert_successful_child(output: std::process::Output) {
+        assert!(
+            output.status.success(),
+            "child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(output.stderr.is_empty());
+    }
+
+    #[test]
+    fn production_process_contract() {
+        if let Ok(mode) = std::env::var(PROCESS_CONTRACT_CHILD_MODE) {
+            assert_production_facts_match_the_child_process();
+            match mode.as_str() {
+                "default" => write_with_production_facts_and_effects(std::path::Path::new(".")),
+                "configured" => write_with_production_facts_and_effects(std::path::Path::new(
+                    &std::env::var("IMAS_MVDD_LOSS_LOG_DIR").unwrap(),
+                )),
+                "diagnostic" => {
+                    let writer = LossFileWriter::new(ProcessFacts);
+                    writer.retain(entry());
+                    writer.retain(second_entry());
+                }
+                unexpected => panic!("unexpected process-contract mode {unexpected}"),
+            }
+            return;
+        }
+
+        let default_directory = TestDirectory::new();
+        assert_successful_child(run_process_contract_child(
+            "default",
+            &default_directory,
+            None,
+        ));
+
+        let configured_directory = TestDirectory::new();
+        let different_working_directory = TestDirectory::new();
+        assert_successful_child(run_process_contract_child(
+            "configured",
+            &different_working_directory,
+            Some(configured_directory.path()),
+        ));
+
+        let invalid_destination_parent = TestDirectory::new();
+        let invalid_destination = invalid_destination_parent.path().join("not-a-directory");
+        fs::write(&invalid_destination, "not a directory").unwrap();
+        let output = run_process_contract_child(
+            "diagnostic",
+            &different_working_directory,
+            Some(&invalid_destination),
+        );
+        assert!(
+            output.status.success(),
+            "child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.starts_with("IMAS-MVDD: could not write loss log in "));
+        assert!(stderr.contains("directory does not exist"));
+        assert_eq!(stderr.matches("IMAS-MVDD: ").count(), 1);
+        assert_eq!(stderr.matches('\n').count(), 1);
     }
 
     struct PreambleFails;

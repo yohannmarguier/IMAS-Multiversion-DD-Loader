@@ -483,6 +483,19 @@ add_stub_test(loss-file-is-absent-without-loss
     STAMP_VERSION 4.1.1
     ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-clean")
 
+# Issue #235: the production facts/effects boundary is observable only from a
+# fresh process. This scenario clears the optional destination so the shim
+# must use this isolated working directory, its clock and its process ID.
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-default-directory")
+add_stub_test(loss-file-production-facts-and-effects-use-the-process-contract
+    read_path_test production-facts-and-effects-use-the-process-contract
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+set_tests_properties(loss-file-production-facts-and-effects-use-the-process-contract PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-default-directory")
+set_property(TEST loss-file-production-facts-and-effects-use-the-process-contract
+    APPEND PROPERTY ENVIRONMENT_MODIFICATION "IMAS_MVDD_LOSS_LOG_DIR=unset:")
+
 # Issue #172: the optional delivery channel can be configured away, or fail
 # once without changing the successful ABI call or its in-memory loss record.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-disabled")
