@@ -579,14 +579,20 @@ sequenceDiagram
             else stamp absent, or equal to the HLI version (ADR 0007)
                 POL-->>OCC: RegisterNothing
                 OCC-->>HLI: status unchanged — passthrough from here on
-            else different version, no embedded artifact
-                POL-->>OCC: RegisterNothing + remember the mismatch
-                OCC->>REG: remember_mismatched_occurrence(...)
-                OCC-->>HLI: status unchanged
-            else different version an artifact serves
-                POL-->>OCC: RegisterRoot(stored, artifact)
-                OCC->>REG: get_or_create_map(MapCacheKey), then record_root(...)
-                OCC-->>HLI: status — this context now converts
+            else different version
+                POL-->>OCC: RegisterMismatch(stored)
+                OCC->>OCC: acquire a complete selected-source map
+                alt production source has no artifact
+                    OCC->>REG: remember_mismatched_occurrence(...)
+                    OCC-->>HLI: status unchanged
+                else acquisition fails
+                    OCC->>REG: forget_occurrence_version(...)
+                    OCC->>CORE: al_end_action(octx_id)
+                    OCC-->>HLI: refusal naming IDS and both DD versions
+                else complete map acquired
+                    OCC->>REG: remember_mismatched_occurrence(...), then record_root(...)
+                    OCC-->>HLI: status — this context now converts
+                end
             end
         end
     end

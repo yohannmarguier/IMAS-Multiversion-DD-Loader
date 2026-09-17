@@ -16,11 +16,17 @@
 
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::Arc;
+#[cfg(feature = "graph-test-source")]
+use std::sync::LazyLock;
 
 use crate::al_status_t;
 use crate::conversion::conversion_map::ConversionMap;
 use crate::conversion::known_artifacts;
 use crate::conversion::path_conversion::{self, ContextPathResolution};
+#[cfg(feature = "graph-test-source")]
+use crate::conversion::runtime_map::{
+    MapRequest, RuntimeMapCoordinator, graph_test_source::GraphTestSource,
+};
 use crate::conversion::seam_policy;
 use crate::core::core_binding::{READ_OP_ID, forward_status};
 use crate::registry::context_registry::{MapCacheKey, REGISTRY, RootRegistration};
@@ -271,12 +277,21 @@ unsafe fn open_occurrence(
         && let Some(raw_path) = datapath
             .and_then(c_str_or_none)
             .filter(|path| !path.is_empty())
-        && let Some(artifact) = known_artifacts::lookup(ids_name, &stored, &hli)
     {
-        let map = resolve_conversion_map(ids_name, &stored, &hli, &artifact);
-        translated_datapath =
-            seam_policy::decide_datapath_translation(&map, artifact.direction_to_stored, raw_path)
+        match resolve_conversion_map(ids_name, &stored, &hli) {
+            MapAcquisition::Ready(map) => {
+                translated_datapath = seam_policy::decide_datapath_translation(
+                    &map.map,
+                    map.direction_to_stored,
+                    raw_path,
+                )
                 .and_then(|path| CString::new(path).ok());
+            }
+            MapAcquisition::Unavailable => {}
+            MapAcquisition::Failed => {
+                return OpenOccurrenceResult::Status(acquisition_refusal(ids_name, &hli, &stored));
+            }
+        }
     }
     let effective_datapath = datapath.map(|original| {
         translated_datapath
@@ -400,7 +415,8 @@ fn discover_stamp(ctx_id: c_int) -> version_stamp::StampOutcome {
 /// successful occurrence open. A malformed stamp clears the occurrence cache
 /// and asks the wrapper to end its just-opened context through its matching
 /// ABI family; an absent or matching stamp clears the cache; a mismatch
-/// records its stored version and, when covered by an artifact, the root.
+/// records its stored version only after the selected source returns a ready
+/// map, and clears that cache before refusing failed acquisition.
 fn apply_discovery_decision(
     pctx_id: c_int,
     dataobjectname: &str,
@@ -428,19 +444,31 @@ fn apply_discovery_decision(
             apply_occurrence_cache_effect(pctx_id, dataobjectname, occurrence_cache);
             OpenOccurrenceResult::Status(status)
         }
-        seam_policy::DiscoveryDecision::RegisterRoot {
+        seam_policy::DiscoveryDecision::RegisterMismatch {
             stored,
-            artifact,
             occurrence_cache,
         } => {
-            apply_occurrence_cache_effect(pctx_id, dataobjectname, occurrence_cache);
             let ids_name = ids_name_from(dataobjectname);
+            let ready = match resolve_conversion_map(ids_name, &stored, hli) {
+                MapAcquisition::Ready(ready) => ready,
+                MapAcquisition::Unavailable => {
+                    apply_occurrence_cache_effect(pctx_id, dataobjectname, occurrence_cache);
+                    return OpenOccurrenceResult::Status(status);
+                }
+                MapAcquisition::Failed => {
+                    apply_occurrence_cache_effect(
+                        pctx_id,
+                        dataobjectname,
+                        seam_policy::OccurrenceCacheEffect::Forget,
+                    );
+                    return OpenOccurrenceResult::RefuseAndEnd {
+                        opened_ctx_id,
+                        status: acquisition_refusal(ids_name, hli, &stored),
+                    };
+                }
+            };
+            apply_occurrence_cache_effect(pctx_id, dataobjectname, occurrence_cache);
             let key = map_cache_key(ids_name, &stored, hli);
-            let direction = artifact.direction_to_stored;
-            // The legacy artifact source acquires the shared map before the
-            // registry mutates. A later KG-backed source follows this same
-            // ready-map handoff, keeping KG I/O and waiting out of record_root.
-            let map = resolve_conversion_map(ids_name, &stored, hli, &artifact);
             // A global/slice/time-range action opens the whole IDS
             // occurrence, not one field: the record's resolved path is the
             // occurrence's own root, empty because a relative read resolves
@@ -452,10 +480,10 @@ fn apply_discovery_decision(
                     pulse_ctx_id: pctx_id,
                     dataobjectname: dataobjectname.to_string(),
                     key,
-                    direction_to_stored: direction,
+                    direction_to_stored: ready.direction_to_stored,
                     opened_read_op,
                 },
-                map,
+                ready.map,
             );
             OpenOccurrenceResult::Status(status)
         }
@@ -493,14 +521,78 @@ fn ids_name_from(dataobjectname: &str) -> &str {
 /// a global action needs the same map before its forward call, whereas root
 /// registration happens only after a successful occurrence open. Keeping the
 /// cache lookup separate also preserves `record_root`'s focused registry API.
+struct ReadyConversionMap {
+    map: Arc<ConversionMap>,
+    direction_to_stored: crate::conversion::conversion_map::Direction,
+}
+
+enum MapAcquisition {
+    Ready(ReadyConversionMap),
+    #[allow(dead_code)] // Constructed only by the production artifact source.
+    Unavailable,
+    #[allow(dead_code)] // Constructed only by the graph-selected test instance.
+    Failed,
+}
+
 fn resolve_conversion_map(
     ids: &str,
     stored: &crate::version::dd_version::DdVersion,
     hli: &crate::version::dd_version::DdVersion,
-    artifact: &known_artifacts::ArtifactMatch,
-) -> Arc<ConversionMap> {
-    let key = map_cache_key(ids, stored, hli);
-    REGISTRY.get_or_create_map(key, || load_artifact(artifact))
+) -> MapAcquisition {
+    #[cfg(not(feature = "graph-test-source"))]
+    {
+        match known_artifacts::lookup(ids, stored, hli) {
+            Some(artifact) => {
+                let key = map_cache_key(ids, stored, hli);
+                MapAcquisition::Ready(ReadyConversionMap {
+                    map: REGISTRY.get_or_create_map(key, || load_artifact(&artifact)),
+                    direction_to_stored: artifact.direction_to_stored,
+                })
+            }
+            None => MapAcquisition::Unavailable,
+        }
+    }
+
+    #[cfg(feature = "graph-test-source")]
+    {
+        match (
+            crate::conversion::conversion_map::ArtifactDdVersion::new(stored.to_string()),
+            crate::conversion::conversion_map::ArtifactDdVersion::new(hli.to_string()),
+        ) {
+            (Ok(stored_dd), Ok(hli_dd)) => {
+                let request = MapRequest {
+                    ids: ids.to_string(),
+                    stored_dd,
+                    hli_dd,
+                };
+                match graph_test_coordinator().acquire(&request) {
+                    Ok(map) => MapAcquisition::Ready(ReadyConversionMap {
+                        map,
+                        direction_to_stored: crate::conversion::conversion_map::Direction::Forward,
+                    }),
+                    Err(_) => MapAcquisition::Failed,
+                }
+            }
+            _ => MapAcquisition::Failed,
+        }
+    }
+}
+
+#[cfg(feature = "graph-test-source")]
+static GRAPH_TEST_COORDINATOR: LazyLock<RuntimeMapCoordinator<GraphTestSource>> =
+    LazyLock::new(|| RuntimeMapCoordinator::new(GraphTestSource));
+
+#[cfg(feature = "graph-test-source")]
+fn graph_test_coordinator() -> &'static RuntimeMapCoordinator<GraphTestSource> {
+    &GRAPH_TEST_COORDINATOR
+}
+
+fn acquisition_refusal(
+    ids: &str,
+    hli: &crate::version::dd_version::DdVersion,
+    stored: &crate::version::dd_version::DdVersion,
+) -> al_status_t {
+    crate::path_conversion_refusal("conversion map acquisition failed", ids, hli, stored)
 }
 
 /// The `(IDS name, stored DD version, HLI DD version)` cache key both the
@@ -518,6 +610,7 @@ fn map_cache_key(
 /// only as a legacy `get_or_create_map` cache-miss closure, so this runs at
 /// most once per `(IDS, stored, HLI)` key for as long as some record still
 /// references the resulting map.
+#[cfg_attr(feature = "graph-test-source", allow(dead_code))]
 pub(super) fn load_artifact(artifact: &known_artifacts::ArtifactMatch) -> ConversionMap {
     ConversionMap::load_with_endpoint_inventories(
         artifact.xml,

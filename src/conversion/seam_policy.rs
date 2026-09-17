@@ -49,7 +49,6 @@ use crate::al_status_t;
 use crate::conversion::conversion_map::{
     ConversionMap, Direction, Fidelity, TransformationDirection, ValueTransformation,
 };
-use crate::conversion::known_artifacts::{self, ArtifactMatch};
 use crate::conversion::path_conversion::{
     self, DeletePath, ReadPath, TranslatedReadPath, WritePath,
 };
@@ -70,12 +69,10 @@ pub(crate) enum OccurrenceCacheEffect {
 /// decides which ADR-0007/0009/0011 branch applies; it never touches the
 /// registry or chooses an ABI end-action symbol itself.
 pub(crate) enum DiscoveryDecision {
-    /// The stored DD version differs from the HLI's and an embedded artifact
-    /// can serve the IDS/version pair. The adapter records both the known
-    /// mismatch and the root conversion context.
-    RegisterRoot {
+    /// The stored DD version differs from the HLI's. The adapter selects its
+    /// map source before recording either occurrence-cache state or a root.
+    RegisterMismatch {
         stored: DdVersion,
-        artifact: ArtifactMatch,
         occurrence_cache: OccurrenceCacheEffect,
     },
     /// No root conversion context is warranted. A mismatching `stored` value
@@ -99,7 +96,7 @@ pub(crate) enum DiscoveryDecision {
 /// returns the effect, while the adapter owns raw pointers, Core calls and
 /// process-global state.
 pub(crate) fn decide_occurrence_registration(
-    ids_name: &str,
+    _ids_name: &str,
     hli: &DdVersion,
     read_stamp: impl FnOnce() -> StampOutcome,
 ) -> DiscoveryDecision {
@@ -114,15 +111,9 @@ pub(crate) fn decide_occurrence_registration(
         StampOutcome::Stored(stored) if stored == *hli => DiscoveryDecision::RegisterNothing {
             occurrence_cache: OccurrenceCacheEffect::Forget,
         },
-        StampOutcome::Stored(stored) => match known_artifacts::lookup(ids_name, &stored, hli) {
-            Some(artifact) => DiscoveryDecision::RegisterRoot {
-                occurrence_cache: OccurrenceCacheEffect::RememberMismatch(stored.clone()),
-                stored,
-                artifact,
-            },
-            None => DiscoveryDecision::RegisterNothing {
-                occurrence_cache: OccurrenceCacheEffect::RememberMismatch(stored),
-            },
+        StampOutcome::Stored(stored) => DiscoveryDecision::RegisterMismatch {
+            occurrence_cache: OccurrenceCacheEffect::RememberMismatch(stored.clone()),
+            stored,
         },
     }
 }
@@ -1035,16 +1026,16 @@ mod tests {
             decide_occurrence_registration("core_profiles", &version("4.1.1"), || {
                 StampOutcome::Stored(version("3.39.0"))
             }),
-            DiscoveryDecision::RegisterNothing {
-                occurrence_cache: OccurrenceCacheEffect::RememberMismatch(stored)
+            DiscoveryDecision::RegisterMismatch {
+                occurrence_cache: OccurrenceCacheEffect::RememberMismatch(stored),
+                ..
             } if stored == version("3.39.0")
         ));
         assert!(matches!(
             discover(StampOutcome::Stored(version("3.39.0"))),
-            DiscoveryDecision::RegisterRoot {
+            DiscoveryDecision::RegisterMismatch {
                 stored,
                 occurrence_cache: OccurrenceCacheEffect::RememberMismatch(cache_stored),
-                ..
             } if stored == version("3.39.0") && cache_stored == version("3.39.0")
         ));
     }
