@@ -404,6 +404,9 @@ static size_t g_last_written_count = 0;
 #define RECORDING_STUB_CSV_CAPACITY 16
 /* IMAS-Core's MAXDIM is part of the duplicated ABI contract above. */
 enum { RECORDING_STUB_MAXDIM = 7 };
+/* IMAS-Core's DOUBLE_DATA code. The stub-only profile has no al_const.h
+ * to include, so name it here rather than comparing a bare ordinal. */
+enum { RECORDING_STUB_DOUBLE_DATA = 52 };
 static double g_read_double_values[RECORDING_STUB_CSV_CAPACITY];
 static int g_read_size_override[RECORDING_STUB_CSV_CAPACITY];
 
@@ -883,7 +886,7 @@ static void trigger_reentrant_data(enum recording_stub_reentrant_outer outer, vo
     g_reentrant_data_expected_size = callback_size;
     al_status_t status = g_reentrant_data(g_reentrant_data_ctx, g_reentrant_data_field,
                                           g_reentrant_data_timebase, callback_data,
-                                          data != NULL ? datatype : 52 /* DOUBLE_DATA */,
+                                          data != NULL ? datatype : RECORDING_STUB_DOUBLE_DATA,
                                           data != NULL ? dim : 1, callback_size);
     g_reentrant_data_status_code = status.code;
     g_reentrant_data_active = 0;
@@ -950,7 +953,7 @@ static void snapshot_double_payload(double **snapshot, size_t *snapshot_count, v
     free(*snapshot);
     *snapshot = NULL;
     *snapshot_count = 0;
-    if (datatype != 52 /* DOUBLE_DATA */ || data == NULL || dim < 0 ||
+    if (datatype != RECORDING_STUB_DOUBLE_DATA || data == NULL || dim < 0 ||
         dim > RECORDING_STUB_MAXDIM || (dim > 0 && size == NULL)) {
         return;
     }

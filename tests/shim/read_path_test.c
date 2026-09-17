@@ -40,7 +40,7 @@ static void arm_reentrant_read(read_data_fn callback, const char *field) {
 
 static al_status_t read_data(int ctx_id, const char *field, const char *timebase, void **data) {
     int size[1] = {0};
-    return al_read_data(ctx_id, field, timebase, data, 52 /* DOUBLE_DATA */, 1, size);
+    return al_read_data(ctx_id, field, timebase, data, IMAS_DOUBLE_DATA, 1, size);
 }
 
 static void check_stub_paths(const char *field, const char *timebase) {
@@ -529,7 +529,7 @@ static void scenario_reentrant_read_does_not_reapply_a_sign_flip(void) {
     int size[1] = {0};
     void *data = NULL;
     CHECK(al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
-                       52 /* DOUBLE_DATA */, 1, size)
+                       IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
     CHECK(data != NULL);
     CHECK(size[0] == 4);
@@ -555,7 +555,7 @@ static void scenario_plugin_reentrant_read_is_forwarded_across_the_ordinary_fami
 
     void *data = NULL;
     int size[1] = {0};
-    CHECK(al_plugin_read_data(operation_ctx, field, "", &data, 52 /* DOUBLE_DATA */, 1, size)
+    CHECK(al_plugin_read_data(operation_ctx, field, "", &data, IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
     CHECK(data != NULL);
     CHECK(loss_count(operation_ctx) == 1);
@@ -869,7 +869,7 @@ static void scenario_split_plan_reads_and_flips_its_first_stored_destination(voi
     int size[1] = {0};
     void *data = NULL;
     CHECK(al_read_data(operation_ctx, "time_slice/global_quantities/psi_axis", "", &data,
-                       52 /* DOUBLE_DATA */, 1, size)
+                       IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
     CHECK(data != NULL);
     CHECK(*(double *)data == -1.5);
@@ -886,7 +886,7 @@ static void scenario_reverse_split_read_flips_its_single_stored_source(void) {
     int size[1] = {0};
     void *data = NULL;
     CHECK(al_read_data(operation_ctx, "time_slice/global_quantities/psi_axis", "", &data,
-                       52 /* DOUBLE_DATA */, 1, size)
+                       IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
     CHECK(data != NULL);
     CHECK(*(double *)data == -1.5);
@@ -987,7 +987,7 @@ static void scenario_no_source_array_zeroes_the_returned_extents(void) {
 static void scenario_rank_changing_retype_refuses_without_core_call(void) {
     int operation_ctx = open_mismatched_equilibrium();
     check_read_refusal(
-        operation_ctx, "grids_ggd/grid/space/coordinates_type", 51 /* INTEGER_DATA */,
+        operation_ctx, "grids_ggd/grid/space/coordinates_type", IMAS_INTEGER_DATA,
         "IMAS-MVDD: this path's container changed shape and cannot be served; "
         "DD path: grids_ggd/grid/space/coordinates_type; HLI DD version: 4.1.1; "
         "stored DD version: 3.39.0");
@@ -1028,7 +1028,7 @@ static void scenario_redefined_unit_path_forwards_verbatim(void) {
 
 static void scenario_unsupported_sign_flip_types_refuse_without_core_call(void) {
     int operation_ctx = open_mismatched_equilibrium();
-    const int unsupported_types[] = {51 /* INTEGER_DATA */, 53 /* COMPLEX_DATA */};
+    const int unsupported_types[] = {IMAS_INTEGER_DATA, IMAS_COMPLEX_DATA};
 
     for (size_t i = 0; i < sizeof unsupported_types / sizeof unsupported_types[0]; ++i) {
         check_read_refusal(
@@ -1050,7 +1050,7 @@ static void scenario_sign_flip_array_negates_values_and_preserves_empty_double(v
     void *data = NULL;
 
     CHECK(al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
-                       52 /* DOUBLE_DATA */, 1, size)
+                       IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
     CHECK(data != NULL);
     CHECK(size[0] == 4);
@@ -1073,7 +1073,7 @@ static void scenario_sign_flip_rank_exceeding_maxdim_refuses_without_core_call(v
     int size[8] = {73, 73, 73, 73, 73, 73, 73, 73};
 
     al_status_t status = al_read_data(operation_ctx, "time_slice/boundary/psi", "", &data,
-                                      52 /* DOUBLE_DATA */, 8 /* rank exceeds MAXDIM == 7 */, size);
+                                      IMAS_DOUBLE_DATA, 8 /* rank exceeds MAXDIM == 7 */, size);
 
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
     CHECK(strcmp(status.message,
@@ -1101,7 +1101,7 @@ static void scenario_sign_flip_invalid_shape_refuses_without_modifying_buffer(vo
      * multiplication on the third factor; the one real element the stub
      * actually returns must still come back unflipped. */
     al_status_t status = al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
-                                      52 /* DOUBLE_DATA */, 3, size);
+                                      IMAS_DOUBLE_DATA, 3, size);
 
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
     CHECK(strcmp(status.message,
@@ -1122,7 +1122,7 @@ static void scenario_sign_flip_shape_override_respects_read_rank(void) {
     void *data = NULL;
 
     CHECK(al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
-                       52 /* DOUBLE_DATA */, 1, size)
+                       IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
     CHECK(data != NULL);
     CHECK(*(double *)data == -1.5);
@@ -1140,7 +1140,7 @@ static void scenario_sign_flip_not_found_skips_value_transformation(void) {
     void *data = (void *)1;
 
     CHECK(al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
-                       52 /* DOUBLE_DATA */, 1, size)
+                       IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
     CHECK(data == NULL);
     CHECK(size[0] == 0);

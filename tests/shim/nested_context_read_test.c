@@ -61,7 +61,7 @@ static void scenario_relative_field_and_timebase_resolve_through_renamed_child(v
 
     void *data = NULL;
     int shape[1] = {0};
-    CHECK(al_read_data(arraystruct_ctx, "measured", "time", &data, 52, 1, shape).code == 0);
+    CHECK(al_read_data(arraystruct_ctx, "measured", "time", &data, IMAS_DOUBLE_DATA, 1, shape).code == 0);
     CHECK(data != NULL);
 
     /* A plain forward would ask IMAS-Core for "measured" beneath a context
@@ -99,7 +99,7 @@ static void scenario_absolute_field_outside_child_subtree_resolves_from_ids_root
     void *data = NULL;
     int shape[1] = {0};
     CHECK(al_read_data(arraystruct_ctx, "/time_slice/global_quantities/beta_tor_norm", "", &data,
-                       52, 1, shape)
+                       IMAS_DOUBLE_DATA, 1, shape)
               .code == 0);
     CHECK(data != NULL);
     check_stub_paths("/time_slice/global_quantities/beta_normal", "");
@@ -117,7 +117,7 @@ static void scenario_no_source_returns_null_through_nested_child(void) {
 
     void *data = (void *)1;
     int shape[1] = {0};
-    CHECK(al_read_data(time_slice_ctx, "boundary/lcfs", "", &data, 52, 1, shape).code == 0);
+    CHECK(al_read_data(time_slice_ctx, "boundary/lcfs", "", &data, IMAS_DOUBLE_DATA, 1, shape).code == 0);
     CHECK(data == NULL);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
 
@@ -188,7 +188,7 @@ static void scenario_sign_flip_applies_through_nested_child(void) {
 
     int read_size[1] = {0};
     void *data = NULL;
-    CHECK(al_read_data(flux_loop_ctx, "measured", "", &data, 52 /* DOUBLE_DATA */, 1, read_size)
+    CHECK(al_read_data(flux_loop_ctx, "measured", "", &data, IMAS_DOUBLE_DATA, 1, read_size)
               .code == 0);
     CHECK(data != NULL);
     CHECK(*(double *)data == -1.5);
@@ -214,7 +214,7 @@ static void scenario_moved_read_through_nested_child_retains_lossy_verdict_on_ro
      * read of the same field would have produced. */
     void *data = NULL;
     int shape[1] = {0};
-    CHECK(al_read_data(time_slice_ctx, "boundary_separatrix/gap/r", "", &data, 52, 1, shape).code
+    CHECK(al_read_data(time_slice_ctx, "boundary_separatrix/gap/r", "", &data, IMAS_DOUBLE_DATA, 1, shape).code
           == 0);
     CHECK(data != NULL);
     check_stub_paths("boundary/gap/r", "");
@@ -239,7 +239,7 @@ static void scenario_merged_read_through_nested_child_retains_potentially_lossy_
      * move-gap's unconditional "certainly lossy" bucket above. */
     void *data = NULL;
     int shape[1] = {0};
-    CHECK(al_read_data(time_slice_ctx, "ggd/b_field_phi", "", &data, 52, 1, shape).code == 0);
+    CHECK(al_read_data(time_slice_ctx, "ggd/b_field_phi", "", &data, IMAS_DOUBLE_DATA, 1, shape).code == 0);
     CHECK(data != NULL);
     check_stub_paths("ggd/b_field_phi", "");
 
@@ -261,7 +261,7 @@ static void scenario_ending_root_before_child_destroys_the_shared_loss_log(void)
 
     void *data = NULL;
     int shape[1] = {0};
-    CHECK(al_read_data(time_slice_ctx, "boundary_separatrix/gap/r", "", &data, 52, 1, shape).code
+    CHECK(al_read_data(time_slice_ctx, "boundary_separatrix/gap/r", "", &data, IMAS_DOUBLE_DATA, 1, shape).code
           == 0);
     CHECK(loss_count(operation_ctx) == 1);
     CHECK(loss_count(time_slice_ctx) == 1);

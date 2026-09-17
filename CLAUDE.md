@@ -172,13 +172,13 @@ and limitations".
   input to *which context the stamp is read through*, and nothing more. This is
   sound only while scope stays append-only, so a write-mode open inherits a
   mismatch and never creates one.
-- **Test-suite debt:** seven bare `52`-for-`DOUBLE_DATA` literals remain in
-  `tests/shim/nested_context_read_test.c` (six) and
-  `tests/shim/arraystruct_path_test.c` (one) although `tests/README.md` already
-  mandates the `IMAS_*_DATA` macros — the grep shape is a small integer in an
-  `al_read_data` datatype argument, e.g. `&data, 52,`. A half-finished migration
-  whose earlier passes each claimed to be complete; verify by grep before
-  claiming it again.
+- **The `IMAS_*_DATA` migration is finished** — no datatype ordinal is left in
+  `tests/`, commented or bare, and `tests/stub/recording_stub.c` names its own
+  `RECORDING_STUB_DOUBLE_DATA` since the stub-only profile has no `al_const.h`.
+  Earlier passes each claimed to be complete while ten bare literals and
+  thirty-seven commented ones survived, so verify by grep — a small integer in
+  an `al_read_data` datatype argument, e.g. `&data, 52,` — before claiming it
+  again.
 
 ### History
 
