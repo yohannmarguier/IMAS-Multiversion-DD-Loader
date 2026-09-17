@@ -9,22 +9,32 @@ the occurrence seams yet: embedded-artifact selection and the public C ABI are
 unchanged.
 
 The controlled contract mirrors the selected graph streams: released versions
-with optional COCOS conventions; IDS node rows with exact endpoint metadata
-(including structures and metadata paths); versioned events; and directed
-successors. It validates all row references before handling evidence. The
-first tracer deliberately accepts only an event- and successor-free identity
-scope. It emits one exact explicit identity rule for every endpoint path whose
-metadata has no COCOS label or expression, uses the existing `Retyped` refusal
-for a representation difference, and makes a COCOS-labelled or
-expression-bearing path an explicit unmappable refusal until a supported factor
-is proven. A caller
-path outside the acquired endpoint scope is left unresolved by the existing
-resolver rather than being claimed through a document-level identity default.
+with optional COCOS conventions; IDS node rows with lifecycle anchors and
+endpoint metadata (including structures and metadata paths); versioned events;
+and directed successors. It validates all row references before handling
+evidence. It orders releases numerically, replays `path_added`, `path_removed`
+and field-qualified `path_renamed` presence effects, and keeps each
+reappearance as a separate metadata interval. A removal is absent at its event
+release; an obsolescence property is not a removal. Introduction/removal edges
+can supply a matching ledger anchor but never replace repeated additions.
 
-Unprocessed event or successor evidence fails explicitly. A node missing one
-requested endpoint returns `UnresolvedEndpoint`; it does not become an absent
-counterpart. A source failure remains `Source`, distinct from construction,
-scope and evidence failures.
+Within an interval, type, rank, unit, timebase and coordinate events replay
+their checked old/new value. Coordinates accept only a small quoted-string list
+literal parser; event text is never evaluated. A field whose interval has no
+usable metadata anchor produces a path-local `Unmappable` rule and makes delete
+inventory evidence incomplete, while independently anchored paths still
+resolve. Contradictory ledger/current-endpoint evidence and malformed values
+fail acquisition. A one-sided present path likewise remains an explicit
+unmappable rule: #217 will establish correspondences and any true absence;
+this ticket does not infer either from spelling or from a missing successor.
+
+The replay still emits exact same-spelling rules only after both endpoint
+representations agree, uses the existing `Retyped` refusal for a representation
+difference, and makes a COCOS-labelled or expression-bearing path explicitly
+unmappable until a supported factor is proven. Successor rows are validated and
+retained, but correspondence, candidate grouping and scientific-factor work
+remain later tickets. A source failure remains distinct from scope, history and
+typed-map construction failures.
 
 The focused verification is:
 
@@ -34,10 +44,12 @@ cargo test conversion_map --lib
 cargo clippy --all-targets -- -D warnings
 ```
 
-The tracer is intentionally not a graph transport, historical reconstruction,
-deadline/single-flight implementation, runtime source switch, or C ABI
-adapter. Those additions must retain this complete-map-or-explicit-failure
-boundary and consume a shared attempt deadline rather than resetting it.
+The tracer is intentionally not a runtime source switch or C ABI adapter.
+The raw Neo4j boundary still retains its rows as `Neo4jRawScope`; wiring those
+complete streams into the controlled facts is the next acquisition integration
+step. Deadline/single-flight implementation must retain this
+complete-map-or-explicit-failure boundary and consume a shared attempt deadline
+rather than resetting it.
 
 ## Neo4j acquisition boundary (#212)
 
@@ -74,10 +86,10 @@ unit suite supplies shuffled pages and schema-faithful malformed rows for the
 same boundary. This machine did not have a running pinned graph, so the live
 scenario is recorded as CI-required rather than claimed as locally executed.
 
-Raw lifecycle and change records are deliberately retained as
-`Neo4jRawScope`, not converted into endpoint metadata or a map by this ticket:
-using current node properties as historical endpoint facts would fabricate a
-supported conversion. #213 owns that interpretation and then supplies the
-existing `GraphFactsSource`/`RuntimeMapAcquirer` map interface. Consequently,
-the three reference pairs have not been frozen into counts or claimed to map
-here; their correspondence/history limitations remain explicit input to #213.
+Raw lifecycle and change records remain `Neo4jRawScope` at this transport
+boundary. #213's controlled replay consumes their corresponding fact shape;
+the direct raw-to-fact adapter remains intentionally separate so it cannot
+silently treat the node's latest property as historical endpoint metadata.
+Consequently, the three reference pairs have not been frozen into counts or
+claimed to map here; their correspondence/history limitations remain explicit
+input to the later reconstruction work.
