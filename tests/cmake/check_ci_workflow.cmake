@@ -307,8 +307,14 @@ if(DEFINED PINNED_FORTRAN_CORE_JOB OR DEFINED PINNED_CPP_CORE_JOB
     return()
 endif()
 
+if(NOT DEFINED GRAPH_SETUP_ACTION_FILE)
+    message(FATAL_ERROR "GRAPH_SETUP_ACTION_FILE is required for the CI workflow")
+endif()
+read_file_lines("${GRAPH_SETUP_ACTION_FILE}" graph_setup_action_lines)
+
 read_job(fast fast_job)
 read_job(full full_job)
+read_job(graph-provisioning graph_provisioning_job)
 read_top_level_mapping(env workflow_env)
 
 require_line(fast_job "build_type: [Debug, Release]"
@@ -319,6 +325,10 @@ require_line(fast_job
     "reject clippy warnings")
 require_line(fast_job "-DIMAS_MVDD_REAL_CORE_TESTS=OFF"
     "select the recording-stub test profile")
+require_line(graph_provisioning_job "- uses: ./.github/actions/setup-dd-graph"
+    "provision the pinned DD graph through the shared setup action")
+require_line(graph_provisioning_job "run: echo 'DD graph provisioning smoke check passed'"
+    "label graph provisioning as a smoke check rather than conversion coverage")
 
 foreach(job IN ITEMS fast_job full_job)
     require_line(${job} "- uses: ./.github/actions/setup-toolchain"
@@ -357,6 +367,18 @@ require_file_line(toolchain_action_lines "using: composite"
 require_file_line(toolchain_action_lines
     "rustup toolchain install \"$RUST_VERSION\" --profile minimal -c rustfmt -c clippy"
     "install the pinned Rust toolchain")
+require_file_line(graph_setup_action_lines "using: composite"
+    "define the DD graph setup as a composite action")
+require_file_line(graph_setup_action_lines "uses: actions/cache/restore@v4"
+    "restore the immutable DD graph archive cache")
+require_file_line(graph_setup_action_lines "uses: actions/cache/save@v4"
+    "save an acquired DD graph archive cache")
+require_file_line(graph_setup_action_lines "uses: oras-project/setup-oras@v1"
+    "install ORAS for a cache miss")
+require_file_line(graph_setup_action_lines "scripts/dd-graph.sh setup"
+    "load and start a fresh Neo4j database")
+require_matching_line(graph_setup_action_lines "scripts/dd-graph\.sh query"
+    "run the graph query smoke check")
 require_file_line(toolchain_action_lines
     "rustup default \"$RUST_VERSION\""
     "select the pinned Rust toolchain")

@@ -1,0 +1,82 @@
+name: Set up pinned DD graph
+description: Restore or acquire the pinned DD-only graph, then load and smoke-check a fresh Neo4j service
+
+outputs:
+  graph-home:
+    description: Task-owned graph state directory for this job
+    value: ${{ steps.configuration.outputs.graph_home }}
+  neo4j-uri:
+    description: Bolt URI for the fresh pinned graph service
+    value: ${{ steps.configuration.outputs.neo4j_uri }}
+
+runs:
+  using: composite
+  steps:
+    - name: Derive immutable archive cache identity
+      id: configuration
+      shell: bash
+      run: |
+        set -euo pipefail
+        selection="$GITHUB_WORKSPACE/config/dd-graph-release.env"
+        manifest=$(sed -n 's/^GRAPH_MANIFEST_DIGEST=sha256://p' "$selection")
+        archive=$(sed -n 's/^GRAPH_ARCHIVE=//p' "$selection")
+        archive_digest=$(sed -n 's/^GRAPH_ARCHIVE_DIGEST=sha256://p' "$selection")
+        test "${#manifest}" = 64
+        test "${#archive_digest}" = 64
+        test -n "$archive"
+        graph_home="$RUNNER_TEMP/imas-mvdd-dd-graph"
+        archive_dir="$graph_home/archives/${manifest:0:12}"
+        password=$(openssl rand -hex 32)
+        echo "::add-mask::$password"
+        {
+          echo "graph_home=$graph_home"
+          echo "archive_dir=$archive_dir"
+          echo "cache_key=imas-mvdd-dd-graph-${RUNNER_OS}-${archive_digest}"
+          echo "neo4j_uri=bolt://127.0.0.1:17687"
+        } >> "$GITHUB_OUTPUT"
+        {
+          echo "IMAS_MVDD_GRAPH_HOME=$graph_home"
+          echo "IMAS_MVDD_GRAPH_PASSWORD=$password"
+          echo "NEO4J_URI=bolt://127.0.0.1:17687"
+          echo "NEO4J_USERNAME=neo4j"
+          echo "NEO4J_PASSWORD=$password"
+        } >> "$GITHUB_ENV"
+
+    # Archive cache only: each job still creates a fresh task-owned database
+    # and service with scripts/dd-graph.sh below.
+    - name: Restore pinned DD graph archive
+      id: archive_cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.configuration.outputs.archive_dir }}
+        key: ${{ steps.configuration.outputs.cache_key }}
+
+    - name: Install ORAS for a cache miss
+      uses: oras-project/setup-oras@v1
+
+    - name: Load and start fresh pinned Neo4j
+      shell: bash
+      run: |
+        set -euo pipefail
+        scripts/dd-graph.sh select
+        scripts/dd-graph.sh setup
+
+    - name: Query smoke check the fresh graph
+      shell: bash
+      run: |
+        set -euo pipefail
+        for attempt in $(seq 1 30); do
+          if scripts/dd-graph.sh query; then
+            exit 0
+          fi
+          sleep 2
+        done
+        echo 'pinned DD graph did not become queryable within 60 seconds' >&2
+        exit 1
+
+    - name: Save acquired pinned DD graph archive
+      if: success() && steps.archive_cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.configuration.outputs.archive_dir }}
+        key: ${{ steps.configuration.outputs.cache_key }}

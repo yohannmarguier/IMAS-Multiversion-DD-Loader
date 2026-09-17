@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-foreach(required_variable WORKFLOW_FILE TOOLCHAIN_ACTION_FILE CHECK_SCRIPT
+foreach(required_variable WORKFLOW_FILE TOOLCHAIN_ACTION_FILE GRAPH_SETUP_ACTION_FILE CHECK_SCRIPT
         TEST_BINARY_DIR)
     if(NOT DEFINED ${required_variable})
         message(FATAL_ERROR "${required_variable} is required")
@@ -19,6 +19,7 @@ function(expect_guard_rejection fixture_name fixture_contents
         COMMAND "${CMAKE_COMMAND}"
             "-DWORKFLOW_FILE=${mutated_workflow}"
             "-DTOOLCHAIN_ACTION_FILE=${TOOLCHAIN_ACTION_FILE}"
+            "-DGRAPH_SETUP_ACTION_FILE=${GRAPH_SETUP_ACTION_FILE}"
             -P "${CHECK_SCRIPT}"
         RESULT_VARIABLE check_result
         OUTPUT_VARIABLE check_output

@@ -64,16 +64,69 @@ test -f "$mock_state/container" || fail 'setup did not create its task-owned ser
 test "$(wc -l < "$temp/oras.log" | tr -d ' ')" = 1 || fail 'clean setup did not acquire exactly once'
 
 IMAS_MVDD_GRAPH_HOME="$clean_state" "$script" stop
+
+# Simulate a fresh CI runner restoring only the immutable archive cache. Its
+# selection and database state are new, so setup must neither download again
+# nor reuse the earlier runner's database/container identity.
+rm "$mock_state/container"
+cache_hit_state="$temp/cache-hit-state"
+cache_hit_archive="$cache_hit_state/archives/dc90975cb9fa/imas-codex-graph-dd-v5.3.0.tar.gz"
+mkdir -p "$(dirname "$cache_hit_archive")"
+cp "$clean_state/archives/dc90975cb9fa/imas-codex-graph-dd-v5.3.0.tar.gz" "$cache_hit_archive"
+IMAS_MVDD_GRAPH_HOME="$cache_hit_state" "$script" select --selection "$runtime_selection"
+TEST_ORAS_FAIL=yes IMAS_MVDD_GRAPH_HOME="$cache_hit_state" IMAS_MVDD_GRAPH_PASSWORD=test-password \
+    "$script" setup
+test -d "$cache_hit_state/databases/dc90975cb9fa" || fail 'cache-hit setup did not load a fresh database'
+test "$(wc -l < "$temp/oras.log" | tr -d ' ')" = 1 || fail 'cache-hit setup downloaded instead of restoring its archive'
+IMAS_MVDD_GRAPH_HOME="$cache_hit_state" IMAS_MVDD_GRAPH_PASSWORD=test-password "$script" query \
+    | grep -F 'node_count' >/dev/null || fail 'cache-hit setup did not start a queryable service'
+IMAS_MVDD_GRAPH_HOME="$cache_hit_state" "$script" stop
+rm "$mock_state/container"
+
+# A restored archive is still verified before use; a corrupt cache makes setup
+# fail instead of bypassing graph-required work.
+corrupt_state="$temp/corrupt-state"
+corrupt_archive="$corrupt_state/archives/dc90975cb9fa/imas-codex-graph-dd-v5.3.0.tar.gz"
+mkdir -p "$(dirname "$corrupt_archive")"
+printf 'corrupt archive cache entry\n' > "$corrupt_archive"
+IMAS_MVDD_GRAPH_HOME="$corrupt_state" "$script" select --selection "$runtime_selection"
+if IMAS_MVDD_GRAPH_HOME="$corrupt_state" IMAS_MVDD_GRAPH_PASSWORD=test-password \
+    "$script" setup >"$temp/corrupt.out" 2>&1; then
+    fail 'corrupt archive cache entry was accepted'
+fi
+grep -F 'archive digest mismatch' "$temp/corrupt.out" >/dev/null \
+    || fail 'corrupt archive cache failure is explicit'
+
+# A service-start failure is an error from setup, so graph-required CI cannot
+# silently continue after archive acquisition and database loading succeeded.
+start_failure_state="$temp/start-failure-state"
+start_failure_archive="$start_failure_state/archives/dc90975cb9fa/imas-codex-graph-dd-v5.3.0.tar.gz"
+mkdir -p "$(dirname "$start_failure_archive")"
+cp "$clean_state/archives/dc90975cb9fa/imas-codex-graph-dd-v5.3.0.tar.gz" "$start_failure_archive"
+IMAS_MVDD_GRAPH_HOME="$start_failure_state" "$script" select --selection "$runtime_selection"
+if TEST_DOCKER_FAIL_START=yes IMAS_MVDD_GRAPH_HOME="$start_failure_state" \
+    IMAS_MVDD_GRAPH_PASSWORD=test-password "$script" setup >"$temp/start-failure.out" 2>&1; then
+    fail 'service-start failure was accepted'
+fi
+test ! -e "$mock_state/container" || fail 'failed service start left a running service'
+# The original clean-state service remains available but stopped. The mock is
+# process-local rather than state-directory-aware, so restore that fact before
+# verifying an ordinary restart below.
+touch "$mock_state/container"
+
 failing_selection="$temp/failing-selection.env"
-sed 's|^GRAPH_REFERENCE=.*|GRAPH_REFERENCE=ghcr.io/iterorganization/not-a-graph|' \
+sed -e 's|^GRAPH_REFERENCE=.*|GRAPH_REFERENCE=ghcr.io/iterorganization/not-a-graph|' \
+    -e 's|^GRAPH_MANIFEST_DIGEST=.*|GRAPH_MANIFEST_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000|' \
     "$runtime_selection" > "$failing_selection"
 if TEST_ORAS_FAIL=yes IMAS_MVDD_GRAPH_HOME="$clean_state" IMAS_MVDD_GRAPH_PASSWORD=test-password \
     "$script" update --selection "$failing_selection" >"$temp/update.out" 2>&1; then
     fail 'failed update was accepted'
 fi
+grep -F 'ghcr.io/iterorganization/not-a-graph@sha256:0000000000000000000000000000000000000000000000000000000000000000' \
+    "$temp/oras.log" >/dev/null || fail 'failed update did not attempt archive acquisition'
 cmp -s "$runtime_selection" "$clean_state/selection.env" \
     || fail 'failed update replaced the active selection record'
 IMAS_MVDD_GRAPH_HOME="$clean_state" "$script" start
 query=$(IMAS_MVDD_GRAPH_HOME="$clean_state" IMAS_MVDD_GRAPH_PASSWORD=test-password "$script" query)
 printf '%s\n' "$query" | grep -F 'node_count' >/dev/null || fail 'query did not reach the started service'
-test "$(wc -l < "$temp/oras.log" | tr -d ' ')" = 1 || fail 'ordinary restart attempted a new acquisition'
+test "$(wc -l < "$temp/oras.log" | tr -d ' ')" = 2 || fail 'ordinary restart attempted a new acquisition'

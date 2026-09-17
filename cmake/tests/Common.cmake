@@ -6,6 +6,7 @@ add_test(NAME ci-workflow
     COMMAND "${CMAKE_COMMAND}"
         "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
         "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
+        "-DGRAPH_SETUP_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-dd-graph/action.yml"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ci_workflow.cmake")
 add_test(NAME hli-validation-workflow
     COMMAND "${CMAKE_COMMAND}"
@@ -20,6 +21,7 @@ add_test(NAME ci-workflow-guard-rejects-misplaced-commands
     COMMAND "${CMAKE_COMMAND}"
         "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
         "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
+        "-DGRAPH_SETUP_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-dd-graph/action.yml"
         "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ci_workflow.cmake"
         "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify_ci_workflow_guard.cmake")

@@ -12,7 +12,10 @@ case "$1 ${2:-}" in
         ;;
     run\ *)
         case " $* " in
-            *' --detach '*) touch "$TEST_DOCKER_STATE/container" ;;
+            *' --detach '*)
+                test "${TEST_DOCKER_FAIL_START:-}" != yes || exit 79
+                touch "$TEST_DOCKER_STATE/container"
+                ;;
         esac
         ;;
     start\ *|stop\ *)
