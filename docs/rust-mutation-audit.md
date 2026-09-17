@@ -15,6 +15,12 @@ own scratch copy. It leaves the candidate list, selection, filter and complete
 `mutants.out/` report in that directory and prints its path and elapsed time.
 Nothing in the command overwrites an earlier report.
 
+Cargo-mutants itself exits nonzero for every raw missed mutant. The command's
+exit status instead comes from the checked-in audit policy after it has applied
+the documented dispositions, floors and timeout rule: an accepted equivalent
+or integration-only miss can therefore pass, while an unclassified miss,
+timeout, incomplete report or below-floor result fails.
+
 Install the pinned tool and use the project minimum toolchain:
 
 ```console

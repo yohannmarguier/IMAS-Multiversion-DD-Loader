@@ -103,3 +103,53 @@ if run_fixture incomplete >"$work_dir/incomplete.txt" 2>&1; then
     exit 1
 fi
 grep -Fq 'mutation audit input error: selected mutant src/loss.rs:1:1: replace loss with none has no outcome' "$work_dir/incomplete.txt"
+
+# Cargo-mutants reports a nonzero result for its raw missed-mutant count even
+# when every miss is narrowly excluded by the checker. The public audit command
+# must expose the checker verdict, not that pre-classification status.
+command_root="$work_dir/command"
+fixture_output="$command_root/fixture-output"
+fake_bin="$command_root/bin"
+mkdir -p "$command_root/scripts" "$command_root/coverage" "$fake_bin"
+cp "$source_dir/scripts/audit-rust-mutation.sh" "$command_root/scripts/"
+cp "$source_dir/scripts/check-rust-mutation-audit.py" "$command_root/scripts/"
+cp "$fixture_dir/rust_line_coverage_scope.json" "$command_root/coverage/rust-line-coverage-scope.json"
+sed 's/rust_line_coverage_scope/rust-line-coverage-scope/' \
+    "$fixture_dir/rust_mutation_audit.json" >"$command_root/coverage/rust-mutation-audit.json"
+python3 "$fixture_dir/create-rust-mutation-fixture.py" all_pass "$fixture_output"
+cp "$fixture_output/dispositions.json" "$command_root/coverage/rust-mutation-dispositions.json"
+
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'case "$2" in' \
+    '  --version) echo "cargo-mutants 27.1.0" ;;' \
+    '  --no-config) cat "$MUTATION_FIXTURE/selected.json" ;;' \
+    '  --config)' \
+    '    shift 2' \
+    '    while [[ $# -gt 0 ]]; do' \
+    '      if [[ "$1" == "--output" ]]; then output=$2; break; fi' \
+    '      shift' \
+    '    done' \
+    '    mkdir -p "$output/mutants.out"' \
+    '    cp "$MUTATION_FIXTURE/mutants.json" "$output/mutants.out/mutants.json"' \
+    '    cp "$MUTATION_FIXTURE/outcomes.json" "$output/mutants.out/outcomes.json"' \
+    '    exit 2' \
+    '    ;;' \
+    '  *) exit 2 ;;' \
+    'esac' >"$fake_bin/cargo"
+chmod +x "$fake_bin/cargo"
+
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'if [[ "$1" == "-C" && "$3" == "status" ]]; then exit 0; fi' \
+    'exec /usr/bin/git "$@"' >"$fake_bin/git"
+chmod +x "$fake_bin/git"
+
+if ! PATH="$fake_bin:$PATH" MUTATION_FIXTURE="$fixture_output" \
+    bash "$command_root/scripts/audit-rust-mutation.sh" >"$work_dir/command.txt" 2>&1; then
+    echo "an accepted equivalent miss must not fail the audit command" >&2
+    sed -n '1,160p' "$work_dir/command.txt" >&2
+    exit 1
+fi
+grep -Fq 'aggregate: caught=7 missed=0 timed-out=0 unviable=1 excluded=1 score=100.0% PASS' "$work_dir/command.txt"

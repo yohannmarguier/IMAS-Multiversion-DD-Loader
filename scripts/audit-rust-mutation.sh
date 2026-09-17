@@ -63,11 +63,9 @@ python3 scripts/check-rust-mutation-audit.py \
     --write-selection "$selected_mutants" \
     --write-cargo-mutants-config "$cargo_mutants_config"
 
-if cargo mutants --config "$cargo_mutants_config" --all-features --output "$audit_dir" -- --lib; then
-    cargo_mutants_status=0
-else
-    cargo_mutants_status=$?
-fi
+# A raw missed mutant gives cargo-mutants a nonzero status. Its complete report
+# below distinguishes a real audit failure from an accepted exclusion.
+cargo mutants --config "$cargo_mutants_config" --all-features --output "$audit_dir" -- --lib || true
 
 if python3 scripts/check-rust-mutation-audit.py \
     --line-scope "$line_scope" \
@@ -82,7 +80,8 @@ else
 fi
 
 echo "mutation audit report: $audit_dir (elapsed ${SECONDS}s)"
-if (( checker_status != 0 )); then
-    exit "$checker_status"
-fi
-exit "$cargo_mutants_status"
+# Cargo-mutants reports raw misses as a nonzero status. The checker is the
+# policy authority: it accounts for documented equivalent/integration-only
+# exclusions, the score floors and timeouts. Keep the raw report above, but
+# return the post-classification verdict so a fully accepted audit can pass.
+exit "$checker_status"
