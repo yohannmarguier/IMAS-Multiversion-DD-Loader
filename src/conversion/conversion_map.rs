@@ -550,9 +550,10 @@ pub enum CompletenessViolation {
     },
 }
 
-/// A conversion-map artifact failed to load because its rule data is
-/// structurally unusable — malformed XML, a missing required attribute, an
-/// unrecognised enum value, or a rule shape that contradicts its own `rel`.
+/// A conversion-map artifact failed to load because it is structurally
+/// unusable — malformed XML, a missing required attribute, an
+/// unrecognised value or `<ids-map>` child, or a rule shape that contradicts
+/// its own `rel`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadError {
     Xml(String),
@@ -565,6 +566,7 @@ pub enum LoadError {
         attribute: String,
         value: String,
     },
+    UnknownIdsMapChild(String),
     DuplicateRuleId(String),
     /// Two rules (or `<from>` entries) register the identical literal
     /// `Exact` or `Subtree` selector for the same source role (`left`
@@ -618,6 +620,9 @@ impl fmt::Display for LoadError {
                 f,
                 "<{element}> attribute `{attribute}` has unrecognised value `{value}`"
             ),
+            LoadError::UnknownIdsMapChild(element) => {
+                write!(f, "unrecognised <ids-map> child <{element}>")
+            }
             LoadError::DuplicateRuleId(id) => write!(f, "duplicate rule id `{id}`"),
             LoadError::DuplicateSourceSelector {
                 role,
@@ -853,7 +858,7 @@ impl ConversionMap {
                 "transforms" => {
                     parse_transforms(&child, &mut sign_flips, &mut redefines)?;
                 }
-                _ => {}
+                other => return Err(LoadError::UnknownIdsMapChild(other.to_string())),
             }
         }
 
