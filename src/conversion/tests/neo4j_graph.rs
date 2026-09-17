@@ -1,5 +1,11 @@
 use super::*;
+use crate::conversion::runtime_map::{
+    AcquisitionAttempt, AcquisitionClock, AcquisitionStage, AttemptObserver,
+};
 use std::cell::RefCell;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 type Row = std::collections::BTreeMap<String, GraphValue>;
 type Reply = (std::collections::BTreeMap<String, GraphValue>, Vec<Row>);
@@ -37,6 +43,48 @@ impl CypherExecutor for ControlledExecutor {
             ));
         }
         Ok(rows)
+    }
+}
+
+#[derive(Default)]
+struct ManualClock(Mutex<Duration>);
+
+impl ManualClock {
+    fn advance(&self, duration: Duration) {
+        *self.0.lock().expect("manual clock mutex is not poisoned") += duration;
+    }
+}
+
+impl AcquisitionClock for ManualClock {
+    fn now(&self) -> Duration {
+        *self.0.lock().expect("manual clock mutex is not poisoned")
+    }
+}
+
+struct NoopObserver;
+
+impl AttemptObserver for NoopObserver {
+    fn entered(&self, _stage: AcquisitionStage) {}
+}
+
+fn attempt() -> AcquisitionAttempt {
+    AcquisitionAttempt::new(
+        Duration::from_secs(1),
+        Arc::new(ManualClock::default()),
+        Arc::new(NoopObserver),
+    )
+}
+
+struct BlockedExecutor {
+    clock: Arc<ManualClock>,
+    timeout: RefCell<Option<Duration>>,
+}
+
+impl CypherExecutor for BlockedExecutor {
+    fn execute(&self, query: BoundQuery) -> Result<Vec<Row>, GraphSourceError> {
+        *self.timeout.borrow_mut() = Some(query.timeout);
+        self.clock.advance(Duration::from_secs(5));
+        Ok(count(0))
     }
 }
 
@@ -134,15 +182,55 @@ fn complete_executor() -> ControlledExecutor {
 #[test]
 fn retrieves_all_schema_streams_with_bound_pagination_and_typed_nulls() {
     let executor = complete_executor();
-    let source = Neo4jScopeSource::new(executor, 2, std::time::Duration::from_secs(1)).unwrap();
+    let source = Neo4jScopeSource::new(executor, 2).unwrap();
+    let attempt = attempt();
     let scope = source
-        .load_raw_scope("equilibrium")
+        .load_raw_scope("equilibrium", &attempt)
         .expect("complete rows must decode");
     assert_eq!(scope.versions.len(), 2);
     assert_eq!(scope.nodes.len(), 2);
     assert_eq!(scope.events.len(), 1);
     assert_eq!(scope.successors.len(), 1);
     assert_eq!(scope.versions[1]["cocos"], GraphValue::Null);
+}
+
+#[test]
+fn a_blocked_transport_receives_the_attempt_remainder_and_times_out_after_returning() {
+    let clock = Arc::new(ManualClock::default());
+    let executor = BlockedExecutor {
+        clock: clock.clone(),
+        timeout: RefCell::new(None),
+    };
+    let source = Neo4jScopeSource::new(executor, 2).unwrap();
+    let attempt = AcquisitionAttempt::new(Duration::from_secs(5), clock, Arc::new(NoopObserver));
+
+    assert!(matches!(
+        source.load_raw_scope("equilibrium", &attempt),
+        Err(GraphSourceError(message)) if message.contains("timed out")
+    ));
+    assert_eq!(
+        source.executor.timeout.borrow().as_ref(),
+        Some(&Duration::from_secs(5))
+    );
+}
+
+#[test]
+fn caller_returns_at_its_deadline_while_a_blocked_driver_worker_cannot_publish_later() {
+    let (result_sender, result_receiver) = mpsc::sync_channel(1);
+    let (release_sender, release_receiver) = mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        release_receiver
+            .recv()
+            .expect("test releases the blocked worker");
+        let _ = result_sender.send(Ok(()));
+    });
+
+    assert!(matches!(
+        receive_before_deadline(result_receiver, Duration::ZERO),
+        Err(GraphSourceError(message)) if message == "Neo4j query exceeded the acquisition deadline"
+    ));
+    release_sender.send(()).expect("worker is still waiting");
+    worker.join().expect("released worker exits normally");
 }
 
 #[test]
@@ -163,9 +251,10 @@ fn refuses_a_missing_page_instead_of_returning_a_partial_scope() {
             ],
         )
         .reply(query_parameters(None, 2), Vec::new());
-    let source = Neo4jScopeSource::new(executor, 2, std::time::Duration::from_secs(1)).unwrap();
+    let source = Neo4jScopeSource::new(executor, 2).unwrap();
+    let attempt = attempt();
     assert!(
-        matches!(source.load_raw_scope("equilibrium"), Err(GraphSourceError(message)) if message.contains("pagination ended"))
+        matches!(source.load_raw_scope("equilibrium", &attempt), Err(GraphSourceError(message)) if message.contains("pagination ended"))
     );
 }
 
@@ -177,9 +266,10 @@ fn rejects_duplicate_or_cross_scope_evidence_after_shuffled_pages() {
         "path".to_string(),
         GraphValue::String("time_slice".to_string()),
     );
-    let source = Neo4jScopeSource::new(executor, 2, std::time::Duration::from_secs(1)).unwrap();
+    let source = Neo4jScopeSource::new(executor, 2).unwrap();
+    let attempt = attempt();
     assert!(
-        matches!(source.load_raw_scope("equilibrium"), Err(GraphSourceError(message)) if message == "duplicate node path")
+        matches!(source.load_raw_scope("equilibrium", &attempt), Err(GraphSourceError(message)) if message == "duplicate node path")
     );
 }
 
@@ -187,9 +277,10 @@ fn rejects_duplicate_or_cross_scope_evidence_after_shuffled_pages() {
 fn distinguishes_a_typed_null_from_a_missing_required_value() {
     let mut executor = complete_executor();
     executor.replies.get_mut()[5].1[0].insert("kind".to_string(), GraphValue::Null);
-    let source = Neo4jScopeSource::new(executor, 2, std::time::Duration::from_secs(1)).unwrap();
+    let source = Neo4jScopeSource::new(executor, 2).unwrap();
+    let attempt = attempt();
     assert!(
-        matches!(source.load_raw_scope("equilibrium"), Err(GraphSourceError(message)) if message == "kind is typed null")
+        matches!(source.load_raw_scope("equilibrium", &attempt), Err(GraphSourceError(message)) if message == "kind is typed null")
     );
 }
 
@@ -201,9 +292,10 @@ fn rejects_duplicate_event_ids_even_when_their_rows_are_otherwise_valid() {
         .expect("controlled count row has count") = GraphValue::Integer(2);
     let duplicate = executor.replies.get_mut()[5].1[0].clone();
     executor.replies.get_mut()[5].1.push(duplicate);
-    let source = Neo4jScopeSource::new(executor, 2, std::time::Duration::from_secs(1)).unwrap();
+    let source = Neo4jScopeSource::new(executor, 2).unwrap();
+    let attempt = attempt();
     assert!(
-        matches!(source.load_raw_scope("equilibrium"), Err(GraphSourceError(message)) if message == "duplicate event ID")
+        matches!(source.load_raw_scope("equilibrium", &attempt), Err(GraphSourceError(message)) if message == "duplicate event ID")
     );
 }
 
@@ -218,15 +310,16 @@ fn pinned_graph_returns_a_complete_equilibrium_scope() {
         page_size: 256,
         connection_timeout: std::time::Duration::from_secs(5),
     };
-    let executor = BoltExecutor::connect(&config).expect("pinned graph accepts Bolt connections");
-    let source = Neo4jScopeSource::new(
-        executor,
-        config.page_size,
-        std::time::Duration::from_secs(30),
-    )
-    .expect("CI page size is valid");
+    let attempt = AcquisitionAttempt::new(
+        Duration::from_secs(30),
+        Arc::new(ManualClock::default()),
+        Arc::new(NoopObserver),
+    );
+    let executor =
+        BoltExecutor::connect(&config, &attempt).expect("pinned graph accepts Bolt connections");
+    let source = Neo4jScopeSource::new(executor, config.page_size).expect("CI page size is valid");
     let scope = source
-        .load_raw_scope("equilibrium")
+        .load_raw_scope("equilibrium", &attempt)
         .expect("pinned graph returns every requested scope stream");
     assert!(
         scope

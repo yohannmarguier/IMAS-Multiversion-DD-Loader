@@ -6,6 +6,10 @@
 //! concern.
 
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use super::conversion_map::{
     ArtifactDdVersion, CocosConvention, ConversionMap, EndpointInventory, EndpointNode,
@@ -93,19 +97,152 @@ pub(crate) struct IdsGraphFacts {
     pub successors: Vec<GraphSuccessor>,
 }
 
+/// The default upper bound for one complete graph-backed map acquisition.
+pub(crate) const DEFAULT_ACQUISITION_DEADLINE: Duration = Duration::from_secs(5);
+
+/// A named cooperative boundary within one acquisition attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AcquisitionStage {
+    Connection,
+    Source,
+    Query,
+    Decoding,
+    ScopeValidation,
+    RuleConstruction,
+    MapValidation,
+    Publication,
+}
+
+/// Monotonic time supplied to an acquisition attempt.
+pub(crate) trait AcquisitionClock: Send + Sync {
+    fn now(&self) -> Duration;
+}
+
+struct SystemClock {
+    started: Instant,
+}
+
+impl SystemClock {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+        }
+    }
+}
+
+impl AcquisitionClock for SystemClock {
+    fn now(&self) -> Duration {
+        self.started.elapsed()
+    }
+}
+
+/// A test-only observation boundary around acquisition stages. Production
+/// attempts use the no-op implementation, while controlled tests advance a
+/// monotonic clock at a precise boundary instead of sleeping.
+pub(crate) trait AttemptObserver: Send + Sync {
+    fn entered(&self, stage: AcquisitionStage);
+}
+
+struct NoopAttemptObserver;
+
+impl AttemptObserver for NoopAttemptObserver {
+    fn entered(&self, _stage: AcquisitionStage) {}
+}
+
+/// One non-restartable deadline shared by acquisition, decoding, map
+/// construction, validation and publication.
+pub(crate) struct AcquisitionAttempt {
+    deadline: Duration,
+    clock: Arc<dyn AcquisitionClock>,
+    started_at: Duration,
+    observer: Arc<dyn AttemptObserver>,
+    cancelled: AtomicBool,
+    expired_stage: Mutex<Option<AcquisitionStage>>,
+}
+
+impl AcquisitionAttempt {
+    pub(crate) fn new(
+        deadline: Duration,
+        clock: Arc<dyn AcquisitionClock>,
+        observer: Arc<dyn AttemptObserver>,
+    ) -> Self {
+        let started_at = clock.now();
+        Self {
+            deadline,
+            clock,
+            started_at,
+            observer,
+            cancelled: AtomicBool::new(false),
+            expired_stage: Mutex::new(None),
+        }
+    }
+
+    /// Enters a stage and checks the same shared deadline both before and
+    /// after controllable stage work begins.
+    pub(crate) fn enter(&self, stage: AcquisitionStage) -> Result<Duration, AttemptExpired> {
+        self.check(stage)?;
+        self.observer.entered(stage);
+        self.check(stage)
+    }
+
+    /// Checks cancellation without starting a new stage or refreshing time.
+    pub(crate) fn check(&self, stage: AcquisitionStage) -> Result<Duration, AttemptExpired> {
+        let elapsed = self.clock.now().saturating_sub(self.started_at);
+        if self.cancelled.load(Ordering::Acquire) || elapsed >= self.deadline {
+            let mut expired_stage = self
+                .expired_stage
+                .lock()
+                .expect("acquisition attempt mutex is not poisoned");
+            let stage = *expired_stage.get_or_insert(stage);
+            self.cancelled.store(true, Ordering::Release);
+            return Err(AttemptExpired { stage });
+        }
+        Ok(self.deadline.saturating_sub(elapsed))
+    }
+
+    fn timeout_failure(&self) -> Option<AcquisitionFailure> {
+        self.expired_stage
+            .lock()
+            .expect("acquisition attempt mutex is not poisoned")
+            .map(|stage| AcquisitionFailure::TimedOut { stage })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AttemptExpired {
+    pub(crate) stage: AcquisitionStage,
+}
+
+impl From<AttemptExpired> for AcquisitionFailure {
+    fn from(expired: AttemptExpired) -> Self {
+        Self::TimedOut {
+            stage: expired.stage,
+        }
+    }
+}
+
 /// A graph transport or query failure, intentionally distinct from a fact or
 /// construction failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GraphSourceError(pub String);
 
-/// Internal dependency supplying one complete IDS scope.
+/// Internal dependency supplying one complete IDS scope. Implementations use
+/// the supplied attempt for every transport and local stage; they must not
+/// substitute a new deadline for its remaining time.
 pub(crate) trait GraphFactsSource {
-    fn load_ids_facts(&self, ids: &str) -> Result<IdsGraphFacts, GraphSourceError>;
+    fn load_ids_facts(
+        &self,
+        ids: &str,
+        attempt: &AcquisitionAttempt,
+    ) -> Result<IdsGraphFacts, GraphSourceError>;
 }
 
 /// Why acquisition could not return a complete validated map.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AcquisitionFailure {
+    TimedOut {
+        stage: AcquisitionStage,
+    },
     Source(GraphSourceError),
     IncompleteScope,
     EmptyScope,
@@ -136,11 +273,44 @@ pub(crate) enum AcquisitionFailure {
 /// Acquires a complete conversion map through an internal graph-fact source.
 pub(crate) struct RuntimeMapAcquirer<S> {
     source: S,
+    deadline: Duration,
+    clock: Arc<dyn AcquisitionClock>,
+    observer: Arc<dyn AttemptObserver>,
 }
 
 impl<S> RuntimeMapAcquirer<S> {
     pub(crate) fn new(source: S) -> Self {
-        Self { source }
+        Self::with_clock_and_observer(
+            source,
+            DEFAULT_ACQUISITION_DEADLINE,
+            Arc::new(SystemClock::new()),
+            Arc::new(NoopAttemptObserver),
+        )
+    }
+
+    /// Uses a caller-selected whole-attempt deadline with the production
+    /// monotonic clock. The configured duration is not a per-query timeout.
+    pub(crate) fn with_deadline(source: S, deadline: Duration) -> Self {
+        Self::with_clock_and_observer(
+            source,
+            deadline,
+            Arc::new(SystemClock::new()),
+            Arc::new(NoopAttemptObserver),
+        )
+    }
+
+    pub(crate) fn with_clock_and_observer(
+        source: S,
+        deadline: Duration,
+        clock: Arc<dyn AcquisitionClock>,
+        observer: Arc<dyn AttemptObserver>,
+    ) -> Self {
+        Self {
+            source,
+            deadline,
+            clock,
+            observer,
+        }
     }
 }
 
@@ -149,16 +319,47 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
         &self,
         request: &MapRequest,
     ) -> Result<ConversionMap, AcquisitionFailure> {
-        let facts = self
-            .source
-            .load_ids_facts(&request.ids)
-            .map_err(AcquisitionFailure::Source)?;
-        validate_complete_scope(&facts, request)?;
+        let attempt = AcquisitionAttempt::new(
+            self.deadline,
+            Arc::clone(&self.clock),
+            Arc::clone(&self.observer),
+        );
+        attempt.enter(AcquisitionStage::Source).map_err(|expired| {
+            AcquisitionFailure::TimedOut {
+                stage: expired.stage,
+            }
+        })?;
+        let facts = match self.source.load_ids_facts(&request.ids, &attempt) {
+            Ok(facts) => {
+                attempt.check(AcquisitionStage::Source)?;
+                facts
+            }
+            Err(source) => match attempt.check(AcquisitionStage::Source) {
+                Ok(_) => return Err(AcquisitionFailure::Source(source)),
+                Err(expired) => return Err(expired.into()),
+            },
+        };
+        attempt
+            .enter(AcquisitionStage::ScopeValidation)
+            .map_err(|expired| AcquisitionFailure::TimedOut {
+                stage: expired.stage,
+            })?;
+        validate_complete_scope(&facts, request, &attempt)?;
 
-        let hli = graph_side(&facts.versions, &request.hli_dd)?;
-        let stored = graph_side(&facts.versions, &request.stored_dd)?;
+        attempt
+            .enter(AcquisitionStage::RuleConstruction)
+            .map_err(|expired| AcquisitionFailure::TimedOut {
+                stage: expired.stage,
+            })?;
+        let hli = graph_side(&facts.versions, &request.hli_dd, &attempt)?;
+        let stored = graph_side(&facts.versions, &request.stored_dd, &attempt)?;
         let mut rules = Vec::with_capacity(facts.nodes.len());
         for node in &facts.nodes {
+            attempt
+                .check(AcquisitionStage::RuleConstruction)
+                .map_err(|expired| AcquisitionFailure::TimedOut {
+                    stage: expired.stage,
+                })?;
             let hli_metadata = endpoint_for(node, &request.hli_dd)?;
             let stored_metadata = endpoint_for(node, &request.stored_dd)?;
             let (rel, fidelity) = if same_representation(hli_metadata, stored_metadata) {
@@ -193,25 +394,46 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
             });
         }
 
-        ConversionMap::from_typed(TypedConversionMap {
+        attempt
+            .enter(AcquisitionStage::MapValidation)
+            .map_err(|expired| AcquisitionFailure::TimedOut {
+                stage: expired.stage,
+            })?;
+        let map = ConversionMap::from_typed(TypedConversionMap {
             ids: request.ids.clone(),
             left: Some(hli),
             right: Some(stored),
-            left_endpoint: endpoint_inventory(&facts.nodes, &request.hli_dd)?,
-            right_endpoint: endpoint_inventory(&facts.nodes, &request.stored_dd)?,
+            left_endpoint: endpoint_inventory(&facts.nodes, &request.hli_dd, &attempt)?,
+            right_endpoint: endpoint_inventory(&facts.nodes, &request.stored_dd, &attempt)?,
             default_identical: false,
             rules,
             sign_flips: Vec::new(),
             redefines: Vec::new(),
         })
-        .map_err(AcquisitionFailure::Construction)
+        .map_err(|error| {
+            attempt
+                .timeout_failure()
+                .unwrap_or(AcquisitionFailure::Construction(error))
+        })?;
+        attempt
+            .enter(AcquisitionStage::Publication)
+            .map_err(|expired| AcquisitionFailure::TimedOut {
+                stage: expired.stage,
+            })?;
+        Ok(map)
     }
 }
 
 fn validate_complete_scope(
     facts: &IdsGraphFacts,
     request: &MapRequest,
+    attempt: &AcquisitionAttempt,
 ) -> Result<(), AcquisitionFailure> {
+    attempt
+        .check(AcquisitionStage::ScopeValidation)
+        .map_err(|expired| AcquisitionFailure::TimedOut {
+            stage: expired.stage,
+        })?;
     if !facts.complete {
         return Err(AcquisitionFailure::IncompleteScope);
     }
@@ -221,6 +443,11 @@ fn validate_complete_scope(
 
     let mut releases = Vec::new();
     for version in &facts.versions {
+        attempt
+            .check(AcquisitionStage::ScopeValidation)
+            .map_err(|expired| AcquisitionFailure::TimedOut {
+                stage: expired.stage,
+            })?;
         if releases.iter().any(|release| release == &version.release) {
             return Err(AcquisitionFailure::DuplicateRelease {
                 release: version.release.clone(),
@@ -238,6 +465,11 @@ fn validate_complete_scope(
 
     let mut paths = HashSet::new();
     for node in &facts.nodes {
+        attempt
+            .check(AcquisitionStage::ScopeValidation)
+            .map_err(|expired| AcquisitionFailure::TimedOut {
+                stage: expired.stage,
+            })?;
         if node.ids != request.ids {
             return Err(invalid_node(
                 node,
@@ -252,6 +484,11 @@ fn validate_complete_scope(
         }
         let mut endpoint_releases = Vec::new();
         for endpoint in &node.endpoints {
+            attempt
+                .check(AcquisitionStage::ScopeValidation)
+                .map_err(|expired| AcquisitionFailure::TimedOut {
+                    stage: expired.stage,
+                })?;
             if !releases.iter().any(|known| known == &endpoint.release) {
                 return Err(invalid_node(
                     node,
@@ -269,6 +506,11 @@ fn validate_complete_scope(
     }
 
     for event in &facts.events {
+        attempt
+            .check(AcquisitionStage::ScopeValidation)
+            .map_err(|expired| AcquisitionFailure::TimedOut {
+                stage: expired.stage,
+            })?;
         if !paths.contains(event.path.as_str())
             || !releases.iter().any(|known| known == &event.release)
         {
@@ -288,6 +530,11 @@ fn validate_complete_scope(
     }
 
     for successor in &facts.successors {
+        attempt
+            .check(AcquisitionStage::ScopeValidation)
+            .map_err(|expired| AcquisitionFailure::TimedOut {
+                stage: expired.stage,
+            })?;
         if !paths.contains(successor.from_path.as_str())
             || !paths.contains(successor.to_path.as_str())
         {
@@ -311,17 +558,24 @@ fn validate_complete_scope(
 fn graph_side(
     versions: &[GraphVersion],
     requested: &ArtifactDdVersion,
+    attempt: &AcquisitionAttempt,
 ) -> Result<Side, AcquisitionFailure> {
-    versions
-        .iter()
-        .find(|version| version.release == *requested)
-        .map(|version| Side {
-            dd: version.release.clone(),
-            cocos: version.cocos.clone(),
-        })
-        .ok_or_else(|| AcquisitionFailure::MissingRequestedRelease {
-            release: requested.clone(),
-        })
+    for version in versions {
+        attempt
+            .check(AcquisitionStage::RuleConstruction)
+            .map_err(|expired| AcquisitionFailure::TimedOut {
+                stage: expired.stage,
+            })?;
+        if version.release == *requested {
+            return Ok(Side {
+                dd: version.release.clone(),
+                cocos: version.cocos.clone(),
+            });
+        }
+    }
+    Err(AcquisitionFailure::MissingRequestedRelease {
+        release: requested.clone(),
+    })
 }
 
 fn endpoint_for<'a>(
@@ -344,10 +598,16 @@ fn endpoint_for<'a>(
 fn endpoint_inventory(
     nodes: &[GraphNode],
     requested: &ArtifactDdVersion,
+    attempt: &AcquisitionAttempt,
 ) -> Result<EndpointInventory, AcquisitionFailure> {
     nodes
         .iter()
         .map(|node| {
+            attempt
+                .check(AcquisitionStage::MapValidation)
+                .map_err(|expired| AcquisitionFailure::TimedOut {
+                    stage: expired.stage,
+                })?;
             let metadata = endpoint_for(node, requested)?;
             Ok(EndpointNode {
                 path: node.path.clone(),

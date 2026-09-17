@@ -1,5 +1,7 @@
 use super::*;
 use crate::conversion::conversion_map::{Direction, Outcome, RefusalReason, Rel};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 #[derive(Clone)]
 struct ControlledSource {
@@ -7,9 +9,87 @@ struct ControlledSource {
 }
 
 impl GraphFactsSource for ControlledSource {
-    fn load_ids_facts(&self, _ids: &str) -> Result<IdsGraphFacts, GraphSourceError> {
+    fn load_ids_facts(
+        &self,
+        _ids: &str,
+        _attempt: &AcquisitionAttempt,
+    ) -> Result<IdsGraphFacts, GraphSourceError> {
         self.result.clone()
     }
+}
+
+struct SourceThatExpires {
+    clock: Arc<ManualClock>,
+}
+
+#[derive(Clone)]
+struct SourceEnteringStage {
+    stage: AcquisitionStage,
+    facts: IdsGraphFacts,
+}
+
+impl GraphFactsSource for SourceEnteringStage {
+    fn load_ids_facts(
+        &self,
+        _ids: &str,
+        attempt: &AcquisitionAttempt,
+    ) -> Result<IdsGraphFacts, GraphSourceError> {
+        attempt.enter(self.stage).map_err(|expired| {
+            GraphSourceError(format!("source timed out during {:?}", expired.stage))
+        })?;
+        Ok(self.facts.clone())
+    }
+}
+
+impl GraphFactsSource for SourceThatExpires {
+    fn load_ids_facts(
+        &self,
+        _ids: &str,
+        _attempt: &AcquisitionAttempt,
+    ) -> Result<IdsGraphFacts, GraphSourceError> {
+        self.clock.advance(Duration::from_secs(5));
+        Err(GraphSourceError(
+            "transport ended after its deadline".to_string(),
+        ))
+    }
+}
+
+#[derive(Default)]
+struct ManualClock(Mutex<Duration>);
+
+impl ManualClock {
+    fn advance(&self, duration: Duration) {
+        *self.0.lock().expect("manual clock mutex is not poisoned") += duration;
+    }
+}
+
+impl AcquisitionClock for ManualClock {
+    fn now(&self) -> Duration {
+        *self.0.lock().expect("manual clock mutex is not poisoned")
+    }
+}
+
+struct AdvanceAtStage {
+    clock: Arc<ManualClock>,
+    stage: AcquisitionStage,
+}
+
+impl AttemptObserver for AdvanceAtStage {
+    fn entered(&self, stage: AcquisitionStage) {
+        if stage == self.stage {
+            self.clock.advance(Duration::from_secs(5));
+        }
+    }
+}
+
+fn acquirer_expiring_at<S>(source: S, stage: AcquisitionStage) -> RuntimeMapAcquirer<S> {
+    let clock = Arc::new(ManualClock::default());
+    RuntimeMapAcquirer::with_clock_and_observer(
+        source,
+        Duration::from_secs(5),
+        clock.clone(),
+        Arc::new(AdvanceAtStage { clock, stage }),
+    )
 }
 
 fn version(value: &str, cocos: Option<&str>) -> GraphVersion {
@@ -126,6 +206,100 @@ fn acquisition_preserves_a_whole_source_failure() {
         RuntimeMapAcquirer::new(source).acquire(&request()),
         Err(AcquisitionFailure::Source(GraphSourceError(message))) if message == "graph unavailable"
     ));
+}
+
+#[test]
+fn an_expired_source_error_is_reported_as_timeout_not_transport_failure() {
+    let clock = Arc::new(ManualClock::default());
+    let acquirer = RuntimeMapAcquirer::with_clock_and_observer(
+        SourceThatExpires {
+            clock: clock.clone(),
+        },
+        Duration::from_secs(5),
+        clock,
+        Arc::new(NoopAttemptObserver),
+    );
+
+    assert!(matches!(
+        acquirer.acquire(&request()),
+        Err(AcquisitionFailure::TimedOut {
+            stage: AcquisitionStage::Source,
+        })
+    ));
+}
+
+#[test]
+fn acquisition_times_out_during_each_cooperating_stage() {
+    for stage in [
+        AcquisitionStage::Source,
+        AcquisitionStage::ScopeValidation,
+        AcquisitionStage::RuleConstruction,
+        AcquisitionStage::MapValidation,
+    ] {
+        let source = ControlledSource {
+            result: Ok(complete_identity_scope()),
+        };
+        assert!(matches!(
+            acquirer_expiring_at(source, stage).acquire(&request()),
+            Err(AcquisitionFailure::TimedOut { stage: actual }) if actual == stage
+        ));
+    }
+}
+
+#[test]
+fn source_stages_consume_the_same_attempt_and_report_their_own_timeout() {
+    for stage in [
+        AcquisitionStage::Connection,
+        AcquisitionStage::Query,
+        AcquisitionStage::Decoding,
+    ] {
+        assert!(matches!(
+            acquirer_expiring_at(
+                SourceEnteringStage {
+                    stage,
+                    facts: complete_identity_scope(),
+                },
+                stage,
+            )
+            .acquire(&request()),
+            Err(AcquisitionFailure::TimedOut { stage: actual }) if actual == stage
+        ));
+    }
+}
+
+#[test]
+fn acquisition_rejects_a_map_that_expires_immediately_before_publication() {
+    let source = ControlledSource {
+        result: Ok(complete_identity_scope()),
+    };
+
+    assert!(matches!(
+        acquirer_expiring_at(source, AcquisitionStage::Publication).acquire(&request()),
+        Err(AcquisitionFailure::TimedOut {
+            stage: AcquisitionStage::Publication,
+        })
+    ));
+}
+
+#[test]
+fn acquisition_starts_a_fresh_deadline_for_each_request() {
+    let clock = Arc::new(ManualClock::default());
+    let acquirer = RuntimeMapAcquirer::with_clock_and_observer(
+        ControlledSource {
+            result: Ok(complete_identity_scope()),
+        },
+        Duration::from_secs(5),
+        clock.clone(),
+        Arc::new(NoopAttemptObserver),
+    );
+
+    acquirer
+        .acquire(&request())
+        .expect("the first attempt must acquire a map");
+    clock.advance(Duration::from_secs(10));
+    acquirer
+        .acquire(&request())
+        .expect("a later request must receive its own full deadline");
 }
 
 #[test]

@@ -81,3 +81,38 @@ supported conversion. #213 owns that interpretation and then supplies the
 existing `GraphFactsSource`/`RuntimeMapAcquirer` map interface. Consequently,
 the three reference pairs have not been frozen into counts or claimed to map
 here; their correspondence/history limitations remain explicit input to #213.
+
+## Whole-attempt deadline (#214)
+
+`RuntimeMapAcquirer::new` gives each `acquire` call one fresh five-second
+monotonic deadline. An internal caller that needs a different bound constructs
+the acquirer with `RuntimeMapAcquirer::with_deadline`; this tracer has no
+environment-variable or C-ABI deadline setting because graph-backed runtime
+source selection remains outside its scope. The duration covers source work,
+scope validation, rule construction, `ConversionMap` validation and the final
+publication check. Any expiry becomes `AcquisitionFailure::TimedOut`, which is
+distinct from source, incomplete-scope, malformed-evidence and construction
+failures. A map that finishes while the deadline expires is rejected at the
+publication check rather than returned.
+
+`GraphFactsSource::load_ids_facts` receives the one `AcquisitionAttempt` and
+must propagate it to later source stages; it must never make a replacement
+attempt or reset the timer. `BoltExecutor::connect` applies the lesser of the
+configured `Neo4jConfig::connection_timeout` and that attempt's remainder to
+the driver connection and pool acquisition settings. The existing URI,
+username and password fields supply normal Neo4j connection/authentication
+configuration; credentials stay in the caller's configuration (for the live
+check, its `NEO4J_*` environment variables) and are neither logged nor added
+to the C ABI. `Neo4jScopeSource::load_raw_scope` then passes the same remaining
+time to every read-only server transaction. A blocked synchronous driver call
+is run in a worker whose result is awaited only for that remainder. The caller
+therefore fails on deadline even if a network/driver call has not returned;
+the same transaction timeout asks Neo4j to abort the server-side work, and a
+late worker result has no receiver and cannot be decoded, constructed or
+published. The worker is deliberately not retained as an in-flight map or a
+joinable request; #215 owns that process-life concurrency policy.
+
+The controlled unit tests advance a manual monotonic clock at source,
+validation, construction and publication boundaries, and simulate a blocked
+transport. They do not sleep or depend on wall-clock timing. The ignored
+live-graph acquisition check remains the service integration proof.
