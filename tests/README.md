@@ -34,10 +34,10 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 | `real_core/` | 4 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core and the checked-in equilibrium HDF5 fixture pair. |
 | `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 4 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
 | `cmake/` | `cmake -P` checks of the build/CI configuration itself, each with a guard-the-guard companion that proves it rejects what it claims. |
-| `coverage/` | Compact shell fixtures for the local Rust decision-coverage audit. |
+| `coverage/` | Compact shell fixtures for the local Rust decision-coverage and mutation audits. |
 | `scripts/` | Install/packaging shell checks. **CI-only — not in ctest.** |
 | `package/` | A downstream `find_package()` consumer project, used by `scripts/check-installed-package.sh`. |
-| `fixtures/` | The reduced conversion-map artifact for the coverage-floor gate, plus compact LCOV and scope fixtures for the Rust decision-coverage audit. |
+| `fixtures/` | The reduced conversion-map artifact for the coverage-floor gate, plus compact LCOV/scope and cargo-mutants report fixtures for the Rust audits. |
 
 ## Groups, in rough dependency order
 
@@ -349,6 +349,15 @@ adds covered and total lines across groups, does not average percentages, fails
 an aggregate pass with one below-floor group, and refuses reports that omit or
 empty a required source measurement. It does not run the full audit: the
 checked-in baseline remains below the target until the follow-on test work.
+
+### `rust-mutation-audit-fixtures`
+
+Runs `tests/coverage/check-rust-mutation-audit.sh`, the compact fixture suite
+for the local Rust mutation audit. It reuses the line audit's six-group scope,
+checks group and aggregate thresholds, rejects a timed-out mutant even when its
+numeric score clears the floor, excludes only a precisely documented equivalent
+or integration-only survivor, and refuses incomplete cargo-mutants reports. It
+does not run cargo-mutants itself; the full audit remains a manual local command.
 
 ### `equilibrium-artifact-coverage-floor`
 

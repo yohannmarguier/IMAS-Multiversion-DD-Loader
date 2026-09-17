@@ -210,6 +210,13 @@ add_test(NAME rust-line-coverage-audit-fixtures
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/check-rust-line-coverage-audit.sh"
         "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# Mutation testing remains an explicit local audit: the fixture test protects
+# its scope, scoring and refusal behavior without starting a costly run in CI.
+add_test(NAME rust-mutation-audit-fixtures
+    COMMAND "${BASH_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/check-rust-mutation-audit.sh"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+
 # The artifact's autoconvert-equivalence floor is an external contract:
 # run the validation command itself, including its deliberately reduced
 # fixture, rather than testing an internal helper (issue #51).
