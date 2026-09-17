@@ -19,7 +19,7 @@
         {"path": "src/conversion/seam_policy.rs", "start_line": 1, "end_line": 877},
         {"path": "src/interpose/reentry.rs", "start_line": 1, "end_line": 42},
         {"path": "src/interpose/refusal.rs", "start_line": 64, "end_line": 144},
-        {"path": "src/lib.rs", "start_line": 129, "end_line": 222}
+        {"path": "src/lib.rs", "start_line": 129, "end_line": 239}
       ]
     },
     {
@@ -43,7 +43,7 @@
     },
     {
       "name": "artifact-validation",
-      "sources": [{"path": "src/bin/validate_equilibrium_coverage.rs", "start_line": 1, "end_line": 265}]
+      "sources": [{"path": "src/artifact_validation.rs", "start_line": 1, "end_line": 351}]
     },
     {
       "name": "deterministic-runtime-binding-policy",
@@ -58,6 +58,10 @@
     {
       "path": "src/core/dl.rs",
       "reason": "dynamic-loader mechanics"
+    },
+    {
+      "path": "src/bin/validate_equilibrium_coverage.rs",
+      "reason": "command-line, filesystem, and terminal adapter"
     },
     {
       "path": "src/interpose/delete.rs",

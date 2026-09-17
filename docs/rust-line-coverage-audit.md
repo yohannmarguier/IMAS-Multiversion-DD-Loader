@@ -35,7 +35,7 @@ The scope has six groups:
 | DD-version | DD-version parsing, the latch policy, and pure stamp decoding. |
 | context-registry | Context lifecycle, root ownership, occurrence cache, map cache, and loss retention. |
 | loss | In-memory loss encoding/retention and append-only loss-file behavior. |
-| artifact-validation | The maintained artifact-coverage validator command. |
+| artifact-validation | The artifact-coverage calculation and ADR 0013 completeness proof. |
 | deterministic runtime-binding policy | Fallback constant/error names, library-name choice, version compatibility, and synthesized resolution failure statuses. |
 
 The configuration gives each included source range one owner and ends each
@@ -44,9 +44,11 @@ C-ABI pointer marshalling, symbol forwarding, dynamic-library opening and
 symbol lookup, and real-Core integration. A file that contains both an ABI
 adapter and a decision helper is ranged rather than excluded wholesale:
 `src/lib.rs`'s status formatting, `interpose/refusal.rs`'s formatting and
-latch gate, `version_stamp.rs`'s pure decoder, and the policy ranges in
-`core_binding.rs` — including the public fallback accessors' result-selection
-policy — remain measured. Update the assignments with an internal seam
+latch gate, `version_stamp.rs`'s pure decoder, `artifact_validation.rs`'s
+calculation, and the policy ranges in `core_binding.rs` — including the public
+fallback accessors' result-selection policy — remain measured. The
+`validate_equilibrium_coverage` binary is excluded as its command-line,
+filesystem, and terminal adapter. Update the assignments with an internal seam
 extraction; do not silently shrink the scope.
 
 The checker rejects a missing or empty configured source measurement, malformed
@@ -61,22 +63,21 @@ and malformed-data behavior without requiring the baseline to pass.
 
 ## Initial baseline (2026-09-17)
 
-The pinned tool and Rust 1.88.0 reported the following after 226 Rust unit
+The pinned tool and Rust 1.88.0 reported the following after 281 Rust unit
 tests. The expected nonzero result is the audit's enforcement result, not a
 broken command.
 
 | Group | Covered/total | Coverage |
 | --- | ---: | ---: |
-| conversion | 1,776 / 2,101 | 84.5% |
-| DD-version | 115 / 150 | 76.7% |
+| conversion | 1,843 / 2,104 | 87.6% |
+| DD-version | 147 / 161 | 91.3% |
 | context-registry | 183 / 183 | 100.0% |
-| loss | 124 / 178 | 69.7% |
-| artifact-validation | 0 / 170 | 0.0% |
-| deterministic runtime-binding policy | 41 / 111 | 36.9% |
-| aggregate | 2,239 / 2,893 | 77.4% |
+| loss | 140 / 163 | 85.9% |
+| artifact-validation | 227 / 232 | 97.8% |
+| deterministic runtime-binding policy | 86 / 111 | 77.5% |
+| aggregate | 2,626 / 2,954 | 88.9% |
 
-The aggregate and the DD-version, loss, artifact-validation, and deterministic
-runtime-binding-policy groups are below their floors. Later work must raise
-coverage or revise this documented scope deliberately; this ticket records the
-measurement and its enforcement mechanism without pretending the baseline has
-already passed.
+The aggregate and deterministic-runtime-binding-policy group are below their
+floors. Later work must raise coverage or revise this documented scope
+deliberately; this ticket records the measurement and its enforcement mechanism
+without pretending the baseline has already passed.

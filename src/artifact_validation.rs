@@ -163,7 +163,7 @@ pub fn validate(inputs: ValidationInputs<'_>) -> Result<ValidationReport, Box<Va
         Box::new(ValidationFailure {
             report: None,
             message: error.to_string(),
-        kind: ValidationFailureKind::ArtifactLoad,
+            kind: ValidationFailureKind::ArtifactLoad,
         })
     })?;
     let baseline = rename_baseline(inputs.rename_baseline)?;

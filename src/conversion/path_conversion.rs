@@ -1295,16 +1295,8 @@ mod tests {
                 assert_eq!(
                     metadata,
                     [
-                        (
-                            "b_field_phi",
-                            "time_slice/profiles_2d/b_field_phi",
-                            1,
-                        ),
-                        (
-                            "b_field_tor",
-                            "time_slice/profiles_2d/b_field_tor",
-                            2,
-                        ),
+                        ("b_field_phi", "time_slice/profiles_2d/b_field_phi", 1,),
+                        ("b_field_tor", "time_slice/profiles_2d/b_field_tor", 2,),
                         ("b_tor", "time_slice/profiles_2d/b_tor", 3),
                     ]
                 );
@@ -2043,10 +2035,12 @@ mod tests {
                         .map(|path| path.path.to_str().expect("fixture paths are UTF-8"))
                         .collect();
                     assert_eq!(actual, expected);
-                    assert!(paths
-                        .paths
-                        .iter()
-                        .all(|path| path.fidelity == Fidelity::Exact));
+                    assert!(
+                        paths
+                            .paths
+                            .iter()
+                            .all(|path| path.fidelity == Fidelity::Exact)
+                    );
                 }
                 _ => panic!("the approved artifact supplies an ordered candidate read plan"),
             }
