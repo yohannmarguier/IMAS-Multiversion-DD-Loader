@@ -1040,6 +1040,22 @@ mod tests {
     }
 
     #[test]
+    fn contextual_refusal_at_the_fixed_buffer_boundary_elides_versions_and_keeps_the_leaf() {
+        let hli_version = "4.1.1".parse().unwrap();
+        let stored_version = "3.39.0".parse().unwrap();
+        let prefix = "IMAS-MVDD: boundary; DD path: ";
+        let path_capacity = MAX_ERR_MSG_LEN - 1 - prefix.len();
+        let path = format!("{}leaf", "a".repeat(path_capacity - 3));
+
+        let status = path_conversion_refusal("boundary", &path, &hli_version, &stored_version);
+
+        assert_eq!(
+            refusal_message(&status),
+            format!("{prefix}...{}", "a".repeat(path_capacity - 7) + "leaf")
+        );
+    }
+
+    #[test]
     fn left_path_truncation_handles_zero_small_and_utf8_boundary_capacities() {
         assert_eq!(truncate_path_from_left("abcdef", 0), "");
         assert_eq!(truncate_path_from_left("abcdef", 1), ".");
