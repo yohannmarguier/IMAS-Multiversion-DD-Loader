@@ -488,6 +488,12 @@ add_stub_test(loss-file-is-absent-without-loss
     STAMP_VERSION 4.1.1
     ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-clean")
 
+add_stub_test(loss-file-filename-collision-gains-a-numeric-suffix
+    read_path_test loss-file-filename-collision-gains-a-numeric-suffix
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-collision")
+
 # Issue #235: the production facts/effects boundary is observable only from a
 # fresh process. This scenario clears the optional destination so the shim
 # must use this isolated working directory, its clock and its process ID.
