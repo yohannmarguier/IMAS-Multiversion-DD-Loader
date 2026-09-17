@@ -8,8 +8,10 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <ctype.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifndef RECORDING_STUB_PATH
@@ -154,6 +156,90 @@ static void scenario_loss_file_is_absent_without_loss(void) {
     CHECK(read_data(operation_ctx, "time", "", &data).code == 0);
     CHECK(single_loss_log_path_or_null() == NULL);
     printf("read_path_test loss-file-is-absent-without-loss: exact work opens no report\n");
+}
+
+static int timestamp_matches_an_observed_second(const char *timestamp, time_t started,
+                                                time_t finished) {
+    for (time_t instant = started; instant <= finished; ++instant) {
+        struct tm utc;
+        CHECK(gmtime_r(&instant, &utc) != NULL);
+        char expected[21];
+        CHECK(strftime(expected, sizeof expected, "%Y-%m-%dT%H:%M:%SZ", &utc)
+              == sizeof expected - 1);
+        if (memcmp(timestamp, expected, sizeof expected - 1) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Issue #235: this is deliberately a fresh CTest process. It reaches the
+ * normal shim ABI and observes only the resulting file and stderr, so it
+ * covers the real environment, CWD, clock, PID and file effects rather than
+ * injected facts or effects. CMake unsets the optional directory setting. */
+static void scenario_production_facts_and_effects_use_the_process_contract(void) {
+    const char *prefix = "imas-mvdd-loss-";
+    CHECK(getenv("IMAS_MVDD_LOSS_LOG_DIR") == NULL);
+    clear_loss_log_directory_in(".");
+    time_t started = time(NULL);
+    CHECK(started != (time_t)-1);
+
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    CHECK(data != NULL);
+
+    time_t finished = time(NULL);
+    CHECK(finished != (time_t)-1);
+    CHECK(finished >= started);
+    CHECK(finished - started <= 60);
+
+    char *path = single_loss_log_path_or_null_in(".");
+    CHECK(path != NULL);
+    const char *name = strrchr(path, '/');
+    name = name == NULL ? path : name + 1;
+    CHECK(strncmp(name, prefix, strlen(prefix)) == 0);
+    const char *timestamp = name + strlen(prefix);
+    CHECK(timestamp[4] == '-');
+    CHECK(timestamp[7] == '-');
+    CHECK(timestamp[10] == 'T');
+    CHECK(timestamp[13] == ':');
+    CHECK(timestamp[16] == ':');
+    CHECK(timestamp[19] == 'Z');
+    CHECK(timestamp_matches_an_observed_second(timestamp, started, finished));
+    for (int index = 0; index < 20; ++index) {
+        if (index != 4 && index != 7 && index != 10 && index != 13 && index != 16
+            && index != 19) {
+            CHECK(isdigit((unsigned char)timestamp[index]));
+        }
+    }
+    char expected_pid_suffix[32];
+    CHECK(snprintf(expected_pid_suffix, sizeof expected_pid_suffix, "-%ld.txt", (long)getpid())
+          < (int)sizeof expected_pid_suffix);
+    CHECK(strcmp(timestamp + 20, expected_pid_suffix) == 0);
+
+    char *contents = read_loss_log_in(".");
+    CHECK(strstr(contents, "# imas-mvdd loss log format 1\n") == contents);
+    char expected_preamble_timestamp[32];
+    CHECK(snprintf(expected_preamble_timestamp, sizeof expected_preamble_timestamp,
+                   "# written %.20s\n", timestamp)
+          < (int)sizeof expected_preamble_timestamp);
+    CHECK(strstr(contents, expected_preamble_timestamp) != NULL);
+    char expected_preamble_pid[32];
+    CHECK(snprintf(expected_preamble_pid, sizeof expected_preamble_pid, "# process %ld\n",
+                   (long)getpid())
+          < (int)sizeof expected_preamble_pid);
+    CHECK(strstr(contents, expected_preamble_pid) != NULL);
+    CHECK(strstr(contents, "uri\tids\tstored-dd\thli-dd\toperation\tfidelity\tpath\n") != NULL);
+    CHECK(strstr(contents,
+                 "\tequilibrium\t4.1.1\t3.39.0\tread\tPOTENTIALLY_LOSSY\t"
+                 "time_slice/ggd/b_field_phi\n")
+          != NULL);
+    free(contents);
+    CHECK(remove(path) == 0);
+    free(path);
+    printf("read_path_test production-facts-and-effects-use-the-process-contract: the "
+           "default directory, timestamp, PID and production file delivery matched the process\n");
 }
 
 /* Drive two distinct lossy reads so a disabled or failed file destination has
@@ -1094,6 +1180,8 @@ int main(int argc, char **argv) {
         {"merged-read-retains-a-lossy-verdict-in-the-loss-log", scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log},
         {"loss-file-is-created-on-first-loss-and-deduplicates-lines", scenario_loss_file_is_created_on_first_loss_and_deduplicates_lines},
         {"loss-file-is-absent-without-loss", scenario_loss_file_is_absent_without_loss},
+        {"production-facts-and-effects-use-the-process-contract",
+         scenario_production_facts_and_effects_use_the_process_contract},
         {"loss-file-empty-directory-value-disables-delivery", scenario_loss_file_empty_directory_value_disables_delivery},
         {"loss-file-missing-directory-reports-once-without-failing-reads", scenario_loss_file_missing_directory_reports_once_without_failing_reads},
         {"loss-file-file-destination-reports-once-without-failing-reads", scenario_loss_file_file_destination_reports_once_without_failing_reads},
