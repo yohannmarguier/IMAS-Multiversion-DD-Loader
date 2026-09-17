@@ -66,9 +66,13 @@ selection and incomplete-run refusal. It does not run a full mutation campaign.
 
 A clean detached worktree at `11457ef` completed 603 selected mutants in
 18m18s. The durable [normalized baseline report](mutation-audits/issue-191-scoped-baseline.md)
-records its result. No survivor has been excluded:
-`rust-mutation-dispositions.json` remains empty, so every missed mutant remains
-visible in the command's survivor inventory for follow-up.
+records its result. At that baseline revision, no survivor had been excluded:
+`rust-mutation-dispositions.json` was empty, so every
+missed mutant remained visible in the command's survivor inventory for
+follow-up. The current manifest classifies the two `path_conversion` shape-
+refusal fallback omissions as equivalent: their shared-refusal checks return
+before either fallback can run. Future exclusions still require the same
+code-local observable-behavior evidence.
 
 | Group | Caught | Missed | Timed out | Unviable | Excluded | Score |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |

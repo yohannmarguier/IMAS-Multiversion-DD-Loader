@@ -1,4 +1,17 @@
 {
   "schema_version": 1,
-  "dispositions": []
+  "dispositions": [
+    {
+      "mutant": "src/conversion/path_conversion.rs:848:9: delete match arm Resolved::Refusal{reason, dd_path, ..} in write_shape_refusal",
+      "classification": "equivalent",
+      "observable_behavior": "write_subject maps every Resolved::Refusal to CheckShape::SharedRefusal, and WRITE_CHECKS returns its retained reason before write_shape_refusal can run",
+      "disposition": "the fallback arm is unreachable until a new resolution shape or changed write check bypasses the shared-refusal check"
+    },
+    {
+      "mutant": "src/conversion/path_conversion.rs:962:9: delete match arm Resolved::Refusal{reason, dd_path, ..} in delete_shape_refusal",
+      "classification": "equivalent",
+      "observable_behavior": "delete_subjects maps every Resolved::Refusal to CheckShape::SharedRefusal, and DELETE_CHECKS returns its retained reason before delete_shape_refusal can run",
+      "disposition": "the fallback arm is unreachable until a new resolution shape or changed delete check bypasses the shared-refusal check"
+    }
+  ]
 }

@@ -840,9 +840,9 @@ fn write_subject<'a>(
     Some(subject)
 }
 
-/// The refusal a shape naming no stored source earns. Reached only if a future
-/// shape escapes [`WRITE_CHECKS`]: reporting the list's own no-stored-slot
-/// verdict refuses safely rather than writing a path no check has judged.
+/// The refusal a shape naming no stored source earns. Today `Resolved::Refusal` cannot reach it:
+/// [`write_subject`] maps it to `CheckShape::SharedRefusal`, then [`WRITE_CHECKS`] returns its reason.
+/// A new resolution shape or changed write check must revisit this routing before relying on the fallback.
 fn write_shape_refusal(resolved: &Resolved, caller: String) -> WritePath {
     let (reason, dd_path) = match resolved {
         Resolved::Refusal {
@@ -955,8 +955,8 @@ fn delete_subjects<'a>(resolved: &'a Resolved, caller: &'a str) -> Vec<CheckSubj
     }
 }
 
-/// The refusal a shape naming no stored source earns, for the same reason
-/// [`write_shape_refusal`] exists.
+/// The refusal a shape naming no stored source earns, for the same reason [`write_shape_refusal`] exists.
+/// Today `Resolved::Refusal` cannot reach it: [`delete_subjects`] maps it to `CheckShape::SharedRefusal`, then [`DELETE_CHECKS`] returns its reason; a new resolution shape or changed delete check must revisit this routing.
 fn delete_shape_refusal(resolved: &Resolved, caller: String) -> DeletePath {
     let (reason, dd_path) = match resolved {
         Resolved::Refusal {
