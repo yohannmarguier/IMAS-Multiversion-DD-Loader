@@ -26,7 +26,7 @@
       "name": "dd-version",
       "sources": [
         {"path": "src/version/dd_version.rs", "start_line": 1, "end_line": 222},
-        {"path": "src/version/hli_version.rs", "start_line": 29, "end_line": 126},
+        {"path": "src/version/hli_version.rs", "start_line": 29, "end_line": 174},
         {"path": "src/version/version_stamp.rs", "start_line": 49, "end_line": 54}
       ]
     },

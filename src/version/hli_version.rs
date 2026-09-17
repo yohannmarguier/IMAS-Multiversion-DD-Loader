@@ -74,6 +74,43 @@ impl Latch {
         }
     }
 
+    /// The HLI DD version this settled outcome offers as a conversion basis.
+    /// `None` covers every case a seam must treat as "no basis": unset, or an
+    /// invalid environment value.
+    fn version(&self) -> Option<DdVersion> {
+        match self {
+            Self::Set(version) => Some(version.clone()),
+            Self::Unset | Self::Invalid(_) => None,
+        }
+    }
+
+    /// The same question without cloning the version out of the latch.
+    fn conversion_is_possible(&self) -> bool {
+        matches!(self, Self::Set(_))
+    }
+
+    /// Whether this settled outcome accepts `parsed` as the process's HLI DD
+    /// version (ADR 0005): an identical repeat is accepted, and every other
+    /// settled outcome refuses naming what it already holds.
+    fn accept(&self, parsed: &DdVersion) -> Result<(), String> {
+        match self {
+            Self::Set(existing) if existing == parsed => Ok(()),
+            Self::Set(existing) => Err(format!(
+                "conflicting HLI DD version: this process already latched to '{existing}' \
+                 and cannot also serve '{parsed}' — one process cannot host two HLIs built \
+                 against different DD versions"
+            )),
+            Self::Unset => Err(format!(
+                "cannot set HLI DD version to '{parsed}': this process already latched to \
+                 unset, after an earlier open found no setter call and no valid {ENV_VAR}"
+            )),
+            Self::Invalid(reason) => Err(format!(
+                "cannot set HLI DD version to '{parsed}': this process already latched to \
+                 an invalid {ENV_VAR} value at an earlier open ({reason})"
+            )),
+        }
+    }
+
     fn from_environment(environment: EnvironmentValue) -> Self {
         match environment {
             EnvironmentValue::Absent => Self::Unset,
@@ -94,36 +131,24 @@ struct HliVersionLatch {
 }
 
 impl HliVersionLatch {
-    fn from_latch(latch: Latch) -> Self {
-        Self { latch: Some(latch) }
-    }
-
     fn into_latch(self) -> Latch {
         self.latch
             .expect("a production latch candidate must settle before storage")
     }
 
+    /// The setter sequence, for tests: production reports through [`set`],
+    /// which applies the same [`Latch::accept`] decision to the one
+    /// process-wide outcome instead of to this model's.
+    #[cfg(test)]
     fn set(&mut self, version: &str) -> Result<(), String> {
         self.set_parsed(version.parse()?)
     }
 
+    #[cfg(test)]
     fn set_parsed(&mut self, parsed: DdVersion) -> Result<(), String> {
-        match self.latch.get_or_insert_with(|| Latch::Set(parsed.clone())) {
-            Latch::Set(existing) if *existing == parsed => Ok(()),
-            Latch::Set(existing) => Err(format!(
-                "conflicting HLI DD version: this process already latched to '{existing}' \
-                 and cannot also serve '{parsed}' — one process cannot host two HLIs built \
-                 against different DD versions"
-            )),
-            Latch::Unset => Err(format!(
-                "cannot set HLI DD version to '{parsed}': this process already latched to \
-                 unset, after an earlier open found no setter call and no valid {ENV_VAR}"
-            )),
-            Latch::Invalid(reason) => Err(format!(
-                "cannot set HLI DD version to '{parsed}': this process already latched to \
-                 an invalid {ENV_VAR} value at an earlier open ({reason})"
-            )),
-        }
+        self.latch
+            .get_or_insert_with(|| Latch::Set(parsed.clone()))
+            .accept(&parsed)
     }
 
     fn resolve_for_open<F>(&mut self, environment: F) -> Result<(), String>
@@ -137,23 +162,14 @@ impl HliVersionLatch {
 
     #[cfg(test)]
     fn latched(&self) -> Option<DdVersion> {
-        Self::latched_from(self.latch.as_ref())
-    }
-
-    fn latched_from(latch: Option<&Latch>) -> Option<DdVersion> {
-        match latch? {
-            Latch::Set(version) => Some(version.clone()),
-            Latch::Unset | Latch::Invalid(_) => None,
-        }
+        self.latch.as_ref().and_then(Latch::version)
     }
 
     #[cfg(test)]
     fn conversion_is_possible(&self) -> bool {
-        Self::conversion_is_possible_from(self.latch.as_ref())
-    }
-
-    fn conversion_is_possible_from(latch: Option<&Latch>) -> bool {
-        matches!(latch, Some(Latch::Set(_)))
+        self.latch
+            .as_ref()
+            .is_some_and(Latch::conversion_is_possible)
     }
 }
 
@@ -170,10 +186,13 @@ static LATCH: OnceLock<Latch> = OnceLock::new();
 /// process already latched to unset (an earlier open with no setter and no
 /// valid environment variable) is refused too.
 pub(crate) fn set(version: &str) -> Result<(), String> {
-    let mut candidate = HliVersionLatch::default();
-    candidate.set(version)?;
-    let settled = LATCH.get_or_init(|| candidate.into_latch());
-    HliVersionLatch::from_latch(settled.clone()).set(version)
+    // An invalid version never touches the latch, and the settled outcome —
+    // this call's own on a first report — answers once, without copying itself
+    // out of the `OnceLock` or deciding twice.
+    let parsed: DdVersion = version.parse()?;
+    LATCH
+        .get_or_init(|| Latch::Set(parsed.clone()))
+        .accept(&parsed)
 }
 
 /// Resolves the latch for the first open (ADR 0005): the setter's value if
@@ -202,7 +221,7 @@ pub(crate) fn resolve_for_open() -> Result<(), String> {
 /// the latch can resolve (ADR 0005) — a seam calling this beforehand simply
 /// sees `None` and forwards unchanged, same as the unset case.
 pub(crate) fn latched() -> Option<DdVersion> {
-    HliVersionLatch::latched_from(LATCH.get())
+    LATCH.get().and_then(Latch::version)
 }
 
 /// Whether this process has any conversion basis at all — the same question
@@ -218,7 +237,7 @@ pub(crate) fn latched() -> Option<DdVersion> {
 /// seams short-circuit on [`latched`] instead, since they go on to use the
 /// version itself.
 pub(crate) fn conversion_is_possible() -> bool {
-    HliVersionLatch::conversion_is_possible_from(LATCH.get())
+    LATCH.get().is_some_and(Latch::conversion_is_possible)
 }
 
 /// C entry point for `imas_mvdd_set_hli_dd_version`: validates the pointer
@@ -293,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn reconstructing_each_settled_latch_state_preserves_its_conversion_basis() {
+    fn each_settled_latch_state_reports_its_conversion_basis() {
         let cases = [
             (Latch::Set(version("4.1.1")), Some(version("4.1.1")), true),
             (Latch::Unset, None, false),
@@ -305,13 +324,8 @@ mod tests {
         ];
 
         for (settled, expected_version, conversion_is_possible) in cases {
-            let reconstructed = HliVersionLatch::from_latch(settled);
-
-            assert_eq!(reconstructed.latched(), expected_version);
-            assert_eq!(
-                reconstructed.conversion_is_possible(),
-                conversion_is_possible
-            );
+            assert_eq!(settled.version(), expected_version);
+            assert_eq!(settled.conversion_is_possible(), conversion_is_possible);
         }
     }
 
