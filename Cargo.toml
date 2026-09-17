@@ -43,4 +43,5 @@ description = "Shim between the IMAS HLIs and IMAS-Core"
 debug = 1
 
 [dependencies]
+neo4j = "0.2.0"
 roxmltree = "0.21.1"
