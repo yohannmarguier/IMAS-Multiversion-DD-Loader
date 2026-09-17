@@ -573,6 +573,17 @@ jobs:
               shim_suite = 'shim' in labels
               names_core = any(e.startswith('IMAS_CORE_LIBRARY=') for e in env)
               names_dd = 'IMAS_MVDD_HLI_DD_VERSION=4.1.1' in env
+              # F2.1 is the one test that must NOT carry the HLI DD version.
+              # The shim latches that version once per process, and absence --
+              # not an empty value, not a late unset in a wrapper -- is what
+              # the scenario asserts the shim does with. Asserted in the
+              # opposite direction rather than skipped, so the day it silently
+              # gains a version this still fails.
+              if test['name'] == 'cpp-test-shim-version-unset':
+                  assert names_core, test['name']
+                  assert not names_dd, f"{test['name']} must not name a DD version"
+                  checked += 1
+                  continue
               if not shim_suite and test['name'] not in inspection_only:
                   assert names_core, test['name']
                   assert names_dd, test['name']
