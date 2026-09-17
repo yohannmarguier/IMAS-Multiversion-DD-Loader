@@ -89,7 +89,7 @@ refuse it, because the stub's recorder resets its integer fields on every call,
 so the probe's own rwmode is only readable while its open is the last plugin
 call made.
 
-### `read-path-*` — 45 · `shim/read_path_test.c`
+### `read-path-*` — 46 · `shim/read_path_test.c`
 
 `al_read_data`, the main conversion seam (issues #56 and #65, ADR 0014).
 
@@ -104,7 +104,9 @@ call made.
 - **Refusals before Core** — rank-changing retype, unit redefinition,
   unsupported sign-flip data types.
 - **Reentrancy** — a read arriving beneath an in-flight read is forwarded
-  untouched and does not re-apply a sign flip.
+  untouched and does not re-apply a sign flip; a callback-shaped interaction
+  also proves that consecutive nested calls preserve the outer conversion and
+  that a later top-level call converts again.
 - **Bypass** — matching, unknown, unstamped and conversion-disabled contexts.
 - **Loss log** — lossy `merged`/`moved` reads retained, log destroyed with its
   context, plus the ten safety refusals of the `imas_mvdd_context_loss_*` query

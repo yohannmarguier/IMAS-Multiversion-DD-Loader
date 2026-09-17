@@ -23,14 +23,19 @@
 typedef al_status_t (*read_data_fn)(int, const char *, const char *, void **, int, int, int *);
 typedef void (*set_reentrant_read_fn)(read_data_fn, const char *);
 
-/* Arms the stub to call back into the shim's own `al_read_data` once, while
- * the shim's read is still on the stack, with `field` as its argument — what
+/* Arms the stub to call back into the shim's own `al_read_data` while the
+ * shim's read is still on the stack, with `field` as its argument — what
  * real IMAS-Core does on ELF, where its internal call to its own public
  * `al_read_data` binds to the shim's exported definition. */
-static void arm_reentrant_read(read_data_fn callback, const char *field) {
+static void arm_reentrant_read_with(const char *setter_name, read_data_fn callback,
+                                    const char *field) {
     set_reentrant_read_fn arm =
-        (set_reentrant_read_fn)stub_symbol_or_die("recording_stub_set_reentrant_read");
+        (set_reentrant_read_fn)stub_symbol_or_die(setter_name);
     arm(callback, field);
+}
+
+static void arm_reentrant_read(read_data_fn callback, const char *field) {
+    arm_reentrant_read_with("recording_stub_set_reentrant_read", callback, field);
 }
 
 static al_status_t read_data(int ctx_id, const char *field, const char *timebase, void **data) {
@@ -412,6 +417,42 @@ static void scenario_reentrant_read_is_forwarded_unchanged(void) {
 
     printf("read_path_test reentrant-read-is-forwarded-unchanged: a read re-entering beneath "
            "an in-flight read was forwarded without conversion or loss retention\n");
+}
+
+/* One callback-shaped interaction covers the entire gate lifecycle: each
+ * top-level read must convert, the callback arriving beneath it must pass
+ * through, and a later top-level read must convert again once that callback
+ * has returned. Keeping all three observations in one scenario makes an
+ * incorrect first-entry threshold, increment, or scope-exit decrement
+ * externally visible without inspecting the thread-local depth itself. */
+static void scenario_reentry_depth_gate_restores_conversion_after_nested_read(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    const char *field = "time_slice/boundary_separatrix/gap/r";
+    const char *stored_field = "time_slice/boundary/gap/r";
+    arm_reentrant_read_with("recording_stub_set_reentrant_read_twice", al_read_data, field);
+
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, field, "", &data).code == 0);
+    CHECK(data != NULL);
+    check_stub_paths(stored_field, "");
+    CHECK(int_from_stub("recording_stub_reentrant_call_count") == 2);
+    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_field"), field) == 0);
+    CHECK(loss_count(operation_ctx) == 1);
+
+    data = NULL;
+    CHECK(read_data(operation_ctx, field, "", &data).code == 0);
+    CHECK(data != NULL);
+    check_stub_paths(stored_field, "");
+    CHECK(int_from_stub("recording_stub_reentrant_call_count") == 4);
+    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_field"), field) == 0);
+    CHECK(loss_count(operation_ctx) == 2);
+    check_loss_at(operation_ctx, 0, field, IMAS_MVDD_FIDELITY_LOSSY,
+                  IMAS_MVDD_LOSS_OPERATION_READ);
+    check_loss_at(operation_ctx, 1, field, IMAS_MVDD_FIDELITY_LOSSY,
+                  IMAS_MVDD_LOSS_OPERATION_READ);
+
+    printf("read_path_test reentry-depth-gate-restores-conversion-after-nested-read: first "
+           "entries converted, callbacks passed through, and scope exit restored conversion\n");
 }
 
 /* The value-transform half of the same policy. The stub hands both legs the
@@ -1165,6 +1206,8 @@ int main(int argc, char **argv) {
         {"sign-flip-array-negates-values-and-preserves-empty-double", scenario_sign_flip_array_negates_values_and_preserves_empty_double},
         {"sign-flip-rank-exceeding-maxdim-refuses-without-core-call", scenario_sign_flip_rank_exceeding_maxdim_refuses_without_core_call},
         {"reentrant-read-is-forwarded-unchanged", scenario_reentrant_read_is_forwarded_unchanged},
+        {"reentry-depth-gate-restores-conversion-after-nested-read",
+         scenario_reentry_depth_gate_restores_conversion_after_nested_read},
         {"reentrant-read-does-not-reapply-a-sign-flip", scenario_reentrant_read_does_not_reapply_a_sign_flip},
         {"plugin-reentrant-read-is-forwarded-across-the-ordinary-family",
          scenario_plugin_reentrant_read_is_forwarded_across_the_ordinary_family},
