@@ -1,11 +1,240 @@
 use super::*;
 use crate::conversion::conversion_map::{Direction, Outcome, RefusalReason, Rel};
-use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread;
 use std::time::Duration;
 
 #[derive(Clone)]
 struct ControlledSource {
     result: Result<IdsGraphFacts, GraphSourceError>,
+}
+
+#[derive(Clone)]
+struct GateSource {
+    result: Result<IdsGraphFacts, GraphSourceError>,
+    loads: Arc<AtomicUsize>,
+    started: Arc<(Mutex<bool>, Condvar)>,
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl GateSource {
+    fn new(facts: IdsGraphFacts) -> Self {
+        Self {
+            result: Ok(facts),
+            loads: Arc::new(AtomicUsize::new(0)),
+            started: Arc::new((Mutex::new(false), Condvar::new())),
+            release: Arc::new((Mutex::new(false), Condvar::new())),
+        }
+    }
+
+    fn failing(message: &str) -> Self {
+        Self {
+            result: Err(GraphSourceError(message.to_string())),
+            loads: Arc::new(AtomicUsize::new(0)),
+            started: Arc::new((Mutex::new(false), Condvar::new())),
+            release: Arc::new((Mutex::new(false), Condvar::new())),
+        }
+    }
+
+    fn wait_until_started(&self) {
+        let (started, wake) = &*self.started;
+        let mut started = started.lock().expect("gate start mutex is not poisoned");
+        while !*started {
+            started = wake
+                .wait(started)
+                .expect("gate start mutex is not poisoned");
+        }
+    }
+
+    fn release(&self) {
+        let (release, wake) = &*self.release;
+        *release.lock().expect("gate release mutex is not poisoned") = true;
+        wake.notify_all();
+    }
+}
+
+impl GraphFactsSource for GateSource {
+    fn load_ids_facts(
+        &self,
+        _ids: &str,
+        _attempt: &AcquisitionAttempt,
+    ) -> Result<IdsGraphFacts, GraphSourceError> {
+        self.loads.fetch_add(1, Ordering::SeqCst);
+        let (started, wake) = &*self.started;
+        *started.lock().expect("gate start mutex is not poisoned") = true;
+        wake.notify_all();
+
+        let (release, wake) = &*self.release;
+        let mut release = release.lock().expect("gate release mutex is not poisoned");
+        while !*release {
+            release = wake
+                .wait(release)
+                .expect("gate release mutex is not poisoned");
+        }
+        self.result.clone()
+    }
+}
+
+#[derive(Clone)]
+struct SequencedSource {
+    results: Arc<Mutex<VecDeque<Result<IdsGraphFacts, GraphSourceError>>>>,
+    loads: Arc<AtomicUsize>,
+}
+
+#[derive(Clone)]
+struct ShutdownSource {
+    facts: IdsGraphFacts,
+    online: Arc<AtomicBool>,
+    loads: Arc<AtomicUsize>,
+}
+
+impl ShutdownSource {
+    fn new(facts: IdsGraphFacts) -> Self {
+        Self {
+            facts,
+            online: Arc::new(AtomicBool::new(true)),
+            loads: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn shut_down(&self) {
+        self.online.store(false, Ordering::SeqCst);
+    }
+}
+
+impl GraphFactsSource for ShutdownSource {
+    fn load_ids_facts(
+        &self,
+        _ids: &str,
+        _attempt: &AcquisitionAttempt,
+    ) -> Result<IdsGraphFacts, GraphSourceError> {
+        self.loads.fetch_add(1, Ordering::SeqCst);
+        if self.online.load(Ordering::SeqCst) {
+            Ok(self.facts.clone())
+        } else {
+            Err(GraphSourceError("graph shut down".to_string()))
+        }
+    }
+}
+
+impl SequencedSource {
+    fn new(results: impl IntoIterator<Item = Result<IdsGraphFacts, GraphSourceError>>) -> Self {
+        Self {
+            results: Arc::new(Mutex::new(results.into_iter().collect())),
+            loads: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+impl GraphFactsSource for SequencedSource {
+    fn load_ids_facts(
+        &self,
+        _ids: &str,
+        _attempt: &AcquisitionAttempt,
+    ) -> Result<IdsGraphFacts, GraphSourceError> {
+        self.loads.fetch_add(1, Ordering::SeqCst);
+        self.results
+            .lock()
+            .expect("sequence mutex is not poisoned")
+            .pop_front()
+            .expect("test source has one result per expected load")
+    }
+}
+
+#[derive(Clone)]
+struct ParallelGateSource {
+    loads: Arc<AtomicUsize>,
+    started: mpsc::Sender<String>,
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl GraphFactsSource for ParallelGateSource {
+    fn load_ids_facts(
+        &self,
+        ids: &str,
+        _attempt: &AcquisitionAttempt,
+    ) -> Result<IdsGraphFacts, GraphSourceError> {
+        self.loads.fetch_add(1, Ordering::SeqCst);
+        self.started
+            .send(ids.to_string())
+            .expect("test receiver remains available");
+        let (release, wake) = &*self.release;
+        let mut release = release.lock().expect("parallel gate mutex is not poisoned");
+        while !*release {
+            release = wake
+                .wait(release)
+                .expect("parallel gate mutex is not poisoned");
+        }
+        Ok(complete_identity_scope_for(ids))
+    }
+}
+
+#[derive(Clone)]
+struct FirstCallGateSource {
+    facts: IdsGraphFacts,
+    loads: Arc<AtomicUsize>,
+    started: Arc<(Mutex<bool>, Condvar)>,
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl FirstCallGateSource {
+    fn new(facts: IdsGraphFacts) -> Self {
+        Self {
+            facts,
+            loads: Arc::new(AtomicUsize::new(0)),
+            started: Arc::new((Mutex::new(false), Condvar::new())),
+            release: Arc::new((Mutex::new(false), Condvar::new())),
+        }
+    }
+
+    fn wait_until_started(&self) {
+        let (started, wake) = &*self.started;
+        let mut started = started
+            .lock()
+            .expect("first-call start mutex is not poisoned");
+        while !*started {
+            started = wake
+                .wait(started)
+                .expect("first-call start mutex is not poisoned");
+        }
+    }
+
+    fn release_first_call(&self) {
+        let (release, wake) = &*self.release;
+        *release
+            .lock()
+            .expect("first-call release mutex is not poisoned") = true;
+        wake.notify_all();
+    }
+}
+
+impl GraphFactsSource for FirstCallGateSource {
+    fn load_ids_facts(
+        &self,
+        _ids: &str,
+        _attempt: &AcquisitionAttempt,
+    ) -> Result<IdsGraphFacts, GraphSourceError> {
+        if self.loads.fetch_add(1, Ordering::SeqCst) == 0 {
+            let (started, wake) = &*self.started;
+            *started
+                .lock()
+                .expect("first-call start mutex is not poisoned") = true;
+            wake.notify_all();
+            let (release, wake) = &*self.release;
+            let mut release = release
+                .lock()
+                .expect("first-call release mutex is not poisoned");
+            while !*release {
+                release = wake
+                    .wait(release)
+                    .expect("first-call release mutex is not poisoned");
+            }
+        }
+        Ok(self.facts.clone())
+    }
 }
 
 impl GraphFactsSource for ControlledSource {
@@ -72,6 +301,43 @@ impl AcquisitionClock for ManualClock {
 struct AdvanceAtStage {
     clock: Arc<ManualClock>,
     stage: AcquisitionStage,
+}
+
+struct JoinObserver {
+    joined: Mutex<bool>,
+    wake: Condvar,
+}
+
+impl JoinObserver {
+    fn new() -> Self {
+        Self {
+            joined: Mutex::new(false),
+            wake: Condvar::new(),
+        }
+    }
+
+    fn wait_until_joined(&self) {
+        let mut joined = self
+            .joined
+            .lock()
+            .expect("join observer mutex is not poisoned");
+        while !*joined {
+            joined = self
+                .wake
+                .wait(joined)
+                .expect("join observer mutex is not poisoned");
+        }
+    }
+}
+
+impl CoordinatorObserver for JoinObserver {
+    fn joined_attempt(&self) {
+        *self
+            .joined
+            .lock()
+            .expect("join observer mutex is not poisoned") = true;
+        self.wake.notify_all();
+    }
 }
 
 impl AttemptObserver for AdvanceAtStage {
@@ -166,11 +432,299 @@ fn complete_identity_scope() -> IdsGraphFacts {
     }
 }
 
+fn complete_identity_scope_for(ids: &str) -> IdsGraphFacts {
+    let mut facts = complete_identity_scope();
+    for node in &mut facts.nodes {
+        node.ids = ids.to_string();
+    }
+    facts
+}
+
 fn request() -> MapRequest {
     MapRequest {
         ids: "equilibrium".to_string(),
         stored_dd: ArtifactDdVersion::new("3.39.0").expect("fixture release is valid"),
         hli_dd: ArtifactDdVersion::new("4.1.1").expect("fixture release is valid"),
+    }
+}
+
+fn request_for(ids: &str) -> MapRequest {
+    MapRequest {
+        ids: ids.to_string(),
+        ..request()
+    }
+}
+
+#[test]
+fn concurrent_same_key_requests_share_one_construction_and_one_result() {
+    let source = GateSource::new(complete_identity_scope());
+    let joined = Arc::new(JoinObserver::new());
+    let coordinator = Arc::new(RuntimeMapCoordinator::with_observers(
+        source.clone(),
+        Duration::from_secs(5),
+        Arc::new(SystemClock::new()),
+        Arc::new(NoopAttemptObserver),
+        joined.clone(),
+    ));
+    let first_coordinator = Arc::clone(&coordinator);
+    let first = thread::spawn(move || first_coordinator.acquire(&request()));
+    source.wait_until_started();
+
+    let second_coordinator = Arc::clone(&coordinator);
+    let second = thread::spawn(move || second_coordinator.acquire(&request()));
+    joined.wait_until_joined();
+    source.release();
+
+    let first = first
+        .join()
+        .expect("first requester must not panic")
+        .expect("first requester must receive the completed map");
+    let second = second
+        .join()
+        .expect("second requester must not panic")
+        .expect("second requester must receive the completed map");
+
+    assert_eq!(source.loads.load(Ordering::SeqCst), 1);
+    for map in [first, second] {
+        assert!(
+            map.resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+                .is_some()
+        );
+    }
+}
+
+#[test]
+fn same_key_joiners_keep_the_original_attempt_deadline() {
+    let source = GateSource::new(complete_identity_scope());
+    let joined = Arc::new(JoinObserver::new());
+    let clock = Arc::new(ManualClock::default());
+    let coordinator = Arc::new(RuntimeMapCoordinator::with_observers(
+        source.clone(),
+        Duration::from_secs(5),
+        clock.clone(),
+        Arc::new(NoopAttemptObserver),
+        joined.clone(),
+    ));
+    let first_coordinator = Arc::clone(&coordinator);
+    let first = thread::spawn(move || first_coordinator.acquire(&request()));
+    source.wait_until_started();
+    clock.advance(Duration::from_secs(4));
+
+    let second_coordinator = Arc::clone(&coordinator);
+    let second = thread::spawn(move || second_coordinator.acquire(&request()));
+    joined.wait_until_joined();
+    clock.advance(Duration::from_secs(1));
+    source.release();
+
+    for result in [
+        first.join().expect("first requester must not panic"),
+        second.join().expect("second requester must not panic"),
+    ] {
+        assert!(matches!(
+            result,
+            Err(AcquisitionFailure::TimedOut {
+                stage: AcquisitionStage::Source,
+            })
+        ));
+    }
+    assert_eq!(source.loads.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn expiry_publishes_one_terminal_failure_to_the_leader_and_joiner() {
+    let source = GateSource::new(complete_identity_scope());
+    let joined = Arc::new(JoinObserver::new());
+    let clock = Arc::new(ManualClock::default());
+    let coordinator = Arc::new(RuntimeMapCoordinator::with_observers(
+        source.clone(),
+        Duration::from_secs(5),
+        clock.clone(),
+        Arc::new(NoopAttemptObserver),
+        joined.clone(),
+    ));
+    let first_coordinator = Arc::clone(&coordinator);
+    let first = thread::spawn(move || first_coordinator.acquire(&request()));
+    source.wait_until_started();
+    let second_coordinator = Arc::clone(&coordinator);
+    let second = thread::spawn(move || second_coordinator.acquire(&request()));
+    joined.wait_until_joined();
+
+    clock.advance(Duration::from_secs(5));
+    let expiry = coordinator.acquire(&request());
+    source.release();
+    for result in [
+        expiry,
+        first.join().expect("first requester must not panic"),
+        second.join().expect("second requester must not panic"),
+    ] {
+        assert!(matches!(
+            result,
+            Err(AcquisitionFailure::TimedOut {
+                stage: AcquisitionStage::Publication,
+            })
+        ));
+    }
+    assert_eq!(source.loads.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn successful_maps_outlive_callers_and_do_not_contact_the_graph_again() {
+    let source = ShutdownSource::new(complete_identity_scope());
+    let coordinator = RuntimeMapCoordinator::new(source.clone());
+
+    let first = coordinator
+        .acquire(&request())
+        .expect("first request must acquire the map");
+    source.shut_down();
+    drop(first);
+    let retained = coordinator
+        .acquire(&request())
+        .expect("retained map must work after graph shutdown");
+
+    assert_eq!(source.loads.load(Ordering::SeqCst), 1);
+    assert!(
+        retained
+            .resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .is_some()
+    );
+}
+
+#[test]
+fn cache_keys_keep_opposite_directions_of_one_ids_separate() {
+    let source =
+        SequencedSource::new([Ok(complete_identity_scope()), Ok(complete_identity_scope())]);
+    let coordinator = RuntimeMapCoordinator::new(source.clone());
+    let reverse = MapRequest {
+        ids: "equilibrium".to_string(),
+        stored_dd: ArtifactDdVersion::new("4.1.1").expect("fixture release is valid"),
+        hli_dd: ArtifactDdVersion::new("3.39.0").expect("fixture release is valid"),
+    };
+
+    assert!(coordinator.acquire(&request()).is_ok());
+    assert!(coordinator.acquire(&reverse).is_ok());
+    assert_eq!(source.loads.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn concurrent_joiners_receive_the_same_terminal_failure_and_a_later_request_retries() {
+    let source = GateSource::failing("graph unavailable");
+    let joined = Arc::new(JoinObserver::new());
+    let coordinator = Arc::new(RuntimeMapCoordinator::with_observers(
+        source.clone(),
+        Duration::from_secs(5),
+        Arc::new(SystemClock::new()),
+        Arc::new(NoopAttemptObserver),
+        joined.clone(),
+    ));
+    let first_coordinator = Arc::clone(&coordinator);
+    let first = thread::spawn(move || first_coordinator.acquire(&request()));
+    source.wait_until_started();
+    let second_coordinator = Arc::clone(&coordinator);
+    let second = thread::spawn(move || second_coordinator.acquire(&request()));
+    joined.wait_until_joined();
+    source.release();
+
+    for result in [
+        first.join().expect("first requester must not panic"),
+        second.join().expect("second requester must not panic"),
+    ] {
+        assert!(matches!(
+            result,
+            Err(AcquisitionFailure::Source(GraphSourceError(message))) if message == "graph unavailable"
+        ));
+    }
+    assert_eq!(source.loads.load(Ordering::SeqCst), 1);
+
+    let source = SequencedSource::new([
+        Err(GraphSourceError("first attempt failed".to_string())),
+        Ok(complete_identity_scope()),
+    ]);
+    let coordinator = RuntimeMapCoordinator::new(source.clone());
+    assert!(coordinator.acquire(&request()).is_err());
+    assert!(coordinator.acquire(&request()).is_ok());
+    assert_eq!(source.loads.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn different_keys_begin_graph_work_independently() {
+    let (started, received) = mpsc::channel();
+    let source = ParallelGateSource {
+        loads: Arc::new(AtomicUsize::new(0)),
+        started,
+        release: Arc::new((Mutex::new(false), Condvar::new())),
+    };
+    let release = Arc::clone(&source.release);
+    let coordinator = Arc::new(RuntimeMapCoordinator::new(source.clone()));
+    let first_coordinator = Arc::clone(&coordinator);
+    let first = thread::spawn(move || first_coordinator.acquire(&request_for("equilibrium")));
+    let second_coordinator = Arc::clone(&coordinator);
+    let second = thread::spawn(move || second_coordinator.acquire(&request_for("pulse_schedule")));
+
+    let first_id = received
+        .recv_timeout(Duration::from_secs(1))
+        .expect("first key must reach graph work");
+    let second_id = received
+        .recv_timeout(Duration::from_secs(1))
+        .expect("second key must reach graph work without waiting for the first");
+    assert_ne!(first_id, second_id);
+    let (released, wake) = &*release;
+    *released
+        .lock()
+        .expect("parallel gate mutex is not poisoned") = true;
+    wake.notify_all();
+
+    assert!(
+        first
+            .join()
+            .expect("first requester must not panic")
+            .is_ok()
+    );
+    assert!(
+        second
+            .join()
+            .expect("second requester must not panic")
+            .is_ok()
+    );
+    assert_eq!(source.loads.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn an_expired_attempt_cannot_replace_a_later_retry() {
+    let source = FirstCallGateSource::new(complete_identity_scope());
+    let clock = Arc::new(ManualClock::default());
+    let coordinator = Arc::new(RuntimeMapCoordinator::with_clock_and_observer(
+        source.clone(),
+        Duration::from_secs(5),
+        clock.clone(),
+        Arc::new(NoopAttemptObserver),
+    ));
+    let first_coordinator = Arc::clone(&coordinator);
+    let first = thread::spawn(move || first_coordinator.acquire(&request()));
+    source.wait_until_started();
+    clock.advance(Duration::from_secs(5));
+
+    assert!(matches!(
+        coordinator.acquire(&request()),
+        Err(AcquisitionFailure::TimedOut { .. })
+    ));
+    let retry = coordinator
+        .acquire(&request())
+        .expect("later request must start a new attempt after expiry");
+    source.release_first_call();
+    assert!(matches!(
+        first.join().expect("expired requester must not panic"),
+        Err(AcquisitionFailure::TimedOut { .. })
+    ));
+    let retained = coordinator
+        .acquire(&request())
+        .expect("late completion must not displace the retry result");
+
+    assert_eq!(source.loads.load(Ordering::SeqCst), 2);
+    for map in [retry, retained] {
+        assert!(
+            map.resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+                .is_some()
+        );
     }
 }
 

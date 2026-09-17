@@ -5,10 +5,10 @@
 //! without making graph transport or runtime source selection a production
 //! concern.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use super::conversion_map::{
@@ -155,6 +155,18 @@ struct NoopAttemptObserver;
 
 impl AttemptObserver for NoopAttemptObserver {
     fn entered(&self, _stage: AcquisitionStage) {}
+}
+
+/// A testable synchronization boundary for request joining. It observes no map
+/// contents and production uses the no-op implementation.
+pub(crate) trait CoordinatorObserver: Send + Sync {
+    fn joined_attempt(&self);
+}
+
+struct NoopCoordinatorObserver;
+
+impl CoordinatorObserver for NoopCoordinatorObserver {
+    fn joined_attempt(&self) {}
 }
 
 /// One non-restartable deadline shared by acquisition, decoding, map
@@ -333,12 +345,23 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
             Arc::clone(&self.clock),
             Arc::clone(&self.observer),
         );
+        self.acquire_with_attempt(request, &attempt)
+    }
+
+    /// Completes one request using the caller-owned attempt. This is the
+    /// coordinator seam: a joiner must use the attempt it joined rather than
+    /// silently resetting its deadline.
+    fn acquire_with_attempt(
+        &self,
+        request: &MapRequest,
+        attempt: &AcquisitionAttempt,
+    ) -> Result<ConversionMap, AcquisitionFailure> {
         attempt.enter(AcquisitionStage::Source).map_err(|expired| {
             AcquisitionFailure::TimedOut {
                 stage: expired.stage,
             }
         })?;
-        let facts = match self.source.load_ids_facts(&request.ids, &attempt) {
+        let facts = match self.source.load_ids_facts(&request.ids, attempt) {
             Ok(facts) => {
                 attempt.check(AcquisitionStage::Source)?;
                 facts
@@ -353,15 +376,15 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
             .map_err(|expired| AcquisitionFailure::TimedOut {
                 stage: expired.stage,
             })?;
-        validate_complete_scope(&facts, request, &attempt)?;
+        validate_complete_scope(&facts, request, attempt)?;
 
         attempt
             .enter(AcquisitionStage::RuleConstruction)
             .map_err(|expired| AcquisitionFailure::TimedOut {
                 stage: expired.stage,
             })?;
-        let hli = graph_side(&facts.versions, &request.hli_dd, &attempt)?;
-        let stored = graph_side(&facts.versions, &request.stored_dd, &attempt)?;
+        let hli = graph_side(&facts.versions, &request.hli_dd, attempt)?;
+        let stored = graph_side(&facts.versions, &request.stored_dd, attempt)?;
         let mut rules = Vec::with_capacity(facts.nodes.len());
         let mut hli_endpoint = Vec::with_capacity(facts.nodes.len());
         let mut stored_endpoint = Vec::with_capacity(facts.nodes.len());
@@ -480,6 +503,233 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
                 stage: expired.stage,
             })?;
         Ok(map)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct MapCacheKey {
+    ids: String,
+    stored_dd: String,
+    hli_dd: String,
+}
+
+impl From<&MapRequest> for MapCacheKey {
+    fn from(request: &MapRequest) -> Self {
+        Self {
+            ids: request.ids.clone(),
+            stored_dd: request.stored_dd.to_string(),
+            hli_dd: request.hli_dd.to_string(),
+        }
+    }
+}
+
+type MapAcquisitionResult = Result<Arc<ConversionMap>, AcquisitionFailure>;
+
+struct SharedMapAttempt {
+    attempt: Arc<AcquisitionAttempt>,
+    result: Mutex<Option<MapAcquisitionResult>>,
+    completed: Condvar,
+}
+
+impl SharedMapAttempt {
+    fn new(attempt: AcquisitionAttempt) -> Self {
+        Self {
+            attempt: Arc::new(attempt),
+            result: Mutex::new(None),
+            completed: Condvar::new(),
+        }
+    }
+
+    fn publish(&self, result: MapAcquisitionResult) {
+        let mut published = self
+            .result
+            .lock()
+            .expect("shared map-attempt mutex is not poisoned");
+        if published.is_none() {
+            *published = Some(result);
+            self.completed.notify_all();
+        }
+    }
+
+    fn wait(&self) -> MapAcquisitionResult {
+        let mut published = self
+            .result
+            .lock()
+            .expect("shared map-attempt mutex is not poisoned");
+        while published.is_none() {
+            let remaining = self.attempt.check(AcquisitionStage::Publication)?;
+            let (next, timeout) = self
+                .completed
+                .wait_timeout(published, remaining)
+                .expect("shared map-attempt mutex is not poisoned");
+            published = next;
+            if published.is_none() && timeout.timed_out() {
+                // Record the timeout on the shared attempt before returning
+                // it. A leader that finishes source work later then observes
+                // this same terminal stage instead of publishing a different
+                // timeout reason to the callers that joined it.
+                if let Err(expired) = self.attempt.check(AcquisitionStage::Publication) {
+                    return Err(expired.into());
+                }
+                return Err(AcquisitionFailure::TimedOut {
+                    stage: AcquisitionStage::Publication,
+                });
+            }
+        }
+        published
+            .as_ref()
+            .expect("shared map attempt must publish before waking waiters")
+            .clone()
+    }
+}
+
+#[derive(Default)]
+struct CoordinatorState {
+    maps: HashMap<MapCacheKey, Arc<ConversionMap>>,
+    attempts: HashMap<MapCacheKey, Arc<SharedMapAttempt>>,
+}
+
+enum CoordinatorDecision {
+    Lead(Arc<SharedMapAttempt>),
+    Join(Arc<SharedMapAttempt>),
+    Expired(Arc<SharedMapAttempt>, AcquisitionFailure),
+}
+
+/// Shares one complete acquisition attempt per exact map key and keeps only
+/// successful maps for the process lifetime. All graph work and all waits are
+/// outside the short coordinator mutex critical sections.
+pub(crate) struct RuntimeMapCoordinator<S> {
+    acquirer: RuntimeMapAcquirer<S>,
+    state: Mutex<CoordinatorState>,
+    observer: Arc<dyn CoordinatorObserver>,
+}
+
+impl<S> RuntimeMapCoordinator<S> {
+    pub(crate) fn new(source: S) -> Self {
+        Self {
+            acquirer: RuntimeMapAcquirer::new(source),
+            state: Mutex::new(CoordinatorState::default()),
+            observer: Arc::new(NoopCoordinatorObserver),
+        }
+    }
+
+    pub(crate) fn with_clock_and_observer(
+        source: S,
+        deadline: Duration,
+        clock: Arc<dyn AcquisitionClock>,
+        observer: Arc<dyn AttemptObserver>,
+    ) -> Self {
+        Self {
+            acquirer: RuntimeMapAcquirer::with_clock_and_observer(
+                source, deadline, clock, observer,
+            ),
+            state: Mutex::new(CoordinatorState::default()),
+            observer: Arc::new(NoopCoordinatorObserver),
+        }
+    }
+
+    pub(crate) fn with_observers(
+        source: S,
+        deadline: Duration,
+        clock: Arc<dyn AcquisitionClock>,
+        attempt_observer: Arc<dyn AttemptObserver>,
+        coordinator_observer: Arc<dyn CoordinatorObserver>,
+    ) -> Self {
+        Self {
+            acquirer: RuntimeMapAcquirer::with_clock_and_observer(
+                source,
+                deadline,
+                clock,
+                attempt_observer,
+            ),
+            state: Mutex::new(CoordinatorState::default()),
+            observer: coordinator_observer,
+        }
+    }
+}
+
+impl<S: GraphFactsSource> RuntimeMapCoordinator<S> {
+    /// Acquires a retained map or joins the exact in-flight attempt already
+    /// responsible for this IDS and direction. A failure is delivered to all
+    /// joiners but deliberately never stored as a reusable cache result.
+    pub(crate) fn acquire(&self, request: &MapRequest) -> MapAcquisitionResult {
+        let key = MapCacheKey::from(request);
+        let decision = {
+            let mut state = self
+                .state
+                .lock()
+                .expect("runtime map coordinator mutex is not poisoned");
+            if let Some(map) = state.maps.get(&key) {
+                return Ok(Arc::clone(map));
+            }
+            if let Some(attempt) = state.attempts.get(&key) {
+                let attempt = Arc::clone(attempt);
+                match attempt.attempt.check(AcquisitionStage::Publication) {
+                    Ok(_) => CoordinatorDecision::Join(attempt),
+                    Err(expired) => {
+                        state.attempts.remove(&key);
+                        CoordinatorDecision::Expired(attempt, expired.into())
+                    }
+                }
+            } else {
+                let attempt = Arc::new(SharedMapAttempt::new(AcquisitionAttempt::new(
+                    self.acquirer.deadline,
+                    Arc::clone(&self.acquirer.clock),
+                    Arc::clone(&self.acquirer.observer),
+                )));
+                state.attempts.insert(key.clone(), Arc::clone(&attempt));
+                CoordinatorDecision::Lead(attempt)
+            }
+        };
+
+        let attempt = match decision {
+            CoordinatorDecision::Lead(attempt) => attempt,
+            CoordinatorDecision::Join(attempt) => {
+                self.observer.joined_attempt();
+                let result = attempt.wait();
+                if let Err(failure) = &result {
+                    attempt.publish(Err(failure.clone()));
+                    let mut state = self
+                        .state
+                        .lock()
+                        .expect("runtime map coordinator mutex is not poisoned");
+                    if state
+                        .attempts
+                        .get(&key)
+                        .is_some_and(|current| Arc::ptr_eq(current, &attempt))
+                    {
+                        state.attempts.remove(&key);
+                    }
+                }
+                return result;
+            }
+            CoordinatorDecision::Expired(attempt, expired) => {
+                attempt.publish(Err(expired.clone()));
+                return Err(expired);
+            }
+        };
+
+        let result = self
+            .acquirer
+            .acquire_with_attempt(request, &attempt.attempt)
+            .map(Arc::new);
+        attempt.publish(result.clone());
+
+        let mut state = self
+            .state
+            .lock()
+            .expect("runtime map coordinator mutex is not poisoned");
+        if state
+            .attempts
+            .get(&key)
+            .is_some_and(|current| Arc::ptr_eq(current, &attempt))
+        {
+            state.attempts.remove(&key);
+            if let Ok(map) = &result {
+                state.maps.insert(key, Arc::clone(map));
+            }
+        }
+        result
     }
 }
 
