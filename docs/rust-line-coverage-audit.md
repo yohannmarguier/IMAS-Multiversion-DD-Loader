@@ -38,18 +38,29 @@ The scope has six groups:
 | artifact-validation | The artifact-coverage calculation and ADR 0013 completeness proof. |
 | deterministic runtime-binding policy | Fallback constant/error names, library-name choice, version compatibility, and synthesized resolution failure statuses. |
 
-The configuration gives each included source range one owner and ends each
-inline-test module before its test implementation. It explicitly excludes
-C-ABI pointer marshalling, symbol forwarding, dynamic-library opening and
-symbol lookup, and real-Core integration. A file that contains both an ABI
-adapter and a decision helper is ranged rather than excluded wholesale:
-`src/lib.rs`'s status formatting, `interpose/refusal.rs`'s formatting and
-latch gate, `version_stamp.rs`'s pure decoder, `artifact_validation.rs`'s
-calculation, and the policy ranges in `core_binding.rs` — including the public
-fallback accessors' result-selection policy — remain measured. The
+The configuration gives each included source range one owner and runs to the
+start of each file's inline test module, so no production line falls out of the
+denominator by being left unnamed. It explicitly excludes C-ABI pointer
+marshalling, symbol forwarding, dynamic-library opening and symbol lookup, and
+real-Core integration. A file that contains both an ABI adapter and a decision
+helper is ranged rather than excluded wholesale: `src/lib.rs`'s status
+formatting, `interpose/refusal.rs`'s formatting and latch gate,
+`version_stamp.rs`'s decoder *and* its read classifier, `artifact_validation.rs`'s
+calculation, `loss_file.rs`'s rendering, naming and append behavior, and the
+policy ranges in `core_binding.rs` — including the public fallback accessors'
+result-selection policy — remain measured. The
 `validate_equilibrium_coverage` binary is excluded as its command-line,
 filesystem, and terminal adapter. Update the assignments with an internal seam
 extraction; do not silently shrink the scope.
+
+**An exclusion may be ranged too.** Where only part of a measured file is
+another test layer's business — `version_stamp.rs`'s discovery read, the
+process-wide `OnceLock` in `hli_version.rs`, `lib.rs`'s exported entry points,
+`core_binding.rs`'s loader — the exclusion carries `start_line`/`end_line` and
+its own reason beside the ranges that *are* measured. That is the only
+supported way to leave production code out of a measured file: a range that
+simply stops short, with nothing saying why, is the failure mode this format
+exists to prevent.
 
 The checker rejects a missing or empty configured source measurement, malformed
 LCOV input, overlapping source assignments, or a scope that does not name all
@@ -63,20 +74,27 @@ before changing scope or tests. The compact fixture test is registered as
 `rust-line-coverage-audit-fixtures` and proves the aggregate/per-group boundary
 and malformed-data behavior without requiring a full coverage run.
 
-## Integrated baseline (2026-09-17)
+## Integrated baseline (2026-09-18)
 
-The pinned tool reported the following from the integrated 299-unit-test audit.
-`cargo-llvm-cov 0.9.1` and `cargo-mutants 27.1.0` are both available under
-Rust 1.88.0, which is the CI toolchain; the recorded line run also passes on
-the local Rust toolchain. All floors pass, so the command is suitable for CI
-enforcement.
+The pinned tool reported the following from the integrated 298-unit-test audit,
+over the completed scope. `cargo-llvm-cov 0.9.1` and `cargo-mutants 27.1.0` are
+both available under Rust 1.88.0, which is the CI toolchain; the recorded line
+run also passes on the local Rust toolchain. All floors pass, so the command is
+suitable for CI enforcement.
 
 | Group | Covered/total | Coverage |
 | --- | ---: | ---: |
-| conversion | 1,900 / 2,095 | 90.7% |
-| DD-version | 154 / 161 | 95.7% |
+| conversion | 1,901 / 2,101 | 90.5% |
+| DD-version | 189 / 200 | 94.5% |
 | context-registry | 183 / 183 | 100.0% |
-| loss | 148 / 149 | 99.3% |
+| loss | 237 / 239 | 99.2% |
 | artifact-validation | 222 / 227 | 97.8% |
-| deterministic runtime-binding policy | 102 / 110 | 92.7% |
-| aggregate | 2,709 / 2,925 | 92.6% |
+| deterministic runtime-binding policy | 106 / 130 | 81.5% |
+| aggregate | 2,838 / 3,080 | 92.1% |
+
+The denominator grew by 155 lines against the first recorded baseline: the
+loss-file's rendering, naming and append behavior, the DD-version read
+classifier and the moved runtime-binding fallback policy were all production
+code that earlier ranges stopped short of. Deterministic runtime-binding policy
+now carries the four public accessors' forwarding arms, which only the C ABI
+suites can reach, and sits closest to its floor because of it.

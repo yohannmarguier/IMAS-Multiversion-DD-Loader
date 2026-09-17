@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-from rust_audit_scope import Group, ScopeError, SourceRange, load_groups
+from rust_audit_scope import Group, ScopeError, SourceRange, load_groups, parse_source
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_scope(path: Path) -> tuple[float, float, list[Group], set[str]]:
+def load_scope(path: Path) -> tuple[float, float, list[Group], list[SourceRange]]:
     try:
         value = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as error:
@@ -49,15 +49,18 @@ def load_scope(path: Path) -> tuple[float, float, list[Group], set[str]]:
     raw_exclusions = value.get("exclusions", [])
     if not isinstance(raw_exclusions, list):
         raise ScopeError("scope exclusions must be a list")
-    exclusions: set[str] = set()
+    exclusions: list[SourceRange] = []
     for exclusion in raw_exclusions:
-        if not isinstance(exclusion, dict) or not isinstance(exclusion.get("path"), str):
-            raise ScopeError("each exclusion needs a path")
-        exclusions.add(exclusion["path"])
-    included_paths = {source.path for group in groups for source in group.sources}
-    overlap = exclusions & included_paths
-    if overlap:
-        raise ScopeError(f"a source cannot be both included and excluded: {sorted(overlap)[0]}")
+        if not isinstance(exclusion, dict) or not isinstance(exclusion.get("reason"), str):
+            raise ScopeError("each exclusion needs a path and a reason")
+        exclusions.append(parse_source(exclusion, "exclusions"))
+    for source in (source for group in groups for source in group.sources):
+        for excluded in exclusions:
+            if source.overlaps(excluded):
+                raise ScopeError(
+                    f"source {source.display()} is both included and excluded "
+                    f"by {excluded.display()}"
+                )
     return float(aggregate), float(group), groups, exclusions
 
 
@@ -153,9 +156,10 @@ def main() -> int:
         print(f"coverage audit input error: {error}", file=sys.stderr)
         return 2
 
-    included_paths = {source.path for group in groups for source in group.sources}
+    mapped_paths = {source.path for group in groups for source in group.sources}
+    mapped_paths |= {excluded.path for excluded in exclusions}
     for path in lcov:
-        if path.startswith("src/") and path not in included_paths and path not in exclusions:
+        if path.startswith("src/") and path not in mapped_paths:
             errors.append(f"source {path} is unmapped; assign it to a group or an exclusion")
 
     if errors:
