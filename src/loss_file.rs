@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::conversion::conversion_map::Fidelity;
 use crate::loss::{LossOperation, fidelity_file_word};
 
-static WRITER: LazyLock<LossFileWriter<ProcessFacts>> =
+static WRITER: LazyLock<LossFileWriter<ProcessFacts, ProcessEffects>> =
     LazyLock::new(LossFileWriter::process_local);
 
 #[derive(Clone)]
@@ -104,7 +104,11 @@ impl LossFileEffects for ProcessEffects {
 
 /// One append-only writer. Production holds one process-local instance, while
 /// tests construct fresh writers with their own state and temporary directory.
-struct LossFileWriter<F, E = ProcessEffects> {
+/// Both parameters are open because both are substituted: every recoverable
+/// failure this module reports — a stopped clock, an unresolvable working
+/// directory, a refused create, a failed preamble or append — is a test
+/// [`LossFileFacts`] or [`LossFileEffects`] implementation away.
+struct LossFileWriter<F, E> {
     facts: F,
     effects: E,
     written_keys: Mutex<HashSet<String>>,
@@ -112,15 +116,9 @@ struct LossFileWriter<F, E = ProcessEffects> {
     file_failed: AtomicBool,
 }
 
-impl LossFileWriter<ProcessFacts> {
+impl LossFileWriter<ProcessFacts, ProcessEffects> {
     fn process_local() -> Self {
-        Self::new(ProcessFacts)
-    }
-}
-
-impl<F: LossFileFacts> LossFileWriter<F, ProcessEffects> {
-    fn new(facts: F) -> Self {
-        Self::with_effects(facts, ProcessEffects)
+        Self::with_effects(ProcessFacts, ProcessEffects)
     }
 }
 
@@ -357,8 +355,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        LossFileEffects, LossFileEntry, LossFileFacts, LossFileWriter, ProcessFacts,
-        select_directory, utc_timestamp,
+        LossFileEffects, LossFileEntry, LossFileFacts, LossFileWriter, ProcessEffects,
+        ProcessFacts, select_directory, utc_timestamp,
     };
     use crate::conversion::conversion_map::Fidelity;
     use crate::loss::LossOperation;
@@ -501,7 +499,7 @@ mod tests {
 
     fn write_with_production_facts_and_effects(directory: &std::path::Path) {
         let started = process_seconds();
-        let writer = LossFileWriter::new(ProcessFacts);
+        let writer = LossFileWriter::with_effects(ProcessFacts, ProcessEffects);
         writer.retain(entry());
         let finished = process_seconds();
         assert!(finished >= started);
@@ -569,7 +567,7 @@ mod tests {
                     &std::env::var("IMAS_MVDD_LOSS_LOG_DIR").unwrap(),
                 )),
                 "diagnostic" => {
-                    let writer = LossFileWriter::new(ProcessFacts);
+                    let writer = LossFileWriter::with_effects(ProcessFacts, ProcessEffects);
                     writer.retain(entry());
                     writer.retain(second_entry());
                 }
@@ -914,7 +912,8 @@ mod tests {
     #[test]
     fn writes_lazily_to_the_explicit_directory_with_complete_appended_records() {
         let directory = TestDirectory::new();
-        let writer = LossFileWriter::new(FixedFacts::in_directory(&directory));
+        let writer =
+            LossFileWriter::with_effects(FixedFacts::in_directory(&directory), ProcessEffects);
         assert!(fs::read_dir(directory.path()).unwrap().next().is_none());
 
         writer.retain(entry());
@@ -952,7 +951,7 @@ mod tests {
         let directory = TestDirectory::new();
         let mut facts = FixedFacts::in_directory(&directory);
         facts.configured_directory = None;
-        let writer = LossFileWriter::new(facts);
+        let writer = LossFileWriter::with_effects(facts, ProcessEffects);
 
         writer.retain(entry());
 
@@ -964,7 +963,7 @@ mod tests {
         let directory = TestDirectory::new();
         let mut facts = FixedFacts::in_directory(&directory);
         facts.configured_directory = Some(OsString::new());
-        let writer = LossFileWriter::new(facts);
+        let writer = LossFileWriter::with_effects(facts, ProcessEffects);
 
         writer.retain(entry());
 
@@ -1005,7 +1004,8 @@ mod tests {
             .path()
             .join("imas-mvdd-loss-2000-02-29T00:00:00Z-196-1.txt");
         fs::write(&first_suffix, "also reserved\n").unwrap();
-        let writer = LossFileWriter::new(FixedFacts::in_directory(&directory));
+        let writer =
+            LossFileWriter::with_effects(FixedFacts::in_directory(&directory), ProcessEffects);
 
         writer.retain(entry());
 
@@ -1028,7 +1028,8 @@ mod tests {
     #[test]
     fn deduplicates_only_an_identical_complete_rendered_line() {
         let directory = TestDirectory::new();
-        let writer = LossFileWriter::new(FixedFacts::in_directory(&directory));
+        let writer =
+            LossFileWriter::with_effects(FixedFacts::in_directory(&directory), ProcessEffects);
         let original = entry();
         writer.retain(original.clone());
         writer.retain(original);
