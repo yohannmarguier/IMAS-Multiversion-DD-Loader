@@ -366,9 +366,15 @@ impl ValueTransformation {
     }
 }
 
-/// One `<rule>` element's `rel` attribute.
+/// One path-level relation, whether decoded from an XML `<rule>` or supplied
+/// through validated typed construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rel {
+    /// A path independently established to have the same spelling and value
+    /// representation at both map endpoints. Typed graph acquisition uses an
+    /// explicit identity rule so the document-level default cannot claim a
+    /// caller path outside the acquired endpoint scope.
+    Identical,
     Renamed,
     Merged,
     Moved,
@@ -412,7 +418,7 @@ pub struct FromEntry {
 }
 
 /// One path-level conversion rule. Field population depends on `rel`:
-/// `Renamed`/`Moved`/`Retyped` carry both `left` and `right`; `LeftOnly`
+/// `Identical`/`Renamed`/`Moved`/`Retyped` carry both `left` and `right`; `LeftOnly`
 /// carries only `left`; `RightOnly` carries only `right`; `Merged` carries
 /// `right` plus left-side `froms`; `Split` carries `left` plus right-side
 /// `froms`.
@@ -498,8 +504,9 @@ impl EndpointInventory {
 }
 
 /// A complete map description supplied by a non-XML source such as the KG.
-/// It deliberately uses the same rule shapes as the XML artifact, while
-/// retaining endpoint metadata that XML historically required to be known.
+/// It deliberately uses the resolver's validated rule shapes while retaining
+/// endpoint metadata that XML historically required to be known. Typed input
+/// additionally expresses a scoped explicit identity rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedConversionMap {
     pub ids: String,
@@ -820,7 +827,7 @@ impl std::error::Error for LoadError {}
 /// requested path before that rule can claim it, and the index of the owning
 /// rule in [`ConversionMap::rules`]. `precedence` is `Some` only when this
 /// entry comes from a `merged`/`split` rule's `<from>` child (the source
-/// role that carries more than one candidate) — a `Renamed`/`Moved`/
+/// role that carries more than one candidate) — an `Identical`/`Renamed`/`Moved`/
 /// `Retyped`/`LeftOnly`/`RightOnly` selector, and a `merged` rule's single
 /// `right` or a `split` rule's single `left`, have no declared precedence.
 #[derive(Debug, Clone)]
@@ -930,7 +937,7 @@ fn build_source_indexes(rules: &[Rule]) -> Result<(Vec<SourceEntry>, Vec<SourceE
                 .ok_or_else(|| missing("requires `right` only"))
         };
         match rule.rel {
-            Rel::Renamed | Rel::Moved | Rel::Retyped => {
+            Rel::Identical | Rel::Renamed | Rel::Moved | Rel::Retyped => {
                 left_sources.push(SourceEntry {
                     selector: left()?,
                     rule_index,
@@ -1015,7 +1022,7 @@ fn rule_from_typed(typed: TypedRule) -> Result<Rule, LoadError> {
         .collect::<Result<_, _>>()?;
 
     match typed.rel {
-        Rel::Renamed | Rel::Moved | Rel::Retyped => {
+        Rel::Identical | Rel::Renamed | Rel::Moved | Rel::Retyped => {
             let (Some(left), Some(right)) = (&left, &right) else {
                 return Err(shape_error("requires both `left` and `right`"));
             };
@@ -1329,7 +1336,7 @@ impl ConversionMap {
             }
 
             return match rule.rel {
-                Rel::Renamed | Rel::Moved => {
+                Rel::Identical | Rel::Renamed | Rel::Moved => {
                     Some(self.resolve_single_path(rule, path, direction, &found))
                 }
                 Rel::Merged => Some(self.resolve_merged(rule, path, direction, &found)),
@@ -1387,7 +1394,7 @@ impl ConversionMap {
     }
 
     /// The stored-side location(s) `rule` declares for `direction`'s source
-    /// role. `Renamed`/`Moved`/`Retyped` each declare exactly one;
+    /// role. `Identical`/`Renamed`/`Moved`/`Retyped` each declare exactly one;
     /// `Merged`/`Split` declare one or several depending on which side is
     /// ambiguous in this direction (the `froms` side); `LeftOnly`/
     /// `RightOnly` declare none at all, because there is no stored
@@ -1395,18 +1402,22 @@ impl ConversionMap {
     /// an escaping rule.
     fn rule_targets(rule: &Rule, direction: Direction) -> Vec<&str> {
         match (rule.rel, direction) {
-            (Rel::Renamed | Rel::Moved | Rel::Retyped, Direction::Forward) => vec![
-                rule.right
-                    .as_ref()
-                    .expect("renamed, moved or retyped rule always carries both paths")
-                    .pattern(),
-            ],
-            (Rel::Renamed | Rel::Moved | Rel::Retyped, Direction::Reverse) => vec![
-                rule.left
-                    .as_ref()
-                    .expect("renamed, moved or retyped rule always carries both paths")
-                    .pattern(),
-            ],
+            (Rel::Identical | Rel::Renamed | Rel::Moved | Rel::Retyped, Direction::Forward) => {
+                vec![
+                    rule.right
+                        .as_ref()
+                        .expect("two-sided rule always carries both paths")
+                        .pattern(),
+                ]
+            }
+            (Rel::Identical | Rel::Renamed | Rel::Moved | Rel::Retyped, Direction::Reverse) => {
+                vec![
+                    rule.left
+                        .as_ref()
+                        .expect("two-sided rule always carries both paths")
+                        .pattern(),
+                ]
+            }
             (Rel::LeftOnly, _) | (Rel::RightOnly, _) => Vec::new(),
             (Rel::Merged, Direction::Forward) => {
                 vec![
@@ -1479,7 +1490,8 @@ impl ConversionMap {
         }
     }
 
-    /// Resolves a `renamed` or `moved` rule's single path on the other side.
+    /// Resolves an identity, `renamed` or `moved` rule's single path on the
+    /// other side.
     fn resolve_single_path(
         &self,
         rule: &Rule,
@@ -1493,7 +1505,7 @@ impl ConversionMap {
         };
         let target = target
             .as_ref()
-            .expect("renamed or moved rule always carries both paths");
+            .expect("identity, renamed or moved rule always carries both paths");
         let resolved_path = target.render(&found.suffix, &found.captures);
         let right_side_path = match direction {
             Direction::Forward => resolved_path.clone(),
