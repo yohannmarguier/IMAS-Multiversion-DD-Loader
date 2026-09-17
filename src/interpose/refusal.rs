@@ -137,10 +137,17 @@ pub(super) fn contextual_refusal(
 /// they are not knowable without asking the registry, and ADR 0003 budgets one
 /// lookup for them by design.
 pub(super) fn live_conversion_record(ctx_id: c_int) -> Option<ConversionRecord> {
-    if !crate::version::hli_version::conversion_is_possible() {
-        return None;
-    }
-    REGISTRY.lookup(ctx_id)
+    conversion_record_if_enabled(
+        crate::version::hli_version::conversion_is_possible(),
+        || REGISTRY.lookup(ctx_id),
+    )
+}
+
+fn conversion_record_if_enabled(
+    conversion_is_possible: bool,
+    lookup: impl FnOnce() -> Option<ConversionRecord>,
+) -> Option<ConversionRecord> {
+    conversion_is_possible.then(lookup).flatten()
 }
 
 #[cfg(test)]
@@ -148,53 +155,115 @@ mod tests {
     use super::*;
     use crate::conversion::known_artifacts;
     use crate::interpose::occurrence::load_artifact;
+    use std::ffi::CString;
+    use std::process::Command;
+
+    const ENABLED_GATE_CHILD: &str = "IMAS_MVDD_ENABLED_GATE_CHILD";
+
+    fn register_equilibrium_root(ctx_id: c_int, resolved_path: &str) -> ConversionRecord {
+        let stored: crate::version::dd_version::DdVersion =
+            "3.39.0".parse().expect("known release");
+        let hli: crate::version::dd_version::DdVersion = "4.1.1".parse().expect("known release");
+        let artifact = known_artifacts::lookup("equilibrium", &stored, &hli)
+            .expect("the embedded equilibrium artifact serves this pair");
+        assert!(REGISTRY.record_root(
+            RootRegistration {
+                ctx_id,
+                resolved_path: resolved_path.to_string(),
+                pulse_ctx_id: ctx_id,
+                dataobjectname: "equilibrium".to_string(),
+                key: MapCacheKey::new("equilibrium".to_string(), stored, hli),
+                direction_to_stored: artifact.direction_to_stored,
+                opened_read_op: true,
+            },
+            || load_artifact(&artifact),
+        ));
+        REGISTRY
+            .lookup(ctx_id)
+            .expect("the root just registered must be live")
+    }
 
     /// Issue #56 AC5: "Matching, unknown, unstamped, and conversion-disabled
     /// contexts bypass registry lookup and rule resolution." The
     /// conversion-disabled half is the one a seam can act on by itself, and
     /// this proves it acts on it *before* the registry rather than after.
     ///
-    /// This integration test deliberately leaves the production latch unset,
-    /// while `hli_version`'s isolated decision model is covered separately by
-    /// its own Rust tests. Registering a genuine root record and still getting
-    /// `None` back is the observable proof: the record is unquestionably there,
-    /// so a lookup that ran could not have missed it.
+    /// The isolated latch decision enters as a value, so this test can prove
+    /// the hot-path short-circuit without mutating the process-wide latch.
     #[test]
     fn a_data_path_seam_answers_before_the_registry_when_conversion_is_disabled() {
-        // Far from the small IDs every other registry test uses, so this one
-        // cannot collide with a concurrently running test in the same process.
-        const CTX_ID: c_int = 0x5D00;
-        let stored: crate::version::dd_version::DdVersion =
-            "3.39.0".parse().expect("known release");
-        let hli: crate::version::dd_version::DdVersion = "4.1.1".parse().expect("known release");
-        let artifact = known_artifacts::lookup("equilibrium", &stored, &hli)
-            .expect("the embedded equilibrium artifact serves this pair");
-        let direction = artifact.direction_to_stored;
-        assert!(REGISTRY.record_root(
-            RootRegistration {
-                ctx_id: CTX_ID,
-                resolved_path: String::new(),
-                pulse_ctx_id: CTX_ID,
-                dataobjectname: "equilibrium".to_string(),
-                key: MapCacheKey::new("equilibrium".to_string(), stored, hli),
-                direction_to_stored: direction,
-                opened_read_op: true,
-            },
-            || load_artifact(&artifact),
-        ));
-
         assert!(
-            !crate::version::hli_version::conversion_is_possible(),
-            "this integration test leaves the production latch unset, so conversion is off here"
-        );
-        assert!(
-            REGISTRY.lookup(CTX_ID).is_some(),
-            "the record must really be in the registry for this test to prove anything"
-        );
-        assert!(
-            live_conversion_record(CTX_ID).is_none(),
+            conversion_record_if_enabled(false, || {
+                panic!("a conversion-disabled seam must not query the registry")
+            })
+            .is_none(),
             "the seam must answer from the latch, without consulting the registry"
         );
+    }
+
+    #[test]
+    fn a_data_path_seam_sees_only_a_registered_record_when_conversion_is_enabled() {
+        let output = Command::new(std::env::current_exe().expect("test executable path"))
+            .args([
+                "--exact",
+                "interpose::refusal::tests::enabled_conversion_record_child",
+            ])
+            .env(ENABLED_GATE_CHILD, "1")
+            .output()
+            .expect("fresh test process");
+        assert!(
+            output.status.success(),
+            "enabled gate child failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn enabled_conversion_record_child() {
+        if std::env::var_os(ENABLED_GATE_CHILD).is_none() {
+            return;
+        }
+
+        const REGISTERED_CTX_ID: c_int = 0x5D01;
+        const UNREGISTERED_CTX_ID: c_int = 0x5D02;
+        crate::version::hli_version::set("4.1.1")
+            .expect("the fresh test process accepts its HLI version");
+        register_equilibrium_root(REGISTERED_CTX_ID, "time_slice");
+
+        let record = live_conversion_record(REGISTERED_CTX_ID)
+            .expect("an enabled seam must see the registered conversion record");
+        assert_eq!(record.resolved_path, "time_slice");
+        assert!(
+            live_conversion_record(UNREGISTERED_CTX_ID).is_none(),
+            "an enabled seam must not invent a record for an unregistered context"
+        );
+
+        REGISTRY.remove(REGISTERED_CTX_ID);
+    }
+
+    #[test]
+    fn a_contextual_refusal_uses_its_context_path_and_public_status() {
+        const CTX_ID: c_int = 0x5D80;
+        let record = register_equilibrium_root(CTX_ID, "time_slice");
+        let empty_path = CString::new("").expect("empty C string");
+        let status = contextual_refusal(
+            &record,
+            "arraystruct path has no stored source",
+            empty_path.as_ptr(),
+        );
+
+        assert_eq!(status.code, crate::IMAS_MVDD_CONVERSION_ERROR);
+        // SAFETY: contextual_refusal creates its status through the shim's
+        // NUL-terminating public refusal formatter.
+        let message = unsafe { std::ffi::CStr::from_ptr(status.message.as_ptr()) }
+            .to_str()
+            .expect("the public refusal is valid UTF-8");
+        assert_eq!(
+            message,
+            "IMAS-MVDD: arraystruct path has no stored source; DD path: time_slice; \
+             HLI DD version: 4.1.1; stored DD version: 3.39.0"
+        );
+        assert_eq!(REGISTRY.loss_count(CTX_ID), 1);
 
         REGISTRY.remove(CTX_ID);
     }

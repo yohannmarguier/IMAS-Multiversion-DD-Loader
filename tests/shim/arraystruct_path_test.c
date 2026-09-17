@@ -266,6 +266,8 @@ static void scenario_refusal_retains_an_unmappable_read_loss(void) {
     al_status_t status = al_begin_arraystruct_action(
         operation_ctx, "time_slice/constraints/j_parallel", "", &size, &arraystruct_ctx);
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "arraystruct path has no stored source",
+                          "time_slice/constraints/j_parallel", "4.1.1", "3.39.0");
 
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/constraints/j_parallel",
