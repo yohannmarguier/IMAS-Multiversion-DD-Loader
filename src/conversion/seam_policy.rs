@@ -1681,6 +1681,112 @@ mod tests {
         assert!(matches!(verdict, WriteVerdict::Forward { data: None, .. }));
     }
 
+    #[test]
+    fn writes_choose_only_precedence_one_and_name_every_skipped_stored_candidate() {
+        let single = write_argument("stored/single", ValueTransformation::None);
+        let timebase = plain_timebase();
+        match run_write(
+            &single,
+            &timebase,
+            BufferShape {
+                datatype: BufferDataType::Double,
+                rank: 1,
+            },
+            SourceView::Double(&[1.25]),
+        ) {
+            WriteVerdict::Forward {
+                field: Some(path),
+                unwritten_candidates,
+                ..
+            } => {
+                assert_eq!(
+                    path.to_str().expect("fixture paths are UTF-8"),
+                    "stored/single"
+                );
+                assert!(unwritten_candidates.is_empty());
+            }
+            _ => panic!("a single safe source must be writable"),
+        }
+
+        let field = WriteArgument {
+            resolution: WritePath::Candidates(vec![
+                crate::conversion::path_conversion::WriteCandidate {
+                    path: CString::new("stored/secondary").expect("no interior NUL"),
+                    stored_dd_path: "stored/secondary".to_string(),
+                    precedence: 2,
+                    value_transformation: ValueTransformation::None,
+                },
+                crate::conversion::path_conversion::WriteCandidate {
+                    path: CString::new("stored/primary").expect("no interior NUL"),
+                    stored_dd_path: "stored/primary".to_string(),
+                    precedence: 1,
+                    value_transformation: ValueTransformation::None,
+                },
+                crate::conversion::path_conversion::WriteCandidate {
+                    path: CString::new("stored/tertiary").expect("no interior NUL"),
+                    stored_dd_path: "stored/tertiary".to_string(),
+                    precedence: 3,
+                    value_transformation: ValueTransformation::None,
+                },
+            ]),
+            forward: None,
+            dd_path: "hli/folded".to_string(),
+        };
+        match run_write(
+            &field,
+            &timebase,
+            BufferShape {
+                datatype: BufferDataType::Double,
+                rank: 1,
+            },
+            SourceView::Double(&[1.25]),
+        ) {
+            WriteVerdict::Forward {
+                field: Some(path),
+                unwritten_candidates,
+                ..
+            } => {
+                assert_eq!(
+                    path.to_str().expect("fixture paths are UTF-8"),
+                    "stored/primary"
+                );
+                assert_eq!(
+                    unwritten_candidates,
+                    ["stored/secondary", "stored/tertiary"],
+                    "loss metadata names the candidates left unchanged in their declared order"
+                );
+            }
+            _ => panic!("a candidate plan with a primary source must be writable"),
+        }
+
+        let no_primary = WriteArgument {
+            resolution: WritePath::Candidates(vec![
+                crate::conversion::path_conversion::WriteCandidate {
+                    path: CString::new("stored/secondary").expect("no interior NUL"),
+                    stored_dd_path: "stored/secondary".to_string(),
+                    precedence: 2,
+                    value_transformation: ValueTransformation::None,
+                },
+            ]),
+            forward: None,
+            dd_path: "hli/no-primary".to_string(),
+        };
+        assert!(matches!(
+            run_write(
+                &no_primary,
+                &timebase,
+                BufferShape {
+                    datatype: BufferDataType::Double,
+                    rank: 1,
+                },
+                SourceView::Double(&[1.25]),
+            ),
+            WriteVerdict::Refusal { ref reason, ref dd_path }
+                if reason == "this candidate plan has no precedence-1 source for a write"
+                    && dd_path == "hli/no-primary"
+        ));
+    }
+
     fn delete_argument(paths: &[&str]) -> DeleteArgument<'static> {
         DeleteArgument {
             resolution: DeletePath::Candidates(
