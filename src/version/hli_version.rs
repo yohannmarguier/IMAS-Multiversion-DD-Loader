@@ -14,11 +14,11 @@
 //! good, and a setter call arriving after that is refused rather than
 //! silently applied to later opens.
 //!
-//! This module is deliberately untested by ordinary `#[cfg(test)]` unit
-//! tests: `LATCH` is a single process-wide `OnceLock`, and `cargo test`
-//! runs every test in one process, so two tests exercising this module
-//! would race for who latches it first. The test seam is the public C ABI,
-//! exercised in isolated ctest processes (see `tests/hli_dd_version_test.c`).
+//! The process-wide store is deliberately small: [`HliVersionLatch`] owns the
+//! decision model, while `LATCH` applies its first settled state atomically in
+//! production. Rust tests therefore exercise fresh decision-model instances;
+//! process-isolated C tests remain the authority for the public entry point and
+//! concurrent identical-setter safety.
 
 use std::env::{self, VarError};
 use std::ffi::{CStr, c_char};
@@ -43,6 +43,119 @@ enum Latch {
     Invalid(String),
 }
 
+/// The environment observation a first open can make. Keeping it a value
+/// lets the latch model stay process-local and makes a non-Unicode value
+/// testable without modifying this process's environment.
+#[derive(Debug)]
+enum EnvironmentValue {
+    Absent,
+    Value(String),
+    NotUnicode,
+}
+
+impl EnvironmentValue {
+    fn current() -> Self {
+        match env::var(ENV_VAR) {
+            Ok(raw) => Self::Value(raw),
+            Err(VarError::NotPresent) => Self::Absent,
+            Err(VarError::NotUnicode(_)) => Self::NotUnicode,
+        }
+    }
+}
+
+impl Latch {
+    fn from_environment(environment: EnvironmentValue) -> Self {
+        match environment {
+            EnvironmentValue::Absent => Self::Unset,
+            EnvironmentValue::Value(raw) => match raw.parse::<DdVersion>() {
+                Ok(version) => Self::Set(version),
+                Err(reason) => Self::Invalid(reason),
+            },
+            EnvironmentValue::NotUnicode => Self::Invalid(format!("{ENV_VAR} is not valid UTF-8")),
+        }
+    }
+}
+
+/// The isolated ADR 0005 decision model. Production copies its settled state
+/// into the one process-wide [`OnceLock`]; tests create one model per case.
+#[derive(Debug, Default)]
+struct HliVersionLatch {
+    latch: Option<Latch>,
+}
+
+impl HliVersionLatch {
+    fn from_latch(latch: Latch) -> Self {
+        Self { latch: Some(latch) }
+    }
+
+    fn into_latch(self) -> Latch {
+        self.latch
+            .expect("a production latch candidate must settle before storage")
+    }
+
+    fn set(&mut self, version: &str) -> Result<(), String> {
+        self.set_parsed(version.parse()?)
+    }
+
+    fn set_parsed(&mut self, parsed: DdVersion) -> Result<(), String> {
+        match self.latch.get_or_insert_with(|| Latch::Set(parsed.clone())) {
+            Latch::Set(existing) if *existing == parsed => Ok(()),
+            Latch::Set(existing) => Err(format!(
+                "conflicting HLI DD version: this process already latched to '{existing}' \
+                 and cannot also serve '{parsed}' — one process cannot host two HLIs built \
+                 against different DD versions"
+            )),
+            Latch::Unset => Err(format!(
+                "cannot set HLI DD version to '{parsed}': this process already latched to \
+                 unset, after an earlier open found no setter call and no valid {ENV_VAR}"
+            )),
+            Latch::Invalid(reason) => Err(format!(
+                "cannot set HLI DD version to '{parsed}': this process already latched to \
+                 an invalid {ENV_VAR} value at an earlier open ({reason})"
+            )),
+        }
+    }
+
+    fn resolve_for_open<F>(&mut self, environment: F) -> Result<(), String>
+    where
+        F: FnOnce() -> EnvironmentValue,
+    {
+        if self.latch.is_none() {
+            self.latch = Some(Latch::from_environment(environment()));
+        }
+        self.open_result()
+    }
+
+    fn open_result(&self) -> Result<(), String> {
+        match self.latch.as_ref() {
+            Some(Latch::Invalid(reason)) => Err(reason.clone()),
+            Some(Latch::Set(_) | Latch::Unset) => Ok(()),
+            None => unreachable!("an open resolution always settles the model"),
+        }
+    }
+
+    #[cfg(test)]
+    fn latched(&self) -> Option<DdVersion> {
+        Self::latched_from(self.latch.as_ref())
+    }
+
+    fn latched_from(latch: Option<&Latch>) -> Option<DdVersion> {
+        match latch? {
+            Latch::Set(version) => Some(version.clone()),
+            Latch::Unset | Latch::Invalid(_) => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn conversion_is_possible(&self) -> bool {
+        Self::conversion_is_possible_from(self.latch.as_ref())
+    }
+
+    fn conversion_is_possible_from(latch: Option<&Latch>) -> bool {
+        matches!(latch, Some(Latch::Set(_)))
+    }
+}
+
 static LATCH: OnceLock<Latch> = OnceLock::new();
 
 /// Reports the calling HLI's DD version (the setter half of ADR 0005).
@@ -56,23 +169,10 @@ static LATCH: OnceLock<Latch> = OnceLock::new();
 /// process already latched to unset (an earlier open with no setter and no
 /// valid environment variable) is refused too.
 pub(crate) fn set(version: &str) -> Result<(), String> {
-    let parsed: DdVersion = version.parse()?;
-    match LATCH.get_or_init(|| Latch::Set(parsed.clone())) {
-        Latch::Set(existing) if *existing == parsed => Ok(()),
-        Latch::Set(existing) => Err(format!(
-            "conflicting HLI DD version: this process already latched to '{existing}' \
-             and cannot also serve '{parsed}' — one process cannot host two HLIs built \
-             against different DD versions"
-        )),
-        Latch::Unset => Err(format!(
-            "cannot set HLI DD version to '{parsed}': this process already latched to \
-             unset, after an earlier open found no setter call and no valid {ENV_VAR}"
-        )),
-        Latch::Invalid(reason) => Err(format!(
-            "cannot set HLI DD version to '{parsed}': this process already latched to \
-             an invalid {ENV_VAR} value at an earlier open ({reason})"
-        )),
-    }
+    let mut candidate = HliVersionLatch::default();
+    candidate.set(version)?;
+    let settled = LATCH.get_or_init(|| candidate.into_latch());
+    HliVersionLatch::from_latch(settled.clone()).set(version)
 }
 
 /// Resolves the latch for the first open (ADR 0005): the setter's value if
@@ -81,17 +181,16 @@ pub(crate) fn set(version: &str) -> Result<(), String> {
 /// an error only for an invalid environment value — the shim refusing to
 /// silently fall back to passthrough.
 pub(crate) fn resolve_for_open() -> Result<(), String> {
-    match LATCH.get_or_init(|| match env::var(ENV_VAR) {
-        Ok(raw) => match raw.parse::<DdVersion>() {
-            Ok(version) => Latch::Set(version),
-            Err(reason) => Latch::Invalid(reason),
-        },
-        Err(VarError::NotPresent) => Latch::Unset,
-        Err(VarError::NotUnicode(_)) => Latch::Invalid(format!("{ENV_VAR} is not valid UTF-8")),
-    }) {
-        Latch::Invalid(reason) => Err(reason.clone()),
-        Latch::Set(_) | Latch::Unset => Ok(()),
-    }
+    let settled = match LATCH.get() {
+        Some(latch) => latch,
+        None => {
+            let mut candidate = HliVersionLatch::default();
+            let _ = candidate.resolve_for_open(EnvironmentValue::current);
+            LATCH.get_or_init(|| candidate.into_latch())
+        }
+    };
+    HliVersionLatch::from_latch(settled.clone())
+        .resolve_for_open(|| unreachable!("a settled latch must not read the environment"))
 }
 
 /// The HLI DD version already latched for this process, if any. `None`
@@ -103,10 +202,7 @@ pub(crate) fn resolve_for_open() -> Result<(), String> {
 /// the latch can resolve (ADR 0005) — a seam calling this beforehand simply
 /// sees `None` and forwards unchanged, same as the unset case.
 pub(crate) fn latched() -> Option<DdVersion> {
-    match LATCH.get()? {
-        Latch::Set(version) => Some(version.clone()),
-        Latch::Unset | Latch::Invalid(_) => None,
-    }
+    HliVersionLatch::latched_from(LATCH.get())
 }
 
 /// Whether this process has any conversion basis at all — the same question
@@ -122,7 +218,7 @@ pub(crate) fn latched() -> Option<DdVersion> {
 /// seams short-circuit on [`latched`] instead, since they go on to use the
 /// version itself.
 pub(crate) fn conversion_is_possible() -> bool {
-    matches!(LATCH.get(), Some(Latch::Set(_)))
+    HliVersionLatch::conversion_is_possible_from(LATCH.get())
 }
 
 /// C entry point for `imas_mvdd_set_hli_dd_version`: validates the pointer
@@ -142,5 +238,154 @@ pub(crate) unsafe fn set_from_c(version: *const c_char) -> crate::al_status_t {
     match set(version) {
         Ok(()) => crate::al_status_t::default(),
         Err(reason) => crate::conversion_refusal(&reason),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn version(input: &str) -> DdVersion {
+        input.parse().expect("test DD version must be valid")
+    }
+
+    #[test]
+    fn a_first_valid_setter_report_latches_conversion_and_identical_repeats() {
+        let mut latch = HliVersionLatch::default();
+
+        assert_eq!(latch.latched(), None);
+        assert!(!latch.conversion_is_possible());
+        assert_eq!(latch.set("4.1.1"), Ok(()));
+        assert_eq!(latch.latched(), Some(version("4.1.1")));
+        assert!(latch.conversion_is_possible());
+        assert_eq!(latch.set("4.1.1"), Ok(()));
+    }
+
+    #[test]
+    fn a_conflicting_setter_report_keeps_the_first_version() {
+        let mut latch = HliVersionLatch::default();
+        assert_eq!(latch.set("3.39.0"), Ok(()));
+
+        assert_eq!(
+            latch.set("4.1.1"),
+            Err(
+                "conflicting HLI DD version: this process already latched to '3.39.0' \
+                 and cannot also serve '4.1.1' — one process cannot host two HLIs built \
+                 against different DD versions"
+                    .to_string()
+            )
+        );
+        assert_eq!(latch.latched(), Some(version("3.39.0")));
+        assert!(latch.conversion_is_possible());
+    }
+
+    #[test]
+    fn an_invalid_setter_report_leaves_the_latch_unresolved() {
+        let mut latch = HliVersionLatch::default();
+
+        assert_eq!(
+            latch.set("not-a-version"),
+            Err("'not' is not MAJOR.MINOR.PATCH".to_string())
+        );
+        assert_eq!(latch.latched(), None);
+        assert!(!latch.conversion_is_possible());
+        assert_eq!(latch.set("4.1.1"), Ok(()));
+    }
+
+    #[test]
+    fn absent_environment_permanently_latches_unset_and_refuses_late_setters() {
+        let mut latch = HliVersionLatch::default();
+
+        assert_eq!(latch.resolve_for_open(|| EnvironmentValue::Absent), Ok(()));
+        assert_eq!(latch.latched(), None);
+        assert!(!latch.conversion_is_possible());
+        assert_eq!(
+            latch.resolve_for_open(|| panic!("a settled latch must not reread the environment")),
+            Ok(())
+        );
+        assert_eq!(
+            latch.set("4.1.1"),
+            Err(
+                "cannot set HLI DD version to '4.1.1': this process already latched to \
+                 unset, after an earlier open found no setter call and no valid \
+                 IMAS_MVDD_HLI_DD_VERSION"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn valid_environment_latches_conversion_and_ignores_later_environment_changes() {
+        let mut latch = HliVersionLatch::default();
+
+        assert_eq!(
+            latch.resolve_for_open(|| EnvironmentValue::Value("3.39.0".to_string())),
+            Ok(())
+        );
+        assert_eq!(latch.latched(), Some(version("3.39.0")));
+        assert!(latch.conversion_is_possible());
+        assert_eq!(
+            latch.resolve_for_open(|| panic!("a settled latch must not reread the environment")),
+            Ok(())
+        );
+        assert_eq!(latch.set("3.39.0"), Ok(()));
+        assert_eq!(
+            latch.set("4.1.1"),
+            Err(
+                "conflicting HLI DD version: this process already latched to '3.39.0' \
+                 and cannot also serve '4.1.1' — one process cannot host two HLIs built \
+                 against different DD versions"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn invalid_and_non_unicode_environment_values_permanently_disable_conversion() {
+        let cases = [
+            (
+                EnvironmentValue::Value("not-a-version".to_string()),
+                "'not' is not MAJOR.MINOR.PATCH",
+            ),
+            (
+                EnvironmentValue::NotUnicode,
+                "IMAS_MVDD_HLI_DD_VERSION is not valid UTF-8",
+            ),
+        ];
+
+        for (environment, expected) in cases {
+            let mut latch = HliVersionLatch::default();
+            assert_eq!(
+                latch.resolve_for_open(|| environment),
+                Err(expected.to_string())
+            );
+            assert_eq!(latch.latched(), None);
+            assert!(!latch.conversion_is_possible());
+            assert_eq!(
+                latch
+                    .resolve_for_open(|| panic!("a settled latch must not reread the environment")),
+                Err(expected.to_string())
+            );
+            assert_eq!(
+                latch.set("4.1.1"),
+                Err(format!(
+                    "cannot set HLI DD version to '4.1.1': this process already latched to \
+                     an invalid {ENV_VAR} value at an earlier open ({expected})"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn an_accepted_setter_wins_without_consulting_the_environment() {
+        let mut latch = HliVersionLatch::default();
+        assert_eq!(latch.set("4.1.1"), Ok(()));
+
+        assert_eq!(
+            latch.resolve_for_open(|| panic!("a setter-set latch must not read the environment")),
+            Ok(())
+        );
+        assert_eq!(latch.latched(), Some(version("4.1.1")));
+        assert!(latch.conversion_is_possible());
     }
 }
