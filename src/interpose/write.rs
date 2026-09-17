@@ -298,11 +298,55 @@ fn finish_write_refusal(record: &ConversionRecord, reason: &str, dd_path: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
+    use std::ffi::{CString, c_char};
 
     use crate::conversion::conversion_map::{ConversionMap, Direction};
     use crate::conversion::path_conversion::WritePath;
     use crate::registry::context_registry::{MapCacheKey, REGISTRY, RootRegistration};
+
+    #[test]
+    fn scalar_empty_classification_keeps_absence_distinct_from_nearby_values() {
+        let mut integer = EMPTY_INT;
+        assert_eq!(integer, -999_999_999);
+        assert!(unsafe { is_empty_scalar((&raw mut integer).cast(), INTEGER_DATA_ID, 0) });
+        integer += 1;
+        assert!(!unsafe { is_empty_scalar((&raw mut integer).cast(), INTEGER_DATA_ID, 0) });
+
+        let mut double = EMPTY_DOUBLE;
+        assert_eq!(double, -9e40);
+        assert!(unsafe { is_empty_scalar((&raw mut double).cast(), DOUBLE_DATA_ID, 0) });
+        double = -9e39;
+        assert!(!unsafe { is_empty_scalar((&raw mut double).cast(), DOUBLE_DATA_ID, 0) });
+
+        let mut complex = EMPTY_COMPLEX;
+        assert_eq!(complex, [-9e40, -9e40]);
+        assert!(unsafe { is_empty_scalar(complex.as_mut_ptr().cast(), COMPLEX_DATA_ID, 0) });
+        complex[0] = -9e39;
+        assert!(!unsafe { is_empty_scalar(complex.as_mut_ptr().cast(), COMPLEX_DATA_ID, 0) });
+        complex = EMPTY_COMPLEX;
+        complex[1] = -9e39;
+        assert!(!unsafe { is_empty_scalar(complex.as_mut_ptr().cast(), COMPLEX_DATA_ID, 0) });
+
+        let mut empty_character = crate::conversion::read_outcome::EMPTY_CHAR;
+        assert_eq!(empty_character, b'\0' as c_char);
+        assert!(
+            !unsafe {
+                is_empty_scalar(
+                    (&raw mut empty_character).cast(),
+                    crate::core::core_binding::CHAR_DATA_ID,
+                    0,
+                )
+            },
+            "a NUL character is valid data, not an unset scalar"
+        );
+
+        assert!(!unsafe { is_empty_scalar(std::ptr::null_mut(), DOUBLE_DATA_ID, 0) });
+        let mut array_element = EMPTY_DOUBLE;
+        assert!(
+            !unsafe { is_empty_scalar((&raw mut array_element).cast(), DOUBLE_DATA_ID, 1) },
+            "only rank-zero sentinels describe an unset scalar"
+        );
+    }
 
     #[test]
     fn a_declared_unmappable_write_refusal_carries_its_message_and_write_loss() {

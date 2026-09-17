@@ -1206,6 +1206,80 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_sign_flipped_read_preserves_empty_array_elements_and_flips_rank_zero_data() {
+        let field = ReadArgument {
+            resolution: ReadPath::Translated(TranslatedReadPath {
+                paths: vec![resolved(
+                    "time_slice/profiles_1d/psi",
+                    Fidelity::Exact,
+                    sign_flip_transformation(),
+                )],
+            }),
+            forward: None,
+            dd_path: "time_slice/profiles_1d/psi".to_string(),
+        };
+        let timebase = ReadArgument {
+            resolution: ReadPath::Forward,
+            forward: None,
+            dd_path: String::new(),
+        };
+
+        let mut array = [1.5, EMPTY_DOUBLE, -3.2, -4.0];
+        let mut array_view = Some(&mut array[..]);
+        let array_verdict = run_read(
+            field,
+            timebase,
+            BufferShape {
+                datatype: BufferDataType::Double,
+                rank: 1,
+            },
+            |_field, _timebase| {
+                Attempt::Data(
+                    al_status_t::default(),
+                    DataView::Double(array_view.take().expect("the one candidate is read once")),
+                )
+            },
+        );
+        assert!(matches!(array_verdict.outcome, SeamOutcome::Data(status) if status.code == 0));
+        assert_eq!(array, [-1.5, EMPTY_DOUBLE, 3.2, 4.0]);
+
+        let field = ReadArgument {
+            resolution: ReadPath::Translated(TranslatedReadPath {
+                paths: vec![resolved(
+                    "time_slice/profiles_1d/psi",
+                    Fidelity::Exact,
+                    sign_flip_transformation(),
+                )],
+            }),
+            forward: None,
+            dd_path: "time_slice/profiles_1d/psi".to_string(),
+        };
+        let timebase = ReadArgument {
+            resolution: ReadPath::Forward,
+            forward: None,
+            dd_path: String::new(),
+        };
+        let mut scalar = [2.5];
+        let mut scalar_view = Some(&mut scalar[..]);
+        let scalar_verdict = run_read(
+            field,
+            timebase,
+            BufferShape {
+                datatype: BufferDataType::Double,
+                rank: 0,
+            },
+            |_field, _timebase| {
+                Attempt::Data(
+                    al_status_t::default(),
+                    DataView::Double(scalar_view.take().expect("the one scalar is read once")),
+                )
+            },
+        );
+        assert!(matches!(scalar_verdict.outcome, SeamOutcome::Data(status) if status.code == 0));
+        assert_eq!(scalar, [-2.5]);
+    }
+
     /// A scalar candidate that reported its absence in the caller's own
     /// buffer advances the plan just as a null-pointer not-found does. Without
     /// this the loop stopped at precedence 1 for every scalar, because a
