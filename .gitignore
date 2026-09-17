@@ -8,3 +8,4 @@
 /.claude
 imas-mvdd-loss-*.txt
 /install-debug-0.2.0
+/mutants.out
