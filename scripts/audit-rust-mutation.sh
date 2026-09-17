@@ -55,7 +55,6 @@ selected_mutants="$audit_dir/selected-mutants.json"
 cargo_mutants_config="$audit_dir/cargo-mutants.toml"
 
 cd -- "$root_dir"
-started=$SECONDS
 cargo mutants --no-config --all-features --list --json >"$candidate_mutants"
 python3 scripts/check-rust-mutation-audit.py \
     --line-scope "$line_scope" \
