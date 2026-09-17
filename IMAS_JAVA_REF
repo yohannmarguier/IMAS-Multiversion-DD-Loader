@@ -1,4 +1,4 @@
-cd51c6182cf86242dfced684df29a044f92b774b
+32ea1ebdeab66b8d5afe348e01981b86fc1b46ba
 
 # yohannmarguier/IMAS-Java develop: shim linkage for the JNI binding, the
 # java.library.path the examples need to load it, and the test runtime
