@@ -54,6 +54,11 @@ candidate_mutants="$audit_dir/candidates.json"
 selected_mutants="$audit_dir/selected-mutants.json"
 cargo_mutants_config="$audit_dir/cargo-mutants.toml"
 
+# CLAUDE.md standing fact: mutation-test with the test binary deleted first. A
+# stale unit-test binary makes a red assertion look green, lagging the result by
+# exactly one iteration, so clear it before cargo-mutants takes its baseline.
+find "$root_dir/target" -type f -path '*/deps/imas_mvdd_loader-*' ! -name '*.*' -delete
+
 cd -- "$root_dir"
 cargo mutants --no-config --all-features --list --json >"$candidate_mutants"
 python3 scripts/check-rust-mutation-audit.py \

@@ -6,7 +6,11 @@ Run the local audit from a clean repository root:
 $ bash scripts/audit-rust-mutation.sh
 ```
 
-The command refuses a dirty worktree. It first asks cargo-mutants for its
+The command refuses a dirty worktree. It then deletes this crate's unit-test
+binaries under `target/*/deps/` before anything is built, because a stale test
+binary makes a red assertion look green and lags the result by exactly one
+iteration — the standing fact recorded in CLAUDE.md. Do the same by hand when
+running `cargo mutants` directly on one module. It first asks cargo-mutants for its
 candidate list, selects only mutants whose complete source spans belong to the
 six groups in `coverage/rust-line-coverage-scope.json`, writes that exact
 selection and a generated cargo-mutants filter into a fresh
