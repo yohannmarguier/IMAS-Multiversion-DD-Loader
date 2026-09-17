@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "tool": {
+    "cargo_llvm_cov_version": "0.9.1",
+    "minimum_rust_version": "1.88"
+  },
+  "minimums": {
+    "aggregate_percent": 90,
+    "group_percent": 80
+  },
+  "groups": [
+    {
+      "name": "conversion",
+      "sources": [
+        {"path": "src/conversion/conversion_map.rs", "start_line": 1, "end_line": 1960},
+        {"path": "src/conversion/known_artifacts.rs", "start_line": 1, "end_line": 54},
+        {"path": "src/conversion/path_conversion.rs", "start_line": 1, "end_line": 1086},
+        {"path": "src/conversion/read_outcome.rs", "start_line": 1, "end_line": 140},
+        {"path": "src/conversion/seam_policy.rs", "start_line": 1, "end_line": 877},
+        {"path": "src/interpose/reentry.rs", "start_line": 1, "end_line": 42},
+        {"path": "src/interpose/refusal.rs", "start_line": 64, "end_line": 144},
+        {"path": "src/lib.rs", "start_line": 129, "end_line": 222}
+      ]
+    },
+    {
+      "name": "dd-version",
+      "sources": [
+        {"path": "src/version/dd_version.rs", "start_line": 1, "end_line": 222},
+        {"path": "src/version/hli_version.rs", "start_line": 29, "end_line": 126},
+        {"path": "src/version/version_stamp.rs", "start_line": 49, "end_line": 54}
+      ]
+    },
+    {
+      "name": "context-registry",
+      "sources": [{"path": "src/registry/context_registry.rs", "start_line": 1, "end_line": 493}]
+    },
+    {
+      "name": "loss",
+      "sources": [
+        {"path": "src/loss.rs", "start_line": 1, "end_line": 101},
+        {"path": "src/loss_file.rs", "start_line": 1, "end_line": 209}
+      ]
+    },
+    {
+      "name": "artifact-validation",
+      "sources": [{"path": "src/bin/validate_equilibrium_coverage.rs", "start_line": 1, "end_line": 265}]
+    },
+    {
+      "name": "deterministic-runtime-binding-policy",
+      "sources": [
+        {"path": "src/core/core_binding.rs", "start_line": 384, "end_line": 418},
+        {"path": "src/core/core_binding.rs", "start_line": 423, "end_line": 526},
+        {"path": "src/core/core_binding.rs", "start_line": 582, "end_line": 630}
+      ]
+    }
+  ],
+  "exclusions": [
+    {
+      "path": "src/core/dl.rs",
+      "reason": "dynamic-loader mechanics"
+    },
+    {
+      "path": "src/interpose/delete.rs",
+      "reason": "raw-pointer adaptation"
+    },
+    {
+      "path": "src/interpose/dispatch.rs",
+      "reason": "verbatim ABI-symbol dispatch"
+    },
+    {
+      "path": "src/interpose/loss.rs",
+      "reason": "raw-pointer output adaptation"
+    },
+    {
+      "path": "src/interpose/occurrence.rs",
+      "reason": "C-facing occurrence and real-Core integration"
+    },
+    {
+      "path": "src/interpose/passthrough.rs",
+      "reason": "verbatim forwarding"
+    },
+    {
+      "path": "src/interpose/read.rs",
+      "reason": "raw-pointer result adaptation"
+    },
+    {
+      "path": "src/interpose/write.rs",
+      "reason": "raw-pointer argument adaptation"
+    }
+  ]
+}

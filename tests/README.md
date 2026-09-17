@@ -34,9 +34,10 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 | `real_core/` | 4 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core and the checked-in equilibrium HDF5 fixture pair. |
 | `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 4 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
 | `cmake/` | `cmake -P` checks of the build/CI configuration itself, each with a guard-the-guard companion that proves it rejects what it claims. |
+| `coverage/` | Compact shell fixtures for the local Rust decision-coverage audit. |
 | `scripts/` | Install/packaging shell checks. **CI-only — not in ctest.** |
 | `package/` | A downstream `find_package()` consumer project, used by `scripts/check-installed-package.sh`. |
-| `fixtures/` | A deliberately reduced conversion-map artifact — the negative fixture for the coverage-floor gate. |
+| `fixtures/` | The reduced conversion-map artifact for the coverage-floor gate, plus compact LCOV and scope fixtures for the Rust decision-coverage audit. |
 
 ## Groups, in rough dependency order
 
@@ -339,6 +340,15 @@ The ABI contract itself.
 `cargo test` — the crate's own unit tests: conversion-map resolution,
 read-outcome classification, registry behaviour, path joining, and the branches
 no C-ABI test can reach.
+
+### `rust-line-coverage-audit-fixtures`
+
+Runs `tests/coverage/check-rust-line-coverage-audit.sh`, the compact fixture
+suite for the local Rust decision-coverage audit. It proves that the checker
+adds covered and total lines across groups, does not average percentages, fails
+an aggregate pass with one below-floor group, and refuses reports that omit or
+empty a required source measurement. It does not run the full audit: the
+checked-in baseline remains below the target until the follow-on test work.
 
 ### `equilibrium-artifact-coverage-floor`
 
