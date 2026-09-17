@@ -154,12 +154,11 @@ mod tests {
     /// conversion-disabled half is the one a seam can act on by itself, and
     /// this proves it acts on it *before* the registry rather than after.
     ///
-    /// `hli_version`'s latch is deliberately never set in-process (its module
-    /// comment explains why a unit test cannot set it), so
-    /// `conversion_is_possible()` is false for the whole `cargo test` run.
-    /// Registering a genuine root record and still getting `None` back is the
-    /// observable proof: the record is unquestionably there, so a lookup that
-    /// ran could not have missed it.
+    /// This integration test deliberately leaves the production latch unset,
+    /// while `hli_version`'s isolated decision model is covered separately by
+    /// its own Rust tests. Registering a genuine root record and still getting
+    /// `None` back is the observable proof: the record is unquestionably there,
+    /// so a lookup that ran could not have missed it.
     #[test]
     fn a_data_path_seam_answers_before_the_registry_when_conversion_is_disabled() {
         // Far from the small IDs every other registry test uses, so this one
@@ -186,7 +185,7 @@ mod tests {
 
         assert!(
             !crate::version::hli_version::conversion_is_possible(),
-            "no unit test can latch an HLI DD version, so conversion is off here"
+            "this integration test leaves the production latch unset, so conversion is off here"
         );
         assert!(
             REGISTRY.lookup(CTX_ID).is_some(),
