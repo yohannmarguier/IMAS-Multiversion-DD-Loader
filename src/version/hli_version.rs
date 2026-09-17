@@ -293,6 +293,29 @@ mod tests {
     }
 
     #[test]
+    fn reconstructing_each_settled_latch_state_preserves_its_conversion_basis() {
+        let cases = [
+            (Latch::Set(version("4.1.1")), Some(version("4.1.1")), true),
+            (Latch::Unset, None, false),
+            (
+                Latch::Invalid("IMAS_MVDD_HLI_DD_VERSION is not valid UTF-8".to_string()),
+                None,
+                false,
+            ),
+        ];
+
+        for (settled, expected_version, conversion_is_possible) in cases {
+            let reconstructed = HliVersionLatch::from_latch(settled);
+
+            assert_eq!(reconstructed.latched(), expected_version);
+            assert_eq!(
+                reconstructed.conversion_is_possible(),
+                conversion_is_possible
+            );
+        }
+    }
+
+    #[test]
     fn absent_environment_permanently_latches_unset_and_refuses_late_setters() {
         let mut latch = HliVersionLatch::default();
 
