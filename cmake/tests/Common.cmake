@@ -218,9 +218,9 @@ add_test(NAME rust-unit
     COMMAND "${CARGO_EXECUTABLE}" test ${CARGO_COMMON_ARGS})
 set_tests_properties(rust-unit PROPERTIES ENVIRONMENT "IMAS_MVDD_LOSS_LOG_DIR=")
 
-# The line-coverage audit remains a local, below-floor baseline in this issue;
-# its fixture test protects the checker without making ordinary CTest enforce
-# the future coverage gate.
+# The line-coverage gate itself lives in CI's `rust-line-coverage` job, which
+# runs the real audit. This fixture test protects the checker's scope, scoring
+# and refusal behavior without making ordinary CTest run a full coverage build.
 find_program(BASH_EXECUTABLE bash REQUIRED)
 add_test(NAME rust-line-coverage-audit-fixtures
     COMMAND "${BASH_EXECUTABLE}"
