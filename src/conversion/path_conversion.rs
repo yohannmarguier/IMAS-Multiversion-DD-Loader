@@ -748,11 +748,11 @@ pub(crate) fn narrow_write_path(
         return WritePath::Forward;
     }
     let caller = caller_dd_path(record, raw);
-    // The primary is the one stored slot a write may change, so it is also the
-    // candidate the role-specific checks judge. A plan that declares none
-    // still runs every resolution-level check first.
+    // Only a plan needs a primary picked out of several declared candidates:
+    // the precedence-1 one is the single stored slot a write may change. Every
+    // other shape names its own subject, and a plan declaring no precedence-1
+    // source still runs every resolution-level check first.
     let primary = match &resolved {
-        Resolved::Single(candidate) => Some(candidate),
         Resolved::Plan(candidates) => candidates
             .iter()
             .find(|candidate| candidate.precedence == Some(1)),
@@ -821,13 +821,12 @@ fn write_subject<'a>(
             requested_precedence: *requested_precedence,
             shape: CheckShape::SharedRefusal(reason),
         },
-        // The single candidate is the write primary just as a plan's
-        // precedence-1 candidate is.  Keep the check subject tied to that
-        // one selection rather than re-deriving a second source of truth.
+        // A single candidate is its own write primary, so it needs nothing
+        // chosen for it the way a plan's candidates do.
         Resolved::Single(candidate) => CheckSubject {
             dd_path: &candidate.dd_path,
             requested_precedence: candidate.requested_precedence,
-            shape: CheckShape::Candidate(primary),
+            shape: CheckShape::Candidate(Some(candidate)),
         },
         Resolved::Plan(candidates) => CheckSubject {
             dd_path: candidates.first().map_or(caller, |first| &first.dd_path),
