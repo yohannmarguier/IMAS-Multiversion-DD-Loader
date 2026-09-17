@@ -116,3 +116,29 @@ The controlled unit tests advance a manual monotonic clock at source,
 validation, construction and publication boundaries, and simulate a blocked
 transport. They do not sleep or depend on wall-clock timing. The ignored
 live-graph acquisition check remains the service integration proof.
+
+## Shared process-life maps (#215)
+
+`RuntimeMapCoordinator::acquire` is the internal complete-map acquisition
+entry point for the next occurrence adapter. It keys work and retained maps by
+IDS name, stored DD version and HLI DD version. A cache hit returns the
+process-life `Arc<ConversionMap>` without contacting the graph, including once
+all former callers have dropped their references. Only successful maps enter
+that cache.
+
+On a cache miss, one caller owns an `AcquisitionAttempt`; concurrent requests
+for that exact key wait for the same terminal result and its original deadline.
+The coordinator holds its mutex only to inspect or replace entries: graph I/O,
+map construction and waiting happen outside it, so distinct keys can progress
+independently. A source, construction or timeout failure wakes every joiner,
+is removed rather than cached, and a later request starts a fresh attempt. If
+an expired attempt returns late, pointer-identity publication fencing prevents
+it from replacing the newer retained result.
+
+The coordinator remains disconnected from occurrence opening, registry
+mutation and the public C ABI. Its controlled lifecycle checks run with
+`cargo test runtime_map --lib`: same-key sharing, retained reuse, shared
+failure and retry, distinct-key progress, and stale-attempt fencing. The
+ignored live Neo4j test still verifies only the source boundary; it does not
+yet exercise coordinator reuse. It was not runnable locally without the
+pinned service, so no live coordinator acquisition/reuse result is claimed.
