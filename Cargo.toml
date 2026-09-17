@@ -22,6 +22,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # cargo-c enables this feature on every invocation and refuses to build without
 # it. Also usable to gate code that only makes sense behind the C ABI.
 capi = []
+# Builds a private C-ABI test instance whose occurrence adapter acquires maps
+# through the controlled graph-fact source. It is never enabled for staging or
+# installation of the production shim.
+graph-test-source = []
 
 # --- cargo-c configuration -------------------------------------------------
 # Drives header generation (cbindgen), soname/versioning and the .pc file.

@@ -16,6 +16,8 @@ use super::conversion_map::{
     EndpointNodeKind, Fidelity, LoadError, Rel, SelectorStage, Side, TypedConversionMap, TypedRule,
 };
 
+#[cfg(feature = "graph-test-source")]
+pub(crate) mod graph_test_source;
 pub(crate) mod neo4j_graph;
 
 /// The IDS and exact DD endpoints a caller wants to serve.

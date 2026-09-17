@@ -302,6 +302,29 @@ add_stub_test(read-path-identity-rule-returns-data read_path_test identity-rule-
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
 
+# --- Issue #216: graph-selected runtime-map tracer through the existing ABI ---
+add_executable(graph_runtime_map_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/graph_runtime_map_test.c")
+target_link_libraries(graph_runtime_map_test PRIVATE imas_mvdd_loader_graph_test ${CMAKE_DL_LIBS})
+target_compile_definitions(graph_runtime_map_test PRIVATE
+    "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+add_dependencies(graph_runtime_map_test imas_mvdd_graph_capi recording_stub)
+set_target_properties(graph_runtime_map_test PROPERTIES
+    BUILD_RPATH "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib")
+
+add_stub_test(graph-runtime-map-identity-operations
+    graph_runtime_map_test identity-operations
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(graph-runtime-map-reverse-identity-operations
+    graph_runtime_map_test identity-operations
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+add_stub_test(graph-runtime-map-acquisition-failure-cleans-up-open-context
+    graph_runtime_map_test acquisition-failure-cleans-up-open-context
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+
 # Not a refusal scenario: the artifact's four chi_squared `<redefine>` entries
 # were removed after review, so these paths now forward verbatim. Registered
 # beside the other pass-through reads rather than with the refusal group.

@@ -1,4 +1,5 @@
 pub mod conversion_map;
+#[cfg_attr(feature = "graph-test-source", allow(dead_code))]
 pub(crate) mod known_artifacts;
 pub(crate) mod path_conversion;
 pub(crate) mod read_outcome;

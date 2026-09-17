@@ -136,10 +136,36 @@ is removed rather than cached, and a later request starts a fresh attempt. If
 an expired attempt returns late, pointer-identity publication fencing prevents
 it from replacing the newer retained result.
 
-The coordinator remains disconnected from occurrence opening, registry
-mutation and the public C ABI. Its controlled lifecycle checks run with
-`cargo test runtime_map --lib`: same-key sharing, retained reuse, shared
-failure and retry, distinct-key progress, and stale-attempt fencing. The
-ignored live Neo4j test still verifies only the source boundary; it does not
-yet exercise coordinator reuse. It was not runnable locally without the
-pinned service, so no live coordinator acquisition/reuse result is claimed.
+## Graph-selected C-ABI tracer (#216)
+
+The production staged and installed shim still selects only the embedded XML
+artifact. CMake additionally builds the same crate into a private
+`graph-stage/` test instance with Cargo's internal `graph-test-source` feature;
+that instance selects a controlled complete graph-fact source through
+`RuntimeMapCoordinator`. There is no installed source-selection option, new C
+export, or second harness.
+
+`graph_runtime_map_test` links that private library and the existing recording
+stub. Its two identity scenarios open 4.1.1 → 3.39.0 and 3.39.0 → 4.1.1
+occurrences, then read, write and leaf-delete `time` through the normal C ABI,
+asserting the exact Core payloads and an empty loss log. Its unavailable-IDS
+scenario proves that a failed uncached acquisition after Core opened a context
+returns the standard refusal naming the IDS and both versions, ends that exact
+Core context, and leaves no context loss record. The occurrence adapter
+acquires a ready map before `record_root`; on failure it forgets the cached
+mismatch before asking the matched call family to clean up the just-opened
+context.
+
+The retained XML mechanism scenarios keep their normal staged library and
+unchanged expectations. The broader opening-family/probe/concurrency matrix is
+#225, and production source cutover remains #233.
+
+Verified in the recording-stub profile with `cmake -S . -B build-issue216
+-DCMAKE_BUILD_TYPE=Debug -DIMAS_MVDD_REAL_CORE_TESTS=OFF`, `cmake --build
+build-issue216 -j2`, and `ctest --test-dir build-issue216 --output-on-failure`
+(215 passing tests). The same change passed `cargo test --all-targets`,
+`cargo clippy --all-targets -- -D warnings`, and `cargo clippy --all-targets
+--features graph-test-source -- -D warnings`; the one ignored live-graph unit
+check still requires CI's pinned Neo4j service. This tracer deliberately
+serves only its controlled equilibrium identity scope, not a live graph or the
+unimplemented semantic mappings.
