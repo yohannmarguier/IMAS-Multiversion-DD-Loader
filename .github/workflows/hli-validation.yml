@@ -873,10 +873,12 @@ jobs:
           import json
           from pathlib import Path
           tests = json.loads(Path('test-inventory.json').read_text())['tests']
-          # 30ea5f1 registers the 25 example programs listed in
+          # cd51c61 registers the 25 example programs listed in
           # examples/CMakeLists.txt. AL_PLUGINS=OFF, so no -with-plugins twin.
-          # The four beyond 879c7b2's 21 are that fork's shim-tolerance tests;
-          # two of them are gated on a persistent backend, and MDSplus is on.
+          # The four beyond 879c7b2's 21 are that fork's shim-tolerance tests,
+          # added by 30ea5f1; two of them are gated on a persistent backend,
+          # and MDSplus is on. cd51c61 only corrects two of their bodies, so
+          # the count it registers is still 30ea5f1's.
           assert len(tests) == 25, f'Expected 25 Java tests, got {len(tests)}'
           names = {t['name'] for t in tests}
           for required in ('example-java-TestCoreProfilesPut',
