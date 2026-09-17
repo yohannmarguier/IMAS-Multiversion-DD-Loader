@@ -8,8 +8,8 @@
 use std::collections::HashSet;
 
 use super::conversion_map::{
-    ArtifactDdVersion, CocosConvention, ConversionMap, Fidelity, LoadError, Rel, SelectorStage,
-    Side, TypedConversionMap, TypedRule,
+    ArtifactDdVersion, CocosConvention, ConversionMap, EndpointInventory, EndpointNode,
+    EndpointNodeKind, Fidelity, LoadError, Rel, SelectorStage, Side, TypedConversionMap, TypedRule,
 };
 
 /// The IDS and exact DD endpoints a caller wants to serve.
@@ -195,6 +195,8 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
             ids: request.ids.clone(),
             left: Some(hli),
             right: Some(stored),
+            left_endpoint: endpoint_inventory(&facts.nodes, &request.hli_dd)?,
+            right_endpoint: endpoint_inventory(&facts.nodes, &request.stored_dd)?,
             default_identical: false,
             rules,
             sign_flips: Vec::new(),
@@ -331,6 +333,30 @@ fn endpoint_for<'a>(
             path: node.path.clone(),
             release: requested.clone(),
         })
+}
+
+/// Adapts the complete endpoint metadata stream into the existing map's
+/// delete-safety inventory. Presence at both requested endpoints was checked
+/// before construction, so this preserves structures as structures rather
+/// than treating every graph row as a leaf.
+fn endpoint_inventory(
+    nodes: &[GraphNode],
+    requested: &ArtifactDdVersion,
+) -> Result<EndpointInventory, AcquisitionFailure> {
+    nodes
+        .iter()
+        .map(|node| {
+            let metadata = endpoint_for(node, requested)?;
+            Ok(EndpointNode {
+                path: node.path.clone(),
+                kind: match metadata.kind {
+                    GraphNodeKind::Leaf => EndpointNodeKind::Leaf,
+                    GraphNodeKind::Structure => EndpointNodeKind::Structure,
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, AcquisitionFailure>>()
+        .map(EndpointInventory::complete)
 }
 
 /// Endpoint presence is established by the release attached to each metadata

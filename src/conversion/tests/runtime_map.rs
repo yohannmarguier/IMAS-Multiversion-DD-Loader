@@ -112,6 +112,8 @@ fn acquisition_returns_a_complete_identity_map_and_localized_retype_refusal() {
         map.resolve("not/from/the/complete/scope", Direction::Forward),
         None
     );
+    assert!(map.delete_target_is_leaf(Direction::Forward, "time_slice/profiles_1d/rho_tor"));
+    assert!(!map.delete_target_is_leaf(Direction::Forward, "time_slice"));
 }
 
 #[test]
