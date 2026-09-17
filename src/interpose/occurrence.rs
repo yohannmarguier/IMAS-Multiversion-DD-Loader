@@ -519,7 +519,16 @@ fn map_cache_key(
 /// most once per `(IDS, stored, HLI)` key for as long as some record still
 /// references the resulting map.
 pub(super) fn load_artifact(artifact: &known_artifacts::ArtifactMatch) -> ConversionMap {
-    ConversionMap::load(artifact.xml).expect("embedded artifact must parse")
+    ConversionMap::load_with_endpoint_inventories(
+        artifact.xml,
+        crate::conversion::conversion_map::EndpointInventory::complete_leaf_paths(
+            artifact.left_leaves,
+        ),
+        crate::conversion::conversion_map::EndpointInventory::complete_leaf_paths(
+            artifact.right_leaves,
+        ),
+    )
+    .expect("embedded artifact and its endpoint inventories must parse")
 }
 
 /// Forwards to IMAS-Core's real `al_begin_slice_action`, resolving

@@ -427,6 +427,76 @@ pub struct Rule {
     pub fidelity_reverse: Fidelity,
 }
 
+/// The DD hierarchy classification of one exact endpoint path. A complete
+/// endpoint inventory may certify only `Leaf` paths for converted deletes;
+/// every `Structure`, absent, or incomplete entry remains unsafe to delete
+/// unless the established trivial-subtree rule permits it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndpointNodeKind {
+    Leaf,
+    Structure,
+}
+
+/// One exact path and its DD hierarchy classification at a map endpoint.
+/// A KG acquisition adapter derives these facts from the selected endpoint's
+/// datatype and hierarchy evidence; it must not copy a convenience `is_leaf`
+/// flag without validating that evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndpointNode {
+    pub path: String,
+    pub kind: EndpointNodeKind,
+}
+
+/// Endpoint hierarchy evidence for one side of a conversion map.
+///
+/// A KG acquisition adapter calls [`Self::complete`] only after it has
+/// retrieved and validated all endpoint datatype/hierarchy facts needed to
+/// classify deletes. Incomplete evidence is retained so callers can still
+/// resolve independently established conversions, but it never certifies a
+/// converted delete target as a leaf. This classification assertion is not an
+/// independent proof that an upstream DD inventory itself is complete.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EndpointInventory {
+    complete: bool,
+    nodes: Vec<EndpointNode>,
+}
+
+impl EndpointInventory {
+    /// Marks validated endpoint datatype/hierarchy evidence as sufficient for
+    /// leaf-delete classification. Future graph acquisition must call this
+    /// only after its complete endpoint result passes its own validation.
+    pub fn complete(nodes: Vec<EndpointNode>) -> Self {
+        Self {
+            complete: true,
+            nodes,
+        }
+    }
+
+    /// Retains partial endpoint evidence without allowing it to certify a
+    /// converted delete target as a leaf.
+    pub fn incomplete(nodes: Vec<EndpointNode>) -> Self {
+        Self {
+            complete: false,
+            nodes,
+        }
+    }
+
+    /// Adapts the legacy artifact's exact leaf lists. These lists are the
+    /// existing compatibility input for delete classification; they are not a
+    /// claim that the artifact-completeness proof exhausts its DD version.
+    pub(crate) fn complete_leaf_paths(paths: &str) -> Self {
+        Self::complete(
+            paths
+                .lines()
+                .map(|path| EndpointNode {
+                    path: path.to_string(),
+                    kind: EndpointNodeKind::Leaf,
+                })
+                .collect(),
+        )
+    }
+}
+
 /// A complete map description supplied by a non-XML source such as the KG.
 /// It deliberately uses the same rule shapes as the XML artifact, while
 /// retaining endpoint metadata that XML historically required to be known.
@@ -435,6 +505,8 @@ pub struct TypedConversionMap {
     pub ids: String,
     pub left: Option<Side>,
     pub right: Option<Side>,
+    pub left_endpoint: EndpointInventory,
+    pub right_endpoint: EndpointInventory,
     pub default_identical: bool,
     pub rules: Vec<TypedRule>,
     pub sign_flips: Vec<TypedSignFlip>,
@@ -655,6 +727,14 @@ pub enum LoadError {
         reason: String,
     },
     DuplicateFlipPath(String),
+    DuplicateEndpointPath {
+        side: &'static str,
+        path: String,
+    },
+    InvalidEndpointPath {
+        side: &'static str,
+        path: String,
+    },
     InvalidArtifactDdVersion(String),
     InvalidCocosConvention(String),
     MissingSide(&'static str),
@@ -716,6 +796,12 @@ impl fmt::Display for LoadError {
                     f,
                     "path `{path}` appears in more than one sign-flip transformation"
                 )
+            }
+            LoadError::DuplicateEndpointPath { side, path } => {
+                write!(f, "duplicate endpoint path on the {side} side: `{path}`")
+            }
+            LoadError::InvalidEndpointPath { side, path } => {
+                write!(f, "invalid endpoint path on the {side} side: `{path}`")
             }
             LoadError::InvalidArtifactDdVersion(value) => {
                 write!(f, "invalid artifact DD version `{value}`")
@@ -1009,6 +1095,28 @@ fn rule_from_typed(typed: TypedRule) -> Result<Rule, LoadError> {
     })
 }
 
+fn validate_endpoint_inventory(
+    side: &'static str,
+    inventory: EndpointInventory,
+) -> Result<EndpointInventory, LoadError> {
+    let mut paths = HashSet::new();
+    for node in &inventory.nodes {
+        if node.path.is_empty() || node.path.split('/').any(str::is_empty) {
+            return Err(LoadError::InvalidEndpointPath {
+                side,
+                path: node.path.clone(),
+            });
+        }
+        if !paths.insert(node.path.as_str()) {
+            return Err(LoadError::DuplicateEndpointPath {
+                side,
+                path: node.path.clone(),
+            });
+        }
+    }
+    Ok(inventory)
+}
+
 /// A loaded conversion-map artifact for one adjacent DD-version step
 /// (CONTEXT.md's "conversion-map artifact").
 #[derive(Debug, Clone)]
@@ -1017,6 +1125,8 @@ pub struct ConversionMap {
     pub left: Side,
     pub right: Side,
     pub default_identical: bool,
+    left_endpoint: EndpointInventory,
+    right_endpoint: EndpointInventory,
     rules: Vec<Rule>,
     sign_flips: HashMap<String, (CocosConvention, CocosConvention)>,
     redefines: Vec<RedefineEntry>,
@@ -1036,6 +1146,22 @@ impl ConversionMap {
     /// does not carry (the future conversion-map generator's concern) or are
     /// generated records that must never affect resolution.
     pub fn load(xml: &str) -> Result<Self, LoadError> {
+        Self::load_with_endpoint_inventories(
+            xml,
+            EndpointInventory::default(),
+            EndpointInventory::default(),
+        )
+    }
+
+    /// Parses an XML artifact while attaching endpoint inventory evidence from
+    /// its caller. XML has no endpoint-hierarchy schema; the legacy artifact
+    /// loader supplies its checked-in inventories here, while a future KG
+    /// adapter uses [`Self::from_typed`] directly.
+    pub(crate) fn load_with_endpoint_inventories(
+        xml: &str,
+        left_endpoint: EndpointInventory,
+        right_endpoint: EndpointInventory,
+    ) -> Result<Self, LoadError> {
         let doc = Document::parse(xml).map_err(|e| LoadError::Xml(e.to_string()))?;
         let root = doc.root_element();
 
@@ -1103,6 +1229,8 @@ impl ConversionMap {
             ids,
             left,
             right,
+            left_endpoint,
+            right_endpoint,
             default_identical,
             rules,
             sign_flips,
@@ -1115,6 +1243,8 @@ impl ConversionMap {
     pub fn from_typed(typed: TypedConversionMap) -> Result<Self, LoadError> {
         let left = typed.left.ok_or(LoadError::MissingSide("left"))?;
         let right = typed.right.ok_or(LoadError::MissingSide("right"))?;
+        let left_endpoint = validate_endpoint_inventory("left", typed.left_endpoint)?;
+        let right_endpoint = validate_endpoint_inventory("right", typed.right_endpoint)?;
         let mut seen_rule_ids = HashSet::new();
         let mut rules = Vec::with_capacity(typed.rules.len());
         for typed_rule in typed.rules {
@@ -1152,12 +1282,29 @@ impl ConversionMap {
             left,
             right,
             default_identical: typed.default_identical,
+            left_endpoint,
+            right_endpoint,
             rules,
             sign_flips,
             redefines,
             left_sources,
             right_sources,
         })
+    }
+
+    /// Whether exact, complete endpoint evidence certifies `path` as a leaf
+    /// on the HLI-facing side of this conversion. This is deliberately a
+    /// safety classification only: it does not select rules or candidates.
+    pub(crate) fn delete_target_is_leaf(&self, direction: Direction, path: &str) -> bool {
+        let endpoint = match direction {
+            Direction::Forward => &self.left_endpoint,
+            Direction::Reverse => &self.right_endpoint,
+        };
+        endpoint.complete
+            && endpoint
+                .nodes
+                .iter()
+                .any(|node| node.kind == EndpointNodeKind::Leaf && node.path == path)
     }
 
     /// Resolves `path`, supplied in the DD spelling named by `direction`'s

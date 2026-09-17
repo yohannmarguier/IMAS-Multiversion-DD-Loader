@@ -48,6 +48,8 @@ fn typed_fixture() -> TypedConversionMap {
         ids: "equilibrium".to_string(),
         left: Some(known_side("3.39.0", "11")),
         right: Some(known_side("4.1.1", "17")),
+        left_endpoint: EndpointInventory::default(),
+        right_endpoint: EndpointInventory::default(),
         default_identical: true,
         rules: vec![
             TypedRule {
@@ -275,6 +277,29 @@ fn typed_map_validation_checks_selector_and_transform_invariants() {
 }
 
 #[test]
+fn typed_map_validation_rejects_contradictory_endpoint_classification() {
+    let mut map = typed_fixture();
+    map.left_endpoint = EndpointInventory::complete(vec![
+        EndpointNode {
+            path: "a_leaf".to_string(),
+            kind: EndpointNodeKind::Leaf,
+        },
+        EndpointNode {
+            path: "a_leaf".to_string(),
+            kind: EndpointNodeKind::Structure,
+        },
+    ]);
+
+    assert_eq!(
+        ConversionMap::from_typed(map).unwrap_err(),
+        LoadError::DuplicateEndpointPath {
+            side: "left",
+            path: "a_leaf".to_string(),
+        }
+    );
+}
+
+#[test]
 fn typed_maps_preserve_unknown_endpoint_cocos_without_inventing_a_transform() {
     let map = ConversionMap::from_typed(TypedConversionMap {
         ids: "equilibrium".to_string(),
@@ -286,6 +311,8 @@ fn typed_maps_preserve_unknown_endpoint_cocos_without_inventing_a_transform() {
             dd: ArtifactDdVersion::new("4.1.1").expect("fixture DD version is valid"),
             cocos: None,
         }),
+        left_endpoint: EndpointInventory::default(),
+        right_endpoint: EndpointInventory::default(),
         default_identical: true,
         rules: Vec::new(),
         sign_flips: Vec::new(),

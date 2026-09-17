@@ -212,9 +212,25 @@ not create a transformation or prevent independently established paths.
 
 `ConversionMap::load` now only decodes XML into that typed description before
 calling the same constructor. XML keeps its required known COCOS attributes;
-the historical fixture and interpreter contract remain unchanged. This ticket
-does not attach endpoint inventories (#207), acquire KG facts, select a map at
-runtime, or alter any read/write/delete operation policy.
+the historical fixture and interpreter contract remain unchanged.
+
+## Endpoint delete classification handoff (#207)
+
+Typed maps carry one endpoint inventory per map side: exact nodes classified
+as `Leaf` or `Structure`, plus a completeness fact. A converted delete consults
+the HLI-facing side selected by its map direction; only endpoint evidence an
+acquisition adapter has validated as complete can certify an exact `Leaf` and
+bypass the existing escaping-subtree check. Missing or incomplete metadata
+therefore fails closed as a structure, while a trivial structure delete,
+whole-DATAOBJECT delete, stamp protection and candidate fan-out retain their
+existing policies. Contradictory classifications of the same exact endpoint
+path reject typed-map construction.
+
+The legacy equilibrium adapter seeds those map-owned inventories from the
+checked-in 3.39.0 and 4.1.1 leaf inventories, preserving its XML-backed
+runtime behavior. A KG acquisition adapter must supply complete, validated
+endpoint datatype/hierarchy facts to certify leaves; this ticket neither
+acquires KG facts nor selects maps at runtime.
 
 ## Specification follow-through
 
