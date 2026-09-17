@@ -260,6 +260,44 @@ enum ResolutionError {
 }
 
 impl ResolutionError {
+    /// What [`const2str`] answers in place of an unbound IMAS-Core. The ADR
+    /// deliberately keeps these diagnostics useful when the mismatched
+    /// library's ABI cannot safely be queried further.
+    fn const2str(&self, id: c_int) -> *const c_char {
+        match self {
+            Self::VersionMismatch { .. } => fallback_const2str(id),
+            Self::Unavailable(_) => std::ptr::null(),
+        }
+    }
+
+    /// What [`err2str`] answers in place of an unbound IMAS-Core.
+    fn err2str(&self, id: c_int) -> *const c_char {
+        match self {
+            Self::VersionMismatch { .. } => fallback_err2str(id),
+            Self::Unavailable(_) => std::ptr::null(),
+        }
+    }
+
+    /// What [`get_al_version`] answers in place of an unbound IMAS-Core: the
+    /// version actually detected, which is the whole point of refusing it.
+    fn al_version(&self) -> *const c_char {
+        match self {
+            Self::VersionMismatch {
+                detected_version, ..
+            } => detected_version.as_ptr(),
+            Self::Unavailable(_) => std::ptr::null(),
+        }
+    }
+
+    /// What [`get_dd_version`] answers in place of an unbound IMAS-Core:
+    /// IMAS-Core's own deliberately dead sentinel.
+    fn dd_version(&self) -> *const c_char {
+        match self {
+            Self::VersionMismatch { .. } => static_c_str(b"!!DEPRECATED!!\0"),
+            Self::Unavailable(_) => std::ptr::null(),
+        }
+    }
+
     fn status(&self) -> &al_status_t {
         match self {
             Self::Unavailable(status) | Self::VersionMismatch { status, .. } => status,
@@ -384,36 +422,28 @@ pub(crate) unsafe fn build_uri_from_legacy_parameters(
 pub(crate) fn const2str(id: c_int) -> *const c_char {
     match resolution() {
         Ok(binding) => unsafe { (binding.const2str)(id) },
-        // The ADR deliberately keeps these diagnostics useful when the
-        // mismatched library's ABI cannot safely be queried further.
-        Err(ResolutionError::VersionMismatch { .. }) => fallback_const2str(id),
-        Err(ResolutionError::Unavailable(_)) => std::ptr::null(),
+        Err(error) => error.const2str(id),
     }
 }
 
 pub(crate) fn err2str(id: c_int) -> *const c_char {
     match resolution() {
         Ok(binding) => unsafe { (binding.err2str)(id) },
-        Err(ResolutionError::VersionMismatch { .. }) => fallback_err2str(id),
-        Err(ResolutionError::Unavailable(_)) => std::ptr::null(),
+        Err(error) => error.err2str(id),
     }
 }
 
 pub(crate) fn get_al_version() -> *const c_char {
     match resolution() {
         Ok(binding) => unsafe { (binding.get_al_version)() },
-        Err(ResolutionError::VersionMismatch {
-            detected_version, ..
-        }) => detected_version.as_ptr(),
-        Err(ResolutionError::Unavailable(_)) => std::ptr::null(),
+        Err(error) => error.al_version(),
     }
 }
 
 pub(crate) fn get_dd_version() -> *const c_char {
     match resolution() {
         Ok(binding) => unsafe { (binding.get_dd_version)() },
-        Err(ResolutionError::VersionMismatch { .. }) => static_c_str(b"!!DEPRECATED!!\0"),
-        Err(ResolutionError::Unavailable(_)) => std::ptr::null(),
+        Err(error) => error.dd_version(),
     }
 }
 
@@ -794,30 +824,57 @@ mod tests {
         }
     }
 
+    fn unresolvable_status() -> al_status_t {
+        al_status_t {
+            code: -1,
+            message: [0; MAX_ERR_MSG_LEN],
+        }
+    }
+
+    /// The four version accessors over a refused major-version mismatch. The
+    /// decision is taken from the resolution value, so this never settles this
+    /// process's one `CORE` binding — which would make the result depend on
+    /// test order and leave every later test facing a mismatched IMAS-Core.
     #[test]
-    fn fallback_accessors_expose_non_null_documented_c_strings() {
-        assert!(
-            CORE.set(Err(ResolutionError::VersionMismatch {
-                status: al_status_t {
-                    code: -1,
-                    message: [0; MAX_ERR_MSG_LEN],
-                },
-                detected_version: CString::new("3.22.0").unwrap(),
-            }))
-            .is_ok()
-        );
+    fn a_version_mismatch_answers_the_accessors_with_documented_c_strings() {
+        let mismatch = ResolutionError::VersionMismatch {
+            status: unresolvable_status(),
+            detected_version: CString::new("3.22.0").unwrap(),
+        };
 
         for (actual, expected) in [
-            (const2str(HDF5_BACKEND_ID), b"HDF5_BACKEND\0".as_slice()),
-            (err2str(BACKEND_ERR_ID), b"BACKEND_ERR\0".as_slice()),
-            (get_al_version(), b"3.22.0\0".as_slice()),
-            (get_dd_version(), b"!!DEPRECATED!!\0".as_slice()),
+            (
+                mismatch.const2str(HDF5_BACKEND_ID),
+                b"HDF5_BACKEND\0".as_slice(),
+            ),
+            (
+                mismatch.err2str(BACKEND_ERR_ID),
+                b"BACKEND_ERR\0".as_slice(),
+            ),
+            (mismatch.al_version(), b"3.22.0\0".as_slice()),
+            (mismatch.dd_version(), b"!!DEPRECATED!!\0".as_slice()),
         ] {
             assert!(!actual.is_null());
             assert_eq!(
                 unsafe { CStr::from_ptr(actual) }.to_bytes_with_nul(),
                 expected
             );
+        }
+    }
+
+    /// An unavailable IMAS-Core has no version and no constant table to fall
+    /// back to, so each accessor reports the null every caller already checks.
+    #[test]
+    fn an_unavailable_core_answers_the_accessors_with_null() {
+        let unavailable = ResolutionError::Unavailable(unresolvable_status());
+
+        for actual in [
+            unavailable.const2str(HDF5_BACKEND_ID),
+            unavailable.err2str(BACKEND_ERR_ID),
+            unavailable.al_version(),
+            unavailable.dd_version(),
+        ] {
+            assert!(actual.is_null());
         }
     }
 

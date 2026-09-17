@@ -48,9 +48,9 @@
     {
       "name": "deterministic-runtime-binding-policy",
       "sources": [
-        {"path": "src/core/core_binding.rs", "start_line": 384, "end_line": 418},
-        {"path": "src/core/core_binding.rs", "start_line": 423, "end_line": 526},
-        {"path": "src/core/core_binding.rs", "start_line": 582, "end_line": 630}
+        {"path": "src/core/core_binding.rs", "start_line": 422, "end_line": 448},
+        {"path": "src/core/core_binding.rs", "start_line": 453, "end_line": 556},
+        {"path": "src/core/core_binding.rs", "start_line": 612, "end_line": 660}
       ]
     }
   ],
