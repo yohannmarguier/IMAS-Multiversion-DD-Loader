@@ -549,8 +549,10 @@ and on demand.
 The C++ job builds `yohannmarguier/IMAS-Cpp` at `IMAS_CPP_REF`, using the same
 `IMAS_CORE_REF` fork and DD 4.1.1. It enables the generated suite and examples,
 checks that the HLI links the shim and that each test selects the acquired Core,
-and requires 22 enabled tests (the generated suite and 21 examples). It runs
-CTest serially because examples share pulses. Plugins are disabled.
+and requires 65 enabled tests: the generated suite, 21 examples, two
+generator refusal-policy tests, and the 41 registered here by the fork's
+Tier-1 shim conformance suite. It runs CTest serially because examples share
+pulses. Plugins are disabled.
 
 Unlike the Fortran job, C++ needs MDSplus: at the pinned commit its generated
 `cpp-TestSuite` implements only that backend and disables itself without it.
@@ -558,14 +560,37 @@ CI installs `mdsplus`, `mdsplus-devel` and `mdsplus-java` from the MDSplus
 Ubuntu 24 repository, plus OpenJDK to build the DD models. Core links MDSplus;
 the HLI links the shim. The installed package versions are recorded in the
 run summary and diagnostics artifact. HDF5 is also enabled in Core. This job
-runs the fork's existing tests; it adds no cross-version C++ test cases.
+runs the fork's existing tests.
+
+Since `IMAS_CPP_REF` moved to `38b9460` it also runs that fork's Tier-1 shim
+conformance suite (`tests/shim/`), which registers only under
+`AL_USE_MULTIVERSION_SHIM=ON`: eighteen catalogue scenarios in six families,
+thirteen of them contract assertions that stay red while the shim disagrees
+rather than being inverted, quarantined or softened to match observed
+behaviour. It is a DD 4.1.1 HLI reading and writing a checked-in DD 3.39.0
+pulse through the shim, compared against the same HLI reading the DD 4.1.1
+pulse of the same equilibrium. That makes this the one HLI job asserting on
+what conversion actually returns, rather than only that the HLI builds, links
+and runs. It covers one direction: the reverse needs a second `al-cpp` built
+against DD 3.39.0, which this job does not produce.
+
+Five of those thirteen — the stamp-state scenarios — register only when
+`imas-python-fixtures/.venv` can import h5py, so the job provisions that venv
+before configuring; registration is decided at configure time, and without it
+the job would run five contract assertions short and still report success. It
+installs h5py alone rather than the fixtures' full requirements, which would
+additionally register the fixture-provenance check: that regenerates the
+fixture pair against whatever Data Dictionary pip resolved and compares it
+with `h5diff`, so it can go red for a reason in neither the shim nor this HLI.
+The asserted count pins both choices — if either prerequisite appears, the
+inventory grows and the assertion names what it found.
 
 The MATLAB job builds `yohannmarguier/IMAS-MATLAB` at `IMAS_MATLAB_REF` against
 the same Core fork and DD 4.1.1, adding `matlab-actions/setup-matlab` for a
 MATLAB R2023b install. MDSplus is required rather than optional:
 `tests/imas_unit_tests.m` parameterises its class setup over both backends
 unconditionally, and seven of the eight examples are MDSplus-only, so turning it
-off would halve `al-mex-test` instead of skipping it. The job requires 11
+off would halve `al-mex-test` instead of skipping it. The job requires 12
 enabled tests with none disabled, and relies on the two linkage tests the fork
 registers itself — `al-mex-shim-linkage` and `mex-imas_open-shim-linkage` —
 rather than running `readelf` from the workflow.
@@ -574,30 +599,31 @@ Only those two actually run. `setup-matlab` installs MATLAB but does not
 license it: on a public project only MathWorks' Run MATLAB Command/Tests/Build
 actions license MATLAB automatically, each for the single process it starts, and
 no documented job-wide token reaches the `matlab -batch` processes CTest spawns
-for the other nine tests. Compiling MEX files needs the installation rather than
+for the other ten tests. Compiling MEX files needs the installation rather than
 a licence, so this job is a build-and-link check: IMAS-MATLAB configures against
 the installed shim, every MEX target compiles against it, and the inspected ones
 link the shim rather than IMAS-Core. It does not show MATLAB code round-tripping
-through the shim. That was measured rather than assumed: driving the remaining
-nine through `matlab-actions/run-command`, the supported auto-licensed entry
-point, failed all nine with `Licensing error: -1,359`, because the licence
-covers only the single MATLAB that action starts and not the `matlab -batch`
-processes CTest starts underneath it.
+through the shim. That was measured rather than assumed: driving the nine that
+existed at the time through `matlab-actions/run-command`, the supported
+auto-licensed entry point, failed all nine with `Licensing error: -1,359`,
+because the licence covers only the single MATLAB that action starts and not the
+`matlab -batch` processes CTest starts underneath it. `al-utils-unit-test` is a
+tenth `matlab -batch` test added since that probe, and inherits the same limit.
 
 The Java job builds `yohannmarguier/IMAS-Java` at `IMAS_JAVA_REF` the same way,
 also with MDSplus and the DD models, which is what the fork's own
 `ci/build_and_test.sh` defaults to. IMAS-Java adds no `tests/` subdirectory to
-its CMake graph, so its whole suite is the 21 example programs; the job requires
-all 21 enabled and checks `lib/libal-java-binding.so` with `readelf`, because
+its CMake graph, so its whole suite is the 25 example programs; the job requires
+all 25 enabled and checks `lib/libal-java-binding.so` with `readelf`, because
 this fork registers no linkage test of its own. It needs the full
 `openjdk-21-jdk` rather than the `-headless` package the other jobs use, because
 `find_package(JNI)` looks for the AWT native libraries `-headless` omits.
 
 Both counts have been confirmed against a real Linux run, so like the Fortran
 and C++ counts they are assertions about the pinned fork rather than estimates;
-a mismatch reports a moved pin. Like the C++ job, neither adds cross-version
-test cases: Java proves the HLI builds against, links and runs through the
-shim, and MATLAB proves the first two.
+a mismatch reports a moved pin. Unlike the C++ job, neither adds
+cross-version test cases: Java proves the HLI builds against, links and runs
+through the shim, and MATLAB proves the first two.
 
 The Fortran job makes two claims from one build. The 83 generated per-IDS tests
 write and read every IDS across the memory, ASCII and HDF5 backends with the HLI DD version
