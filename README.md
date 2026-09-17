@@ -17,6 +17,7 @@ IMAS-Core (libal)             ← stores the IDS under DD version W
 
 **Jump to:** [Status](#status) · [Toolchain](#toolchain) ·
 [Build, test, install](#build-test-install) ·
+[Pinned DD-only graph](#pinned-dd-only-graph) ·
 [Using it with an HLI](#using-it-with-an-hli) ·
 [Scope and limitations](#scope-and-limitations) · [Layout](#layout) ·
 [Installed layout](#installed-layout-and-consuming-the-package) ·
@@ -79,6 +80,82 @@ test, install](#build-test-install).
 
 CMake fails at configure time with the module names above if either tool is
 missing, so a wrong environment is caught immediately rather than mid-build.
+
+## Pinned DD-only graph
+
+Runtime conversion-map work uses one explicitly selected local Neo4j graph.
+This setup is separate from ordinary builds: `cargo`, cargo-c, and CMake never
+download a graph or start a service. It uses Docker plus
+[ORAS](https://oras.land/) on the operator's `PATH`; ORAS fetches the published
+OCI artifact and Docker runs the pinned Neo4j image.
+
+The checked-in [selection](config/dd-graph-release.env) records the currently
+supported DD-only release (`v5.3.0`), its OCI manifest digest, archive digest,
+producer commit, and Neo4j `2026.01.4-community` image digest. It contains no
+credential or graph data. The default state directory is
+`$XDG_STATE_HOME/imas-mvdd-loader/dd-graph` (or
+`~/.local/state/imas-mvdd-loader/dd-graph`); set `IMAS_MVDD_GRAPH_HOME` to a
+private task-owned directory to use a different location. The script creates
+that directory with private permissions and never writes it inside the repo.
+
+Choose a password outside Git and perform the initial setup:
+
+```console
+$ export IMAS_MVDD_GRAPH_HOME="$HOME/.local/state/imas-mvdd-loader/dd-graph"
+$ export IMAS_MVDD_GRAPH_PASSWORD='choose-a-local-secret'
+$ scripts/dd-graph.sh select
+$ scripts/dd-graph.sh inspect
+$ scripts/dd-graph.sh setup
+$ scripts/dd-graph.sh query
+```
+
+`setup` downloads the immutable manifest selected by digest, verifies the
+archive SHA-256 after ORAS has fetched it, checks the archive's release and
+commit manifest, then loads its `graph.dump` into a new data directory keyed
+by that manifest. It will fail rather than overwrite an existing database or
+container. The service name is `imas-mvdd-dd-graph-<manifest-prefix>` and Bolt
+is bound only to `127.0.0.1:17687` by default. Set
+`IMAS_MVDD_GRAPH_BOLT_PORT` before setup if that local port is occupied.
+
+The connection for the Rust graph adapter is therefore:
+
+```console
+NEO4J_URI=bolt://127.0.0.1:17687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=$IMAS_MVDD_GRAPH_PASSWORD
+```
+
+`query` runs `RETURN count(*)` through `cypher-shell`; its successful result is
+the clean-load check. Do not place the password in a selection file, shell
+history, or Git. It is supplied only through `IMAS_MVDD_GRAPH_PASSWORD` when a
+new service is created or queried.
+
+Between HLI runs, stop and later restart the same recorded pin without any
+release lookup or download:
+
+```console
+$ scripts/dd-graph.sh stop
+$ scripts/dd-graph.sh start
+$ scripts/dd-graph.sh query
+```
+
+To update, create a new selection file outside the repository containing all
+nine `GRAPH_*` variables in `config/dd-graph-release.env`, with the release's
+manifest digest, archive digest, producer commit, and a compatible immutable
+Neo4j image digest. Inspect those identities before selecting them. Stop the
+current task-owned service, then run:
+
+```console
+$ scripts/dd-graph.sh update --selection /private/path/to/new-release.env
+$ scripts/dd-graph.sh inspect
+$ scripts/dd-graph.sh query
+```
+
+`update` refuses while this task's graph service is running and creates a
+separate archive/database/container identity for a new manifest; it does not
+delete or overwrite the preceding graph state, although it intentionally
+replaces the active selection record after the new service starts. No live refresh or HLI process
+cache invalidation exists: select or update only between HLI processes.
 
 ## Build, test, install
 
@@ -417,10 +494,12 @@ tests/real_core/        HDF5 and real-IMAS-Core checks and plugin fixture
 tests/package/          installed-package consumer fixture
 tests/support/          shared C test harness
 tests/cmake/            CMake-script checks
-tests/scripts/          install and package checks
+tests/scripts/          install/package checks plus the hermetic DD-graph setup lifecycle check
 tests/stub/             recording stub standing in for IMAS-Core
 tests/fixtures/         reduced conversion-map fixture for the coverage-floor test
 scripts/iter-env.sh     ITER cluster module loads
+scripts/dd-graph.sh     opt-in pinned DD-only graph selection and lifecycle
+config/dd-graph-release.env  immutable released DD-only graph selection
 docs/                   reference material — read the inventory before designing anything
 ```
 

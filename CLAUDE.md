@@ -43,7 +43,8 @@ grouped under `tests/abi/`, `tests/shim/`, `tests/real_core/`, and
 `tests/package/`, with shared test infrastructure in `tests/support/` (the
 C harness), `tests/stub/` (the recording stub), `tests/fixtures/` (the
 reduced conversion-map fixture), `tests/cmake/` (`cmake -P` script checks),
-and `tests/scripts/` (install/package shell checks). The historical
+and `tests/scripts/` (install/package shell checks plus the hermetic
+DD-graph setup lifecycle check). The historical
 per-issue entries under `docs/history/` — and the ADRs under `docs/adr/`,
 which are dated records of a decision rather than navigation aids — retain the
 paths used when they were written; use this map for current navigation.

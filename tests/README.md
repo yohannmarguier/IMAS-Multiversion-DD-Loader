@@ -38,6 +38,11 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 | `package/` | A downstream `find_package()` consumer project, used by `scripts/check-installed-package.sh`. |
 | `fixtures/` | A deliberately reduced conversion-map artifact — the negative fixture for the coverage-floor gate. |
 
+`dd-graph-setup` is the exception to the `scripts/` row: it drives a clean
+temporary setup, load/start, query, stop and offline restart through local
+ORAS/Docker doubles. It proves the command sequence and immutable archive
+verification without Docker, ORAS, credentials, or a downloaded graph.
+
 ## Groups, in rough dependency order
 
 ### `runtime-binding-*` — 10 stub + 2 real · `shim/runtime_binding_test.c`
