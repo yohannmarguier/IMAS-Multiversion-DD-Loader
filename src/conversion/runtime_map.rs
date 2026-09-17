@@ -12,6 +12,8 @@ use super::conversion_map::{
     EndpointNodeKind, Fidelity, LoadError, Rel, SelectorStage, Side, TypedConversionMap, TypedRule,
 };
 
+pub(crate) mod neo4j_graph;
+
 /// The IDS and exact DD endpoints a caller wants to serve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MapRequest {

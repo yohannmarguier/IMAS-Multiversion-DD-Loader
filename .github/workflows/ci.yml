@@ -23,9 +23,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Provisioning evidence only: runtime conversion scenarios consume this
-  # reusable setup in their own tickets. A green job proves neither conversion
-  # map construction nor the shim's C ABI behavior.
+  # This job proves the pinned graph can be provisioned and fully acquired at
+  # the Rust boundary. It proves neither map interpretation nor C ABI behavior.
   graph-provisioning:
     name: Pinned DD graph provisioning smoke check
     runs-on: ubuntu-latest
@@ -35,6 +34,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: ./.github/actions/setup-dd-graph
+
+      - uses: ./.github/actions/setup-toolchain
+
+      - name: Acquire the complete live equilibrium scope
+        run: cargo test pinned_graph_returns_a_complete_equilibrium_scope --lib -- --ignored
 
       - name: Record provisioning scope
         run: echo 'DD graph provisioning smoke check passed'
