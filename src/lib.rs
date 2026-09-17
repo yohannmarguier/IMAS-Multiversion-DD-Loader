@@ -84,6 +84,8 @@ mod version;
 /// Length of `al_status_t::message`, mirroring IMAS-Core's `MAX_ERR_MSG_LEN`.
 pub const MAX_ERR_MSG_LEN: usize = 256;
 
+const MAX_UTF8_CODE_POINT_BYTES: usize = 4;
+
 /// Maximum array rank accepted across the ABI, mirroring IMAS-Core's `MAXDIM`.
 pub const MAXDIM: usize = 7;
 
@@ -126,14 +128,21 @@ impl Default for al_status_t {
     }
 }
 
-/// Writes as much of `message` as fits in `buffer`, always leaving room for
-/// the trailing NUL and never splitting a UTF-8 code point.
+/// Writes as much of `message` as fits in an initialized `buffer`, always
+/// leaving room for its trailing NUL and never splitting a UTF-8 code point.
+///
+/// Callers initialize the fixed ABI buffer to zero before calling this helper;
+/// it writes the message payload only, preserving that terminating NUL.
 pub(crate) fn write_truncated(buffer: &mut [c_char; MAX_ERR_MSG_LEN], message: &str) {
     let capacity = MAX_ERR_MSG_LEN - 1; // always leave room for the NUL
-    let mut len = message.len().min(capacity);
-    while len > 0 && !message.is_char_boundary(len) {
-        len -= 1;
-    }
+    let requested_len = message.len().min(capacity);
+    // A UTF-8 code point occupies at most four bytes, so one of these four
+    // positions is a boundary. Keeping the search bounded makes its runtime
+    // independent of malformed arithmetic in this truncation path.
+    let len = (0..MAX_UTF8_CODE_POINT_BYTES)
+        .map(|backtrack| requested_len.saturating_sub(backtrack))
+        .find(|&index| message.is_char_boundary(index))
+        .expect("the start of a UTF-8 string is a character boundary");
     for (slot, byte) in buffer.iter_mut().zip(message.as_bytes()[..len].iter()) {
         *slot = *byte as c_char;
     }
@@ -194,6 +203,9 @@ fn format_read_refusal_message(
     }
 
     let without_versions = format!("{prefix}{dd_path}");
+    // At exact capacity the fallback below is an identity transformation, but
+    // retain this strict boundary so the policy remains: only a message that
+    // fits with room for the NUL returns before considering left truncation.
     if without_versions.len() < MAX_ERR_MSG_LEN {
         return without_versions;
     }
@@ -214,10 +226,14 @@ fn truncate_path_from_left(path: &str, capacity: usize) -> String {
     }
 
     let suffix_capacity = capacity - 3;
-    let mut suffix_start = path.len() - suffix_capacity;
-    while !path.is_char_boundary(suffix_start) {
-        suffix_start += 1;
-    }
+    let requested_start = path.len() - suffix_capacity;
+    // As with `write_truncated`, a UTF-8 code point is at most four bytes.
+    // The bounded search preserves the leaf while making a malformed index
+    // calculation fail the mutation audit rather than spin indefinitely.
+    let suffix_start = (0..MAX_UTF8_CODE_POINT_BYTES)
+        .map(|advance| requested_start.saturating_add(advance))
+        .find(|&index| path.is_char_boundary(index))
+        .expect("a suffix of a UTF-8 string has a character boundary within three bytes");
     format!("...{}", &path[suffix_start..])
 }
 
@@ -951,6 +967,99 @@ mod tests {
     #[test]
     fn status_default_is_success() {
         assert_eq!(al_status_t::default().code, 0);
+    }
+
+    fn refusal_message(status: &al_status_t) -> &str {
+        assert_eq!(status.code, -1000, "the shim's public refusal code");
+        assert_eq!(status.message[MAX_ERR_MSG_LEN - 1], 0);
+        // SAFETY: every status built by the shim starts with a zeroed message
+        // buffer, and the formatter writes only valid UTF-8 prefixes.
+        unsafe { CStr::from_ptr(status.message.as_ptr()) }
+            .to_str()
+            .expect("refusal message must remain valid UTF-8")
+    }
+
+    #[test]
+    fn a_short_contextual_refusal_has_the_literal_code_prefix_and_all_context() {
+        let hli_version = "4.1.1".parse().unwrap();
+        let stored_version = "3.39.0".parse().unwrap();
+
+        let status = path_conversion_refusal(
+            "this path has no stored source",
+            "time_slice/boundary/phi",
+            &hli_version,
+            &stored_version,
+        );
+
+        assert_eq!(
+            refusal_message(&status),
+            "IMAS-MVDD: this path has no stored source; DD path: time_slice/boundary/phi; \
+             HLI DD version: 4.1.1; stored DD version: 3.39.0"
+        );
+    }
+
+    #[test]
+    fn contextual_refusal_keeps_or_omits_versions_at_the_fixed_buffer_boundary() {
+        let hli_version = "4.1.1".parse().unwrap();
+        let stored_version = "3.39.0".parse().unwrap();
+        let prefix = "IMAS-MVDD: boundary; DD path: ";
+        let versions = "; HLI DD version: 4.1.1; stored DD version: 3.39.0";
+
+        for message_len in [MAX_ERR_MSG_LEN - 2, MAX_ERR_MSG_LEN - 1, MAX_ERR_MSG_LEN] {
+            let path = "x".repeat(message_len - prefix.len() - versions.len());
+            let status = path_conversion_refusal("boundary", &path, &hli_version, &stored_version);
+            let expected = if message_len < MAX_ERR_MSG_LEN {
+                format!("{prefix}{path}{versions}")
+            } else {
+                format!("{prefix}{path}")
+            };
+
+            assert_eq!(
+                refusal_message(&status),
+                expected,
+                "input length {message_len}"
+            );
+        }
+    }
+
+    #[test]
+    fn contextual_refusal_left_truncates_an_overlong_path_without_losing_its_leaf() {
+        let hli_version = "4.1.1".parse().unwrap();
+        let stored_version = "3.39.0".parse().unwrap();
+        let prefix = "IMAS-MVDD: boundary; DD path: ";
+        let path_capacity = MAX_ERR_MSG_LEN - 1 - prefix.len();
+        let path = format!("{}leaf", "a".repeat(path_capacity));
+
+        let status = path_conversion_refusal("boundary", &path, &hli_version, &stored_version);
+
+        assert_eq!(
+            refusal_message(&status),
+            format!("{prefix}...{}", "a".repeat(path_capacity - 7) + "leaf")
+        );
+    }
+
+    #[test]
+    fn left_path_truncation_handles_zero_small_and_utf8_boundary_capacities() {
+        assert_eq!(truncate_path_from_left("abcdef", 0), "");
+        assert_eq!(truncate_path_from_left("abcdef", 1), ".");
+        assert_eq!(truncate_path_from_left("abcdef", 2), "..");
+        assert_eq!(truncate_path_from_left("abcdef", 3), "...");
+        assert_eq!(truncate_path_from_left("abcdef", 4), "...f");
+        assert_eq!(truncate_path_from_left("root/éleaf", 8), "...leaf");
+    }
+
+    #[test]
+    fn initialized_status_buffers_keep_a_nul_terminated_utf8_prefix() {
+        let mut buffer = [0; MAX_ERR_MSG_LEN];
+
+        write_truncated(&mut buffer, &"é".repeat(MAX_ERR_MSG_LEN));
+
+        let message = unsafe { CStr::from_ptr(buffer.as_ptr()) }
+            .to_str()
+            .expect("the written prefix must remain valid UTF-8");
+        assert_eq!(message, "é".repeat((MAX_ERR_MSG_LEN - 2) / 2));
+        assert_eq!(buffer[MAX_ERR_MSG_LEN - 2], 0);
+        assert_eq!(buffer[MAX_ERR_MSG_LEN - 1], 0);
     }
 
     #[test]
