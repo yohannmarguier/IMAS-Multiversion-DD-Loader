@@ -321,6 +321,16 @@ the pinned fork rather than guesses, so a mismatch is a report about a moved
 pin — as it was here: `a7905ab` added `al-utils-unit-test` and `30ea5f1` added
 that fork's four shim-tolerance examples.
 
+The C++ count of 65 was derived the same way — from the fork's CMake and the
+suite's own README — and **confirmed on Linux by run 35238451263**, which
+registered 65 and passed all of them, 41 of those being `tests/shim`. That run
+also corrected an assertion of this repository's rather than of the fork's:
+`cpp-test-shim-version-unset` carries `IMAS_CORE_LIBRARY` and deliberately no
+`IMAS_MVDD_HLI_DD_VERSION`, because the shim latches that version once per
+process and F2.1 asserts what happens when it was never declared. A rule
+demanding the full environment of every test said that scenario was
+misconfigured; it is the scenario.
+
 `README.md` carries the build options and layout. The *why* behind the build
 lives in comments next to what it explains — `CMakeLists.txt` for the staging
 tree, the install path, the multi-config refusal and the IMAS-Core
