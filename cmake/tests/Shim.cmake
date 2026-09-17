@@ -497,25 +497,20 @@ add_stub_test(loss-file-filename-collision-gains-a-numeric-suffix
 # Issue #235: the production facts/effects boundary is observable only from a
 # fresh process. This scenario clears the optional destination so the shim
 # must use this isolated working directory, its clock and its process ID.
-file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-default-directory")
 add_stub_test(loss-file-default-destination-uses-the-process-clock-and-pid
     read_path_test loss-file-default-destination-uses-the-process-clock-and-pid
     HLI_DD_VERSION 3.39.0
-    STAMP_VERSION 4.1.1)
-set_tests_properties(loss-file-default-destination-uses-the-process-clock-and-pid PROPERTIES
+    STAMP_VERSION 4.1.1
+    UNSET_ENV IMAS_MVDD_LOSS_LOG_DIR
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-default-directory")
-set_property(TEST loss-file-default-destination-uses-the-process-clock-and-pid
-    APPEND PROPERTY ENVIRONMENT_MODIFICATION "IMAS_MVDD_LOSS_LOG_DIR=unset:")
 
 # Issue #172: the optional delivery channel can be configured away, or fail
 # once without changing the successful ABI call or its in-memory loss record.
-file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-disabled")
 add_stub_test(read-path-loss-file-empty-directory-value-disables-delivery
     read_path_test loss-file-empty-directory-value-disables-delivery
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1
-    ENV "IMAS_MVDD_LOSS_LOG_DIR=")
-set_tests_properties(read-path-loss-file-empty-directory-value-disables-delivery PROPERTIES
+    ENV "IMAS_MVDD_LOSS_LOG_DIR="
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-disabled")
 
 add_stub_test(read-path-loss-file-missing-directory-reports-once-without-failing-reads

@@ -407,11 +407,15 @@ scenario table, and register it in `cmake/tests/Shim.cmake`:
 
 ```cmake
 add_stub_test(<ctest-name> <executable> <scenario>
-    [HLI_DD_VERSION v] [STAMP_VERSION v] [ENV "KNOB=value"...])
+    [HLI_DD_VERSION v] [STAMP_VERSION v] [ENV "KNOB=value"...]
+    [UNSET_ENV KNOB...] [WORKING_DIRECTORY dir])
 ```
 
 That function owns the shared environment (`IMAS_CORE_LIBRARY`, the latched HLI
-version, the stub's stamp version). Do not copy a prologue: twelve copies of one
+version, the stub's stamp version), the variables a scenario needs *removed*
+(`UNSET_ENV`), and the directory it runs in (`WORKING_DIRECTORY`, created at
+configure time). Reach for those options rather than a bare
+`set_tests_properties`/`set_property` beside the call. Do not copy a prologue: twelve copies of one
 is where the shared harness came from, and one of those copies printed a literal
 `\n` in four suites' failure messages for months.
 

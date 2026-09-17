@@ -99,7 +99,8 @@ target_compile_definitions(recording_stub PRIVATE
 # which is why CMakeLists.txt requires CMake 3.22 -- below that the property is
 # ignored without warning and this guarantee disappears.
 function(add_stub_test name executable)
-    cmake_parse_arguments(PARSE_ARGV 2 ARG "" "HLI_DD_VERSION;STAMP_VERSION" "ENV")
+    cmake_parse_arguments(PARSE_ARGV 2 ARG ""
+        "HLI_DD_VERSION;STAMP_VERSION;WORKING_DIRECTORY" "ENV;UNSET_ENV")
 
     set(environment "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
     if(DEFINED ARG_HLI_DD_VERSION)
@@ -115,8 +116,19 @@ function(add_stub_test name executable)
     add_test(NAME "${name}" COMMAND ${executable} ${ARG_UNPARSED_ARGUMENTS})
     set_tests_properties("${name}" PROPERTIES ENVIRONMENT "${environment}")
     if(NOT DEFINED ARG_HLI_DD_VERSION)
+        list(APPEND ARG_UNSET_ENV IMAS_MVDD_HLI_DD_VERSION)
+    endif()
+    foreach(variable IN LISTS ARG_UNSET_ENV)
         set_property(TEST "${name}" APPEND PROPERTY ENVIRONMENT_MODIFICATION
-            "IMAS_MVDD_HLI_DD_VERSION=unset:")
+            "${variable}=unset:")
+    endforeach()
+    # A scenario that observes the shim's default, unconfigured destination
+    # needs a directory of its own; creating it here keeps every environment
+    # and placement decision inside this one function.
+    if(DEFINED ARG_WORKING_DIRECTORY)
+        file(MAKE_DIRECTORY "${ARG_WORKING_DIRECTORY}")
+        set_tests_properties("${name}" PROPERTIES
+            WORKING_DIRECTORY "${ARG_WORKING_DIRECTORY}")
     endif()
 endfunction()
 
