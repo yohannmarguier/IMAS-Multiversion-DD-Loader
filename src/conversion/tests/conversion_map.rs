@@ -36,6 +36,272 @@ fn candidates(explanation: &RuleExplanation) -> &[CandidatePath] {
     }
 }
 
+fn known_side(dd: &str, cocos: &str) -> Side {
+    Side {
+        dd: ArtifactDdVersion::new(dd).expect("fixture DD version is valid"),
+        cocos: Some(CocosConvention::new(cocos).expect("fixture COCOS is valid")),
+    }
+}
+
+fn typed_fixture() -> TypedConversionMap {
+    TypedConversionMap {
+        ids: "equilibrium".to_string(),
+        left: Some(known_side("3.39.0", "11")),
+        right: Some(known_side("4.1.1", "17")),
+        default_identical: true,
+        rules: vec![
+            TypedRule {
+                id: "rename".to_string(),
+                rel: Rel::Renamed,
+                selector_stage: SelectorStage::Exact,
+                left: Some("old".to_string()),
+                right: Some("new".to_string()),
+                froms: Vec::new(),
+                fidelity_forward: Fidelity::Exact,
+                fidelity_reverse: Fidelity::Exact,
+            },
+            TypedRule {
+                id: "merge".to_string(),
+                rel: Rel::Merged,
+                selector_stage: SelectorStage::Exact,
+                left: None,
+                right: Some("canonical".to_string()),
+                froms: vec![
+                    TypedFromEntry {
+                        path: "second".to_string(),
+                        precedence: 2,
+                    },
+                    TypedFromEntry {
+                        path: "first".to_string(),
+                        precedence: 1,
+                    },
+                ],
+                fidelity_forward: Fidelity::Lossy,
+                fidelity_reverse: Fidelity::Exact,
+            },
+            TypedRule {
+                id: "split".to_string(),
+                rel: Rel::Split,
+                selector_stage: SelectorStage::Exact,
+                left: Some("split_source".to_string()),
+                right: None,
+                froms: vec![
+                    TypedFromEntry {
+                        path: "split_second".to_string(),
+                        precedence: 2,
+                    },
+                    TypedFromEntry {
+                        path: "split_first".to_string(),
+                        precedence: 1,
+                    },
+                ],
+                fidelity_forward: Fidelity::Exact,
+                fidelity_reverse: Fidelity::Lossy,
+            },
+            TypedRule {
+                id: "removed".to_string(),
+                rel: Rel::LeftOnly,
+                selector_stage: SelectorStage::Exact,
+                left: Some("removed".to_string()),
+                right: None,
+                froms: Vec::new(),
+                fidelity_forward: Fidelity::Exact,
+                fidelity_reverse: Fidelity::Unmappable,
+            },
+            TypedRule {
+                id: "added".to_string(),
+                rel: Rel::RightOnly,
+                selector_stage: SelectorStage::Exact,
+                left: None,
+                right: Some("added".to_string()),
+                froms: Vec::new(),
+                fidelity_forward: Fidelity::Unmappable,
+                fidelity_reverse: Fidelity::Exact,
+            },
+            TypedRule {
+                id: "reshape".to_string(),
+                rel: Rel::Retyped,
+                selector_stage: SelectorStage::Exact,
+                left: Some("old_shape".to_string()),
+                right: Some("new_shape".to_string()),
+                froms: Vec::new(),
+                fidelity_forward: Fidelity::Exact,
+                fidelity_reverse: Fidelity::Unmappable,
+            },
+        ],
+        sign_flips: vec![TypedSignFlip {
+            path: "new".to_string(),
+            from_cocos: CocosConvention::new("11").expect("fixture COCOS is valid"),
+            to_cocos: CocosConvention::new("17").expect("fixture COCOS is valid"),
+        }],
+        redefines: Vec::new(),
+    }
+}
+
+const EQUIVALENT_TYPED_FIXTURE_XML: &str = r#"
+    <ids-map ids="equilibrium" format-version="1">
+      <side id="left" dd="3.39.0" cocos="11"/>
+      <side id="right" dd="4.1.1" cocos="17"/>
+      <default rel="identical"/>
+      <rules>
+        <rule id="rename" rel="renamed" left="old" right="new"><fidelity forward="exact" reverse="exact"/></rule>
+        <rule id="merge" rel="merged" right="canonical"><from left="second" precedence="2"/><from left="first" precedence="1"/><fidelity forward="lossy" reverse="exact"/></rule>
+        <rule id="split" rel="split" left="split_source"><from right="split_second" precedence="2"/><from right="split_first" precedence="1"/><fidelity forward="exact" reverse="lossy"/></rule>
+        <rule id="removed" rel="left_only" left="removed"><fidelity forward="exact" reverse="unmappable"/></rule>
+        <rule id="added" rel="right_only" right="added"><fidelity forward="unmappable" reverse="exact"/></rule>
+        <rule id="reshape" rel="retyped" left="old_shape" right="new_shape"><fidelity forward="exact" reverse="unmappable"/></rule>
+      </rules>
+      <transforms><cocos from="11" to="17"><flip path="new"/></cocos></transforms>
+    </ids-map>
+"#;
+
+#[test]
+fn typed_and_xml_maps_explain_the_same_rules_in_both_directions() {
+    let typed = ConversionMap::from_typed(typed_fixture()).expect("typed fixture is valid");
+    let xml = ConversionMap::load(EQUIVALENT_TYPED_FIXTURE_XML).expect("XML fixture is valid");
+
+    for (path, direction) in [
+        ("old", Direction::Forward),
+        ("new", Direction::Reverse),
+        ("canonical", Direction::Reverse),
+        ("split_source", Direction::Forward),
+        ("split_first", Direction::Reverse),
+        ("removed", Direction::Forward),
+        ("added", Direction::Reverse),
+        ("old_shape", Direction::Forward),
+        ("new_shape", Direction::Reverse),
+        ("unclaimed", Direction::Forward),
+    ] {
+        assert_eq!(
+            typed.resolve(path, direction),
+            xml.resolve(path, direction),
+            "typed and XML maps disagree for {path} in {direction:?}"
+        );
+    }
+}
+
+#[test]
+fn typed_map_validation_rejects_invalid_rules_before_index_assembly() {
+    let mut map = typed_fixture();
+    map.rules.push(TypedRule {
+        id: "merge".to_string(),
+        rel: Rel::Merged,
+        selector_stage: SelectorStage::Exact,
+        left: None,
+        right: Some("other".to_string()),
+        froms: Vec::new(),
+        fidelity_forward: Fidelity::Exact,
+        fidelity_reverse: Fidelity::Exact,
+    });
+
+    assert_eq!(
+        ConversionMap::from_typed(map).unwrap_err(),
+        LoadError::DuplicateRuleId("merge".to_string())
+    );
+}
+
+#[test]
+fn typed_map_validation_keeps_the_xml_shape_and_precedence_invariants() {
+    let mut missing_side = typed_fixture();
+    missing_side.left = None;
+    assert_eq!(
+        ConversionMap::from_typed(missing_side).unwrap_err(),
+        LoadError::MissingSide("left")
+    );
+
+    let mut missing_target = typed_fixture();
+    missing_target.rules[1].right = None;
+    assert_eq!(
+        ConversionMap::from_typed(missing_target).unwrap_err(),
+        LoadError::InvalidRuleShape {
+            rule_id: "merge".to_string(),
+            reason: "requires `right` only, plus left-side <from> entries".to_string(),
+        }
+    );
+
+    let mut duplicate_precedence = typed_fixture();
+    duplicate_precedence.rules[1].froms[1].precedence = 2;
+    assert_eq!(
+        ConversionMap::from_typed(duplicate_precedence).unwrap_err(),
+        LoadError::DuplicatePrecedence {
+            rule_id: "merge".to_string(),
+            precedence: 2,
+        }
+    );
+}
+
+#[test]
+fn typed_map_validation_checks_selector_and_transform_invariants() {
+    let mut conflicting_selector = typed_fixture();
+    conflicting_selector.rules.push(TypedRule {
+        id: "other-rename".to_string(),
+        rel: Rel::Renamed,
+        selector_stage: SelectorStage::Exact,
+        left: Some("old".to_string()),
+        right: Some("other_new".to_string()),
+        froms: Vec::new(),
+        fidelity_forward: Fidelity::Exact,
+        fidelity_reverse: Fidelity::Exact,
+    });
+    assert_eq!(
+        ConversionMap::from_typed(conflicting_selector).unwrap_err(),
+        LoadError::DuplicateSourceSelector {
+            role: "left",
+            stage: SelectorStage::Exact,
+            pattern: "old".to_string(),
+        }
+    );
+
+    let mut incompatible_glob = typed_fixture();
+    incompatible_glob.rules[0].selector_stage = SelectorStage::Glob;
+    incompatible_glob.rules[0].left = Some("old/*".to_string());
+    assert_eq!(
+        ConversionMap::from_typed(incompatible_glob).unwrap_err(),
+        LoadError::InvalidRuleShape {
+            rule_id: "rename".to_string(),
+            reason: "glob `left` and `right` must carry the same number of `*` wildcards"
+                .to_string(),
+        }
+    );
+
+    let mut duplicate_flip = typed_fixture();
+    duplicate_flip
+        .sign_flips
+        .push(duplicate_flip.sign_flips[0].clone());
+    assert_eq!(
+        ConversionMap::from_typed(duplicate_flip).unwrap_err(),
+        LoadError::DuplicateFlipPath("new".to_string())
+    );
+}
+
+#[test]
+fn typed_maps_preserve_unknown_endpoint_cocos_without_inventing_a_transform() {
+    let map = ConversionMap::from_typed(TypedConversionMap {
+        ids: "equilibrium".to_string(),
+        left: Some(Side {
+            dd: ArtifactDdVersion::new("3.39.0").expect("fixture DD version is valid"),
+            cocos: None,
+        }),
+        right: Some(Side {
+            dd: ArtifactDdVersion::new("4.1.1").expect("fixture DD version is valid"),
+            cocos: None,
+        }),
+        default_identical: true,
+        rules: Vec::new(),
+        sign_flips: Vec::new(),
+        redefines: Vec::new(),
+    })
+    .expect("unknown COCOS metadata does not invalidate independent paths");
+
+    let explanation = map
+        .resolve("independently-established", Direction::Forward)
+        .expect("the identity default remains available");
+    assert_eq!(
+        *value_transformation(&explanation),
+        ValueTransformation::None
+    );
+}
+
 #[test]
 fn rejects_malformed_xml() {
     let err = ConversionMap::load("<not-xml").unwrap_err();
@@ -375,9 +641,9 @@ fn loads_the_approved_equilibrium_artifact_as_one_complete_version_pair() {
     let map = ConversionMap::load(APPROVED_ARTIFACT).expect("approved artifact must load");
     assert_eq!(map.ids, "equilibrium");
     assert_eq!(map.left.dd, ArtifactDdVersion("3.39.0".to_string()));
-    assert_eq!(map.left.cocos, CocosConvention("11".to_string()));
+    assert_eq!(map.left.cocos, Some(CocosConvention("11".to_string())));
     assert_eq!(map.right.dd, ArtifactDdVersion("4.1.1".to_string()));
-    assert_eq!(map.right.cocos, CocosConvention("17".to_string()));
+    assert_eq!(map.right.cocos, Some(CocosConvention("17".to_string())));
     assert!(map.default_identical);
     // Sanity: both a merged rule and the lone renamed rule loaded.
     assert!(map.rules.iter().any(|r| r.id == "rename-beta-normal"));

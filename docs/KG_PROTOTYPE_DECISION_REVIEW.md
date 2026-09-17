@@ -201,6 +201,21 @@ acquisition remains artifact-backed and weakly retained here; #215 supplies
 the accepted process-life shared-attempt policy, and #216 supplies the
 fallible KG acquisition/cleanup path.
 
+## Typed-map construction handoff (#206)
+
+`ConversionMap::from_typed(TypedConversionMap)` is the map-source boundary for
+future KG acquisition. It accepts typed endpoint sides, rules, ordered
+merge/split entries, established sign flips and unit-redefinition refusals,
+then validates and builds the resolver's existing source indexes. Endpoint
+COCOS is `Option<CocosConvention>`: `None` records unknown metadata and does
+not create a transformation or prevent independently established paths.
+
+`ConversionMap::load` now only decodes XML into that typed description before
+calling the same constructor. XML keeps its required known COCOS attributes;
+the historical fixture and interpreter contract remain unchanged. This ticket
+does not attach endpoint inventories (#207), acquire KG facts, select a map at
+runtime, or alter any read/write/delete operation policy.
+
 ## Specification follow-through
 
 The user subsequently invoked to-spec and confirmed all three testing

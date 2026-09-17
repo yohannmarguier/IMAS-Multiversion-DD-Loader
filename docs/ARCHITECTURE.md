@@ -299,12 +299,13 @@ classDiagram
         +Side right
         +Vec~Rule~ rules
         +load(xml) ConversionMap
+        +from_typed(input) ConversionMap
         +resolve(path, direction) RuleExplanation
         +check_completeness(...)
     }
     class Side {
         +ArtifactDdVersion dd
-        +CocosConvention cocos
+        +Option~CocosConvention~ cocos
     }
     class Rule {
         +String id
