@@ -565,7 +565,7 @@ the same Core fork and DD 4.1.1, adding `matlab-actions/setup-matlab` for a
 MATLAB R2023b install. MDSplus is required rather than optional:
 `tests/imas_unit_tests.m` parameterises its class setup over both backends
 unconditionally, and seven of the eight examples are MDSplus-only, so turning it
-off would halve `al-mex-test` instead of skipping it. The job requires 11
+off would halve `al-mex-test` instead of skipping it. The job requires 12
 enabled tests with none disabled, and relies on the two linkage tests the fork
 registers itself — `al-mex-shim-linkage` and `mex-imas_open-shim-linkage` —
 rather than running `readelf` from the workflow.
@@ -574,21 +574,22 @@ Only those two actually run. `setup-matlab` installs MATLAB but does not
 license it: on a public project only MathWorks' Run MATLAB Command/Tests/Build
 actions license MATLAB automatically, each for the single process it starts, and
 no documented job-wide token reaches the `matlab -batch` processes CTest spawns
-for the other nine tests. Compiling MEX files needs the installation rather than
+for the other ten tests. Compiling MEX files needs the installation rather than
 a licence, so this job is a build-and-link check: IMAS-MATLAB configures against
 the installed shim, every MEX target compiles against it, and the inspected ones
 link the shim rather than IMAS-Core. It does not show MATLAB code round-tripping
-through the shim. That was measured rather than assumed: driving the remaining
-nine through `matlab-actions/run-command`, the supported auto-licensed entry
-point, failed all nine with `Licensing error: -1,359`, because the licence
-covers only the single MATLAB that action starts and not the `matlab -batch`
-processes CTest starts underneath it.
+through the shim. That was measured rather than assumed: driving the nine that
+existed at the time through `matlab-actions/run-command`, the supported
+auto-licensed entry point, failed all nine with `Licensing error: -1,359`,
+because the licence covers only the single MATLAB that action starts and not the
+`matlab -batch` processes CTest starts underneath it. `al-utils-unit-test` is a
+tenth `matlab -batch` test added since that probe, and inherits the same limit.
 
 The Java job builds `yohannmarguier/IMAS-Java` at `IMAS_JAVA_REF` the same way,
 also with MDSplus and the DD models, which is what the fork's own
 `ci/build_and_test.sh` defaults to. IMAS-Java adds no `tests/` subdirectory to
-its CMake graph, so its whole suite is the 21 example programs; the job requires
-all 21 enabled and checks `lib/libal-java-binding.so` with `readelf`, because
+its CMake graph, so its whole suite is the 25 example programs; the job requires
+all 25 enabled and checks `lib/libal-java-binding.so` with `readelf`, because
 this fork registers no linkage test of its own. It needs the full
 `openjdk-21-jdk` rather than the `-headless` package the other jobs use, because
 `find_package(JNI)` looks for the AWT native libraries `-headless` omits.

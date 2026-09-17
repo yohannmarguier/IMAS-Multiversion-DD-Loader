@@ -670,12 +670,14 @@ jobs:
           import json
           from pathlib import Path
           tests = json.loads(Path('test-inventory.json').read_text())['tests']
-          # bdef77a registers al-mex-test, two MEX shim-linkage checks, and
-          # eight examples (seven MDSplus + one HDF5). AL_PLUGINS=OFF, so there
-          # is no -with-plugins twin and no al-partial-get-test.
-          assert len(tests) == 11, f'Expected 11 MATLAB tests, got {len(tests)}'
+          # a7905ab registers al-mex-test, al-utils-unit-test, two MEX
+          # shim-linkage checks, and eight examples (seven MDSplus + one HDF5).
+          # AL_PLUGINS=OFF, so there is no -with-plugins twin and no
+          # al-partial-get-test.
+          assert len(tests) == 12, f'Expected 12 MATLAB tests, got {len(tests)}'
           names = {t['name'] for t in tests}
           for required in ('al-mex-test',
+                           'al-utils-unit-test',
                            'al-mex-shim-linkage',
                            'mex-imas_open-shim-linkage',
                            'example-mex-test_get',
@@ -701,7 +703,7 @@ jobs:
           test -e _deps/al-core-build/models/mdsplus/ids_model.datafile
 
       # Only the two linkage tests run here, and that is a deliberate limit
-      # rather than an oversight. Nine of the eleven registered tests launch
+      # rather than an oversight. Ten of the twelve registered tests launch
       # the MATLAB interpreter through ${Matlab_MAIN_PROGRAM}, and CTest starts
       # those processes itself. MathWorks licenses a public project's MATLAB
       # only through its own Run MATLAB Command / Tests / Build actions, each
@@ -729,13 +731,15 @@ jobs:
             exit 1
           fi
 
-      # The remaining nine are NOT run, and that question is settled rather
-      # than open. Run 34852296651 drove them through
-      # matlab-actions/run-command -- the supported auto-licensed entry point
-      # for a public project -- and all nine failed with
+      # The remaining ten are NOT run, and that question is settled rather
+      # than open. Run 34852296651 drove the nine that existed at the time
+      # through matlab-actions/run-command -- the supported auto-licensed
+      # entry point for a public project -- and all nine failed with
       # "Licensing error: -1,359": run-command licenses the one MATLAB it
       # starts, and that licence does not reach the `matlab -batch` processes
-      # CTest starts underneath it. 0 of 9 passed. The probe that established
+      # CTest starts underneath it. 0 of 9 passed. al-utils-unit-test, which
+      # a7905ab added since, is a tenth `matlab -batch` test and inherits the
+      # same limit unmeasured. The probe that established
       # this was removed once it had answered; re-add it only if MathWorks
       # documents a job-wide batch licence, since a permanently red step that
       # cannot fail the job is noise nobody reads.
@@ -857,7 +861,7 @@ jobs:
         run: cmake --build hli-java/build --parallel 2
 
       # IMAS-Java has no tests/ subdirectory in its CMake graph -- the root
-      # CMakeLists.txt adds only examples/ -- so the whole suite is the 21
+      # CMakeLists.txt adds only examples/ -- so the whole suite is the 25
       # example programs. Unlike MATLAB, the Java fork registers no linkage
       # test of its own, so readelf is checked here the way cpp-hli does it.
       - name: Verify the Java test suite and linkage
@@ -869,13 +873,19 @@ jobs:
           import json
           from pathlib import Path
           tests = json.loads(Path('test-inventory.json').read_text())['tests']
-          # 879c7b2 registers the 21 example programs listed in
+          # 30ea5f1 registers the 25 example programs listed in
           # examples/CMakeLists.txt. AL_PLUGINS=OFF, so no -with-plugins twin.
-          assert len(tests) == 21, f'Expected 21 Java tests, got {len(tests)}'
+          # The four beyond 879c7b2's 21 are that fork's shim-tolerance tests;
+          # two of them are gated on a persistent backend, and MDSplus is on.
+          assert len(tests) == 25, f'Expected 25 Java tests, got {len(tests)}'
           names = {t['name'] for t in tests}
           for required in ('example-java-TestCoreProfilesPut',
                            'example-java-TestCoreProfilesGet',
-                           'example-java-TestVersion'):
+                           'example-java-TestVersion',
+                           'example-java-TestALExceptionCarriedStatus',
+                           'example-java-TestLeafReadTolerance',
+                           'example-java-TestOperationRecordLifecycle',
+                           'example-java-TestToleranceChokepoint'):
               assert required in names, (required, sorted(names))
           disabled = [t['name'] for t in tests for p in t['properties']
                       if p['name'] == 'DISABLED' and p['value']]

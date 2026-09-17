@@ -249,7 +249,7 @@ way, adding `matlab-actions/setup-matlab`. MDSplus is **not** optional here:
 `tests/imas_unit_tests.m` parameterises its class setup over
 `struct('MDSplus',12,'HDF5',13)` unconditionally, and seven of the eight
 examples are MDSplus-only, so dropping it would halve `al-mex-test` rather than
-skip it. The job requires 11 enabled tests and none disabled, and leans on the
+skip it. The job requires 12 enabled tests and none disabled, and leans on the
 two linkage tests the fork registers itself (`al-mex-shim-linkage`,
 `mex-imas_open-shim-linkage`) instead of running `readelf`; those two are
 excluded from the per-test environment assertion because they inspect a file
@@ -267,13 +267,15 @@ shim, that every MEX target compiles against it, and that the inspected ones
 link `libimas_mvdd_loader` rather than `libal`. It does *not* prove MATLAB code
 round-trips through the shim.
 
-That limit is **measured, not assumed**. Run 34852296651 drove the other nine
-through `matlab-actions/run-command`, the supported auto-licensed entry point,
-and **0 of 9 passed** — every one died on `Licensing error: -1,359`, because
-run-command licenses the single MATLAB it starts and that licence does not
-reach the `matlab -batch` processes CTest starts underneath it. The probe was
-removed once it had answered; re-add it only if MathWorks documents a job-wide
-batch licence. Note that the IMAS-MATLAB fork's own CI does not contradict
+That limit is **measured, not assumed**. Run 34852296651 drove the nine that
+existed at the time through `matlab-actions/run-command`, the supported
+auto-licensed entry point, and **0 of 9 passed** — every one died on
+`Licensing error: -1,359`, because run-command licenses the single MATLAB it
+starts and that licence does not reach the `matlab -batch` processes CTest
+starts underneath it. `al-utils-unit-test`, which `a7905ab` added since, is a
+tenth `matlab -batch` test and inherits that limit without having been measured
+under it. The probe was removed once it had answered; re-add it only if
+MathWorks documents a job-wide batch licence. Note that the IMAS-MATLAB fork's own CI does not contradict
 this — it tolerates the same failure with `continue-on-error: true` and
 `|| echo "MATLAB batch mode failed"`, so it never ran MATLAB either.
 
@@ -281,7 +283,7 @@ Its Java job builds `yohannmarguier/IMAS-Java` at `IMAS_JAVA_REF`, also with
 MDSplus and the DD models, because the fork's own `ci/build_and_test.sh`
 defaults to that backend and `examples/CMakeLists.txt` asks `al-mdsplus-model`
 for its model directory. IMAS-Java adds no `tests/` subdirectory to its CMake
-graph, so the whole suite is the 21 example programs; the job requires all 21
+graph, so the whole suite is the 25 example programs; the job requires all 25
 enabled and checks `lib/libal-java-binding.so` with `readelf`, since this fork
 registers no linkage test of its own. It is the one job needing the **full**
 `openjdk-21-jdk`: it calls `find_package(JNI)`, which wants the AWT native
@@ -294,10 +296,13 @@ HLI's own version, not IMAS-Core's, so the Core version tags this repo depends
 on are unaffected.
 
 The MATLAB and Java counts were first read off the pinned forks' CMake and have
-since been **confirmed on Linux by run 34852296651** — 11 registered for MATLAB
-and 21 for Java, none disabled in either. Like the Fortran and C++ counts they
-are now assertions about the pinned fork rather than guesses, so a mismatch is
-a report about a moved pin.
+since been **confirmed on Linux** — 11 for MATLAB and 21 for Java at the
+previous pins by run 34852296651, and **12 and 25 at the current pins by run
+35205740907**, which reported them by failing the old assertions. None are
+disabled in either. Like the Fortran and C++ counts they are assertions about
+the pinned fork rather than guesses, so a mismatch is a report about a moved
+pin — as it was here: `a7905ab` added `al-utils-unit-test` and `30ea5f1` added
+that fork's four shim-tolerance examples.
 
 `README.md` carries the build options and layout. The *why* behind the build
 lives in comments next to what it explains — `CMakeLists.txt` for the staging
