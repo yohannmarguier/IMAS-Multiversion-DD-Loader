@@ -74,13 +74,14 @@ unit suite supplies shuffled pages and schema-faithful malformed rows for the
 same boundary. This machine did not have a running pinned graph, so the live
 scenario is recorded as CI-required rather than claimed as locally executed.
 
-Raw lifecycle and change records are deliberately retained as
-`Neo4jRawScope`, not converted into endpoint metadata or a map by this ticket:
-using current node properties as historical endpoint facts would fabricate a
-supported conversion. #213 owns that interpretation and then supplies the
-existing `GraphFactsSource`/`RuntimeMapAcquirer` map interface. Consequently,
-the three reference pairs have not been frozen into counts or claimed to map
-here; their correspondence/history limitations remain explicit input to #213.
+Raw lifecycle and change records remain `Neo4jRawScope` at the transport
+boundary. The controlled acquisition facts replay numeric-version additions,
+removals and field-qualified metadata events into interval-local endpoints;
+they never treat a node's latest property as historical evidence. A reused
+spelling across an absence interval stays an explicit path-local refusal until
+correspondence evidence proves its role. The direct raw-to-fact adapter remains
+separate, and the three reference pairs have not been frozen into counts or
+claimed to map here.
 
 ## Whole-attempt deadline (#214)
 
