@@ -795,6 +795,33 @@ mod tests {
     }
 
     #[test]
+    fn fallback_accessors_expose_non_null_documented_c_strings() {
+        assert!(
+            CORE.set(Err(ResolutionError::VersionMismatch {
+                status: al_status_t {
+                    code: -1,
+                    message: [0; MAX_ERR_MSG_LEN],
+                },
+                detected_version: CString::new("3.22.0").unwrap(),
+            }))
+            .is_ok()
+        );
+
+        for (actual, expected) in [
+            (const2str(HDF5_BACKEND_ID), b"HDF5_BACKEND\0".as_slice()),
+            (err2str(BACKEND_ERR_ID), b"BACKEND_ERR\0".as_slice()),
+            (get_al_version(), b"3.22.0\0".as_slice()),
+            (get_dd_version(), b"!!DEPRECATED!!\0".as_slice()),
+        ] {
+            assert!(!actual.is_null());
+            assert_eq!(
+                unsafe { CStr::from_ptr(actual) }.to_bytes_with_nul(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn failure_status_has_the_synthesized_code_exact_message_and_termination() {
         let status = failure("boom");
         assert_eq!(status.code, -1);
