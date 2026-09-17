@@ -181,7 +181,7 @@ mod tests {
                 direction_to_stored: direction,
                 opened_read_op: true,
             },
-            || load_artifact(&artifact),
+            std::sync::Arc::new(load_artifact(&artifact)),
         ));
 
         assert!(

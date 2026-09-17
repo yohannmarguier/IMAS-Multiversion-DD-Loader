@@ -169,6 +169,38 @@ resolved or freezing the experimental coverage counts. It must retain the full
 integration acceptance criteria and the no-code-reuse constraint. No commit,
 production implementation or upstream KG change was made by this review.
 
+## Staged ready-map registration handoff (#208)
+
+`ContextRegistry::record_root` accepts a ready `Arc<ConversionMap>` and only
+records context state. It neither constructs maps nor waits for or performs
+KG I/O. The current artifact adapter obtains its map through the existing
+weak-reference cache before calling `record_root`, so live roots and children
+continue to share the same map and the legacy map is released after its last
+record closes.
+
+#216 supplies a complete or failed acquisition result to this same handoff:
+it must acquire before registry mutation, pass a successful ready map into
+root registration, and clean up an already-opened Core context on failure.
+#215 replaces the legacy cache behavior with the accepted process-life,
+bounded shared-attempt policy; this staged refactor does not impose that new
+retention policy on artifact-backed maps.
+
+### #208 verification and remaining boundary
+
+In an isolated worktree from `feat/runtime-conversion-mapping`, the following
+checks passed: `cargo fmt --check`; `git diff --check`; `cargo test
+a_root_record_uses_the_callers_ready_shared_map --lib`; `cargo test
+context_registry --lib`; `cargo test occurrence --lib`; `cargo clippy
+--all-targets -- -D warnings`; and a Debug CMake build configured with
+`-DIMAS_MVDD_REAL_CORE_TESTS=OFF`, followed by its 211-test `ctest
+--output-on-failure` suite. That suite includes the occurrence-discovery,
+plugin-family, and context-lifecycle C ABI regressions.
+
+The validation build intentionally did not run real-IMAS-Core tests. Map
+acquisition remains artifact-backed and weakly retained here; #215 supplies
+the accepted process-life shared-attempt policy, and #216 supplies the
+fallible KG acquisition/cleanup path.
+
 ## Specification follow-through
 
 The user subsequently invoked to-spec and confirmed all three testing

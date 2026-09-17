@@ -321,6 +321,9 @@ mod tests {
         "#;
         let stored = "4.1.1".parse().expect("known release");
         let hli = "3.39.0".parse().expect("known release");
+        let map = std::sync::Arc::new(
+            ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
+        );
         assert!(REGISTRY.record_root(
             RootRegistration {
                 ctx_id: CTX_ID,
@@ -331,7 +334,7 @@ mod tests {
                 direction_to_stored: Direction::Forward,
                 opened_read_op: true,
             },
-            || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
+            map,
         ));
         let record = REGISTRY
             .lookup(CTX_ID)
@@ -412,6 +415,9 @@ mod tests {
         // `lossy`.
         let stored = "3.39.0".parse().expect("known release");
         let hli = "4.1.1".parse().expect("known release");
+        let map = std::sync::Arc::new(
+            ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
+        );
         assert!(REGISTRY.record_root(
             RootRegistration {
                 ctx_id: CTX_ID,
@@ -422,7 +428,7 @@ mod tests {
                 direction_to_stored: Direction::Reverse,
                 opened_read_op: true,
             },
-            || ConversionMap::load(ARTIFACT).expect("fixture artifact must load"),
+            map,
         ));
         let record = REGISTRY
             .lookup(CTX_ID)

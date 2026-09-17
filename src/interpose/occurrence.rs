@@ -437,6 +437,10 @@ fn apply_discovery_decision(
             let ids_name = ids_name_from(dataobjectname);
             let key = map_cache_key(ids_name, &stored, hli);
             let direction = artifact.direction_to_stored;
+            // The legacy artifact source acquires the shared map before the
+            // registry mutates. A later KG-backed source follows this same
+            // ready-map handoff, keeping KG I/O and waiting out of record_root.
+            let map = resolve_conversion_map(ids_name, &stored, hli, &artifact);
             // A global/slice/time-range action opens the whole IDS
             // occurrence, not one field: the record's resolved path is the
             // occurrence's own root, empty because a relative read resolves
@@ -451,7 +455,7 @@ fn apply_discovery_decision(
                     direction_to_stored: direction,
                     opened_read_op,
                 },
-                || load_artifact(&artifact),
+                map,
             );
             OpenOccurrenceResult::Status(status)
         }
@@ -511,9 +515,9 @@ fn map_cache_key(
 }
 
 /// Parses the one embedded conversion-map artifact `artifact` names. Used
-/// only as a `get_or_create_map`/`record_root` cache-miss closure, so this
-/// runs at most once per `(IDS, stored, HLI)` key for as long as some record
-/// still references the resulting map.
+/// only as a legacy `get_or_create_map` cache-miss closure, so this runs at
+/// most once per `(IDS, stored, HLI)` key for as long as some record still
+/// references the resulting map.
 pub(super) fn load_artifact(artifact: &known_artifacts::ArtifactMatch) -> ConversionMap {
     ConversionMap::load(artifact.xml).expect("embedded artifact must parse")
 }

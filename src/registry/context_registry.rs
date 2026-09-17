@@ -212,9 +212,9 @@ impl ContextRegistry {
 
     /// Records `ctx_id` as a root conversion record when the stored and HLI
     /// DD versions differ. Captures the complete occurrence `dataobjectname`
-    /// and its pulse URI, then obtains the map through this registry's cache,
-    /// so every record for one version pair shares a map. Returns `false` for a
-    /// matching version pair after removing any record at `ctx_id`, so a
+    /// and its pulse URI, retaining the ready shared map its caller acquired
+    /// before registry mutation. Returns `false` for a matching version pair
+    /// after removing any record at `ctx_id`, so a
     /// recycled matching-version ID can never expose stale conversion state.
     ///
     /// For a mismatched pair, replaces whatever record — of any kind —
@@ -223,7 +223,7 @@ impl ContextRegistry {
     pub(crate) fn record_root(
         &self,
         registration: RootRegistration,
-        create: impl FnOnce() -> ConversionMap,
+        map: Arc<ConversionMap>,
     ) -> bool {
         let RootRegistration {
             ctx_id,
@@ -246,7 +246,7 @@ impl ContextRegistry {
             pulse_ctx_id,
             dataobjectname,
             pulse_uri: self.pulse_uri(pulse_ctx_id).unwrap_or_default(),
-            map: self.get_or_create_map(key, create),
+            map,
             root_id: ctx_id,
             direction_to_stored,
             opened_read_op,

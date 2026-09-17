@@ -46,7 +46,7 @@ fn record_dummy_root(
             direction_to_stored: DUMMY_DIRECTION,
             opened_read_op: true,
         },
-        dummy_map,
+        Arc::new(dummy_map()),
     )
 }
 
@@ -60,6 +60,7 @@ fn an_unrecorded_context_has_no_conversion_record() {
 fn a_root_record_retains_its_path_pulse_id_map_and_root_identity() {
     let registry = ContextRegistry::new();
     let key = dummy_key();
+    let map = registry.get_or_create_map(key.clone(), dummy_map);
     assert!(registry.record_root(
         RootRegistration {
             ctx_id: 5,
@@ -70,7 +71,7 @@ fn a_root_record_retains_its_path_pulse_id_map_and_root_identity() {
             direction_to_stored: DUMMY_DIRECTION,
             opened_read_op: true,
         },
-        dummy_map,
+        map.clone(),
     ));
 
     let snapshot = registry.lookup(5).expect("just-recorded root must be live");
@@ -80,11 +81,33 @@ fn a_root_record_retains_its_path_pulse_id_map_and_root_identity() {
     assert_eq!(snapshot.stored_version.to_string(), "3.39.0");
     assert_eq!(snapshot.hli_version.to_string(), "4.1.1");
     assert!(
-        Arc::ptr_eq(
-            &snapshot.map,
-            &registry.get_or_create_map(key, || panic!("map must be cached"))
-        ),
+        Arc::ptr_eq(&snapshot.map, &map),
         "lookup must hand back a shared reference to the same map, not a copy"
+    );
+}
+
+#[test]
+fn a_root_record_uses_the_callers_ready_shared_map() {
+    let registry = ContextRegistry::new();
+    let ready_map = Arc::new(dummy_map());
+
+    assert!(registry.record_root(
+        RootRegistration {
+            ctx_id: 5,
+            resolved_path: "time_slice/boundary/psi".to_string(),
+            pulse_ctx_id: 1,
+            dataobjectname: "equilibrium".to_string(),
+            key: dummy_key(),
+            direction_to_stored: DUMMY_DIRECTION,
+            opened_read_op: true,
+        },
+        ready_map.clone(),
+    ));
+
+    let record = registry.lookup(5).expect("just-recorded root must be live");
+    assert!(
+        Arc::ptr_eq(&record.map, &ready_map),
+        "registration must retain the prepared shared map rather than construct another"
     );
 }
 
@@ -106,7 +129,7 @@ fn root_and_child_retain_their_occurrence_and_pulse_identity_across_pulse_id_reu
             direction_to_stored: DUMMY_DIRECTION,
             opened_read_op: true,
         },
-        dummy_map,
+        Arc::new(dummy_map()),
     ));
     assert!(registry.record_child(
         6,
@@ -268,6 +291,7 @@ fn a_read_uses_its_captured_root_after_its_child_id_is_reused() {
 fn a_child_record_retains_its_own_path_and_parent_id_and_shares_the_parents_map() {
     let registry = ContextRegistry::new();
     let key = dummy_key();
+    let map = registry.get_or_create_map(key.clone(), dummy_map);
     assert!(registry.record_root(
         RootRegistration {
             ctx_id: 5,
@@ -278,7 +302,7 @@ fn a_child_record_retains_its_own_path_and_parent_id_and_shares_the_parents_map(
             direction_to_stored: DUMMY_DIRECTION,
             opened_read_op: true,
         },
-        dummy_map
+        map
     ));
 
     assert!(registry.record_child(
@@ -502,9 +526,8 @@ fn pulse_ctx_id_is_none_for_a_conversion_record_or_unrecorded_id() {
 }
 
 #[test]
-fn matching_versions_remove_stale_records_without_creating_a_map() {
+fn matching_versions_remove_stale_records() {
     let registry = ContextRegistry::new();
-    let loads = Cell::new(0);
     assert!(record_dummy_root(&registry, 5, "stale".to_string(), 1));
     let matching_key = MapCacheKey::new(
         "equilibrium".to_string(),
@@ -522,17 +545,13 @@ fn matching_versions_remove_stale_records_without_creating_a_map() {
             direction_to_stored: DUMMY_DIRECTION,
             opened_read_op: true,
         },
-        || {
-            loads.set(loads.get() + 1);
-            dummy_map()
-        },
+        Arc::new(dummy_map()),
     ));
 
     assert!(
         registry.lookup(5).is_none(),
         "matching versions need no record"
     );
-    assert_eq!(loads.get(), 0, "matching versions must not load a map");
 }
 
 #[test]
@@ -540,6 +559,10 @@ fn a_shared_map_survives_as_long_as_one_record_still_references_it() {
     let registry = ContextRegistry::new();
     let loads = Cell::new(0);
     let key = dummy_key();
+    let ready_map = registry.get_or_create_map(key.clone(), || {
+        loads.set(loads.get() + 1);
+        dummy_map()
+    });
 
     assert!(registry.record_root(
         RootRegistration {
@@ -551,10 +574,7 @@ fn a_shared_map_survives_as_long_as_one_record_still_references_it() {
             direction_to_stored: DUMMY_DIRECTION,
             opened_read_op: true,
         },
-        || {
-            loads.set(loads.get() + 1);
-            dummy_map()
-        }
+        ready_map.clone()
     ));
     assert!(registry.record_root(
         RootRegistration {
@@ -566,13 +586,11 @@ fn a_shared_map_survives_as_long_as_one_record_still_references_it() {
             direction_to_stored: DUMMY_DIRECTION,
             opened_read_op: true,
         },
-        || {
-            loads.set(loads.get() + 1);
-            dummy_map()
-        }
+        ready_map.clone()
     ));
 
     assert_eq!(loads.get(), 1, "the second record must hit the cache");
+    drop(ready_map);
 
     registry.remove(5);
     let survivor = registry.lookup(6).unwrap();
@@ -593,6 +611,10 @@ fn a_shared_map_is_released_once_no_record_references_it() {
     let registry = ContextRegistry::new();
     let loads = Cell::new(0);
     let key = dummy_key();
+    let ready_map = registry.get_or_create_map(key.clone(), || {
+        loads.set(loads.get() + 1);
+        dummy_map()
+    });
 
     assert!(registry.record_root(
         RootRegistration {
@@ -604,12 +626,10 @@ fn a_shared_map_is_released_once_no_record_references_it() {
             direction_to_stored: DUMMY_DIRECTION,
             opened_read_op: true,
         },
-        || {
-            loads.set(loads.get() + 1);
-            dummy_map()
-        }
+        ready_map.clone()
     ));
     registry.remove(5);
+    drop(ready_map);
 
     let _new_map = registry.get_or_create_map(key, || {
         loads.set(loads.get() + 1);
@@ -642,7 +662,7 @@ fn concurrent_operations_never_observe_a_torn_record() {
                         direction_to_stored: DUMMY_DIRECTION,
                         opened_read_op: true,
                     },
-                    dummy_map,
+                    Arc::new(dummy_map()),
                 );
                 if let Some(snapshot) = registry.lookup(ctx_id) {
                     // A torn record would show a path that does not
@@ -682,7 +702,7 @@ fn concurrent_child_operations_never_observe_a_torn_record() {
                         direction_to_stored: DUMMY_DIRECTION,
                         opened_read_op: true,
                     },
-                    dummy_map,
+                    Arc::new(dummy_map()),
                 );
                 registry.record_child(
                     child_id,
