@@ -801,6 +801,40 @@ fn a_read_transformation_inverts_to_the_stored_write_direction() {
             direction: TransformationDirection::ToStored,
         })
     );
+    assert_eq!(
+        read.inverse().and_then(|write| write.inverse()),
+        Some(read),
+        "both COCOS directions must return to the read transformation"
+    );
+}
+
+#[test]
+fn a_noop_transformation_stays_a_noop_when_inverted() {
+    assert_eq!(
+        ValueTransformation::None.inverse(),
+        Some(ValueTransformation::None)
+    );
+}
+
+#[test]
+fn a_sign_flip_between_the_same_cocos_convention_is_not_invertible() {
+    let convention = CocosConvention("11".to_string());
+
+    for direction in [
+        TransformationDirection::ToHli,
+        TransformationDirection::ToStored,
+    ] {
+        assert_eq!(
+            ValueTransformation::SignFlip {
+                from_cocos: convention.clone(),
+                to_cocos: convention.clone(),
+                direction,
+            }
+            .inverse(),
+            None,
+            "a same-convention flip must not become a write transformation"
+        );
+    }
 }
 
 #[test]
