@@ -201,6 +201,15 @@ add_test(NAME rust-unit
     COMMAND "${CARGO_EXECUTABLE}" test ${CARGO_COMMON_ARGS})
 set_tests_properties(rust-unit PROPERTIES ENVIRONMENT "IMAS_MVDD_LOSS_LOG_DIR=")
 
+# The line-coverage audit remains a local, below-floor baseline in this issue;
+# its fixture test protects the checker without making ordinary CTest enforce
+# the future coverage gate.
+find_program(BASH_EXECUTABLE bash REQUIRED)
+add_test(NAME rust-line-coverage-audit-fixtures
+    COMMAND "${BASH_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/check-rust-line-coverage-audit.sh"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+
 # The artifact's autoconvert-equivalence floor is an external contract:
 # run the validation command itself, including its deliberately reduced
 # fixture, rather than testing an internal helper (issue #51).
