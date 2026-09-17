@@ -1,4 +1,4 @@
-4c93542e61098407b004a4bef4e42776b2d7b997
+70e901b644806e13a9ae8e82155f76ac3ad365c9
 
 The commit of the IMAS-Fortran HLI that .github/workflows/hli-validation.yml
 builds against the installed shim. First line only is the value, the way
