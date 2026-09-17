@@ -498,13 +498,13 @@ add_stub_test(loss-file-filename-collision-gains-a-numeric-suffix
 # fresh process. This scenario clears the optional destination so the shim
 # must use this isolated working directory, its clock and its process ID.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-default-directory")
-add_stub_test(loss-file-production-facts-and-effects-use-the-process-contract
-    read_path_test production-facts-and-effects-use-the-process-contract
+add_stub_test(loss-file-default-destination-uses-the-process-clock-and-pid
+    read_path_test loss-file-default-destination-uses-the-process-clock-and-pid
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
-set_tests_properties(loss-file-production-facts-and-effects-use-the-process-contract PROPERTIES
+set_tests_properties(loss-file-default-destination-uses-the-process-clock-and-pid PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-default-directory")
-set_property(TEST loss-file-production-facts-and-effects-use-the-process-contract
+set_property(TEST loss-file-default-destination-uses-the-process-clock-and-pid
     APPEND PROPERTY ENVIRONMENT_MODIFICATION "IMAS_MVDD_LOSS_LOG_DIR=unset:")
 
 # Issue #172: the optional delivery channel can be configured away, or fail

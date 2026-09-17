@@ -239,11 +239,12 @@ static int timestamp_matches_an_observed_second(const char *timestamp, time_t st
     return 0;
 }
 
-/* Issue #235: this is deliberately a fresh CTest process. It reaches the
- * normal shim ABI and observes only the resulting file and stderr, so it
- * covers the real environment, CWD, clock, PID and file effects rather than
- * injected facts or effects. CMake unsets the optional directory setting. */
-static void scenario_production_facts_and_effects_use_the_process_contract(void) {
+/* Issue #235: this is deliberately a fresh CTest process with no configured
+ * loss-log directory. It reaches the normal shim ABI and observes only the
+ * resulting file, so it covers the real working directory, UTC clock, process
+ * id and file writing rather than values a Rust test supplies. CMake unsets
+ * the optional directory setting and gives the test its own directory. */
+static void scenario_loss_file_default_destination_uses_the_process_clock_and_pid(void) {
     const char *prefix = "imas-mvdd-loss-";
     CHECK(getenv("IMAS_MVDD_LOSS_LOG_DIR") == NULL);
     clear_loss_log_directory_in(".");
@@ -304,7 +305,7 @@ static void scenario_production_facts_and_effects_use_the_process_contract(void)
     free(contents);
     CHECK(remove(path) == 0);
     free(path);
-    printf("read_path_test production-facts-and-effects-use-the-process-contract: the "
+    printf("read_path_test loss-file-default-destination-uses-the-process-clock-and-pid: the "
            "default directory, timestamp, PID and production file delivery matched the process\n");
 }
 
@@ -1286,8 +1287,8 @@ int main(int argc, char **argv) {
         {"loss-file-is-absent-without-loss", scenario_loss_file_is_absent_without_loss},
         {"loss-file-filename-collision-gains-a-numeric-suffix",
          scenario_loss_file_filename_collision_gains_a_numeric_suffix},
-        {"production-facts-and-effects-use-the-process-contract",
-         scenario_production_facts_and_effects_use_the_process_contract},
+        {"loss-file-default-destination-uses-the-process-clock-and-pid",
+         scenario_loss_file_default_destination_uses_the_process_clock_and_pid},
         {"loss-file-empty-directory-value-disables-delivery", scenario_loss_file_empty_directory_value_disables_delivery},
         {"loss-file-missing-directory-reports-once-without-failing-reads", scenario_loss_file_missing_directory_reports_once_without_failing_reads},
         {"loss-file-file-destination-reports-once-without-failing-reads", scenario_loss_file_file_destination_reports_once_without_failing_reads},
