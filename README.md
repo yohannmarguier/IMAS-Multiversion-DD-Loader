@@ -417,10 +417,10 @@ tests/real_core/        HDF5 and real-IMAS-Core checks and plugin fixture
 tests/package/          installed-package consumer fixture
 tests/support/          shared C test harness
 tests/cmake/            CMake-script checks
-tests/coverage/         local Rust coverage-audit fixtures
+tests/coverage/         local Rust line-coverage and mutation-audit fixtures
 tests/scripts/          install and package checks
 tests/stub/             recording stub standing in for IMAS-Core
-tests/fixtures/         conversion-map and Rust coverage-audit fixtures
+tests/fixtures/         conversion-map and Rust audit fixtures
 scripts/iter-env.sh     ITER cluster module loads
 docs/                   reference material — read the inventory before designing anything
 ```
@@ -479,6 +479,10 @@ next to the equivalent `pkg-config` check.
   missing-data and empty-data refusal cases. The maintainer command and
   current below-floor baseline are in `docs/rust-line-coverage-audit.md`; it
   is deliberately not a CI gate yet.
+- `rust-mutation-audit-fixtures` — exercises the local Rust mutation audit's
+  shared six-group scope, score thresholds, timeouts, exclusions and incomplete
+  run refusal. Its maintainer command and baseline report are in
+  `docs/rust-mutation-audit.md`; full mutation testing remains manual.
 - `ci-workflow` — guards the fast/full job split, unrestricted push trigger,
   shared pinned-toolchain setup, explicit test profiles, install checks, and
   `--no-tests=error` coverage gate; its rejection test proves comments or later
