@@ -64,6 +64,16 @@ impl EnvironmentValue {
 }
 
 impl Latch {
+    /// Whether an open may proceed on this settled outcome. Only an invalid
+    /// environment value refuses — the shim will not silently fall back to
+    /// passthrough after the caller declared a version it could not parse.
+    fn open_result(&self) -> Result<(), String> {
+        match self {
+            Self::Invalid(reason) => Err(reason.clone()),
+            Self::Set(_) | Self::Unset => Ok(()),
+        }
+    }
+
     fn from_environment(environment: EnvironmentValue) -> Self {
         match environment {
             EnvironmentValue::Absent => Self::Unset,
@@ -120,18 +130,9 @@ impl HliVersionLatch {
     where
         F: FnOnce() -> EnvironmentValue,
     {
-        if self.latch.is_none() {
-            self.latch = Some(Latch::from_environment(environment()));
-        }
-        self.open_result()
-    }
-
-    fn open_result(&self) -> Result<(), String> {
-        match self.latch.as_ref() {
-            Some(Latch::Invalid(reason)) => Err(reason.clone()),
-            Some(Latch::Set(_) | Latch::Unset) => Ok(()),
-            None => unreachable!("an open resolution always settles the model"),
-        }
+        self.latch
+            .get_or_insert_with(|| Latch::from_environment(environment()))
+            .open_result()
     }
 
     #[cfg(test)]
@@ -189,8 +190,7 @@ pub(crate) fn resolve_for_open() -> Result<(), String> {
             LATCH.get_or_init(|| candidate.into_latch())
         }
     };
-    HliVersionLatch::from_latch(settled.clone())
-        .resolve_for_open(|| unreachable!("a settled latch must not read the environment"))
+    settled.open_result()
 }
 
 /// The HLI DD version already latched for this process, if any. `None`
