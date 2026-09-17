@@ -821,10 +821,13 @@ fn write_subject<'a>(
             requested_precedence: *requested_precedence,
             shape: CheckShape::SharedRefusal(reason),
         },
+        // The single candidate is the write primary just as a plan's
+        // precedence-1 candidate is.  Keep the check subject tied to that
+        // one selection rather than re-deriving a second source of truth.
         Resolved::Single(candidate) => CheckSubject {
             dd_path: &candidate.dd_path,
             requested_precedence: candidate.requested_precedence,
-            shape: CheckShape::Candidate(Some(candidate)),
+            shape: CheckShape::Candidate(primary),
         },
         Resolved::Plan(candidates) => CheckSubject {
             dd_path: candidates.first().map_or(caller, |first| &first.dd_path),
@@ -1265,6 +1268,114 @@ mod tests {
             Some(TransformationDirection::ToHli),
             "a candidate that is never written keeps the transformation the map declared"
         );
+    }
+
+    #[test]
+    fn a_single_equilibrium_write_candidate_resolves_to_its_stored_spelling() {
+        const ARTIFACT: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
+        let record = reverse_record(ARTIFACT);
+        let field =
+            CString::new("time_slice/global_quantities/beta_tor_norm").expect("no interior NUL");
+
+        match narrow_write_path(
+            &record,
+            field.as_ptr(),
+            ArgumentRole::Field,
+            resolve(&record, field.as_ptr()),
+        ) {
+            WritePath::Translated { path, .. } => assert_eq!(
+                path.to_str().expect("fixture paths are UTF-8"),
+                "time_slice/global_quantities/beta_normal"
+            ),
+            WritePath::Forward | WritePath::Candidates(_) | WritePath::Refusal { .. } => {
+                panic!("one safe equilibrium source must narrow to its stored spelling")
+            }
+        }
+    }
+
+    #[test]
+    fn a_single_candidate_preserves_its_noninvertible_write_refusal() {
+        const ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <default rel="identical"/>
+              <transforms>
+                <cocos from="11" to="17"><flip path="flipped"/></cocos>
+              </transforms>
+            </ids-map>
+        "#;
+        let record = record(ARTIFACT, "");
+        let map_transformation = match record
+            .map
+            .resolve("flipped", Direction::Forward)
+            .expect("the fixture resolves its transformed path")
+            .outcome
+        {
+            Outcome::Path {
+                value_transformation: ValueTransformation::SignFlip { from_cocos, .. },
+                ..
+            } => from_cocos,
+            other => panic!("expected a sign flip from the fixture, got {other:?}"),
+        };
+        let field = CString::new("flipped").expect("no interior NUL");
+        // Supported artifacts normalize this malformed same-COCOS flip to
+        // `None`, so resolving an artifact cannot reach the defensive
+        // refusal. Constructing the already-resolved candidate keeps the
+        // regression at the narrowing seam where that refusal is promised.
+        let candidate = Candidate {
+            path: CString::new("stored/flipped").expect("no interior NUL"),
+            stored_dd_path: "stored/flipped".to_string(),
+            dd_path: "flipped".to_string(),
+            fidelity: Fidelity::Exact,
+            value_transformation: ValueTransformation::SignFlip {
+                from_cocos: map_transformation.clone(),
+                to_cocos: map_transformation,
+                direction: TransformationDirection::ToHli,
+            },
+            precedence: None,
+            requested_precedence: None,
+        };
+
+        assert!(matches!(
+            narrow_write_path(
+                &record,
+                field.as_ptr(),
+                ArgumentRole::Field,
+                Resolved::Single(candidate),
+            ),
+            WritePath::Refusal { ref reason, ref dd_path }
+                if reason == "this path needs a value transformation that cannot be inverted for a write"
+                    && dd_path == "flipped"
+        ));
+    }
+
+    #[test]
+    fn a_write_plan_without_a_primary_source_refuses_before_it_can_name_candidates() {
+        const ARTIFACT: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
+        let record = reverse_record(ARTIFACT);
+        let field = CString::new("hli/folded").expect("no interior NUL");
+        let secondary = Candidate {
+            path: CString::new("stored/secondary").expect("no interior NUL"),
+            stored_dd_path: "stored/secondary".to_string(),
+            dd_path: "hli/folded".to_string(),
+            fidelity: Fidelity::Exact,
+            value_transformation: ValueTransformation::None,
+            precedence: Some(2),
+            requested_precedence: Some(1),
+        };
+
+        assert!(matches!(
+            narrow_write_path(
+                &record,
+                field.as_ptr(),
+                ArgumentRole::Field,
+                Resolved::Plan(vec![secondary]),
+            ),
+            WritePath::Refusal { ref reason, ref dd_path }
+                if reason == "this candidate plan has no precedence-1 source for a write"
+                    && dd_path == "hli/folded"
+        ));
     }
 
     #[test]
@@ -2048,6 +2159,50 @@ mod tests {
     }
 
     #[test]
+    fn merged_and_split_lossy_reads_are_potentially_lossy() {
+        const MERGED: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="fold" rel="merged" right="stored">
+                  <from left="hli" precedence="1"/>
+                  <from left="legacy" precedence="2"/>
+                  <fidelity forward="lossy" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        const SPLIT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="split" rel="split" left="stored">
+                  <from right="hli" precedence="1"/>
+                  <from right="legacy" precedence="2"/>
+                  <fidelity forward="exact" reverse="lossy"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+
+        for (record, raw) in [(record(MERGED, ""), "hli"), (reverse_record(SPLIT), "hli")] {
+            let raw = CString::new(raw).expect("fixture paths contain no NUL");
+            match narrow_read_path(resolve(&record, raw.as_ptr())) {
+                ReadPath::Translated(paths) => assert!(
+                    paths
+                        .paths
+                        .iter()
+                        .all(|path| path.fidelity == Fidelity::PotentiallyLossy),
+                    "a lossy merged or split resolution must retain an unverified loss verdict"
+                ),
+                _ => panic!("a lossy merged or split rule must resolve to a candidate read plan"),
+            }
+        }
+    }
+
+    #[test]
     fn equilibrium_write_and_delete_preserve_shape_refusals() {
         const ARTIFACT: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
         let record = reverse_record(ARTIFACT);
@@ -2072,10 +2227,20 @@ mod tests {
         let record = reverse_record(ARTIFACT);
         let leaf =
             CString::new("time_slice/global_quantities/beta_tor_norm").expect("no interior NUL");
+        let moved_leaf = CString::new("time_slice/boundary/gap/r").expect("no interior NUL");
         let trivial_structure = CString::new("time_slice/constraints").expect("no interior NUL");
         let escaping_structure = CString::new("time_slice/boundary").expect("no interior NUL");
+        assert!(
+            is_equilibrium_leaf(&record, "time_slice/boundary/gap/r"),
+            "the DD4 gap coordinate is a leaf, so delete safety must not treat it as a subtree"
+        );
+        assert!(
+            !is_equilibrium_leaf(&record, "time_slice/boundary/gap"),
+            "the DD4 gap container must still be subject to subtree safety"
+        );
         for (raw, expected) in [
             (&leaf, "time_slice/global_quantities/beta_normal"),
+            (&moved_leaf, "time_slice/boundary_separatrix/gap/r"),
             (&trivial_structure, "time_slice/constraints"),
         ] {
             match narrow_delete_path(&record, raw.as_ptr(), resolve(&record, raw.as_ptr())) {
