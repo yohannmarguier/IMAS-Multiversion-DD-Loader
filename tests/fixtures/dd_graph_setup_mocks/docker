@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >> "$TEST_DOCKER_LOG"
+case "$1 ${2:-}" in
+    'container inspect')
+        test -e "$TEST_DOCKER_STATE/container"
+        ;;
+    'ps --quiet')
+        ;;
+    pull\ *)
+        ;;
+    run\ *)
+        case " $* " in
+            *' --detach '*) touch "$TEST_DOCKER_STATE/container" ;;
+        esac
+        ;;
+    start\ *|stop\ *)
+        test -e "$TEST_DOCKER_STATE/container"
+        ;;
+    exec\ *)
+        printf 'node_count\n1\n'
+        ;;
+    *)
+        printf 'unexpected fake docker invocation: %s\n' "$*" >&2
+        exit 1
+        ;;
+esac

@@ -38,6 +38,12 @@ add_test(NAME script-policy-guard-rejects-unpinned-scripts
         "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify_script_policy_guard.cmake")
 
+# Graph setup remains opt-in: this test drives the lifecycle through local
+# ORAS/Docker doubles in a temporary state directory. It never downloads a
+# graph, invokes Docker, or needs credentials.
+add_test(NAME dd-graph-setup
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/dd_graph_setup_test.sh")
+
 # The recording stub is the fast profile's runtime dependency and remains
 # part of the full profile so the two complementary seam suites stay honest.
 add_library(recording_stub SHARED
