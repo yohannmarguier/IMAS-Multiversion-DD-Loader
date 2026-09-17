@@ -2,6 +2,12 @@
   "schema_version": 1,
   "dispositions": [
     {
+      "mutant": "src/conversion/conversion_map.rs:827:17: delete match arm \"include\" | \"coverage\" in ConversionMap::load",
+      "classification": "equivalent",
+      "observable_behavior": "ConversionMap::load ignores every <ids-map> child it does not read, so deleting the explicit include/coverage arm leaves the catch-all arm doing exactly the same nothing",
+      "disposition": "no artifact can tell the two apart; it returns to the score the moment an unrecognised child becomes a refusal or include/coverage gain meaning"
+    },
+    {
       "mutant": "src/conversion/path_conversion.rs:848:9: delete match arm Resolved::Refusal{reason, dd_path, ..} in write_shape_refusal",
       "classification": "equivalent",
       "observable_behavior": "write_subject maps every Resolved::Refusal to CheckShape::SharedRefusal, and WRITE_CHECKS returns its retained reason before write_shape_refusal can run",

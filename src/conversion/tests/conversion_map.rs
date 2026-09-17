@@ -211,21 +211,6 @@ fn parser_accepts_nonoverlapping_glob_selectors() {
 }
 
 #[test]
-fn parser_rejects_unknown_ids_map_children() {
-    let xml = map_with("3.39.0", "4.1.1", r#"<unrecognised-metadata/>"#);
-
-    let error = ConversionMap::load(&xml).expect_err("only documented metadata may be ignored");
-    assert_eq!(
-        error,
-        LoadError::UnknownIdsMapChild("unrecognised-metadata".to_string())
-    );
-    assert_eq!(
-        error.to_string(),
-        "unrecognised <ids-map> child <unrecognised-metadata>"
-    );
-}
-
-#[test]
 fn rejects_invalid_artifact_dd_version() {
     let xml = r#"
             <ids-map ids="equilibrium" format-version="1">
@@ -509,13 +494,14 @@ fn redefine_requires_a_fidelity_child_not_merely_any_element() {
 }
 
 #[test]
-fn include_and_coverage_metadata_are_ignored_without_changing_default_resolution() {
+fn undocumented_metadata_is_ignored_without_changing_default_resolution() {
     let xml = map_with(
         "3.39.0",
         "4.1.1",
         r#"
           <include href="not-present.xml"/>
           <coverage scope="time_slice/boundary" forward="unmappable" reverse="lossy"/>
+          <unrecognised-metadata/>
           <default rel="identical"/>
         "#,
     );
