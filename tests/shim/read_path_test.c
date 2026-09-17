@@ -10,7 +10,6 @@
 #include <fcntl.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <time.h>
 #include <unistd.h>
 
 #ifndef RECORDING_STUB_PATH
@@ -157,67 +156,6 @@ static void scenario_loss_file_is_absent_without_loss(void) {
     printf("read_path_test loss-file-is-absent-without-loss: exact work opens no report\n");
 }
 
-/* Issue #171 AC: "a colliding name gains a numeric suffix". Predicts the
- * exact first-attempt filename the shim will pick (matching its own
- * `utc_timestamp` format and the running process's own pid) and pre-creates
- * it, empty, so the shim's own create-new attempt collides and it must move
- * to the `-1` suffix. This assumes the shim's own clock reads the same UTC
- * second as this predicted one, true except across a second boundary
- * crossed between here and the shim's first loss a few instructions later. */
-static void scenario_loss_file_filename_collision_gains_a_numeric_suffix(void) {
-    clear_loss_log_directory();
-    const char *directory = loss_log_directory();
-
-    time_t now = time(NULL);
-    CHECK(now != (time_t)-1);
-    struct tm utc;
-    CHECK(gmtime_r(&now, &utc) != NULL);
-    char timestamp[32];
-    CHECK(strftime(timestamp, sizeof timestamp, "%Y-%m-%dT%H:%M:%SZ", &utc) > 0);
-
-    char base_path[1024];
-    CHECK(snprintf(base_path, sizeof base_path, "%s/imas-mvdd-loss-%s-%d.txt", directory,
-                    timestamp, (int)getpid())
-          < (int)sizeof base_path);
-    int fd = open(base_path, O_CREAT | O_EXCL | O_WRONLY, 0600);
-    CHECK(fd >= 0);
-    CHECK(close(fd) == 0);
-
-    int operation_ctx = open_mismatched_equilibrium();
-    void *data = NULL;
-    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
-
-    struct stat placeholder_stat;
-    CHECK(stat(base_path, &placeholder_stat) == 0);
-    CHECK(placeholder_stat.st_size == 0);
-
-    char suffixed_path[1024];
-    CHECK(snprintf(suffixed_path, sizeof suffixed_path, "%s/imas-mvdd-loss-%s-%d-1.txt", directory,
-                    timestamp, (int)getpid())
-          < (int)sizeof suffixed_path);
-    FILE *file = fopen(suffixed_path, "rb");
-    CHECK(file != NULL);
-    CHECK(fseek(file, 0, SEEK_END) == 0);
-    long length = ftell(file);
-    CHECK(length >= 0);
-    CHECK(fseek(file, 0, SEEK_SET) == 0);
-    char *contents = malloc((size_t)length + 1);
-    CHECK(contents != NULL);
-    CHECK(fread(contents, 1, (size_t)length, file) == (size_t)length);
-    contents[length] = '\0';
-    CHECK(fclose(file) == 0);
-
-    CHECK(strstr(contents, "# imas-mvdd loss log format 1\n") == contents);
-    CHECK(strstr(contents,
-                  "\tequilibrium\t4.1.1\t3.39.0\tread\tPOTENTIALLY_LOSSY\t"
-                  "time_slice/ggd/b_field_phi\n")
-          != NULL);
-    free(contents);
-
-    printf("read_path_test loss-file-filename-collision-gains-a-numeric-suffix: a colliding "
-           "name gained a numeric suffix and the untouched placeholder stayed empty\n");
-}
-
 /* Drive two distinct lossy reads so a disabled or failed file destination has
  * to stay silent or report only once, while the caller-visible loss log still
  * retains both entries. */
@@ -312,19 +250,22 @@ static void scenario_loss_file_missing_directory_reports_once_without_failing_re
            "missing destination cannot change successful reads or their in-memory loss log\n");
 }
 
-static void scenario_loss_file_unwritable_directory_reports_once_without_failing_reads(void) {
+static void scenario_loss_file_file_destination_reports_once_without_failing_reads(void) {
     const char *directory = loss_log_directory();
-    CHECK(mkdir(directory, 0700) == 0 || errno == EEXIST);
-    CHECK(chmod(directory, 0500) == 0);
+    CHECK(remove(directory) == 0 || errno == ENOENT);
+    int fd = open(directory, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    CHECK(fd >= 0);
+    CHECK(close(fd) == 0);
     int operation_ctx = open_mismatched_equilibrium();
     char *message = capture_loss_log_failure(operation_ctx);
-    CHECK(chmod(directory, 0700) == 0);
 
-    CHECK(single_loss_log_path_or_null() == NULL);
-    check_single_loss_log_failure_message(message, directory, "could not write loss log in");
+    struct stat destination;
+    CHECK(stat(directory, &destination) == 0);
+    CHECK(S_ISREG(destination.st_mode));
+    check_single_loss_log_failure_message(message, directory, "directory does not exist");
     free(message);
-    printf("read_path_test loss-file-unwritable-directory-reports-once-without-failing-reads: "
-           "an unwritable destination cannot change successful reads or their in-memory loss log\n");
+    printf("read_path_test loss-file-file-destination-reports-once-without-failing-reads: "
+           "an invalid destination cannot change successful reads or their in-memory loss log\n");
 }
 
 static void scenario_loss_file_append_failure_reports_once_without_failing_reads(void) {
@@ -1153,11 +1094,9 @@ int main(int argc, char **argv) {
         {"merged-read-retains-a-lossy-verdict-in-the-loss-log", scenario_merged_read_retains_a_lossy_verdict_in_the_loss_log},
         {"loss-file-is-created-on-first-loss-and-deduplicates-lines", scenario_loss_file_is_created_on_first_loss_and_deduplicates_lines},
         {"loss-file-is-absent-without-loss", scenario_loss_file_is_absent_without_loss},
-        {"loss-file-filename-collision-gains-a-numeric-suffix",
-         scenario_loss_file_filename_collision_gains_a_numeric_suffix},
         {"loss-file-empty-directory-value-disables-delivery", scenario_loss_file_empty_directory_value_disables_delivery},
         {"loss-file-missing-directory-reports-once-without-failing-reads", scenario_loss_file_missing_directory_reports_once_without_failing_reads},
-        {"loss-file-unwritable-directory-reports-once-without-failing-reads", scenario_loss_file_unwritable_directory_reports_once_without_failing_reads},
+        {"loss-file-file-destination-reports-once-without-failing-reads", scenario_loss_file_file_destination_reports_once_without_failing_reads},
         {"loss-file-append-failure-reports-once-without-failing-reads", scenario_loss_file_append_failure_reports_once_without_failing_reads},
         {"moved-read-retains-a-lossy-verdict-in-the-loss-log", scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log},
         {"ending-context-destroys-its-loss-log", scenario_ending_context_destroys_its_loss_log},

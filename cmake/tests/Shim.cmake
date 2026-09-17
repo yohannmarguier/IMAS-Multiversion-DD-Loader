@@ -483,12 +483,6 @@ add_stub_test(loss-file-is-absent-without-loss
     STAMP_VERSION 4.1.1
     ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-clean")
 
-add_stub_test(loss-file-filename-collision-gains-a-numeric-suffix
-    read_path_test loss-file-filename-collision-gains-a-numeric-suffix
-    HLI_DD_VERSION 3.39.0
-    STAMP_VERSION 4.1.1
-    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-collision")
-
 # Issue #172: the optional delivery channel can be configured away, or fail
 # once without changing the successful ABI call or its in-memory loss record.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-disabled")
@@ -506,11 +500,11 @@ add_stub_test(read-path-loss-file-missing-directory-reports-once-without-failing
     STAMP_VERSION 4.1.1
     ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-missing")
 
-add_stub_test(read-path-loss-file-unwritable-directory-reports-once-without-failing-reads
-    read_path_test loss-file-unwritable-directory-reports-once-without-failing-reads
+add_stub_test(read-path-loss-file-file-destination-reports-once-without-failing-reads
+    read_path_test loss-file-file-destination-reports-once-without-failing-reads
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1
-    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-unwritable")
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-invalid-destination")
 
 add_stub_test(read-path-loss-file-append-failure-reports-once-without-failing-reads
     read_path_test loss-file-append-failure-reports-once-without-failing-reads

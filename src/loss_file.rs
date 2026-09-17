@@ -62,10 +62,51 @@ impl LossFileFacts for ProcessFacts {
     }
 }
 
+/// The three delivery operations that can fail after process facts have been
+/// resolved. Keeping this boundary specific to a loss-log file lets tests
+/// exercise platform-dependent I/O failures without abstracting a filesystem.
+trait LossFileEffects {
+    fn create_log(&self, path: &Path) -> std::io::Result<File>;
+    fn write_preamble(
+        &self,
+        file: &mut File,
+        timestamp: &str,
+        process_id: u32,
+        entry: &LossFileEntry,
+    ) -> std::io::Result<()>;
+    fn append(&self, path: &Path, line: &str) -> std::io::Result<()>;
+    fn report_failure(&self, message: &str) {
+        eprintln!("IMAS-MVDD: {message}");
+    }
+}
+
+struct ProcessEffects;
+
+impl LossFileEffects for ProcessEffects {
+    fn create_log(&self, path: &Path) -> std::io::Result<File> {
+        OpenOptions::new().append(true).create_new(true).open(path)
+    }
+
+    fn write_preamble(
+        &self,
+        file: &mut File,
+        timestamp: &str,
+        process_id: u32,
+        entry: &LossFileEntry,
+    ) -> std::io::Result<()> {
+        write_preamble(file, timestamp, process_id, entry)
+    }
+
+    fn append(&self, path: &Path, line: &str) -> std::io::Result<()> {
+        append(path, line)
+    }
+}
+
 /// One append-only writer. Production holds one process-local instance, while
 /// tests construct fresh writers with their own state and temporary directory.
-struct LossFileWriter<F> {
+struct LossFileWriter<F, E = ProcessEffects> {
     facts: F,
+    effects: E,
     written_keys: Mutex<HashSet<String>>,
     log_path: OnceLock<Option<PathBuf>>,
     file_failed: AtomicBool,
@@ -77,10 +118,17 @@ impl LossFileWriter<ProcessFacts> {
     }
 }
 
-impl<F: LossFileFacts> LossFileWriter<F> {
+impl<F: LossFileFacts> LossFileWriter<F, ProcessEffects> {
     fn new(facts: F) -> Self {
+        Self::with_effects(facts, ProcessEffects)
+    }
+}
+
+impl<F: LossFileFacts, E: LossFileEffects> LossFileWriter<F, E> {
+    fn with_effects(facts: F, effects: E) -> Self {
         Self {
             facts,
+            effects,
             written_keys: Mutex::new(HashSet::new()),
             log_path: OnceLock::new(),
             file_failed: AtomicBool::new(false),
@@ -101,7 +149,7 @@ impl<F: LossFileFacts> LossFileWriter<F> {
             .get_or_init(|| self.create_log(&entry))
             .as_ref();
         if let Some(path) = path
-            && let Err(error) = append(path, &line)
+            && let Err(error) = self.effects.append(path, &line)
         {
             self.report_failure(format_args!(
                 "could not append loss log {}: {error}",
@@ -151,11 +199,14 @@ impl<F: LossFileFacts> LossFileWriter<F> {
                 self.facts.process_id(),
                 suffix
             ));
-            match OpenOptions::new().append(true).create_new(true).open(&path) {
+            match self.effects.create_log(&path) {
                 Ok(mut file) => {
-                    if let Err(error) =
-                        write_preamble(&mut file, &timestamp, self.facts.process_id(), entry)
-                    {
+                    if let Err(error) = self.effects.write_preamble(
+                        &mut file,
+                        &timestamp,
+                        self.facts.process_id(),
+                        entry,
+                    ) {
                         self.report_failure(format_args!(
                             "could not initialize loss log {}: {error}",
                             path.display()
@@ -180,7 +231,7 @@ impl<F: LossFileFacts> LossFileWriter<F> {
     /// Reports one filesystem failure without changing an HLI call's outcome.
     fn report_failure(&self, message: std::fmt::Arguments<'_>) {
         if !self.file_failed.swap(true, Ordering::Relaxed) {
-            eprintln!("IMAS-MVDD: {message}");
+            self.effects.report_failure(&message.to_string());
         }
     }
 }
@@ -299,11 +350,14 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
 mod tests {
     use std::ffi::OsString;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
+    use std::io;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{LossFileEntry, LossFileFacts, LossFileWriter, select_directory, utc_timestamp};
+    use super::{
+        LossFileEffects, LossFileEntry, LossFileFacts, LossFileWriter, select_directory,
+        utc_timestamp,
+    };
     use crate::conversion::conversion_map::Fidelity;
     use crate::loss::LossOperation;
 
@@ -390,6 +444,303 @@ mod tests {
         paths.into_iter().next().unwrap()
     }
 
+    struct PreambleFails;
+
+    impl LossFileEffects for PreambleFails {
+        fn create_log(&self, path: &std::path::Path) -> io::Result<std::fs::File> {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .create_new(true)
+                .open(path)
+        }
+
+        fn write_preamble(
+            &self,
+            _file: &mut std::fs::File,
+            _timestamp: &str,
+            _process_id: u32,
+            _entry: &LossFileEntry,
+        ) -> io::Result<()> {
+            Err(io::Error::other("preamble write failed"))
+        }
+
+        fn append(&self, _path: &std::path::Path, _line: &str) -> io::Result<()> {
+            panic!("delivery must stop after the preamble failure")
+        }
+    }
+
+    struct CreationFails {
+        attempts: AtomicUsize,
+        diagnostics: AtomicUsize,
+    }
+
+    impl LossFileEffects for CreationFails {
+        fn create_log(&self, _path: &std::path::Path) -> io::Result<std::fs::File> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "creation failed",
+            ))
+        }
+
+        fn write_preamble(
+            &self,
+            _file: &mut std::fs::File,
+            _timestamp: &str,
+            _process_id: u32,
+            _entry: &LossFileEntry,
+        ) -> io::Result<()> {
+            panic!("a failed creation must not initialize a file")
+        }
+
+        fn append(&self, _path: &std::path::Path, _line: &str) -> io::Result<()> {
+            panic!("a failed creation must disable delivery")
+        }
+
+        fn report_failure(&self, _message: &str) {
+            self.diagnostics.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    struct AppendFails {
+        attempts: AtomicUsize,
+    }
+
+    struct NoDelivery {
+        diagnostics: AtomicUsize,
+    }
+
+    impl LossFileEffects for NoDelivery {
+        fn create_log(&self, _path: &std::path::Path) -> io::Result<std::fs::File> {
+            panic!("the failure must happen before file creation")
+        }
+
+        fn write_preamble(
+            &self,
+            _file: &mut std::fs::File,
+            _timestamp: &str,
+            _process_id: u32,
+            _entry: &LossFileEntry,
+        ) -> io::Result<()> {
+            panic!("the failure must happen before preamble writing")
+        }
+
+        fn append(&self, _path: &std::path::Path, _line: &str) -> io::Result<()> {
+            panic!("the failure must happen before appending")
+        }
+
+        fn report_failure(&self, _message: &str) {
+            self.diagnostics.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    struct ClockFails {
+        directory: PathBuf,
+    }
+
+    impl LossFileFacts for ClockFails {
+        fn configured_directory(&self) -> Option<OsString> {
+            Some(self.directory.as_os_str().to_os_string())
+        }
+
+        fn current_directory(&self) -> std::io::Result<PathBuf> {
+            Ok(self.directory.clone())
+        }
+
+        fn epoch_seconds(&self) -> Result<u64, std::time::SystemTimeError> {
+            std::time::UNIX_EPOCH
+                .duration_since(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))
+                .map(|duration| duration.as_secs())
+        }
+
+        fn process_id(&self) -> u32 {
+            196
+        }
+    }
+
+    struct DirectoryResolutionFails;
+
+    impl LossFileFacts for DirectoryResolutionFails {
+        fn configured_directory(&self) -> Option<OsString> {
+            None
+        }
+
+        fn current_directory(&self) -> std::io::Result<PathBuf> {
+            Err(io::Error::other("working directory unavailable"))
+        }
+
+        fn epoch_seconds(&self) -> Result<u64, std::time::SystemTimeError> {
+            Ok(951_782_400)
+        }
+
+        fn process_id(&self) -> u32 {
+            196
+        }
+    }
+
+    impl LossFileEffects for AppendFails {
+        fn create_log(&self, path: &std::path::Path) -> io::Result<std::fs::File> {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .create_new(true)
+                .open(path)
+        }
+
+        fn write_preamble(
+            &self,
+            file: &mut std::fs::File,
+            timestamp: &str,
+            process_id: u32,
+            entry: &LossFileEntry,
+        ) -> io::Result<()> {
+            super::write_preamble(file, timestamp, process_id, entry)
+        }
+
+        fn append(&self, _path: &std::path::Path, _line: &str) -> io::Result<()> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            Err(io::Error::other("append failed"))
+        }
+    }
+
+    #[test]
+    fn a_preamble_failure_latches_delivery_without_discarding_distinct_keys() {
+        let directory = TestDirectory::new();
+        let writer =
+            LossFileWriter::with_effects(FixedFacts::in_directory(&directory), PreambleFails);
+
+        writer.retain(entry());
+        writer.retain(entry());
+        writer.retain(LossFileEntry::new(
+            "imas:hdf5?path=/tmp/pulse",
+            "equilibrium/3",
+            "4.1.1",
+            "3.39.0",
+            LossOperation::Read,
+            Fidelity::Lossy,
+            "time_slice/boundary_separatrix/gap/r",
+        ));
+
+        assert!(writer.file_failed.load(Ordering::Relaxed));
+        assert!(writer.log_path.get().is_some_and(Option::is_none));
+        assert_eq!(writer.written_keys.lock().unwrap().len(), 2);
+        assert_eq!(fs::read_to_string(only_log(&directory)).unwrap(), "");
+    }
+
+    #[test]
+    fn a_non_collision_creation_error_is_not_retried_and_latches_delivery() {
+        let directory = TestDirectory::new();
+        let writer = LossFileWriter::with_effects(
+            FixedFacts::in_directory(&directory),
+            CreationFails {
+                attempts: AtomicUsize::new(0),
+                diagnostics: AtomicUsize::new(0),
+            },
+        );
+
+        writer.retain(entry());
+        writer.retain(entry());
+        writer.retain(LossFileEntry::new(
+            "imas:hdf5?path=/tmp/pulse",
+            "equilibrium/3",
+            "4.1.1",
+            "3.39.0",
+            LossOperation::Read,
+            Fidelity::Lossy,
+            "time_slice/boundary_separatrix/gap/r",
+        ));
+
+        assert_eq!(writer.effects.attempts.load(Ordering::Relaxed), 1);
+        assert_eq!(writer.effects.diagnostics.load(Ordering::Relaxed), 1);
+        assert!(writer.file_failed.load(Ordering::Relaxed));
+        assert!(writer.log_path.get().is_some_and(Option::is_none));
+        assert_eq!(writer.written_keys.lock().unwrap().len(), 2);
+        assert!(fs::read_dir(directory.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn an_append_failure_latches_delivery_without_discarding_distinct_keys() {
+        let directory = TestDirectory::new();
+        let writer = LossFileWriter::with_effects(
+            FixedFacts::in_directory(&directory),
+            AppendFails {
+                attempts: AtomicUsize::new(0),
+            },
+        );
+
+        writer.retain(entry());
+        writer.retain(LossFileEntry::new(
+            "imas:hdf5?path=/tmp/pulse",
+            "equilibrium/3",
+            "4.1.1",
+            "3.39.0",
+            LossOperation::Read,
+            Fidelity::Lossy,
+            "time_slice/boundary_separatrix/gap/r",
+        ));
+
+        assert_eq!(writer.effects.attempts.load(Ordering::Relaxed), 1);
+        assert!(writer.file_failed.load(Ordering::Relaxed));
+        assert_eq!(writer.written_keys.lock().unwrap().len(), 2);
+        let contents = fs::read_to_string(only_log(&directory)).unwrap();
+        assert!(contents.ends_with("uri\tids\tstored-dd\thli-dd\toperation\tfidelity\tpath\n"));
+        assert!(!contents.contains("time_slice/ggd/b_field_phi"));
+        assert!(!contents.contains("time_slice/boundary_separatrix/gap/r"));
+    }
+
+    #[test]
+    fn a_clock_failure_latches_delivery_before_touching_the_directory() {
+        let directory = TestDirectory::new();
+        let writer = LossFileWriter::with_effects(
+            ClockFails {
+                directory: directory.path().clone(),
+            },
+            NoDelivery {
+                diagnostics: AtomicUsize::new(0),
+            },
+        );
+
+        writer.retain(entry());
+        writer.retain(LossFileEntry::new(
+            "imas:hdf5?path=/tmp/pulse",
+            "equilibrium/3",
+            "4.1.1",
+            "3.39.0",
+            LossOperation::Read,
+            Fidelity::Lossy,
+            "time_slice/boundary_separatrix/gap/r",
+        ));
+
+        assert_eq!(writer.effects.diagnostics.load(Ordering::Relaxed), 1);
+        assert!(writer.file_failed.load(Ordering::Relaxed));
+        assert_eq!(writer.written_keys.lock().unwrap().len(), 2);
+        assert!(fs::read_dir(directory.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn a_directory_resolution_failure_latches_delivery_before_file_creation() {
+        let writer = LossFileWriter::with_effects(
+            DirectoryResolutionFails,
+            NoDelivery {
+                diagnostics: AtomicUsize::new(0),
+            },
+        );
+
+        writer.retain(entry());
+        writer.retain(LossFileEntry::new(
+            "imas:hdf5?path=/tmp/pulse",
+            "equilibrium/3",
+            "4.1.1",
+            "3.39.0",
+            LossOperation::Read,
+            Fidelity::Lossy,
+            "time_slice/boundary_separatrix/gap/r",
+        ));
+
+        assert_eq!(writer.effects.diagnostics.load(Ordering::Relaxed), 1);
+        assert!(writer.file_failed.load(Ordering::Relaxed));
+        assert_eq!(writer.written_keys.lock().unwrap().len(), 2);
+    }
+
     #[test]
     fn writes_lazily_to_the_explicit_directory_with_complete_appended_records() {
         let directory = TestDirectory::new();
@@ -474,12 +825,16 @@ mod tests {
     }
 
     #[test]
-    fn a_filename_collision_uses_the_next_numeric_suffix() {
+    fn filename_collisions_skip_existing_suffixes_without_touching_existing_bytes() {
         let directory = TestDirectory::new();
         let base = directory
             .path()
             .join("imas-mvdd-loss-2000-02-29T00:00:00Z-196.txt");
         fs::write(&base, "reserved by another writer\n").unwrap();
+        let first_suffix = directory
+            .path()
+            .join("imas-mvdd-loss-2000-02-29T00:00:00Z-196-1.txt");
+        fs::write(&first_suffix, "also reserved\n").unwrap();
         let writer = LossFileWriter::new(FixedFacts::in_directory(&directory));
 
         writer.retain(entry());
@@ -488,30 +843,16 @@ mod tests {
             fs::read_to_string(&base).unwrap(),
             "reserved by another writer\n"
         );
+        assert_eq!(fs::read_to_string(first_suffix).unwrap(), "also reserved\n");
         let suffix = directory
             .path()
-            .join("imas-mvdd-loss-2000-02-29T00:00:00Z-196-1.txt");
+            .join("imas-mvdd-loss-2000-02-29T00:00:00Z-196-2.txt");
         assert_eq!(
             fs::read_to_string(suffix).unwrap().lines().last(),
             Some(
                 "imas:hdf5?path=/tmp/pulse\tequilibrium/3\t4.1.1\t3.39.0\tread\tPOTENTIALLY_LOSSY\ttime_slice/ggd/b_field_phi"
             ),
         );
-    }
-
-    #[test]
-    fn a_non_collision_file_error_does_not_try_more_suffixes() {
-        let directory = TestDirectory::new();
-        let original_permissions = fs::metadata(directory.path()).unwrap().permissions();
-        let mut read_only = original_permissions.clone();
-        read_only.set_mode(0o500);
-        fs::set_permissions(directory.path(), read_only).unwrap();
-        let writer = LossFileWriter::new(FixedFacts::in_directory(&directory));
-
-        writer.retain(entry());
-
-        fs::set_permissions(directory.path(), original_permissions).unwrap();
-        assert!(fs::read_dir(directory.path()).unwrap().next().is_none());
     }
 
     #[test]
