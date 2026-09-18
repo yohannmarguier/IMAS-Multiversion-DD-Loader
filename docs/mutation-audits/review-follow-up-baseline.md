@@ -8,12 +8,12 @@ reported 300 passing Rust unit tests on the scoped line command.
 ```text
 line coverage
 conversion: 1901/2096 lines (90.7%) PASS
-dd-version: 189/200 lines (94.5%) PASS
+dd-version: 188/199 lines (94.5%) PASS
 context-registry: 183/183 lines (100.0%) PASS
 loss: 238/239 lines (99.6%) PASS
 artifact-validation: 222/227 lines (97.8%) PASS
 deterministic-runtime-binding-policy: 110/110 lines (100.0%) PASS
-aggregate: 2843/3055 lines (93.1%) PASS
+aggregate: 2842/3054 lines (93.1%) PASS
 
 mutation coverage
 conversion: caught=278 missed=0 timed-out=0 unviable=61 excluded=3 score=100.0% PASS

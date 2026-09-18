@@ -94,12 +94,12 @@ suitable for CI enforcement.
 | Group | Covered/total | Coverage |
 | --- | ---: | ---: |
 | conversion | 1,901 / 2,096 | 90.7% |
-| DD-version | 189 / 200 | 94.5% |
+| DD-version | 188 / 199 | 94.5% |
 | context-registry | 183 / 183 | 100.0% |
 | loss | 238 / 239 | 99.6% |
 | artifact-validation | 222 / 227 | 97.8% |
 | deterministic runtime-binding policy | 110 / 110 | 100.0% |
-| aggregate | 2,843 / 3,055 | 93.1% |
+| aggregate | 2,842 / 3,054 | 93.1% |
 
 The denominator grew by 130 lines against the first recorded baseline: the
 loss-file's rendering, naming and append behavior and the DD-version read
