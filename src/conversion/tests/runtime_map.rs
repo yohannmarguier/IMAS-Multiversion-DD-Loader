@@ -385,6 +385,7 @@ fn node(path: &str, left: EndpointMetadata, right: EndpointMetadata) -> GraphNod
         path: path.to_string(),
         introduced: vec![ArtifactDdVersion::new("3.39.0").expect("fixture release is valid")],
         removed: Vec::new(),
+        rename_declarations: Vec::new(),
         endpoints: vec![left, right],
     }
 }
@@ -437,6 +438,41 @@ fn complete_identity_scope_for(ids: &str) -> IdsGraphFacts {
     for node in &mut facts.nodes {
         node.ids = ids.to_string();
     }
+    facts
+}
+
+fn direct_rename_facts() -> IdsGraphFacts {
+    let mut facts = complete_identity_scope();
+    facts.nodes.extend([
+        node(
+            "time_slice/global_quantities/beta_normal",
+            endpoint("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1),
+            endpoint("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1),
+        ),
+        node(
+            "time_slice/global_quantities/beta_tor_norm",
+            endpoint("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1),
+            endpoint("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1),
+        ),
+    ]);
+
+    // The predecessor name is local to the declaring node. Endpoint histories
+    // make beta_normal old-only and beta_tor_norm new-only.
+    facts.nodes[5].rename_declarations.push(GraphRename {
+        release: ArtifactDdVersion::new("4.0.0").expect("fixture release is valid"),
+        previous_name: "beta_normal".to_string(),
+    });
+    facts.nodes[5]
+        .endpoints
+        .push(endpoint("4.0.0", GraphNodeKind::Leaf, "FLT_1D", 1));
+    facts.nodes[4].removed =
+        vec![ArtifactDdVersion::new("4.0.0").expect("fixture release is valid")];
+    facts.nodes[5].introduced =
+        vec![ArtifactDdVersion::new("4.0.0").expect("fixture release is valid")];
+    facts.successors.push(GraphSuccessor {
+        from_path: "equilibrium/time_slice/global_quantities/beta_normal".to_string(),
+        to_path: "equilibrium/time_slice/global_quantities/beta_tor_norm".to_string(),
+    });
     facts
 }
 
@@ -976,6 +1012,193 @@ fn acquisition_refuses_cocos_sensitive_values_without_a_proven_factor() {
         .expect("the COCOS-labelled endpoint must be claimed");
     assert_eq!(
         explanation.outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+}
+
+#[test]
+fn acquisition_emits_an_evidenced_direct_rename_in_both_directions() {
+    let facts = direct_rename_facts();
+
+    let mut shuffled = facts.clone();
+    shuffled.versions.reverse();
+    shuffled.nodes.reverse();
+    shuffled.successors.reverse();
+
+    let forward = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(facts.clone()),
+    })
+    .acquire(&request())
+    .expect("the direct rename has complete endpoint evidence");
+    let shuffled_forward = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(shuffled),
+    })
+    .acquire(&request())
+    .expect("input ordering cannot alter direct-rename resolution");
+    let reverse = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&MapRequest {
+            ids: "equilibrium".to_string(),
+            stored_dd: ArtifactDdVersion::new("4.1.1").expect("fixture release is valid"),
+            hli_dd: ArtifactDdVersion::new("3.39.0").expect("fixture release is valid"),
+        })
+        .expect("the inverse request uses the same evidenced relation");
+
+    for (map, direction, requested, expected) in [
+        (
+            &forward,
+            Direction::Forward,
+            "time_slice/global_quantities/beta_tor_norm",
+            "time_slice/global_quantities/beta_normal",
+        ),
+        (
+            &reverse,
+            Direction::Forward,
+            "time_slice/global_quantities/beta_normal",
+            "time_slice/global_quantities/beta_tor_norm",
+        ),
+    ] {
+        let explanation = map
+            .resolve(requested, direction)
+            .expect("the caller path must be claimed");
+        assert_eq!(explanation.rel, Some(Rel::Renamed));
+        assert!(matches!(
+            explanation.outcome,
+            Outcome::Path { ref resolved_path, .. } if resolved_path == expected
+        ));
+    }
+    assert_eq!(
+        forward.resolve(
+            "time_slice/global_quantities/beta_tor_norm",
+            Direction::Forward,
+        ),
+        shuffled_forward.resolve(
+            "time_slice/global_quantities/beta_tor_norm",
+            Direction::Forward,
+        )
+    );
+    assert_eq!(
+        forward.resolve("not/from/the/complete/scope", Direction::Forward),
+        None
+    );
+}
+
+#[test]
+fn acquisition_keeps_an_uncorroborated_or_scientifically_unproven_rename_unmappable() {
+    let mut facts = direct_rename_facts();
+    facts.successors.clear();
+
+    let uncorroborated = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(facts.clone()),
+    })
+    .acquire(&request())
+    .expect("a missing witness localizes to the named endpoints");
+    assert_eq!(
+        uncorroborated
+            .resolve(
+                "time_slice/global_quantities/beta_tor_norm",
+                Direction::Forward,
+            )
+            .expect("the caller path must be traced")
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+
+    facts.successors.push(GraphSuccessor {
+        from_path: "time_slice/global_quantities/beta_normal".to_string(),
+        to_path: "time_slice/global_quantities/beta_tor_norm".to_string(),
+    });
+    facts.nodes[4].endpoints[0].cocos_label_transformation = Some("psi_like".to_string());
+    let scientifically_unproven = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("a missing value proof localizes to the named endpoints");
+    assert_eq!(
+        scientifically_unproven
+            .resolve(
+                "time_slice/global_quantities/beta_tor_norm",
+                Direction::Forward,
+            )
+            .expect("the caller path must be traced")
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+}
+
+#[test]
+fn acquisition_leaves_a_coexisting_rename_declaration_as_two_endpoint_rules() {
+    let mut facts = direct_rename_facts();
+    facts.nodes[4].removed.clear();
+    facts.nodes[5].introduced =
+        vec![ArtifactDdVersion::new("3.39.0").expect("fixture release is valid")];
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("coexistence has two independently established endpoint spellings");
+
+    let explanation = map
+        .resolve(
+            "time_slice/global_quantities/beta_tor_norm",
+            Direction::Forward,
+        )
+        .expect("the coexisting caller path must remain claimed");
+    assert_eq!(explanation.rel, Some(Rel::Identical));
+    assert!(matches!(
+        explanation.outcome,
+        Outcome::Path { ref resolved_path, .. }
+            if resolved_path == "time_slice/global_quantities/beta_tor_norm"
+    ));
+}
+
+#[test]
+fn acquisition_traces_missing_or_conflicting_direct_predecessors_as_refusals() {
+    let mut missing = direct_rename_facts();
+    missing.nodes[5].rename_declarations[0].previous_name = "not_beta_normal".to_string();
+    let missing = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(missing),
+    })
+    .acquire(&request())
+    .expect("a missing predecessor localizes to the declared newer endpoint");
+    assert_eq!(
+        missing
+            .resolve(
+                "time_slice/global_quantities/beta_tor_norm",
+                Direction::Forward,
+            )
+            .expect("the caller path must be traced")
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+
+    let mut conflicting = direct_rename_facts();
+    let mut rival = node(
+        "time_slice/global_quantities/beta_other",
+        endpoint("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1),
+        endpoint("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1),
+    );
+    rival.introduced = vec![ArtifactDdVersion::new("4.0.0").expect("fixture release is valid")];
+    rival
+        .endpoints
+        .push(endpoint("4.0.0", GraphNodeKind::Leaf, "FLT_1D", 1));
+    rival.rename_declarations.push(GraphRename {
+        release: ArtifactDdVersion::new("4.0.0").expect("fixture release is valid"),
+        previous_name: "beta_normal".to_string(),
+    });
+    conflicting.nodes.push(rival);
+    conflicting.successors.push(GraphSuccessor {
+        from_path: "time_slice/global_quantities/beta_normal".to_string(),
+        to_path: "time_slice/global_quantities/beta_other".to_string(),
+    });
+    let conflicting = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(conflicting),
+    })
+    .acquire(&request())
+    .expect("a conflicting predecessor localizes to each newer endpoint");
+    assert_eq!(
+        conflicting
+            .resolve(
+                "time_slice/global_quantities/beta_tor_norm",
+                Direction::Forward,
+            )
+            .expect("the caller path must be traced")
+            .outcome,
         Outcome::Refusal(RefusalReason::Unmappable)
     );
 }

@@ -6,8 +6,8 @@
 //! source selection unchanged.
 
 use super::{
-    AcquisitionAttempt, EndpointMetadata, GraphFactsSource, GraphNode, GraphNodeKind,
-    GraphSourceError, GraphVersion, IdsGraphFacts,
+    AcquisitionAttempt, EndpointMetadata, GraphFactsSource, GraphNode, GraphNodeKind, GraphRename,
+    GraphSourceError, GraphSuccessor, GraphVersion, IdsGraphFacts,
 };
 use crate::conversion::conversion_map::ArtifactDdVersion;
 
@@ -38,6 +38,7 @@ fn leaf(path: &str) -> GraphNode {
         path: path.to_string(),
         introduced: vec![graph_release("3.39.0")],
         removed: Vec::new(),
+        rename_declarations: Vec::new(),
         endpoints: ["3.39.0", "4.1.1"]
             .into_iter()
             .map(|endpoint_release| EndpointMetadata {
@@ -55,10 +56,34 @@ fn leaf(path: &str) -> GraphNode {
     }
 }
 
+fn renamed_leaf(path: &str, introduced: &str, removed: Option<&str>) -> GraphNode {
+    let mut node = leaf(path);
+    node.introduced = vec![graph_release(introduced)];
+    node.removed = removed.into_iter().map(graph_release).collect();
+    if !node
+        .endpoints
+        .iter()
+        .any(|endpoint| endpoint.release == graph_release(introduced))
+    {
+        node.endpoints.push(EndpointMetadata {
+            release: graph_release(introduced),
+            kind: GraphNodeKind::Leaf,
+            data_type: "FLT_1D".to_string(),
+            ndim: 1,
+            unit: None,
+            timebase_path: None,
+            coordinate_paths: Vec::new(),
+            cocos_label_transformation: None,
+            cocos_transformation_expression: None,
+        });
+    }
+    node
+}
+
 fn identity_equilibrium_scope() -> IdsGraphFacts {
-    IdsGraphFacts {
+    let mut facts = IdsGraphFacts {
         complete: true,
-        versions: ["3.39.0", "4.1.1"]
+        versions: ["3.39.0", "3.42.0", "4.0.0", "4.1.1"]
             .into_iter()
             .map(|release_text| GraphVersion {
                 release: graph_release(release_text),
@@ -68,8 +93,47 @@ fn identity_equilibrium_scope() -> IdsGraphFacts {
         nodes: vec![
             leaf("time"),
             leaf("ids_properties/version_put/data_dictionary"),
+            renamed_leaf(
+                "time_slice/global_quantities/beta_normal",
+                "3.39.0",
+                Some("4.0.0"),
+            ),
+            GraphNode {
+                rename_declarations: vec![GraphRename {
+                    release: graph_release("4.0.0"),
+                    previous_name: "beta_normal".to_string(),
+                }],
+                ..renamed_leaf("time_slice/global_quantities/beta_tor_norm", "4.0.0", None)
+            },
+            renamed_leaf("time_slice/constraints/j_tor", "3.39.0", Some("4.0.0")),
+            GraphNode {
+                rename_declarations: vec![GraphRename {
+                    release: graph_release("3.42.0"),
+                    previous_name: "j_tor".to_string(),
+                }],
+                ..renamed_leaf("time_slice/constraints/j_phi", "3.42.0", None)
+            },
         ],
         events: Vec::new(),
-        successors: Vec::new(),
+        successors: vec![
+            GraphSuccessor {
+                from_path: "equilibrium/time_slice/global_quantities/beta_normal".to_string(),
+                to_path: "equilibrium/time_slice/global_quantities/beta_tor_norm".to_string(),
+            },
+            GraphSuccessor {
+                from_path: "time_slice/constraints/j_tor".to_string(),
+                to_path: "time_slice/constraints/j_phi".to_string(),
+            },
+        ],
+    };
+    for node in facts
+        .nodes
+        .iter_mut()
+        .filter(|node| node.path.starts_with("time_slice/constraints/j_"))
+    {
+        for endpoint in &mut node.endpoints {
+            endpoint.cocos_label_transformation = Some("psi_like".to_string());
+        }
     }
+    facts
 }

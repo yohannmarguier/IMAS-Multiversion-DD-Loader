@@ -320,6 +320,34 @@ add_stub_test(graph-runtime-map-reverse-identity-operations
     graph_runtime_map_test identity-operations
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
+add_stub_test(read-graph-runtime-map-renamed-hli-new
+    graph_runtime_map_test renamed-read-hli-new
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(read-graph-runtime-map-renamed-hli-old
+    graph_runtime_map_test renamed-read-hli-old
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+add_stub_test(write-graph-runtime-map-renamed-hli-new
+    graph_runtime_map_test renamed-write-hli-new
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(write-graph-runtime-map-renamed-hli-old
+    graph_runtime_map_test renamed-write-hli-old
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+add_stub_test(delete-graph-runtime-map-renamed-hli-new
+    graph_runtime_map_test renamed-delete-hli-new
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(delete-graph-runtime-map-renamed-hli-old
+    graph_runtime_map_test renamed-delete-hli-old
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+add_stub_test(read-graph-runtime-map-scientific-gate-refuses-caller-path
+    graph_runtime_map_test scientific-gate-refuses-caller-path
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
 add_stub_test(graph-runtime-map-acquisition-failure-cleans-up-open-context
     graph_runtime_map_test acquisition-failure-cleans-up-open-context
     HLI_DD_VERSION 4.1.1
