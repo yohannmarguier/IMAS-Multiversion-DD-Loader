@@ -47,8 +47,8 @@ helper is ranged rather than excluded wholesale: `src/lib.rs`'s status
 formatting, `interpose/refusal.rs`'s formatting and latch gate,
 `version_stamp.rs`'s decoder *and* its read classifier, `artifact_validation.rs`'s
 calculation, `loss_file.rs`'s rendering, naming and append behavior, and the
-policy ranges in `core_binding.rs` — including the public fallback accessors'
-result-selection policy — remain measured. The
+policy ranges in `core_binding.rs` — including the fallback each unresolvable
+IMAS-Core selects — remain measured. The
 `validate_equilibrium_coverage` binary is excluded as its command-line,
 filesystem, and terminal adapter. Update the assignments with an internal seam
 extraction; do not silently shrink the scope.
@@ -56,7 +56,10 @@ extraction; do not silently shrink the scope.
 **An exclusion may be ranged too.** Where only part of a measured file is
 another test layer's business — `version_stamp.rs`'s discovery read, the
 process-wide `OnceLock` in `hli_version.rs`, `lib.rs`'s exported entry points,
-`core_binding.rs`'s loader — the exclusion carries `start_line`/`end_line` and
+`core_binding.rs`'s loader, and the three thin dispatchers that read a
+process-wide value (`core_binding.rs`'s version accessors,
+`refusal.rs`'s seam gate, `loss_file.rs`'s `retain`) — the exclusion carries
+`start_line`/`end_line` and
 its own reason beside the ranges that *are* measured. That is the only
 supported way to leave production code out of a measured file: a range that
 simply stops short, with nothing saying why, is the failure mode this format
@@ -90,17 +93,16 @@ suitable for CI enforcement.
 
 | Group | Covered/total | Coverage |
 | --- | ---: | ---: |
-| conversion | 1,901 / 2,101 | 90.5% |
+| conversion | 1,901 / 2,096 | 90.7% |
 | DD-version | 189 / 200 | 94.5% |
 | context-registry | 183 / 183 | 100.0% |
-| loss | 237 / 239 | 99.2% |
+| loss | 238 / 239 | 99.6% |
 | artifact-validation | 222 / 227 | 97.8% |
-| deterministic runtime-binding policy | 106 / 130 | 81.5% |
-| aggregate | 2,838 / 3,080 | 92.1% |
+| deterministic runtime-binding policy | 110 / 110 | 100.0% |
+| aggregate | 2,843 / 3,055 | 93.1% |
 
-The denominator grew by 155 lines against the first recorded baseline: the
-loss-file's rendering, naming and append behavior, the DD-version read
-classifier and the moved runtime-binding fallback policy were all production
-code that earlier ranges stopped short of. Deterministic runtime-binding policy
-now carries the four public accessors' forwarding arms, which only the C ABI
-suites can reach, and sits closest to its floor because of it.
+The denominator grew by 130 lines against the first recorded baseline: the
+loss-file's rendering, naming and append behavior and the DD-version read
+classifier were all production code that earlier ranges stopped short of, while
+the three dispatchers that only read a process-wide value became declared
+exclusions rather than silent omissions.

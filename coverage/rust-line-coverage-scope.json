@@ -18,7 +18,8 @@
         {"path": "src/conversion/read_outcome.rs", "start_line": 1, "end_line": 140},
         {"path": "src/conversion/seam_policy.rs", "start_line": 1, "end_line": 877},
         {"path": "src/interpose/reentry.rs", "start_line": 1, "end_line": 43},
-        {"path": "src/interpose/refusal.rs", "start_line": 64, "end_line": 155},
+        {"path": "src/interpose/refusal.rs", "start_line": 64, "end_line": 138},
+        {"path": "src/interpose/refusal.rs", "start_line": 145, "end_line": 155},
         {"path": "src/lib.rs", "start_line": 129, "end_line": 239}
       ]
     },
@@ -38,7 +39,8 @@
       "name": "loss",
       "sources": [
         {"path": "src/loss.rs", "start_line": 1, "end_line": 102},
-        {"path": "src/loss_file.rs", "start_line": 1, "end_line": 346}
+        {"path": "src/loss_file.rs", "start_line": 1, "end_line": 289},
+        {"path": "src/loss_file.rs", "start_line": 293, "end_line": 360}
       ]
     },
     {
@@ -49,7 +51,7 @@
       "name": "deterministic-runtime-binding-policy",
       "sources": [
         {"path": "src/core/core_binding.rs", "start_line": 254, "end_line": 306},
-        {"path": "src/core/core_binding.rs", "start_line": 422, "end_line": 556},
+        {"path": "src/core/core_binding.rs", "start_line": 449, "end_line": 556},
         {"path": "src/core/core_binding.rs", "start_line": 612, "end_line": 664}
       ]
     }
@@ -132,6 +134,24 @@
       "start_line": 307,
       "end_line": 421,
       "reason": "memoized resolution of the one process-wide binding and its forwarding entry points"
+    },
+    {
+      "path": "src/core/core_binding.rs",
+      "start_line": 422,
+      "end_line": 448,
+      "reason": "the four version accessors dispatch on the one process-wide binding; the fallback they select is measured on ResolutionError, and the runtime-binding C scenarios prove the dispatch"
+    },
+    {
+      "path": "src/interpose/refusal.rs",
+      "start_line": 139,
+      "end_line": 144,
+      "reason": "the seam gate reads the process-wide latch; the decision it applies is measured beside it and every recording-stub read exercises the wrapper"
+    },
+    {
+      "path": "src/loss_file.rs",
+      "start_line": 290,
+      "end_line": 292,
+      "reason": "delivery through the one process-local writer; the writer's own behavior is measured above and the loss-file C scenarios prove this entry point"
     },
     {
       "path": "src/core/core_binding.rs",
