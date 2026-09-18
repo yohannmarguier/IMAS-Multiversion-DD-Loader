@@ -65,9 +65,10 @@ fn classify_discovery_read(
     match outcome {
         ReadOutcome::Failure | ReadOutcome::NotFound => StampOutcome::Unstamped,
         ReadOutcome::Data => {
-            // A non-positive extent reports no stamp bytes. `>= 0` would be
-            // equivalent here: both zero-length slices decode as malformed;
-            // retain `> 0` to document the positive-byte contract explicitly.
+            // A non-positive extent reports no stamp bytes. `>= 0` is
+            // equivalent — both give a zero-length slice — and is classified
+            // as such in `coverage/rust-mutation-dispositions.json` rather
+            // than argued for here; `> 0` documents the positive-byte contract.
             let len = if reported_extent > 0 {
                 reported_extent as usize
             } else {
