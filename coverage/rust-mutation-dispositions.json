@@ -20,7 +20,7 @@
       "disposition": "the fallback arm is unreachable until a new resolution shape or changed delete check bypasses the shared-refusal check"
     },
     {
-      "mutant": "src/version/version_stamp.rs:71:42: replace > with >= in classify_discovery_read",
+      "mutant": "src/version/version_stamp.rs:72:42: replace > with >= in classify_discovery_read",
       "classification": "equivalent",
       "observable_behavior": "a zero reported extent takes the same path either way: `0 as usize` and the else arm both give a zero-length slice, which decodes as malformed",
       "disposition": "only a negative extent separates `>` from `>=`, and both already yield zero; the mutant returns to the score if a zero-length stamp ever stops meaning malformed"
