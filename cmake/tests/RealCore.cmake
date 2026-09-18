@@ -214,4 +214,37 @@ foreach(scenario IN ITEMS
     add_real_core_test("${scenario}" $<TARGET_FILE:write_delete_oracle_test> "${scenario}")
 endforeach()
 
+# Issue #229: the second IDS uses the graph-selected test source but the same
+# public C ABI and raw-HDF5 stored-effect oracle as the equilibrium scenarios.
+# Each case owns a fresh pulse because the HLI DD-version latch is process-wide
+# and writes/deletes are intentionally observable on disk.
+add_executable(graph_runtime_map_oracle_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/graph_runtime_map_oracle_test.c")
+target_include_directories(graph_runtime_map_oracle_test PRIVATE
+    ${_imas_core_include_dirs}
+    ${HDF5_C_INCLUDE_DIRS})
+target_link_libraries(graph_runtime_map_oracle_test PRIVATE
+    imas_mvdd_loader_graph_test
+    ${HDF5_C_LIBRARIES})
+add_dependencies(graph_runtime_map_oracle_test imas_mvdd_graph_capi)
+set_target_properties(graph_runtime_map_oracle_test PROPERTIES
+    BUILD_RPATH "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib")
+
+add_real_core_test(read-graph-pulse-schedule-forward
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-forward-read)
+add_real_core_test(read-graph-pulse-schedule-reverse
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-reverse-read)
+add_real_core_test(write-graph-pulse-schedule-forward
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-forward-write)
+add_real_core_test(write-graph-pulse-schedule-reverse
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-reverse-write)
+add_real_core_test(delete-graph-pulse-schedule-forward
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-forward-delete)
+add_real_core_test(delete-graph-pulse-schedule-reverse
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-reverse-delete)
+add_real_core_test(delete-graph-pulse-schedule-forward-structure
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-forward-structure-delete)
+add_real_core_test(delete-graph-pulse-schedule-reverse-structure
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-reverse-structure-delete)
+
 imas_mvdd_end_real_core_tests()

@@ -37,8 +37,8 @@ jobs:
 
       - uses: ./.github/actions/setup-toolchain
 
-      - name: Acquire the complete live equilibrium scope
-        run: cargo test pinned_graph_returns_a_complete_equilibrium_scope --lib -- --ignored
+      - name: Acquire the complete live reference scopes
+        run: cargo test pinned_graph_returns_complete_reference_scopes --lib -- --ignored
 
       - name: Record provisioning scope
         run: echo 'DD graph provisioning smoke check passed'

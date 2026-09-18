@@ -95,12 +95,14 @@ the cancellation/remaining-time facilities handed to #214; per-query limits
 do **not** constitute its future whole-attempt deadline.
 
 The graph-required CI scenario provisions the pinned service and runs
-`pinned_graph_returns_a_complete_equilibrium_scope`. It verifies the live
-catalogue contains 3.39.0 and 4.1.1, that the stamp metadata path is present,
-and that the unfiltered event and successor streams are non-empty. The local
-unit suite supplies shuffled pages and schema-faithful malformed rows for the
-same boundary. This machine did not have a running pinned graph, so the live
-scenario is recorded as CI-required rather than claimed as locally executed.
+`pinned_graph_returns_complete_reference_scopes`. It verifies the live
+equilibrium scope contains 3.39.0, 3.42.0 and 4.1.1, its stamp metadata path,
+and unfiltered event/successor streams; it also verifies the pulse_schedule
+scope contains the 3.25.0/3.30.0 historical endpoint paths and their successor
+evidence. The local unit suite supplies shuffled pages and schema-faithful
+malformed rows for the same boundary. This machine did not have a running
+pinned graph, so the live scenario is recorded as CI-required rather than
+claimed as locally executed.
 
 Raw lifecycle and change records remain `Neo4jRawScope` at the transport
 boundary. The controlled acquisition facts replay numeric-version additions,
