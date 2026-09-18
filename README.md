@@ -134,10 +134,25 @@ CI uses the same script through the reusable
 [`setup-dd-graph` action](.github/actions/setup-dd-graph/action.yml). It caches
 only the verified archive under its immutable archive digest; a fresh CI job
 always loads a new task-owned database and starts Neo4j before its query smoke
-check. That job is provisioning evidence, not proof that the shim converts
-through the graph. Graph-backed C ABI, real-Core and HLI scenarios can reuse
-the action's exported `NEO4J_URI`, `NEO4J_USERNAME` and `NEO4J_PASSWORD` when
-their own tickets add them.
+check. The `graph-abi` job then acquires its required complete live scope, and
+the Fortran HLI job starts the same selected graph before its installed
+graph-selected conversion scenario. A setup/acquisition failure or an empty
+scenario selection fails those graph-required checks. The action exports
+`NEO4J_URI`, `NEO4J_USERNAME` and `NEO4J_PASSWORD`; they are job-local settings
+and credentials never enter Git or the job summary.
+
+The live graph-acquisition contract has a configurable whole-attempt deadline
+of five seconds by default. It covers connection, graph reads, validation,
+construction and publication; later stages receive the remaining time rather
+than restarting the budget. An internal caller uses
+`RuntimeMapAcquirer::with_deadline` to choose a different bound; there is no
+environment or C-ABI deadline setting. When that source is selected, a first
+mismatched occurrence needs the selected graph and a complete map before it can
+open. A successful map is retained for the process lifetime, so later opens of
+the same IDS/version key reuse it without another graph request; updates
+therefore happen explicitly between HLI processes, not through a live refresh.
+The ordinary installed library remains XML-selected, and the private CI package
+uses controlled complete facts until #233 chooses normal source selection.
 
 Between HLI runs, stop and later restart the same recorded pin without any
 release lookup or download:
@@ -633,6 +648,18 @@ HLIs through the installed shim. Its Fortran job builds the IMAS-Fortran fork pi
 `find_package(imas-mvdd-loader CONFIG)`, and runs that HLI's own suite. It runs
 on pull requests based on `develop` or `main` whose diff can affect the result,
 and on demand.
+
+The same Fortran job separately builds #230's opt-in
+`al-fortran-test-shim-graph-runtime` scenario against the build-tree-only
+graph-selected package, after starting the pinned graph. The scenario performs
+generated HLI calls that write and read the supported `psi` COCOS conversion
+and observes the `coordinates_type` refusal through the HLI's partial-read
+surface. Its selected CTest set must be nonempty, and the job summary records
+the Fortran/Core pins, graph release and manifest digest. This package is
+install-shaped solely for this validation: the ordinary installed package and
+full Fortran suite remain XML-selected. A validated installed integration is
+not a universal deployment choice; selecting the graph source for normal
+installations remains #233's separate decision.
 
 The C++ job builds `yohannmarguier/IMAS-Cpp` at `IMAS_CPP_REF`, using the same
 `IMAS_CORE_REF` fork and DD 4.1.1. It enables the generated suite and examples,

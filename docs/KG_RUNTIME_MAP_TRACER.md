@@ -412,5 +412,33 @@ ctest --test-dir hli/build -R '^al-fortran-test-shim-graph-runtime$' \
 The selected CTest ran its fixture copy, loss-log cleanup and the nonzero HLI
 scenario: all 3 passed. This is an installed graph-selected test instance with
 controlled complete facts; it is not a production source switch or a claim
-that a live Neo4j service was used. #231 owns provisioning the pinned graph in
-CI and the full existing HLI job; #233 remains the production source cutover.
+that the scenario itself queried live Neo4j.
+
+## Installed Fortran graph validation (#231)
+
+The Fortran HLI CI job now starts the committed DD-only graph through the
+digest-keyed `setup-dd-graph` action before it builds either HLI configuration.
+That action restores or acquires only the immutable archive, then always loads
+a fresh task-owned database and query-smoke-checks it; a cache hit cannot skip
+startup, and a setup failure fails the job.
+
+The existing HLI configuration still consumes the ordinary installed
+XML-selected package and runs its full asserted suite. A second `build-graph`
+configuration enables only `AL_SHIM_GRAPH_RUNTIME_SCENARIO` and finds
+`build-shim/graph-package`, which is the private graph-test-source package.
+It builds the same pinned Core fork, verifies that checkout's commit, rejects
+an empty `al-fortran-test-shim-graph-runtime` selection, then executes that
+generated-HLI conversion scenario with the normal HDF5 backend. Its job summary
+records the Fortran and Core pins, selected graph release and manifest digest,
+and selected scenario count without reporting credentials.
+
+This ties the installed HLI conversion and graph provisioning gates together
+while keeping their evidence honest: the scenario's map facts are controlled
+until #233 changes normal source selection, whereas `graph-abi` continues to
+prove live complete-scope acquisition. Formatting, isolated Rust tests and the
+ordinary XML package path remain graph-service-independent. One selected
+snapshot applies for an HLI process; map acquisition has its shared configurable
+five-second whole-attempt deadline and successful maps are reused for that
+process lifetime. Operators start or update the selected snapshot explicitly
+between HLI processes as documented in README.md; no graph archive, database or
+credential belongs in Git.

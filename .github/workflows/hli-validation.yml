@@ -93,6 +93,13 @@ jobs:
 
       - uses: ./.github/actions/setup-toolchain
 
+      # This is a required graph-input gate for the separate installed HLI
+      # conversion scenario below. The private package still selects its
+      # controlled complete facts until #233 switches production selection, but
+      # a setup or live-acquisition regression must not be hidden by that
+      # controlled source.
+      - uses: ./.github/actions/setup-dd-graph
+
       # Boost and HDF5 are IMAS-Core's dependencies, not the HLI's -- the HLI
       # looks for neither and links only the `al` target. These are the same apt
       # packages ci.yml's full job already builds IMAS-Core 5.7.1 against, and
@@ -194,6 +201,12 @@ jobs:
             -DIMAS_MVDD_REAL_CORE_TESTS=OFF
           cmake --build build-shim
           cmake --install build-shim --prefix "$PWD/dist"
+
+      # This uses the installed-package shape without changing the ordinary
+      # installation above: graph-package is a build-tree-only prefix whose
+      # library has Cargo's internal graph-test-source feature enabled.
+      - name: Package the graph-selected shim for the Fortran scenario
+        run: cmake --build build-shim --target imas_mvdd_graph_test_package -j"$(nproc)"
 
       # The HLI acquires its run-time IMAS-Core here. Its repository and version
       # options are explicit so this build opens the same fork commit as ci.yml.
@@ -313,6 +326,76 @@ jobs:
           mkdir -p "$PWD/testdb"
           export USER="$PWD/testdb"
           ctest --output-on-failure --no-tests=error
+
+      # Keep the graph-selected scenario in a separate HLI build. The normal
+      # build above must keep consuming the ordinary installed XML-selected
+      # package and retain its complete passthrough suite and count assertion.
+      - name: Configure the graph-backed Fortran conversion scenario
+        working-directory: hli
+        run: |
+          set -euo pipefail
+          cmake -B build-graph \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-14 \
+            -DCMAKE_CXX_COMPILER=g++-14 \
+            -DCMAKE_Fortran_COMPILER=gfortran-14 \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DAL_USE_MULTIVERSION_SHIM=ON \
+            -DAL_SHIM_GRAPH_RUNTIME_SCENARIO=ON \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/build-shim/graph-package" \
+            -DAL_CORE_GIT_REPOSITORY=https://github.com/yohannmarguier/IMAS-Core.git \
+            -DAL_CORE_VERSION="${{ steps.imas_core_pin.outputs.commit }}" \
+            -DDD_VERSION="${HLI_DD_VERSION}" \
+            -DAL_BACKEND_HDF5=ON \
+            -DAL_BACKEND_MDSPLUS=OFF \
+            -DAL_BACKEND_UDA=OFF \
+            -DAL_BUILD_MDSPLUS_MODELS=OFF \
+            -DAL_TESTS=ON \
+            -DAL_EXAMPLES=OFF \
+            -DAL_PLAYGROUND=OFF \
+            -DAL_PLUGINS=OFF \
+            -DAL_HLI_DOCS=OFF
+
+      - name: Build the graph-backed Fortran conversion scenario
+        working-directory: hli
+        run: |
+          set -euo pipefail
+          cmake --build build-graph --target al-fortran-test-shim-graph-runtime -j"$(nproc)"
+          cmake --build build-graph --target al-core-runtime -j"$(nproc)"
+          expected="${{ steps.imas_core_pin.outputs.commit }}"
+          actual=$(git -C build-graph/_deps/al-core-runtime/src/al-core-runtime rev-parse HEAD)
+          expected=${expected,,}
+          test "$actual" = "$expected"
+
+      - name: Run the graph-backed Fortran conversion scenario
+        working-directory: hli
+        run: |
+          set -euo pipefail
+          mkdir -p "$PWD/build-graph/testdb"
+          export USER="$PWD/build-graph/testdb"
+          listing=$(ctest --test-dir build-graph -N -R '^al-fortran-test-shim-graph-runtime$')
+          printf '%s\n' "$listing"
+          graph_scenario_count=$(printf '%s\n' "$listing" | grep -cE '^  Test #[0-9]+:' || true)
+          test "$graph_scenario_count" -gt 0
+          ctest --test-dir build-graph -R '^al-fortran-test-shim-graph-runtime$' \
+            --output-on-failure --no-tests=error
+          graph_release=$(sed -n 's/^GRAPH_RELEASE=//p' "$GITHUB_WORKSPACE/config/dd-graph-release.env")
+          graph_manifest=$(sed -n 's/^GRAPH_MANIFEST_DIGEST=//p' "$GITHUB_WORKSPACE/config/dd-graph-release.env")
+          {
+            echo "### Graph-selected Fortran conversion"
+            echo
+            echo "| Input | Pinned identity |"
+            echo "|---|---|"
+            echo "| IMAS-Fortran | \`${{ steps.hli_pin.outputs.ref }}\` |"
+            echo "| IMAS-Core | \`${{ steps.imas_core_pin.outputs.commit }}\` |"
+            echo "| DD graph release | \`$graph_release\` |"
+            echo "| DD graph manifest | \`$graph_manifest\` |"
+            echo "| Selected HLI scenarios | \`$graph_scenario_count\` |"
+            echo
+            echo "The pinned graph was started by the shared setup action. This"
+            echo "HLI scenario uses the private graph-selected test package; it"
+            echo "does not select a graph source in the shipped installation."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # The drift verdict only reaches stderr (VersionDrift::record in
       # src/core/core_binding.rs), and --output-on-failure hides it on a passing
