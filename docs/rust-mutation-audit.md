@@ -48,6 +48,11 @@ including its documented range-level treatment of mixed adapter/policy files.
 Raw-pointer adaptation, forwarding, dynamic loading and real-Core integration
 remain out of scope for the same explicit reasons recorded by the line audit.
 
+Selection reads that file's **exclusions** as well as its groups. A candidate
+mutant no group owns is dropped only when a declared exclusion covers its
+span; one belonging to neither fails the selection naming the hole, because a
+candidate quietly skipped is a scope reduction nobody reviewed.
+
 Every group and the aggregate report caught, missed, timed-out, unviable and
 explicitly excluded mutants. The score is:
 
@@ -70,7 +75,7 @@ is shown as unexplained and remains in the score; it cannot be hidden.
 
 The CTest fixture `rust-mutation-audit-fixtures` verifies threshold boundaries,
 timeouts, unviable mutants, a precisely documented equivalent exclusion, scope
-selection and incomplete-run refusal. It does not run a full mutation campaign.
+selection, the undeclared-candidate refusal and incomplete-run refusal. It does not run a full mutation campaign.
 
 GitHub Actions exposes the same command only through the **Rust mutation
 audit** `workflow_dispatch` workflow. It is neither scheduled nor a pull-request

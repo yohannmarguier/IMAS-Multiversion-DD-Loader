@@ -8,7 +8,14 @@ import json
 import sys
 from pathlib import Path
 
-from rust_audit_scope import Group, ScopeError, SourceRange, load_groups, parse_source
+from rust_audit_scope import (
+    Group,
+    ScopeError,
+    SourceRange,
+    load_exclusions,
+    load_groups,
+    unpartitioned_production,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,14 +53,7 @@ def load_scope(path: Path) -> tuple[float, float, list[Group], list[SourceRange]
         raise ScopeError("coverage minimums must be percentages from 0 through 100")
 
     groups = load_groups(value, path)
-    raw_exclusions = value.get("exclusions", [])
-    if not isinstance(raw_exclusions, list):
-        raise ScopeError("scope exclusions must be a list")
-    exclusions: list[SourceRange] = []
-    for exclusion in raw_exclusions:
-        if not isinstance(exclusion, dict) or not isinstance(exclusion.get("reason"), str):
-            raise ScopeError("each exclusion needs a path and a reason")
-        exclusions.append(parse_source(exclusion, "exclusions"))
+    exclusions = load_exclusions(value)
     for source in (source for group in groups for source in group.sources):
         for excluded in exclusions:
             if source.overlaps(excluded):
@@ -155,6 +155,8 @@ def main() -> int:
     except ScopeError as error:
         print(f"coverage audit input error: {error}", file=sys.stderr)
         return 2
+
+    errors.extend(unpartitioned_production(groups, exclusions, args.root.resolve()))
 
     mapped_paths = {source.path for group in groups for source in group.sources}
     mapped_paths |= {excluded.path for excluded in exclusions}

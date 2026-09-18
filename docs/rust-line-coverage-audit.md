@@ -64,15 +64,21 @@ exists to prevent.
 
 The checker rejects a missing or empty configured source measurement, malformed
 LCOV input, overlapping source assignments, or a scope that does not name all
-six groups. A source absent from the scope is an explicit test-layer exclusion
-recorded in the same JSON file; it is not part of the denominator.
+six groups. It also rejects **a measured file whose production lines are not
+fully assigned**: it reads each measured source, takes its inline test module
+as the end of production, and requires every line before that to fall in a
+group range or in a declared exclusion. That is what makes a silently truncated
+range impossible rather than merely discouraged. A source absent from the scope
+is an explicit test-layer exclusion recorded in the same JSON file; it is not
+part of the denominator.
 
 The floors are 90% aggregate and 80% for every group. Ordinary CI runs this
 same command in its `rust-line-coverage` job and blocks on its verdict. Its
 LCOV report is uploaded even if the audit fails, so inspect the group totals
 before changing scope or tests. The compact fixture test is registered as
-`rust-line-coverage-audit-fixtures` and proves the aggregate/per-group boundary
-and malformed-data behavior without requiring a full coverage run.
+`rust-line-coverage-audit-fixtures` and proves the aggregate/per-group boundary,
+malformed-data behavior, and the truncated-range refusal against a throwaway
+source tree, without requiring a full coverage run.
 
 ## Integrated baseline (2026-09-18)
 

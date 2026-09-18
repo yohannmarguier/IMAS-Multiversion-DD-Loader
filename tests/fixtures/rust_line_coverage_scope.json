@@ -9,5 +9,8 @@
     {"name": "loss", "sources": [{"path": "src/loss.rs"}]},
     {"name": "artifact-validation", "sources": [{"path": "src/bin/validate.rs"}]},
     {"name": "deterministic-runtime-binding-policy", "sources": [{"path": "src/core/policy.rs"}]}
+  ],
+  "exclusions": [
+    {"path": "src/interpose/read.rs", "reason": "raw-pointer result adaptation"}
   ]
 }

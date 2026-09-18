@@ -52,6 +52,32 @@ if grep -Fq 'src/interpose/read.rs' "$work_dir/selection/scoped.json"; then
 fi
 grep -Fq '^src/conversion\\.rs:1:1: replace conversion outcome 1$' "$work_dir/selection/mutants.toml"
 
+# A candidate belonging to no group and no declared exclusion is a hole in the
+# scope, not a mutant to drop quietly.
+python3 "$fixture_dir/create-rust-mutation-fixture.py" all_pass "$work_dir/hole"
+python3 - "$work_dir/hole/selected.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+mutants = json.load(open(path))
+mutants.append({
+    "name": "src/unmapped.rs:1:1: replace decision with none",
+    "file": "src/unmapped.rs",
+    "span": {"start": {"line": 1}, "end": {"line": 1}},
+})
+json.dump(mutants, open(path, "w"), indent=2)
+PY
+if python3 "$checker" \
+    --line-scope "$fixture_dir/rust_line_coverage_scope.json" \
+    --candidate-mutants "$work_dir/hole/selected.json" \
+    --write-selection "$work_dir/hole/scoped.json" \
+    --write-cargo-mutants-config "$work_dir/hole/mutants.toml" >"$work_dir/hole.txt" 2>&1; then
+    echo "an undeclared candidate must not be dropped quietly" >&2
+    exit 1
+fi
+grep -Fq 'the measurement scope has a hole' "$work_dir/hole.txt"
+
 output=$(run_fixture all_pass)
 grep -Fq 'conversion: caught=2 missed=0 timed-out=0 unviable=1 excluded=1 score=100.0% PASS' <<<"$output"
 grep -Fq 'aggregate: caught=7 missed=0 timed-out=0 unviable=1 excluded=1 score=100.0% PASS' <<<"$output"

@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from rust_audit_scope import Group, ScopeError, SourceRange, load_groups
+from rust_audit_scope import Group, ScopeError, SourceRange, load_exclusions, load_groups
 
 
 OUTCOME_NAMES = {
@@ -84,10 +84,12 @@ def load_json(path: Path, what: str) -> object:
         raise AuditError(f"cannot read {what} {path}: {error}") from error
 
 
-def load_line_scope_groups(path: Path) -> list[Group]:
-    """The line audit's own group ownership, reused verbatim: the mutation
-    audit scores the same ranges and must never re-derive them."""
-    return load_groups(load_json(path, "line scope"), path)
+def load_line_scope_groups(path: Path) -> tuple[list[Group], list[SourceRange]]:
+    """The line audit's own ownership, reused verbatim: the mutation audit
+    scores the same ranges and must never re-derive them. Its exclusions come
+    along because a candidate belonging to neither is a hole in the scope."""
+    value = load_json(path, "line scope")
+    return load_groups(value, path), load_exclusions(value)
 
 
 def load_audit(path: Path) -> tuple[str, Path, float, float]:
@@ -111,7 +113,13 @@ def load_mutants(path: Path, what: str) -> dict[str, Mutant]:
     return load_mutants_from_value(load_json(path, what), what)
 
 
-def write_selection(candidates: Path, selection: Path, config: Path, groups: list[Group]) -> None:
+def write_selection(
+    candidates: Path,
+    selection: Path,
+    config: Path,
+    groups: list[Group],
+    exclusions: list[SourceRange],
+) -> None:
     raw_candidates = load_json(candidates, "cargo-mutants candidates")
     if not isinstance(raw_candidates, list):
         raise AuditError("cargo-mutants candidates must be a JSON array")
@@ -132,6 +140,18 @@ def write_selection(candidates: Path, selection: Path, config: Path, groups: lis
         try:
             owner(candidate, groups)
         except AuditError:
+            # A candidate no group owns is only acceptable where the line audit
+            # says so. Skipping one silently is how a range that stops short
+            # shrinks the mutation scope without anyone noticing.
+            if not any(
+                excluded.path == candidate.path
+                and excluded.contains(candidate.start_line, candidate.end_line)
+                for excluded in exclusions
+            ):
+                raise AuditError(
+                    f"candidate mutant {candidate.name} belongs to no line-audit group "
+                    "and no declared exclusion; the measurement scope has a hole"
+                )
             continue
         selected.append(raw)
     selected_mutants = load_mutants_from_value(selected, "selected scoped mutants")
@@ -261,13 +281,14 @@ def report_line(name: str, totals: Totals, minimum: float) -> tuple[str, bool]:
 def main() -> int:
     args = parse_args()
     try:
-        groups = load_line_scope_groups(args.line_scope)
+        groups, exclusions = load_line_scope_groups(args.line_scope)
         if args.candidate_mutants:
             write_selection(
                 args.candidate_mutants,
                 args.write_selection,
                 args.write_cargo_mutants_config,
                 groups,
+                exclusions,
             )
             return 0
         version, expected_line_scope, aggregate_minimum, group_minimum = load_audit(args.audit)

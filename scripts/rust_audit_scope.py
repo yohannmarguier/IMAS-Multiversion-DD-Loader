@@ -118,3 +118,83 @@ def parse_source(raw_source: Any, group_name: str) -> SourceRange:
             f"source {raw_source['path']} must give a valid start_line/end_line pair"
         )
     return SourceRange(raw_source["path"], start, end)
+
+
+def load_exclusions(value: Any) -> list[SourceRange]:
+    """The ranges deliberately left to another test layer, each with a reason.
+
+    An exclusion without line bounds excludes the whole file; one with them
+    excludes only that part of a file whose rest is measured.
+    """
+    raw_exclusions = value.get("exclusions", []) if isinstance(value, dict) else None
+    if not isinstance(raw_exclusions, list):
+        raise ScopeError("scope exclusions must be a list")
+    exclusions: list[SourceRange] = []
+    for exclusion in raw_exclusions:
+        if not isinstance(exclusion, dict) or not isinstance(exclusion.get("reason"), str):
+            raise ScopeError("each exclusion needs a path and a reason")
+        exclusions.append(parse_source(exclusion, "exclusions"))
+    return exclusions
+
+
+def production_boundary(path: Path) -> int:
+    """The last production line of a source file.
+
+    A file's inline test module — `#[cfg(test)]` followed within two lines by
+    `mod tests` — ends the production region; a file without one is production
+    to its last line.
+    """
+    lines = path.read_text().splitlines()
+    boundary = len(lines)
+    for index, line in enumerate(lines):
+        if line.strip() != "#[cfg(test)]":
+            continue
+        if any(following.startswith("mod tests") for following in lines[index + 1 : index + 3]):
+            boundary = index
+    return boundary
+
+
+def unpartitioned_production(
+    groups: list[Group], exclusions: list[SourceRange], root: Path
+) -> list[str]:
+    """Production lines of a measured file owned by neither a group nor an exclusion.
+
+    A range that simply stops short takes code out of the denominator without
+    saying so — the failure this check exists to make impossible. Files the
+    scope names but that are not on disk are left to the measurement check,
+    which reports a source with no data.
+    """
+    measured: dict[str, list[SourceRange]] = {}
+    for group in groups:
+        for source in group.sources:
+            measured.setdefault(source.path, []).append(source)
+    for excluded in exclusions:
+        if excluded.path in measured:
+            measured[excluded.path].append(excluded)
+
+    errors: list[str] = []
+    for path, ranges in sorted(measured.items()):
+        file_path = root / path
+        if not file_path.is_file():
+            continue
+        last = production_boundary(file_path)
+        owned: set[int] = set()
+        for source in ranges:
+            start = source.start_line or 1
+            end = min(source.end_line or last, last)
+            owned.update(range(start, end + 1))
+        missing = sorted(set(range(1, last + 1)) - owned)
+        if not missing:
+            continue
+        first = missing[0]
+        run_end = first
+        for line in missing[1:]:
+            if line != run_end + 1:
+                break
+            run_end = line
+        errors.append(
+            f"{path}: production lines {first}-{run_end} belong to no group and no "
+            f"exclusion ({len(missing)} of {last} unassigned); extend a range or "
+            "declare a ranged exclusion with its reason"
+        )
+    return errors
