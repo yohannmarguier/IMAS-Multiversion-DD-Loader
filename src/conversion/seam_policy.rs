@@ -387,9 +387,9 @@ fn write_argument_path<'a>(
 }
 
 /// Applies a write-side transformation to a copy the policy owns. Rank-zero
-/// Scalar sentinels are returned before this function runs. A sentinel inside
-/// an array remains a value and therefore is transformed with its neighbours,
-/// matching the scope of IMAS-Core's own shape gate (ADR 0018).
+/// scalar sentinels are returned before this function runs; an array can mix
+/// measurements and unset elements, so its EMPTY sentinels also remain
+/// unchanged while neighbouring measurements transform.
 ///
 /// This is the one place that reads [`TransformationDirection`]. The resolver
 /// inverts the map's read-direction transformation before it reaches this
@@ -408,7 +408,18 @@ fn copy_value_transformation(
             Err("this value transformation was not inverted for the write direction")
         }
         ValueTransformation::SignFlip { .. } => match source {
-            SourceView::Double(values) => Ok(Some(values.iter().map(|value| -*value).collect())),
+            SourceView::Double(values) => Ok(Some(
+                values
+                    .iter()
+                    .map(|value| {
+                        if *value == EMPTY_DOUBLE {
+                            *value
+                        } else {
+                            -*value
+                        }
+                    })
+                    .collect(),
+            )),
             SourceView::UnsetScalar => {
                 debug_assert!(
                     false,
@@ -926,7 +937,7 @@ mod tests {
             "the fixture must declare a flip, or this proves nothing"
         );
 
-        let values = [1.0f64, -2.0];
+        let values = [1.0f64, -2.0, EMPTY_DOUBLE];
         assert_eq!(
             copy_value_transformation(&value_transformation, SourceView::Double(&values)),
             Err("this value transformation was not inverted for the write direction")
@@ -939,9 +950,9 @@ mod tests {
             .expect("a flip between differing conventions inverts");
         assert_eq!(
             copy_value_transformation(&inverted, SourceView::Double(&values)),
-            Ok(Some(vec![-1.0, 2.0]))
+            Ok(Some(vec![-1.0, 2.0, EMPTY_DOUBLE]))
         );
-        assert_eq!(values, [1.0f64, -2.0]);
+        assert_eq!(values, [1.0f64, -2.0, EMPTY_DOUBLE]);
     }
 
     /// A real [`ValueTransformation::SignFlip`], obtained by loading a tiny

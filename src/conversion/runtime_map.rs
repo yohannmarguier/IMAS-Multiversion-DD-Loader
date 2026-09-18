@@ -5,7 +5,7 @@
 //! without making graph transport or runtime source selection a production
 //! concern.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Condvar, Mutex};
@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use super::conversion_map::{
     ArtifactDdVersion, CocosConvention, ConversionMap, EndpointInventory, EndpointNode,
     EndpointNodeKind, Fidelity, LoadError, Rel, SelectorStage, Side, TypedConversionMap,
-    TypedRedefine, TypedRule,
+    TypedRedefine, TypedRule, TypedSignFlip,
 };
 
 #[cfg(feature = "graph-test-source")]
@@ -43,6 +43,17 @@ pub(crate) enum GraphNodeKind {
     Leaf,
 }
 
+/// Provenance attached to a COCOS label in the selected graph snapshot.
+/// Unsupported sources stay distinct from a missing source so neither can
+/// accidentally certify a factor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CocosLabelSource {
+    Xml,
+    InferredSignFlip,
+    InferredExpression,
+    Other,
+}
+
 /// Metadata established for one exact endpoint where a path is present.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EndpointMetadata {
@@ -58,8 +69,13 @@ pub(crate) struct EndpointMetadata {
     /// factor of one.
     pub cocos_label_transformation: Option<String>,
     /// The graph's `cocos_transformation_expression` value for this exact
-    /// endpoint. This tracer does not interpret expressions yet.
+    /// endpoint. A compound expression is not executable evidence for this
+    /// shim: supported factors come from a known class and conventions.
     pub cocos_transformation_expression: Option<String>,
+    /// The graph's provenance for `cocos_label_transformation`. A backfilled
+    /// label and a raw declaration are different evidence forms, so a label
+    /// without an accepted source never certifies a factor.
+    pub cocos_label_source: Option<CocosLabelSource>,
 }
 
 /// One IDS-relative node row together with every endpoint metadata row the
@@ -426,6 +442,7 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
         let mut hli_endpoint = Vec::with_capacity(facts.nodes.len());
         let mut stored_endpoint = Vec::with_capacity(facts.nodes.len());
         let mut redefines = Vec::new();
+        let mut sign_flips = Vec::new();
         let mut endpoint_evidence_complete = true;
         let mut retyped_anchors = Vec::new();
         for node in &facts.nodes {
@@ -502,50 +519,91 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
                     ) => {
                         hli_endpoint.push(endpoint_node(node, hli_metadata));
                         stored_endpoint.push(endpoint_node(node, stored_metadata));
-                        let relation = if hli_start != stored_start {
-                            // A reused spelling starts a distinct historical role.
-                            // Unit evidence cannot establish that the roles carry
-                            // the same value semantics.
-                            EndpointRelation::Unresolved
-                        } else {
-                            endpoint_relation(&facts, node, hli_metadata, stored_metadata)
-                        };
-                        match relation {
-                            EndpointRelation::Retyped => (
-                                Rel::Retyped,
-                                SelectorStage::Subtree,
+                        let cocos_evidence = collect_cocos_evidence(
+                            &facts,
+                            node,
+                            hli_metadata,
+                            stored_metadata,
+                            &request.hli_dd,
+                            &request.stored_dd,
+                        )?;
+                        let cocos_factor = derive_cocos_factor(
+                            hli_metadata,
+                            stored_metadata,
+                            hli.cocos.as_ref(),
+                            stored.cocos.as_ref(),
+                            &cocos_evidence,
+                        );
+                        if matches!(
+                            cocos_factor,
+                            CocosFactorResolution::Unresolved | CocosFactorResolution::Unsupported
+                        ) {
+                            (
+                                Rel::Identical,
+                                SelectorStage::Exact,
                                 Some(node.path.clone()),
                                 Some(node.path.clone()),
                                 Fidelity::Unmappable,
-                            ),
-                            EndpointRelation::UnitRedefinition => {
-                                redefines.push(TypedRedefine {
-                                    glob: node.path.clone(),
-                                    fidelity_forward: Fidelity::Exact,
-                                    fidelity_reverse: Fidelity::Exact,
-                                });
-                                (
+                            )
+                        } else {
+                            let relation = if hli_start != stored_start {
+                                // A reused spelling starts a distinct historical role.
+                                // Unit evidence cannot establish that the roles carry
+                                // the same value semantics.
+                                EndpointRelation::Unresolved
+                            } else {
+                                endpoint_relation(&facts, node, hli_metadata, stored_metadata)
+                            };
+                            match relation {
+                                EndpointRelation::Retyped => (
+                                    Rel::Retyped,
+                                    SelectorStage::Subtree,
+                                    Some(node.path.clone()),
+                                    Some(node.path.clone()),
+                                    Fidelity::Unmappable,
+                                ),
+                                EndpointRelation::UnitRedefinition => {
+                                    redefines.push(TypedRedefine {
+                                        glob: node.path.clone(),
+                                        fidelity_forward: Fidelity::Exact,
+                                        fidelity_reverse: Fidelity::Exact,
+                                    });
+                                    (
+                                        Rel::Identical,
+                                        SelectorStage::Exact,
+                                        Some(node.path.clone()),
+                                        Some(node.path.clone()),
+                                        Fidelity::Exact,
+                                    )
+                                }
+                                EndpointRelation::Exact => {
+                                    if let CocosFactorResolution::SignFlip {
+                                        from_cocos,
+                                        to_cocos,
+                                    } = cocos_factor
+                                    {
+                                        sign_flips.push(TypedSignFlip {
+                                            path: node.path.clone(),
+                                            from_cocos,
+                                            to_cocos,
+                                        });
+                                    }
+                                    (
+                                        Rel::Identical,
+                                        SelectorStage::Exact,
+                                        Some(node.path.clone()),
+                                        Some(node.path.clone()),
+                                        Fidelity::Exact,
+                                    )
+                                }
+                                EndpointRelation::Unresolved => (
                                     Rel::Identical,
                                     SelectorStage::Exact,
                                     Some(node.path.clone()),
                                     Some(node.path.clone()),
-                                    Fidelity::Exact,
-                                )
+                                    Fidelity::Unmappable,
+                                ),
                             }
-                            EndpointRelation::Exact => (
-                                Rel::Identical,
-                                SelectorStage::Exact,
-                                Some(node.path.clone()),
-                                Some(node.path.clone()),
-                                Fidelity::Exact,
-                            ),
-                            EndpointRelation::Unresolved => (
-                                Rel::Identical,
-                                SelectorStage::Exact,
-                                Some(node.path.clone()),
-                                Some(node.path.clone()),
-                                Fidelity::Unmappable,
-                            ),
                         }
                     }
                     (EndpointState::Present { metadata, .. }, EndpointState::Absent) => {
@@ -614,7 +672,7 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
             right_endpoint: endpoint_inventory(stored_endpoint, endpoint_evidence_complete),
             default_identical: false,
             rules,
-            sign_flips: Vec::new(),
+            sign_flips,
             redefines,
         })
         .map_err(|error| {
@@ -1329,7 +1387,10 @@ fn apply_metadata_event(
     event: &GraphEvent,
 ) -> Result<(), AcquisitionFailure> {
     let field = event_field(event)?;
-    if field == "ignored" {
+    if !matches!(
+        field,
+        "data_type" | "ndim" | "units" | "timebase" | "coordinates"
+    ) {
         return Ok(());
     }
     let (Some(old), Some(new)) = (event.old_value.as_deref(), event.new_value.as_deref()) else {
@@ -1352,7 +1413,14 @@ fn event_field(event: &GraphEvent) -> Result<&str, AcquisitionFailure> {
     }
     match field {
         "data_type" | "ndim" | "units" | "timebase" | "coordinates" => Ok(field),
-        "documentation" | "lifecycle_status" | "maxoccur" | "identifier_enum" => Ok("ignored"),
+        // Raw COCOS label events describe the XML history.  They do not
+        // overwrite a separately-proven backfilled class on the endpoint:
+        // the two evidence forms are intentionally not interchangeable.
+        "cocos_label_transformation"
+        | "documentation"
+        | "lifecycle_status"
+        | "maxoccur"
+        | "identifier_enum" => Ok(field),
         _ => Err(invalid_event(event)),
     }
 }
@@ -1364,7 +1432,6 @@ fn metadata_value(metadata: &EndpointMetadata, field: &str) -> Result<String, Ac
         "units" => Ok(metadata.unit.clone().unwrap_or_default()),
         "timebase" => Ok(metadata.timebase_path.clone().unwrap_or_default()),
         "coordinates" => Ok(render_list(&metadata.coordinate_paths)),
-        "ignored" => Ok(String::new()),
         _ => unreachable!(),
     }
 }
@@ -1385,7 +1452,6 @@ fn set_metadata_value(
         "units" => metadata.unit = (!value.is_empty()).then(|| value.to_string()),
         "timebase" => metadata.timebase_path = (!value.is_empty()).then(|| value.to_string()),
         "coordinates" => metadata.coordinate_paths = parse_string_list(value, id)?,
-        "ignored" => {}
         _ => return Err(AcquisitionFailure::InvalidEventValue { id: id.to_string() }),
     }
     Ok(())
@@ -1459,12 +1525,15 @@ fn same_metadata_values(left: &EndpointMetadata, right: &EndpointMetadata) -> bo
         && left.coordinate_paths == right.coordinate_paths
         && left.cocos_label_transformation == right.cocos_label_transformation
         && left.cocos_transformation_expression == right.cocos_transformation_expression
+        && left.cocos_label_source == right.cocos_label_source
 }
 
 /// A direct predecessor declaration cannot serve as value evidence when either
 /// endpoint carries COCOS metadata, even if the two raw values happen to match.
 fn same_representation(left: &EndpointMetadata, right: &EndpointMetadata) -> bool {
-    same_metadata_values(left, right) && !has_cocos_evidence(left, right)
+    same_metadata_values(left, right)
+        && !endpoint_has_cocos_evidence(left)
+        && !endpoint_has_cocos_evidence(right)
 }
 
 fn invalid_event(event: &GraphEvent) -> AcquisitionFailure {
@@ -1496,9 +1565,7 @@ fn endpoint_relation(
     if metadata_is_retyped(hli, stored) {
         return EndpointRelation::Retyped;
     }
-    if hli.timebase_path != stored.timebase_path
-        || hli.coordinate_paths != stored.coordinate_paths
-        || has_cocos_evidence(hli, stored)
+    if hli.timebase_path != stored.timebase_path || hli.coordinate_paths != stored.coordinate_paths
     {
         return EndpointRelation::Unresolved;
     }
@@ -1575,11 +1642,169 @@ fn unit_evidence_between(
     }
 }
 
-fn has_cocos_evidence(left: &EndpointMetadata, right: &EndpointMetadata) -> bool {
-    left.cocos_label_transformation.is_some()
-        || right.cocos_label_transformation.is_some()
-        || left.cocos_transformation_expression.is_some()
-        || right.cocos_transformation_expression.is_some()
+/// The only COCOS factor the existing value engine can execute is a sign
+/// change. Evidence that would require an expression evaluator, a scale
+/// converter, or a guessed convention remains a local refusal.
+enum CocosFactorResolution {
+    Identity,
+    SignFlip {
+        from_cocos: CocosConvention,
+        to_cocos: CocosConvention,
+    },
+    Unresolved,
+    Unsupported,
+}
+
+fn derive_cocos_factor(
+    hli: &EndpointMetadata,
+    stored: &EndpointMetadata,
+    hli_cocos: Option<&CocosConvention>,
+    stored_cocos: Option<&CocosConvention>,
+    evidence: &CocosEvidence,
+) -> CocosFactorResolution {
+    if evidence.is_empty() {
+        return CocosFactorResolution::Identity;
+    }
+    if evidence.has_incompatible_history {
+        return CocosFactorResolution::Unsupported;
+    }
+    let (Some(hli_cocos), Some(stored_cocos)) = (hli_cocos, stored_cocos) else {
+        return CocosFactorResolution::Unresolved;
+    };
+    if hli.kind != GraphNodeKind::Leaf || stored.kind != GraphNodeKind::Leaf {
+        return CocosFactorResolution::Unsupported;
+    }
+    let (Some(hli_label), Some(stored_label)) =
+        (supported_cocos_label(hli), supported_cocos_label(stored))
+    else {
+        return CocosFactorResolution::Unsupported;
+    };
+    if hli_label != stored_label {
+        return CocosFactorResolution::Unresolved;
+    }
+    if hli_cocos == stored_cocos {
+        return CocosFactorResolution::Identity;
+    }
+    if is_supported_sign_flip_pair(hli_cocos, stored_cocos) {
+        return CocosFactorResolution::SignFlip {
+            from_cocos: hli_cocos.clone(),
+            to_cocos: stored_cocos.clone(),
+        };
+    }
+    CocosFactorResolution::Unsupported
+}
+
+fn is_supported_sign_flip_pair(hli: &CocosConvention, stored: &CocosConvention) -> bool {
+    matches!((hli.as_str(), stored.as_str()), ("11", "17") | ("17", "11"))
+}
+
+fn supported_cocos_label(metadata: &EndpointMetadata) -> Option<&str> {
+    if metadata.cocos_transformation_expression.is_some()
+        || !matches!(
+            metadata.cocos_label_source,
+            Some(CocosLabelSource::Xml | CocosLabelSource::InferredSignFlip)
+        )
+    {
+        return None;
+    }
+    match metadata.cocos_label_transformation.as_deref() {
+        Some("psi_like" | "dodpsi_like") => metadata.cocos_label_transformation.as_deref(),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum CocosEvidenceForm {
+    EndpointLabel,
+    RawLabelHistory,
+    Documentation,
+}
+
+/// Evidence is deduplicated by transition/path before factor selection.  The
+/// forms corroborate one scientific change but never compose into repeated
+/// numerical transforms.
+#[derive(Default)]
+struct CocosEvidence {
+    forms: BTreeSet<CocosEvidenceForm>,
+    has_incompatible_history: bool,
+}
+
+impl CocosEvidence {
+    fn is_empty(&self) -> bool {
+        self.forms.is_empty()
+    }
+}
+
+fn collect_cocos_evidence(
+    facts: &IdsGraphFacts,
+    node: &GraphNode,
+    hli_metadata: &EndpointMetadata,
+    stored_metadata: &EndpointMetadata,
+    hli_release: &ArtifactDdVersion,
+    stored_release: &ArtifactDdVersion,
+) -> Result<CocosEvidence, AcquisitionFailure> {
+    let mut evidence = CocosEvidence::default();
+    if endpoint_has_cocos_evidence(hli_metadata) || endpoint_has_cocos_evidence(stored_metadata) {
+        evidence.forms.insert(CocosEvidenceForm::EndpointLabel);
+    }
+    for event in facts.events.iter().filter(|event| {
+        event.path == node.path
+            && cocos_release_is_between(&event.release, hli_release, stored_release)
+    }) {
+        let field = event.id.rsplit(':').nth(1).unwrap_or_default();
+        if !matches!(field, "cocos_label_transformation" | "documentation") {
+            continue;
+        }
+        match event_field(event)? {
+            "cocos_label_transformation" => {
+                let (Some(old), Some(new)) =
+                    (event.old_value.as_deref(), event.new_value.as_deref())
+                else {
+                    return Err(invalid_event(event));
+                };
+                if old == new {
+                    return Err(invalid_event(event));
+                }
+                // An add or clear is history that can corroborate the class
+                // provenance. Replacing one raw label with another describes
+                // an unmodelled factor and cannot be silently merged.
+                if !old.is_empty() && !new.is_empty() {
+                    evidence.has_incompatible_history = true;
+                }
+                evidence.forms.insert(CocosEvidenceForm::RawLabelHistory);
+            }
+            "documentation" => {
+                if event.old_value.is_none() || event.new_value.is_none() {
+                    return Err(invalid_event(event));
+                }
+                evidence.forms.insert(CocosEvidenceForm::Documentation);
+            }
+            _ => {}
+        }
+    }
+    Ok(evidence)
+}
+
+fn endpoint_has_cocos_evidence(endpoint: &EndpointMetadata) -> bool {
+    endpoint.cocos_label_transformation.is_some()
+        || endpoint.cocos_transformation_expression.is_some()
+        || endpoint.cocos_label_source.is_some()
+}
+
+fn cocos_release_is_between(
+    candidate: &ArtifactDdVersion,
+    first: &ArtifactDdVersion,
+    second: &ArtifactDdVersion,
+) -> bool {
+    let candidate = numeric_release(candidate);
+    let first = numeric_release(first);
+    let second = numeric_release(second);
+    let (lower, upper) = if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    lower <= candidate && candidate <= upper
 }
 
 fn invalid_node(node: &GraphNode, reason: &str) -> AcquisitionFailure {

@@ -1,5 +1,6 @@
 use super::*;
 use crate::conversion::conversion_map::{Direction, Outcome, RefusalReason, Rel, RuleExplanation};
+use crate::conversion::conversion_map::{TransformationDirection, ValueTransformation};
 use crate::registry::context_registry::REGISTRY;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -377,6 +378,7 @@ fn endpoint(release: &str, kind: GraphNodeKind, data_type: &str, ndim: u8) -> En
         coordinate_paths: Vec::new(),
         cocos_label_transformation: None,
         cocos_transformation_expression: None,
+        cocos_label_source: None,
     }
 }
 
@@ -1311,9 +1313,9 @@ fn acquisition_leaves_a_coexisting_rename_declaration_as_two_endpoint_rules() {
         .expect("the coexisting caller path must remain claimed");
     assert_eq!(explanation.rel, Some(Rel::Identical));
     assert!(matches!(
-        explanation.outcome,
-        Outcome::Path { ref resolved_path, .. }
-            if resolved_path == "time_slice/global_quantities/beta_tor_norm"
+    explanation.outcome,
+    Outcome::Path { ref resolved_path, .. }
+        if resolved_path == "time_slice/global_quantities/beta_tor_norm"
     ));
 }
 
@@ -1371,4 +1373,168 @@ fn acquisition_traces_missing_or_conflicting_direct_predecessors_as_refusals() {
             .outcome,
         Outcome::Refusal(RefusalReason::Unmappable)
     );
+}
+
+#[test]
+fn acquisition_derives_one_psi_sign_flip_from_endpoint_conventions() {
+    let mut facts = complete_identity_scope();
+    for endpoint in &mut facts.nodes[2].endpoints {
+        endpoint.cocos_label_transformation = Some("psi_like".to_string());
+        endpoint.cocos_label_source = Some(CocosLabelSource::InferredSignFlip);
+    }
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("the supported psi factor must construct a map");
+
+    for direction in [Direction::Forward, Direction::Reverse] {
+        assert!(matches!(
+            map.resolve("time_slice/profiles_1d/rho_tor", direction)
+                .expect("the COCOS-labelled endpoint must be claimed")
+                .outcome,
+            Outcome::Path {
+                value_transformation: ValueTransformation::SignFlip {
+                    direction: TransformationDirection::ToHli,
+                    ..
+                },
+                ..
+            }
+        ));
+    }
+}
+
+#[test]
+fn acquisition_deduplicates_corroborating_cocos_evidence() {
+    let mut facts = complete_identity_scope();
+    for endpoint in &mut facts.nodes[2].endpoints {
+        endpoint.cocos_label_transformation = Some("psi_like".to_string());
+        endpoint.cocos_label_source = Some(CocosLabelSource::InferredSignFlip);
+    }
+    facts.events.extend([
+        GraphEvent {
+            id: "rho_tor:cocos_label_transformation:4.0.0".to_string(),
+            path: "time_slice/profiles_1d/rho_tor".to_string(),
+            release: ArtifactDdVersion::new("4.0.0").expect("fixture release is valid"),
+            field: "cocos_label_transformation".to_string(),
+            kind: "metadata_changed".to_string(),
+            old_value: Some("psi".to_string()),
+            new_value: Some(String::new()),
+            unit_change: None,
+        },
+        GraphEvent {
+            id: "rho_tor:documentation:4.0.0".to_string(),
+            path: "time_slice/profiles_1d/rho_tor".to_string(),
+            release: ArtifactDdVersion::new("4.0.0").expect("fixture release is valid"),
+            field: "documentation".to_string(),
+            kind: "metadata_changed".to_string(),
+            old_value: Some("poloidal flux".to_string()),
+            new_value: Some("COCOS convention changed".to_string()),
+            unit_change: None,
+        },
+    ]);
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("corroborating history must not add a second factor");
+
+    assert!(matches!(
+        map.resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .expect("the path remains covered by its one sign flip")
+            .outcome,
+        Outcome::Path {
+            value_transformation: ValueTransformation::SignFlip { .. },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn acquisition_refuses_a_conflicting_raw_cocos_label_replacement() {
+    let mut facts = complete_identity_scope();
+    for endpoint in &mut facts.nodes[2].endpoints {
+        endpoint.cocos_label_transformation = Some("psi_like".to_string());
+        endpoint.cocos_label_source = Some(CocosLabelSource::InferredSignFlip);
+    }
+    facts.events.push(GraphEvent {
+        id: "rho_tor:cocos_label_transformation:4.0.0".to_string(),
+        path: "time_slice/profiles_1d/rho_tor".to_string(),
+        release: ArtifactDdVersion::new("4.0.0").expect("fixture release is valid"),
+        field: "cocos_label_transformation".to_string(),
+        kind: "metadata_changed".to_string(),
+        old_value: Some("psi".to_string()),
+        new_value: Some("phi".to_string()),
+        unit_change: None,
+    });
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("a path-local scientific conflict must not reject other paths");
+
+    assert_eq!(
+        map.resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .expect("the conflicting endpoint remains explicitly covered")
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+}
+
+#[test]
+fn acquisition_localizes_unservable_or_out_of_pair_cocos_evidence() {
+    let mutations: [fn(&mut IdsGraphFacts); 4] = [
+        |facts| {
+            for endpoint in &mut facts.nodes[2].endpoints {
+                endpoint.cocos_label_transformation = Some("unknown_like".to_string());
+                endpoint.cocos_label_source = Some(CocosLabelSource::Xml);
+            }
+        },
+        |facts| {
+            for endpoint in &mut facts.nodes[2].endpoints {
+                endpoint.cocos_label_transformation = Some("psi_like".to_string());
+                endpoint.cocos_label_source = Some(CocosLabelSource::InferredExpression);
+                endpoint.cocos_transformation_expression = Some("-psi_like / q".to_string());
+            }
+        },
+        |facts| {
+            for endpoint in &mut facts.nodes[2].endpoints {
+                endpoint.cocos_label_transformation = Some("psi_like".to_string());
+                endpoint.cocos_label_source = Some(CocosLabelSource::Xml);
+            }
+            facts.versions[0].cocos = None;
+        },
+        |facts| {
+            facts.versions.push(version("5.0.0", Some("17")));
+            let mut future = endpoint("5.0.0", GraphNodeKind::Leaf, "FLT_1D", 1);
+            future.cocos_label_transformation = Some("psi_like".to_string());
+            future.cocos_label_source = Some(CocosLabelSource::InferredSignFlip);
+            facts.nodes[2].endpoints.push(future);
+        },
+    ];
+    for (index, mutate) in mutations.into_iter().enumerate() {
+        let mut facts = complete_identity_scope();
+        mutate(&mut facts);
+        let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+            .acquire(&request())
+            .expect("a local COCOS verdict must not reject the complete map");
+        let outcome = map
+            .resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .expect("the endpoint must remain claimed")
+            .outcome;
+        if index == 3 {
+            assert!(matches!(
+                outcome,
+                Outcome::Path {
+                    value_transformation: ValueTransformation::None,
+                    ..
+                }
+            ));
+        } else {
+            assert_eq!(outcome, Outcome::Refusal(RefusalReason::Unmappable));
+        }
+        assert!(matches!(
+            map.resolve("time_slice", Direction::Forward)
+                .expect("independent paths remain available")
+                .outcome,
+            Outcome::Path {
+                value_transformation: ValueTransformation::None,
+                ..
+            }
+        ));
+    }
 }

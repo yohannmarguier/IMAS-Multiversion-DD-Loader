@@ -348,6 +348,28 @@ add_stub_test(read-graph-runtime-map-scientific-gate-refuses-caller-path
     graph_runtime_map_test scientific-gate-refuses-caller-path
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
+add_stub_test(graph-runtime-map-psi-read-flips-once-and-write-uses-its-inverse
+    graph_runtime_map_test psi-read-flips-once-and-write-uses-its-inverse
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-2.0,-9.0e40")
+add_stub_test(graph-runtime-map-reverse-psi-read-flips-once-and-write-uses-its-inverse
+    graph_runtime_map_test psi-read-flips-once-and-write-uses-its-inverse
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1
+    ENV "RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-2.0,-9.0e40")
+add_stub_test(graph-runtime-map-unknown-cocos-refuses-only-the-affected-operations
+    graph_runtime_map_test unknown-cocos-refuses-only-the-affected-operations
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(graph-runtime-map-compound-cocos-refuses-only-the-affected-operations
+    graph_runtime_map_test compound-cocos-refuses-only-the-affected-operations
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(graph-runtime-map-missing-cocos-refuses-only-the-affected-operations
+    graph_runtime_map_test missing-cocos-refuses-only-the-affected-operations
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
 add_stub_test(graph-runtime-map-acquisition-failure-cleans-up-open-context
     graph_runtime_map_test acquisition-failure-cleans-up-open-context
     HLI_DD_VERSION 4.1.1
