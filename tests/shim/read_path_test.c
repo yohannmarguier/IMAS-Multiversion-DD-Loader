@@ -8,6 +8,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <ctype.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -22,19 +23,24 @@
 typedef al_status_t (*read_data_fn)(int, const char *, const char *, void **, int, int, int *);
 typedef void (*set_reentrant_read_fn)(read_data_fn, const char *);
 
-/* Arms the stub to call back into the shim's own `al_read_data` once, while
- * the shim's read is still on the stack, with `field` as its argument — what
+/* Arms the stub to call back into the shim's own `al_read_data` while the
+ * shim's read is still on the stack, with `field` as its argument — what
  * real IMAS-Core does on ELF, where its internal call to its own public
  * `al_read_data` binds to the shim's exported definition. */
-static void arm_reentrant_read(read_data_fn callback, const char *field) {
+static void arm_reentrant_read_with(const char *setter_name, read_data_fn callback,
+                                    const char *field) {
     set_reentrant_read_fn arm =
-        (set_reentrant_read_fn)stub_symbol_or_die("recording_stub_set_reentrant_read");
+        (set_reentrant_read_fn)stub_symbol_or_die(setter_name);
     arm(callback, field);
+}
+
+static void arm_reentrant_read(read_data_fn callback, const char *field) {
+    arm_reentrant_read_with("recording_stub_set_reentrant_read", callback, field);
 }
 
 static al_status_t read_data(int ctx_id, const char *field, const char *timebase, void **data) {
     int size[1] = {0};
-    return al_read_data(ctx_id, field, timebase, data, 52 /* DOUBLE_DATA */, 1, size);
+    return al_read_data(ctx_id, field, timebase, data, IMAS_DOUBLE_DATA, 1, size);
 }
 
 static void check_stub_paths(const char *field, const char *timebase) {
@@ -218,6 +224,91 @@ static void scenario_loss_file_filename_collision_gains_a_numeric_suffix(void) {
            "name gained a numeric suffix and the untouched placeholder stayed empty\n");
 }
 
+static int timestamp_matches_an_observed_second(const char *timestamp, time_t started,
+                                                time_t finished) {
+    for (time_t instant = started; instant <= finished; ++instant) {
+        struct tm utc;
+        CHECK(gmtime_r(&instant, &utc) != NULL);
+        char expected[21];
+        CHECK(strftime(expected, sizeof expected, "%Y-%m-%dT%H:%M:%SZ", &utc)
+              == sizeof expected - 1);
+        if (memcmp(timestamp, expected, sizeof expected - 1) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Issue #235: this is deliberately a fresh CTest process with no configured
+ * loss-log directory. It reaches the normal shim ABI and observes only the
+ * resulting file, so it covers the real working directory, UTC clock, process
+ * id and file writing rather than values a Rust test supplies. CMake unsets
+ * the optional directory setting and gives the test its own directory. */
+static void scenario_loss_file_default_destination_uses_the_process_clock_and_pid(void) {
+    const char *prefix = "imas-mvdd-loss-";
+    CHECK(getenv("IMAS_MVDD_LOSS_LOG_DIR") == NULL);
+    clear_loss_log_directory_in(".");
+    time_t started = time(NULL);
+    CHECK(started != (time_t)-1);
+
+    int operation_ctx = open_mismatched_equilibrium();
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
+    CHECK(data != NULL);
+
+    time_t finished = time(NULL);
+    CHECK(finished != (time_t)-1);
+    CHECK(finished >= started);
+    CHECK(finished - started <= 60);
+
+    char *path = single_loss_log_path_or_null_in(".");
+    CHECK(path != NULL);
+    const char *name = strrchr(path, '/');
+    name = name == NULL ? path : name + 1;
+    CHECK(strncmp(name, prefix, strlen(prefix)) == 0);
+    const char *timestamp = name + strlen(prefix);
+    CHECK(timestamp[4] == '-');
+    CHECK(timestamp[7] == '-');
+    CHECK(timestamp[10] == 'T');
+    CHECK(timestamp[13] == ':');
+    CHECK(timestamp[16] == ':');
+    CHECK(timestamp[19] == 'Z');
+    CHECK(timestamp_matches_an_observed_second(timestamp, started, finished));
+    for (int index = 0; index < 20; ++index) {
+        if (index != 4 && index != 7 && index != 10 && index != 13 && index != 16
+            && index != 19) {
+            CHECK(isdigit((unsigned char)timestamp[index]));
+        }
+    }
+    char expected_pid_suffix[32];
+    CHECK(snprintf(expected_pid_suffix, sizeof expected_pid_suffix, "-%ld.txt", (long)getpid())
+          < (int)sizeof expected_pid_suffix);
+    CHECK(strcmp(timestamp + 20, expected_pid_suffix) == 0);
+
+    char *contents = read_loss_log_in(".");
+    CHECK(strstr(contents, "# imas-mvdd loss log format 1\n") == contents);
+    char expected_preamble_timestamp[32];
+    CHECK(snprintf(expected_preamble_timestamp, sizeof expected_preamble_timestamp,
+                   "# written %.20s\n", timestamp)
+          < (int)sizeof expected_preamble_timestamp);
+    CHECK(strstr(contents, expected_preamble_timestamp) != NULL);
+    char expected_preamble_pid[32];
+    CHECK(snprintf(expected_preamble_pid, sizeof expected_preamble_pid, "# process %ld\n",
+                   (long)getpid())
+          < (int)sizeof expected_preamble_pid);
+    CHECK(strstr(contents, expected_preamble_pid) != NULL);
+    CHECK(strstr(contents, "uri\tids\tstored-dd\thli-dd\toperation\tfidelity\tpath\n") != NULL);
+    CHECK(strstr(contents,
+                 "\tequilibrium\t4.1.1\t3.39.0\tread\tPOTENTIALLY_LOSSY\t"
+                 "time_slice/ggd/b_field_phi\n")
+          != NULL);
+    free(contents);
+    CHECK(remove(path) == 0);
+    free(path);
+    printf("read_path_test loss-file-default-destination-uses-the-process-clock-and-pid: the "
+           "default directory, timestamp, PID and production file delivery matched the process\n");
+}
+
 /* Drive two distinct lossy reads so a disabled or failed file destination has
  * to stay silent or report only once, while the caller-visible loss log still
  * retains both entries. */
@@ -312,19 +403,22 @@ static void scenario_loss_file_missing_directory_reports_once_without_failing_re
            "missing destination cannot change successful reads or their in-memory loss log\n");
 }
 
-static void scenario_loss_file_unwritable_directory_reports_once_without_failing_reads(void) {
+static void scenario_loss_file_file_destination_reports_once_without_failing_reads(void) {
     const char *directory = loss_log_directory();
-    CHECK(mkdir(directory, 0700) == 0 || errno == EEXIST);
-    CHECK(chmod(directory, 0500) == 0);
+    CHECK(remove(directory) == 0 || errno == ENOENT);
+    int fd = open(directory, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    CHECK(fd >= 0);
+    CHECK(close(fd) == 0);
     int operation_ctx = open_mismatched_equilibrium();
     char *message = capture_loss_log_failure(operation_ctx);
-    CHECK(chmod(directory, 0700) == 0);
 
-    CHECK(single_loss_log_path_or_null() == NULL);
-    check_single_loss_log_failure_message(message, directory, "could not write loss log in");
+    struct stat destination;
+    CHECK(stat(directory, &destination) == 0);
+    CHECK(S_ISREG(destination.st_mode));
+    check_single_loss_log_failure_message(message, directory, "directory does not exist");
     free(message);
-    printf("read_path_test loss-file-unwritable-directory-reports-once-without-failing-reads: "
-           "an unwritable destination cannot change successful reads or their in-memory loss log\n");
+    printf("read_path_test loss-file-file-destination-reports-once-without-failing-reads: "
+           "an invalid destination cannot change successful reads or their in-memory loss log\n");
 }
 
 static void scenario_loss_file_append_failure_reports_once_without_failing_reads(void) {
@@ -387,6 +481,42 @@ static void scenario_reentrant_read_is_forwarded_unchanged(void) {
            "an in-flight read was forwarded without conversion or loss retention\n");
 }
 
+/* One callback-shaped interaction covers the entire gate lifecycle: each
+ * top-level read must convert, the callback arriving beneath it must pass
+ * through, and a later top-level read must convert again once that callback
+ * has returned. Keeping all three observations in one scenario makes an
+ * incorrect first-entry threshold, increment, or scope-exit decrement
+ * externally visible without inspecting the thread-local depth itself. */
+static void scenario_reentry_depth_gate_restores_conversion_after_nested_read(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    const char *field = "time_slice/boundary_separatrix/gap/r";
+    const char *stored_field = "time_slice/boundary/gap/r";
+    arm_reentrant_read_with("recording_stub_set_reentrant_read_twice", al_read_data, field);
+
+    void *data = NULL;
+    CHECK(read_data(operation_ctx, field, "", &data).code == 0);
+    CHECK(data != NULL);
+    check_stub_paths(stored_field, "");
+    CHECK(int_from_stub("recording_stub_reentrant_call_count") == 2);
+    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_field"), field) == 0);
+    CHECK(loss_count(operation_ctx) == 1);
+
+    data = NULL;
+    CHECK(read_data(operation_ctx, field, "", &data).code == 0);
+    CHECK(data != NULL);
+    check_stub_paths(stored_field, "");
+    CHECK(int_from_stub("recording_stub_reentrant_call_count") == 4);
+    CHECK(strcmp(string_from_stub("recording_stub_reentrant_seen_field"), field) == 0);
+    CHECK(loss_count(operation_ctx) == 2);
+    check_loss_at(operation_ctx, 0, field, IMAS_MVDD_FIDELITY_LOSSY,
+                  IMAS_MVDD_LOSS_OPERATION_READ);
+    check_loss_at(operation_ctx, 1, field, IMAS_MVDD_FIDELITY_LOSSY,
+                  IMAS_MVDD_LOSS_OPERATION_READ);
+
+    printf("read_path_test reentry-depth-gate-restores-conversion-after-nested-read: first "
+           "entries converted, callbacks passed through, and scope exit restored conversion\n");
+}
+
 /* The value-transform half of the same policy. The stub hands both legs the
  * same static buffer, so a reentrant read that still applied the COCOS flip
  * would negate it a second time and hand the caller its original signs back —
@@ -399,7 +529,7 @@ static void scenario_reentrant_read_does_not_reapply_a_sign_flip(void) {
     int size[1] = {0};
     void *data = NULL;
     CHECK(al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
-                       52 /* DOUBLE_DATA */, 1, size)
+                       IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
     CHECK(data != NULL);
     CHECK(size[0] == 4);
@@ -425,7 +555,7 @@ static void scenario_plugin_reentrant_read_is_forwarded_across_the_ordinary_fami
 
     void *data = NULL;
     int size[1] = {0};
-    CHECK(al_plugin_read_data(operation_ctx, field, "", &data, 52 /* DOUBLE_DATA */, 1, size)
+    CHECK(al_plugin_read_data(operation_ctx, field, "", &data, IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
     CHECK(data != NULL);
     CHECK(loss_count(operation_ctx) == 1);
@@ -739,7 +869,7 @@ static void scenario_split_plan_reads_and_flips_its_first_stored_destination(voi
     int size[1] = {0};
     void *data = NULL;
     CHECK(al_read_data(operation_ctx, "time_slice/global_quantities/psi_axis", "", &data,
-                       52 /* DOUBLE_DATA */, 1, size)
+                       IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
     CHECK(data != NULL);
     CHECK(*(double *)data == -1.5);
@@ -756,7 +886,7 @@ static void scenario_reverse_split_read_flips_its_single_stored_source(void) {
     int size[1] = {0};
     void *data = NULL;
     CHECK(al_read_data(operation_ctx, "time_slice/global_quantities/psi_axis", "", &data,
-                       52 /* DOUBLE_DATA */, 1, size)
+                       IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
     CHECK(data != NULL);
     CHECK(*(double *)data == -1.5);
@@ -857,7 +987,7 @@ static void scenario_no_source_array_zeroes_the_returned_extents(void) {
 static void scenario_rank_changing_retype_refuses_without_core_call(void) {
     int operation_ctx = open_mismatched_equilibrium();
     check_read_refusal(
-        operation_ctx, "grids_ggd/grid/space/coordinates_type", 51 /* INTEGER_DATA */,
+        operation_ctx, "grids_ggd/grid/space/coordinates_type", IMAS_INTEGER_DATA,
         "IMAS-MVDD: this path's container changed shape and cannot be served; "
         "DD path: grids_ggd/grid/space/coordinates_type; HLI DD version: 4.1.1; "
         "stored DD version: 3.39.0");
@@ -898,7 +1028,7 @@ static void scenario_redefined_unit_path_forwards_verbatim(void) {
 
 static void scenario_unsupported_sign_flip_types_refuse_without_core_call(void) {
     int operation_ctx = open_mismatched_equilibrium();
-    const int unsupported_types[] = {51 /* INTEGER_DATA */, 53 /* COMPLEX_DATA */};
+    const int unsupported_types[] = {IMAS_INTEGER_DATA, IMAS_COMPLEX_DATA};
 
     for (size_t i = 0; i < sizeof unsupported_types / sizeof unsupported_types[0]; ++i) {
         check_read_refusal(
@@ -920,7 +1050,7 @@ static void scenario_sign_flip_array_negates_values_and_preserves_empty_double(v
     void *data = NULL;
 
     CHECK(al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
-                       52 /* DOUBLE_DATA */, 1, size)
+                       IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
     CHECK(data != NULL);
     CHECK(size[0] == 4);
@@ -943,7 +1073,7 @@ static void scenario_sign_flip_rank_exceeding_maxdim_refuses_without_core_call(v
     int size[8] = {73, 73, 73, 73, 73, 73, 73, 73};
 
     al_status_t status = al_read_data(operation_ctx, "time_slice/boundary/psi", "", &data,
-                                      52 /* DOUBLE_DATA */, 8 /* rank exceeds MAXDIM == 7 */, size);
+                                      IMAS_DOUBLE_DATA, 8 /* rank exceeds MAXDIM == 7 */, size);
 
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
     CHECK(strcmp(status.message,
@@ -971,7 +1101,7 @@ static void scenario_sign_flip_invalid_shape_refuses_without_modifying_buffer(vo
      * multiplication on the third factor; the one real element the stub
      * actually returns must still come back unflipped. */
     al_status_t status = al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
-                                      52 /* DOUBLE_DATA */, 3, size);
+                                      IMAS_DOUBLE_DATA, 3, size);
 
     CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
     CHECK(strcmp(status.message,
@@ -992,7 +1122,7 @@ static void scenario_sign_flip_shape_override_respects_read_rank(void) {
     void *data = NULL;
 
     CHECK(al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
-                       52 /* DOUBLE_DATA */, 1, size)
+                       IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
     CHECK(data != NULL);
     CHECK(*(double *)data == -1.5);
@@ -1010,7 +1140,7 @@ static void scenario_sign_flip_not_found_skips_value_transformation(void) {
     void *data = (void *)1;
 
     CHECK(al_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
-                       52 /* DOUBLE_DATA */, 1, size)
+                       IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
     CHECK(data == NULL);
     CHECK(size[0] == 0);
@@ -1138,6 +1268,8 @@ int main(int argc, char **argv) {
         {"sign-flip-array-negates-values-and-preserves-empty-double", scenario_sign_flip_array_negates_values_and_preserves_empty_double},
         {"sign-flip-rank-exceeding-maxdim-refuses-without-core-call", scenario_sign_flip_rank_exceeding_maxdim_refuses_without_core_call},
         {"reentrant-read-is-forwarded-unchanged", scenario_reentrant_read_is_forwarded_unchanged},
+        {"reentry-depth-gate-restores-conversion-after-nested-read",
+         scenario_reentry_depth_gate_restores_conversion_after_nested_read},
         {"reentrant-read-does-not-reapply-a-sign-flip", scenario_reentrant_read_does_not_reapply_a_sign_flip},
         {"plugin-reentrant-read-is-forwarded-across-the-ordinary-family",
          scenario_plugin_reentrant_read_is_forwarded_across_the_ordinary_family},
@@ -1155,9 +1287,11 @@ int main(int argc, char **argv) {
         {"loss-file-is-absent-without-loss", scenario_loss_file_is_absent_without_loss},
         {"loss-file-filename-collision-gains-a-numeric-suffix",
          scenario_loss_file_filename_collision_gains_a_numeric_suffix},
+        {"loss-file-default-destination-uses-the-process-clock-and-pid",
+         scenario_loss_file_default_destination_uses_the_process_clock_and_pid},
         {"loss-file-empty-directory-value-disables-delivery", scenario_loss_file_empty_directory_value_disables_delivery},
         {"loss-file-missing-directory-reports-once-without-failing-reads", scenario_loss_file_missing_directory_reports_once_without_failing_reads},
-        {"loss-file-unwritable-directory-reports-once-without-failing-reads", scenario_loss_file_unwritable_directory_reports_once_without_failing_reads},
+        {"loss-file-file-destination-reports-once-without-failing-reads", scenario_loss_file_file_destination_reports_once_without_failing_reads},
         {"loss-file-append-failure-reports-once-without-failing-reads", scenario_loss_file_append_failure_reports_once_without_failing_reads},
         {"moved-read-retains-a-lossy-verdict-in-the-loss-log", scenario_moved_read_retains_a_lossy_verdict_in_the_loss_log},
         {"ending-context-destroys-its-loss-log", scenario_ending_context_destroys_its_loss_log},

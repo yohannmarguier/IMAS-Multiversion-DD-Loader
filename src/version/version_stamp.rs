@@ -53,6 +53,37 @@ pub(crate) fn decode(bytes: &[u8]) -> Option<DdVersion> {
     std::str::from_utf8(bytes).ok()?.parse().ok()
 }
 
+/// Classifies a discovery read from the read result and the bytes reported by
+/// IMAS-Core. This is intentionally separate from allocation ownership and
+/// argument marshalling so the boundary between an absent stamp and present,
+/// malformed metadata can be tested from ordinary Rust values.
+fn classify_discovery_read(
+    outcome: ReadOutcome,
+    bytes: &[u8],
+    reported_extent: c_int,
+) -> StampOutcome {
+    match outcome {
+        ReadOutcome::Failure | ReadOutcome::NotFound => StampOutcome::Unstamped,
+        ReadOutcome::Data => {
+            // A non-positive extent reports no stamp bytes. `>= 0` is
+            // equivalent — both give a zero-length slice — and is classified
+            // as such in `coverage/rust-mutation-dispositions.json` rather
+            // than argued for here; `> 0` documents the positive-byte contract.
+            let len = if reported_extent > 0 {
+                reported_extent as usize
+            } else {
+                0
+            };
+            match bytes.get(..len).and_then(decode) {
+                Some(version) => StampOutcome::Stored(version),
+                None => StampOutcome::Malformed(Box::new(crate::conversion_refusal(
+                    "malformed DD-version stamp at 'ids_properties/version_put/data_dictionary'",
+                ))),
+            }
+        }
+    }
+}
+
 /// Reads and classifies the DD-version stamp for the occurrence just opened
 /// at `octx_id`. The interposition adapter supplies `read`, which has the
 /// ordinary IMAS-Core `al_read_data` shape and forwards without any conversion
@@ -84,24 +115,20 @@ pub(crate) fn discover(
         &mut size,
     );
 
-    match read_outcome::classify(&status, data.cast_const()) {
-        ReadOutcome::Failure | ReadOutcome::NotFound => StampOutcome::Unstamped,
+    let outcome = read_outcome::classify(&status, data.cast_const());
+    match outcome {
+        ReadOutcome::Failure | ReadOutcome::NotFound => classify_discovery_read(outcome, &[], size),
         ReadOutcome::Data => {
-            let len = if size > 0 { size as usize } else { 0 };
+            let len = usize::try_from(size).unwrap_or(0);
             // SAFETY: IMAS-Core reported `size` bytes at `data` for this
             // CHAR_DATA, dim == 1 read; `data` is non-null (this arm of the
             // classifier guarantees it) and IMAS-Core-allocated.
             let bytes = unsafe { std::slice::from_raw_parts(data.cast::<u8>(), len) };
-            let decoded = decode(bytes);
+            let outcome = classify_discovery_read(outcome, bytes, size);
             // Freed exactly once, on every path through this arm — malformed
             // or valid — since this buffer never reaches the HLI.
             unsafe { free(data) };
-            match decoded {
-                Some(version) => StampOutcome::Stored(version),
-                None => StampOutcome::Malformed(Box::new(crate::conversion_refusal(
-                    "malformed DD-version stamp at 'ids_properties/version_put/data_dictionary'",
-                ))),
-            }
+            outcome
         }
     }
 }
@@ -113,6 +140,70 @@ unsafe extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CStr;
+
+    fn assert_unstamped(outcome: StampOutcome) {
+        assert!(matches!(outcome, StampOutcome::Unstamped));
+    }
+
+    fn assert_stored(outcome: StampOutcome, expected: &str) {
+        match outcome {
+            StampOutcome::Stored(actual) => assert_eq!(actual, expected.parse().unwrap()),
+            StampOutcome::Unstamped | StampOutcome::Malformed(_) => {
+                panic!("expected stored DD version {expected}")
+            }
+        }
+    }
+
+    fn assert_malformed(outcome: StampOutcome) {
+        match outcome {
+            StampOutcome::Malformed(status) => {
+                assert_eq!(status.code, crate::IMAS_MVDD_CONVERSION_ERROR);
+                assert_eq!(
+                    unsafe { CStr::from_ptr(status.message.as_ptr()) }
+                        .to_str()
+                        .unwrap(),
+                    "IMAS-MVDD: malformed DD-version stamp at 'ids_properties/version_put/data_dictionary'"
+                );
+            }
+            StampOutcome::Unstamped | StampOutcome::Stored(_) => {
+                panic!("expected malformed DD-version stamp")
+            }
+        }
+    }
+
+    #[test]
+    fn failed_or_absent_reads_are_unstamped_but_present_bad_bytes_are_malformed() {
+        assert_unstamped(classify_discovery_read(ReadOutcome::Failure, b"4.1.1", 5));
+        assert_unstamped(classify_discovery_read(ReadOutcome::NotFound, b"4.1.1", 5));
+        assert_malformed(classify_discovery_read(
+            ReadOutcome::Data,
+            b"not-a-version",
+            13,
+        ));
+        assert_malformed(classify_discovery_read(ReadOutcome::Data, b"4.1.2", 5));
+        assert_malformed(classify_discovery_read(ReadOutcome::Data, &[0xff, 0xfe], 2));
+    }
+
+    #[test]
+    fn a_present_stamp_decodes_only_its_positive_reported_extent() {
+        assert_stored(
+            classify_discovery_read(ReadOutcome::Data, b"4.1.1\0unreported", 5),
+            "4.1.1",
+        );
+        assert_malformed(classify_discovery_read(
+            ReadOutcome::Data,
+            b"4.1.1\0unreported",
+            6,
+        ));
+    }
+
+    #[test]
+    fn a_present_stamp_with_zero_or_negative_extent_is_malformed() {
+        assert_malformed(classify_discovery_read(ReadOutcome::Data, b"", 0));
+        assert_malformed(classify_discovery_read(ReadOutcome::Data, b"4.1.1", 0));
+        assert_malformed(classify_discovery_read(ReadOutcome::Data, b"4.1.1", -1));
+    }
 
     #[test]
     fn a_known_release_stamp_decodes() {

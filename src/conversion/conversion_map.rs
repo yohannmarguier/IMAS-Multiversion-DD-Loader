@@ -853,6 +853,10 @@ impl ConversionMap {
                 "transforms" => {
                     parse_transforms(&child, &mut sign_flips, &mut redefines)?;
                 }
+                // An unrecognised child is ignored like `include`/`coverage`:
+                // an artifact carrying metadata this shim does not read must
+                // keep loading, so a future documented element cannot turn an
+                // older shim into a hard refusal.
                 _ => {}
             }
         }

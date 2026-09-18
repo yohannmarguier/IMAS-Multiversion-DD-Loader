@@ -40,3 +40,36 @@ impl Drop for ReentryGuard {
         SHIM_REENTRY_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ReentryGuard;
+
+    #[test]
+    fn callback_scope_preserves_the_outer_entry_then_restores_a_fresh_entry() {
+        let (outer, outer_is_reentrant) = ReentryGuard::enter();
+        assert!(
+            !outer_is_reentrant,
+            "the first entry receives conversion policy"
+        );
+
+        {
+            let (_callback, callback_is_reentrant) = ReentryGuard::enter();
+            assert!(callback_is_reentrant, "a nested callback passes through");
+        }
+
+        let (after_callback, after_callback_is_reentrant) = ReentryGuard::enter();
+        assert!(
+            after_callback_is_reentrant,
+            "leaving the callback preserves the in-flight outer entry"
+        );
+        drop(after_callback);
+        drop(outer);
+
+        let (_fresh, fresh_is_reentrant) = ReentryGuard::enter();
+        assert!(
+            !fresh_is_reentrant,
+            "leaving the outer entry restores conversion for the next call"
+        );
+    }
+}

@@ -404,6 +404,9 @@ static size_t g_last_written_count = 0;
 #define RECORDING_STUB_CSV_CAPACITY 16
 /* IMAS-Core's MAXDIM is part of the duplicated ABI contract above. */
 enum { RECORDING_STUB_MAXDIM = 7 };
+/* IMAS-Core's DOUBLE_DATA code. The stub-only profile has no al_const.h
+ * to include, so name it here rather than comparing a bare ordinal. */
+enum { RECORDING_STUB_DOUBLE_DATA = 52 };
 static double g_read_double_values[RECORDING_STUB_CSV_CAPACITY];
 static int g_read_size_override[RECORDING_STUB_CSV_CAPACITY];
 
@@ -708,14 +711,26 @@ typedef al_status_t (*recording_stub_read_fn)(int, const char *, const char *, v
 static recording_stub_read_fn g_reentrant_read = NULL;
 static char *g_reentrant_field = NULL;
 static int g_reentrant_active = 0;
+static int g_reentrant_callbacks_per_outer = 1;
 static int g_reentrant_call_count = 0;
 static char *g_reentrant_seen_field = NULL;
 static char *g_reentrant_seen_timebase = NULL;
 
-void recording_stub_set_reentrant_read(recording_stub_read_fn reentrant_read, const char *field) {
+static void configure_reentrant_read(recording_stub_read_fn reentrant_read, const char *field,
+                                     int callbacks_per_outer) {
     g_reentrant_read = reentrant_read;
+    g_reentrant_callbacks_per_outer = callbacks_per_outer;
     free(g_reentrant_field);
     g_reentrant_field = record_str(field);
+}
+
+void recording_stub_set_reentrant_read(recording_stub_read_fn reentrant_read, const char *field) {
+    configure_reentrant_read(reentrant_read, field, 1);
+}
+
+void recording_stub_set_reentrant_read_twice(recording_stub_read_fn reentrant_read,
+                                              const char *field) {
+    configure_reentrant_read(reentrant_read, field, 2);
 }
 
 int recording_stub_reentrant_call_count(void) {
@@ -755,10 +770,12 @@ al_status_t al_read_data(int ctxID, const char *field, const char *timebase, voi
 
     if (g_reentrant_read != NULL && field != NULL) {
         g_reentrant_active = 1;
-        void *reentrant_data = NULL;
-        int reentrant_size[RECORDING_STUB_MAXDIM] = {0};
-        g_reentrant_read(ctxID, g_reentrant_field, "", &reentrant_data, datatype, dim,
-                         reentrant_size);
+        for (int callback = 0; callback < g_reentrant_callbacks_per_outer; ++callback) {
+            void *reentrant_data = NULL;
+            int reentrant_size[RECORDING_STUB_MAXDIM] = {0};
+            g_reentrant_read(ctxID, g_reentrant_field, "", &reentrant_data, datatype, dim,
+                             reentrant_size);
+        }
         /* Deliberately not freed: every read response this stub can return
          * now points at a static buffer it owns. The one caller that received
          * a per-read allocation was the delete presence probe, removed with
@@ -869,7 +886,7 @@ static void trigger_reentrant_data(enum recording_stub_reentrant_outer outer, vo
     g_reentrant_data_expected_size = callback_size;
     al_status_t status = g_reentrant_data(g_reentrant_data_ctx, g_reentrant_data_field,
                                           g_reentrant_data_timebase, callback_data,
-                                          data != NULL ? datatype : 52 /* DOUBLE_DATA */,
+                                          data != NULL ? datatype : RECORDING_STUB_DOUBLE_DATA,
                                           data != NULL ? dim : 1, callback_size);
     g_reentrant_data_status_code = status.code;
     g_reentrant_data_active = 0;
@@ -936,7 +953,7 @@ static void snapshot_double_payload(double **snapshot, size_t *snapshot_count, v
     free(*snapshot);
     *snapshot = NULL;
     *snapshot_count = 0;
-    if (datatype != 52 /* DOUBLE_DATA */ || data == NULL || dim < 0 ||
+    if (datatype != RECORDING_STUB_DOUBLE_DATA || data == NULL || dim < 0 ||
         dim > RECORDING_STUB_MAXDIM || (dim > 0 && size == NULL)) {
         return;
     }

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "dispositions": [
+    {
+      "mutant": "src/conversion/conversion_map.rs:827:17: delete match arm \"include\" | \"coverage\" in ConversionMap::load",
+      "classification": "equivalent",
+      "observable_behavior": "ConversionMap::load ignores every <ids-map> child it does not read, so deleting the explicit include/coverage arm leaves the catch-all arm doing exactly the same nothing",
+      "disposition": "no artifact can tell the two apart; it returns to the score the moment an unrecognised child becomes a refusal or include/coverage gain meaning"
+    },
+    {
+      "mutant": "src/conversion/path_conversion.rs:847:9: delete match arm Resolved::Refusal{reason, dd_path, ..} in write_shape_refusal",
+      "classification": "equivalent",
+      "observable_behavior": "write_subject maps every Resolved::Refusal to CheckShape::SharedRefusal, and WRITE_CHECKS returns its retained reason before write_shape_refusal can run",
+      "disposition": "the fallback arm is unreachable until a new resolution shape or changed write check bypasses the shared-refusal check"
+    },
+    {
+      "mutant": "src/conversion/path_conversion.rs:961:9: delete match arm Resolved::Refusal{reason, dd_path, ..} in delete_shape_refusal",
+      "classification": "equivalent",
+      "observable_behavior": "delete_subjects maps every Resolved::Refusal to CheckShape::SharedRefusal, and DELETE_CHECKS returns its retained reason before delete_shape_refusal can run",
+      "disposition": "the fallback arm is unreachable until a new resolution shape or changed delete check bypasses the shared-refusal check"
+    },
+    {
+      "mutant": "src/version/version_stamp.rs:72:42: replace > with >= in classify_discovery_read",
+      "classification": "equivalent",
+      "observable_behavior": "a zero reported extent takes the same path either way: `0 as usize` and the else arm both give a zero-length slice, which decodes as malformed",
+      "disposition": "only a negative extent separates `>` from `>=`, and both already yield zero; the mutant returns to the score if a zero-length stamp ever stops meaning malformed"
+    }
+  ]
+}

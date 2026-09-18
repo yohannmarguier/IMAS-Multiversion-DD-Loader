@@ -25,8 +25,14 @@ function(run_guard_on_fixture fixture_name fixture_contents result_variable
         RESULT_VARIABLE guard_result
         OUTPUT_VARIABLE guard_output
         ERROR_VARIABLE guard_error)
+    # CMake wraps its own message() output, and where it breaks a line depends
+    # on the absolute path it just printed -- so a long build directory can
+    # split an expected phrase across two lines and fail a guard that is
+    # working. Collapse whitespace before the caller matches on it.
+    string(REGEX REPLACE "[ \t\r\n]+" " " guard_diagnostic
+        "${guard_output}${guard_error}")
     set("${result_variable}" "${guard_result}" PARENT_SCOPE)
-    set("${diagnostic_variable}" "${guard_output}${guard_error}" PARENT_SCOPE)
+    set("${diagnostic_variable}" "${guard_diagnostic}" PARENT_SCOPE)
 endfunction()
 
 function(expect_guard_rejection fixture_name fixture_contents
@@ -37,6 +43,8 @@ function(expect_guard_rejection fixture_name fixture_contents
         message(FATAL_ERROR
             "The script-policy guard accepted the ${fixture_name} fixture")
     endif()
+    string(REGEX REPLACE "[ \t\r\n]+" " " expected_diagnostic
+        "${expected_diagnostic}")
     string(FIND "${guard_diagnostic}" "${expected_diagnostic}"
         expected_diagnostic_position)
     if(expected_diagnostic_position EQUAL -1)

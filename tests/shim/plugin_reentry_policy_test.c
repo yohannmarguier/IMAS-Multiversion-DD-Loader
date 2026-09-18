@@ -41,7 +41,7 @@ static al_status_t open_plugin_slice(int pctxID, const char *dataobjectname, int
 
 static al_status_t read_data(int ctx_id, const char *field, const char *timebase, void **data) {
     int size[1] = {0};
-    return al_read_data(ctx_id, field, timebase, data, 52 /* DOUBLE_DATA */, 1, size);
+    return al_read_data(ctx_id, field, timebase, data, IMAS_DOUBLE_DATA, 1, size);
 }
 
 static void check_stub_field(const char *field) {
@@ -412,7 +412,7 @@ static void scenario_plugin_read_translates_field_under_mismatch(void) {
 
     void *data = NULL;
     int size[1] = {0};
-    CHECK(al_plugin_read_data(operation_ctx, ROOT_HLI_FIELD, "", &data, 52 /* DOUBLE_DATA */, 1,
+    CHECK(al_plugin_read_data(operation_ctx, ROOT_HLI_FIELD, "", &data, IMAS_DOUBLE_DATA, 1,
                               size)
               .code == 0);
     CHECK(data != NULL);
@@ -468,7 +468,7 @@ static void scenario_plugin_read_no_source_returns_null_without_core_call(void) 
     void *data = (void *)1;
     int size[1] = {0};
     CHECK(al_plugin_read_data(operation_ctx, "time_slice/contour_tree/critical_point", "", &data,
-                              52 /* DOUBLE_DATA */, 1, size)
+                              IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
 
     CHECK(data == NULL);
@@ -491,7 +491,7 @@ static void scenario_plugin_read_merged_candidate_falls_through(void) {
     void *data = NULL;
     int size[1] = {0};
     CHECK(al_plugin_read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data,
-                              52 /* DOUBLE_DATA */, 1, size)
+                              IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
 
     CHECK(data != NULL);
@@ -511,7 +511,7 @@ static void scenario_plugin_read_sign_flip_negates_values(void) {
     void *data = NULL;
     int size[1] = {0};
     CHECK(al_plugin_read_data(operation_ctx, "time_slice/profiles_1d/psi", "", &data,
-                              52 /* DOUBLE_DATA */, 1, size)
+                              IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
 
     CHECK(data != NULL);
@@ -542,7 +542,7 @@ static void scenario_plugin_read_through_child_context_retains_loss_on_root(void
     void *data = NULL;
     int shape[1] = {0};
     CHECK(al_plugin_read_data(time_slice_ctx, "boundary_separatrix/gap/r", "", &data,
-                              52 /* DOUBLE_DATA */, 1, shape)
+                              IMAS_DOUBLE_DATA, 1, shape)
               .code == 0);
     CHECK(data != NULL);
     check_plugin_stub_field("boundary/gap/r");

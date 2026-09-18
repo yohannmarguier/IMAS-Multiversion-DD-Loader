@@ -260,6 +260,44 @@ enum ResolutionError {
 }
 
 impl ResolutionError {
+    /// What [`const2str`] answers in place of an unbound IMAS-Core. The ADR
+    /// deliberately keeps these diagnostics useful when the mismatched
+    /// library's ABI cannot safely be queried further.
+    fn const2str(&self, id: c_int) -> *const c_char {
+        match self {
+            Self::VersionMismatch { .. } => fallback_const2str(id),
+            Self::Unavailable(_) => std::ptr::null(),
+        }
+    }
+
+    /// What [`err2str`] answers in place of an unbound IMAS-Core.
+    fn err2str(&self, id: c_int) -> *const c_char {
+        match self {
+            Self::VersionMismatch { .. } => fallback_err2str(id),
+            Self::Unavailable(_) => std::ptr::null(),
+        }
+    }
+
+    /// What [`get_al_version`] answers in place of an unbound IMAS-Core: the
+    /// version actually detected, which is the whole point of refusing it.
+    fn al_version(&self) -> *const c_char {
+        match self {
+            Self::VersionMismatch {
+                detected_version, ..
+            } => detected_version.as_ptr(),
+            Self::Unavailable(_) => std::ptr::null(),
+        }
+    }
+
+    /// What [`get_dd_version`] answers in place of an unbound IMAS-Core:
+    /// IMAS-Core's own deliberately dead sentinel.
+    fn dd_version(&self) -> *const c_char {
+        match self {
+            Self::VersionMismatch { .. } => static_c_str(b"!!DEPRECATED!!\0"),
+            Self::Unavailable(_) => std::ptr::null(),
+        }
+    }
+
     fn status(&self) -> &al_status_t {
         match self {
             Self::Unavailable(status) | Self::VersionMismatch { status, .. } => status,
@@ -384,36 +422,28 @@ pub(crate) unsafe fn build_uri_from_legacy_parameters(
 pub(crate) fn const2str(id: c_int) -> *const c_char {
     match resolution() {
         Ok(binding) => unsafe { (binding.const2str)(id) },
-        // The ADR deliberately keeps these diagnostics useful when the
-        // mismatched library's ABI cannot safely be queried further.
-        Err(ResolutionError::VersionMismatch { .. }) => fallback_const2str(id),
-        Err(ResolutionError::Unavailable(_)) => std::ptr::null(),
+        Err(error) => error.const2str(id),
     }
 }
 
 pub(crate) fn err2str(id: c_int) -> *const c_char {
     match resolution() {
         Ok(binding) => unsafe { (binding.err2str)(id) },
-        Err(ResolutionError::VersionMismatch { .. }) => fallback_err2str(id),
-        Err(ResolutionError::Unavailable(_)) => std::ptr::null(),
+        Err(error) => error.err2str(id),
     }
 }
 
 pub(crate) fn get_al_version() -> *const c_char {
     match resolution() {
         Ok(binding) => unsafe { (binding.get_al_version)() },
-        Err(ResolutionError::VersionMismatch {
-            detected_version, ..
-        }) => detected_version.as_ptr(),
-        Err(ResolutionError::Unavailable(_)) => std::ptr::null(),
+        Err(error) => error.al_version(),
     }
 }
 
 pub(crate) fn get_dd_version() -> *const c_char {
     match resolution() {
         Ok(binding) => unsafe { (binding.get_dd_version)() },
-        Err(ResolutionError::VersionMismatch { .. }) => static_c_str(b"!!DEPRECATED!!\0"),
-        Err(ResolutionError::Unavailable(_)) => std::ptr::null(),
+        Err(error) => error.dd_version(),
     }
 }
 
@@ -629,6 +659,9 @@ fn failure(detail: &str) -> al_status_t {
     status
 }
 
+// These unit tests cover only deterministic fallback, compatibility and
+// failure-formatting decisions. Library opening, symbol lookup, memoized
+// resolution, drift emission and forwarding remain ABI/CTest concerns.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -667,32 +700,214 @@ mod tests {
                 found: "4.2.0".to_string(),
             }))
         );
-        assert!(check_major_version("1.0.0", "1.0.9").is_ok_and(|drift| drift.is_some()));
+        assert_eq!(
+            check_major_version("1.0.0", "1.0.9"),
+            Ok(Some(VersionDrift {
+                built_against: "1.0.0".to_string(),
+                found: "1.0.9".to_string(),
+            }))
+        );
     }
 
     #[test]
     fn major_version_mismatch_names_both_versions() {
-        let error = check_major_version("4.1.1", "3.22.0").unwrap_err();
-        assert!(error.contains("4.1.1"));
-        assert!(error.contains("3.22.0"));
+        assert_eq!(
+            check_major_version("4.1.1", "3.22.0"),
+            Err(
+                "IMAS-Core major version mismatch: shim built against 4.1.1, found 3.22.0"
+                    .to_string()
+            )
+        );
     }
 
     #[test]
-    fn unparsable_versions_are_rejected_without_panicking() {
-        assert!(check_major_version("4.1.1", "not-a-version").is_err());
-        assert!(check_major_version("not-a-version", "4.1.1").is_err());
-        assert!(check_major_version("", "4.1.1").is_err());
+    fn malformed_or_empty_major_components_report_the_exact_reason() {
+        for (built_against, found) in [
+            ("4.1.1", "not-a-version"),
+            ("not-a-version", "4.1.1"),
+            ("", "4.1.1"),
+            ("4.1.1", ""),
+            (".1.1", "4.1.1"),
+            ("4.1.1", ".1.1"),
+            ("4x.1.1", "4.1.1"),
+            ("4.1.1", "4x.1.1"),
+        ] {
+            assert_eq!(
+                check_major_version(built_against, found),
+                Err(format!(
+                    "could not compare IMAS-Core versions: shim built against '{built_against}', found '{found}'"
+                ))
+            );
+        }
     }
 
     #[test]
-    fn failure_status_carries_a_nonzero_code_naming_the_override_variable_and_the_detail() {
+    fn fallback_constant_names_match_each_identifier_value_and_terminate() {
+        for (identifier, expected_id, expected_name) in [
+            (NO_BACKEND_ID, 10, b"NO_BACKEND\0".as_slice()),
+            (ASCII_BACKEND_ID, 11, b"ASCII_BACKEND\0".as_slice()),
+            (MDSPLUS_BACKEND_ID, 12, b"MDSPLUS_BACKEND\0".as_slice()),
+            (HDF5_BACKEND_ID, 13, b"HDF5_BACKEND\0".as_slice()),
+            (MEMORY_BACKEND_ID, 14, b"MEMORY_BACKEND\0".as_slice()),
+            (UDA_BACKEND_ID, 15, b"UDA_BACKEND\0".as_slice()),
+            (GLOBAL_OP_ID, 20, b"GLOBAL_OP\0".as_slice()),
+            (SLICE_OP_ID, 21, b"SLICE_OP\0".as_slice()),
+            (READ_OP_ID, 30, b"READ_OP\0".as_slice()),
+            (WRITE_OP_ID, 31, b"WRITE_OP\0".as_slice()),
+            (REPLACE_OP_ID, 32, b"REPLACE_OP\0".as_slice()),
+            (UNDEFINED_INTERP_ID, 0, b"UNDEFINED_INTERP\0".as_slice()),
+            (CLOSEST_INTERP_ID, 1, b"CLOSEST_INTERP\0".as_slice()),
+            (PREVIOUS_INTERP_ID, 2, b"PREVIOUS_INTERP\0".as_slice()),
+            (LINEAR_INTERP_ID, 3, b"LINEAR_INTERP\0".as_slice()),
+            (UNDEFINED_TIME_ID, -999, b"UNDEFINED_TIME\0".as_slice()),
+            (OPEN_PULSE_ID, 40, b"OPEN_PULSE\0".as_slice()),
+            (FORCE_OPEN_PULSE_ID, 41, b"FORCE_OPEN_PULSE\0".as_slice()),
+            (CREATE_PULSE_ID, 42, b"CREATE_PULSE\0".as_slice()),
+            (
+                FORCE_CREATE_PULSE_ID,
+                43,
+                b"FORCE_CREATE_PULSE\0".as_slice(),
+            ),
+            (CLOSE_PULSE_ID, 44, b"CLOSE_PULSE\0".as_slice()),
+            (ERASE_PULSE_ID, 45, b"ERASE_PULSE\0".as_slice()),
+            (CHAR_DATA_ID, 50, b"CHAR_DATA\0".as_slice()),
+            (INTEGER_DATA_ID, 51, b"INTEGER_DATA\0".as_slice()),
+            (DOUBLE_DATA_ID, 52, b"DOUBLE_DATA\0".as_slice()),
+            (COMPLEX_DATA_ID, 53, b"COMPLEX_DATA\0".as_slice()),
+            (
+                ASCII_SERIALIZER_PROTOCOL_ID,
+                60,
+                b"ASCII_SERIALIZER_PROTOCOL\0".as_slice(),
+            ),
+            (
+                FLEXBUFFERS_SERIALIZER_PROTOCOL_ID,
+                61,
+                b"FLEXBUFFERS_SERIALIZER_PROTOCOL\0".as_slice(),
+            ),
+        ] {
+            assert_eq!(identifier, expected_id);
+            let actual = fallback_const2str(identifier);
+            assert!(!actual.is_null());
+            assert_eq!(
+                unsafe { CStr::from_ptr(actual) }.to_bytes_with_nul(),
+                expected_name
+            );
+        }
+    }
+
+    #[test]
+    fn fallback_error_names_match_each_negative_identifier_value_and_terminate() {
+        for (identifier, expected_id, expected_name) in [
+            (UNKNOWN_ERR_ID, -1, b"UNKNOWN_ERR\0".as_slice()),
+            (CONTEXT_ERR_ID, -2, b"CONTEXT_ERR\0".as_slice()),
+            (BACKEND_ERR_ID, -3, b"BACKEND_ERR\0".as_slice()),
+            (LOWLEVEL_ERR_ID, -4, b"LOWLEVEL_ERR\0".as_slice()),
+        ] {
+            assert_eq!(identifier, expected_id);
+            let actual = fallback_err2str(identifier);
+            assert!(!actual.is_null());
+            assert_eq!(
+                unsafe { CStr::from_ptr(actual) }.to_bytes_with_nul(),
+                expected_name
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_fallback_identifiers_return_a_non_null_empty_c_string() {
+        for fallback in [fallback_const2str, fallback_err2str] {
+            for unknown_identifier in [c_int::MIN, -5, 999, c_int::MAX] {
+                let actual = fallback(unknown_identifier);
+                assert!(!actual.is_null());
+                assert_eq!(unsafe { CStr::from_ptr(actual) }.to_bytes_with_nul(), b"\0");
+            }
+        }
+    }
+
+    fn unresolvable_status() -> al_status_t {
+        al_status_t {
+            code: -1,
+            message: [0; MAX_ERR_MSG_LEN],
+        }
+    }
+
+    /// The four version accessors over a refused major-version mismatch. The
+    /// decision is taken from the resolution value, so this never settles this
+    /// process's one `CORE` binding — which would make the result depend on
+    /// test order and leave every later test facing a mismatched IMAS-Core.
+    #[test]
+    fn a_version_mismatch_answers_the_accessors_with_documented_c_strings() {
+        let mismatch = ResolutionError::VersionMismatch {
+            status: unresolvable_status(),
+            detected_version: CString::new("3.22.0").unwrap(),
+        };
+
+        for (actual, expected) in [
+            (
+                mismatch.const2str(HDF5_BACKEND_ID),
+                b"HDF5_BACKEND\0".as_slice(),
+            ),
+            (
+                mismatch.err2str(BACKEND_ERR_ID),
+                b"BACKEND_ERR\0".as_slice(),
+            ),
+            (mismatch.al_version(), b"3.22.0\0".as_slice()),
+            (mismatch.dd_version(), b"!!DEPRECATED!!\0".as_slice()),
+        ] {
+            assert!(!actual.is_null());
+            assert_eq!(
+                unsafe { CStr::from_ptr(actual) }.to_bytes_with_nul(),
+                expected
+            );
+        }
+    }
+
+    /// Both unresolvable shapes hand back the status they were built with —
+    /// the one every status-returning seam reports in IMAS-Core's place.
+    #[test]
+    fn an_unresolvable_core_reports_the_status_it_retained() {
+        let detected_version = CString::new("3.22.0").unwrap();
+        for error in [
+            ResolutionError::Unavailable(failure("no IMAS-Core here")),
+            ResolutionError::VersionMismatch {
+                status: failure("no IMAS-Core here"),
+                detected_version,
+            },
+        ] {
+            let retained = error.status();
+            assert_eq!(retained.code, -1);
+            assert_eq!(
+                unsafe { CStr::from_ptr(retained.message.as_ptr()) }.to_bytes_with_nul(),
+                b"override with $IMAS_CORE_LIBRARY if this is wrong; no IMAS-Core here\0"
+            );
+        }
+    }
+
+    /// An unavailable IMAS-Core has no version and no constant table to fall
+    /// back to, so each accessor reports the null every caller already checks.
+    #[test]
+    fn an_unavailable_core_answers_the_accessors_with_null() {
+        let unavailable = ResolutionError::Unavailable(unresolvable_status());
+
+        for actual in [
+            unavailable.const2str(HDF5_BACKEND_ID),
+            unavailable.err2str(BACKEND_ERR_ID),
+            unavailable.al_version(),
+            unavailable.dd_version(),
+        ] {
+            assert!(actual.is_null());
+        }
+    }
+
+    #[test]
+    fn failure_status_has_the_synthesized_code_exact_message_and_termination() {
         let status = failure("boom");
-        assert_ne!(status.code, 0);
-        let message = unsafe { CStr::from_ptr(status.message.as_ptr()) }
-            .to_str()
-            .unwrap();
-        assert!(message.contains("boom"));
-        assert!(message.contains(CORE_LIBRARY_ENV_VAR));
+        assert_eq!(status.code, -1);
+        assert_eq!(
+            unsafe { CStr::from_ptr(status.message.as_ptr()) }.to_bytes_with_nul(),
+            b"override with $IMAS_CORE_LIBRARY if this is wrong; boom\0"
+        );
+        assert_eq!(status.message[MAX_ERR_MSG_LEN - 1], 0);
     }
 
     #[test]
@@ -717,6 +932,9 @@ mod tests {
         let long_message = "é".repeat(200); // 2 bytes each — straddles byte 255
         let status = failure(&long_message);
         let message = unsafe { CStr::from_ptr(status.message.as_ptr()) };
-        assert!(message.to_str().is_ok());
+        let message = message.to_str().unwrap();
+        assert!(message.starts_with("override with $IMAS_CORE_LIBRARY if this is wrong; "));
+        assert!(message.ends_with('é'));
+        assert_eq!(status.message[MAX_ERR_MSG_LEN - 1], 0);
     }
 }

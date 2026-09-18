@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+audit="$root_dir/coverage/rust-mutation-audit.json"
+line_scope="$root_dir/coverage/rust-line-coverage-scope.json"
+dispositions="$root_dir/coverage/rust-mutation-dispositions.json"
+
+if [[ -n $(git -C "$root_dir" status --porcelain) ]]; then
+    echo "mutation audit requires a clean worktree; commit, stash, or discard unrelated changes first" >&2
+    exit 2
+fi
+
+expected_version=$(python3 - "$audit" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1]))["tool"]["cargo_mutants_version"])
+PY
+)
+minimum_rust_version=$(python3 - "$audit" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1]))["tool"]["minimum_rust_version"])
+PY
+)
+actual_version=$(cargo mutants --version)
+if [[ "$actual_version" != "cargo-mutants $expected_version" ]]; then
+    echo "cargo-mutants $expected_version is required; found $actual_version" >&2
+    exit 2
+fi
+actual_rust_version=$(rustc --version | awk '{print $2}')
+if ! python3 - "$minimum_rust_version" "$actual_rust_version" <<'PY'
+import sys
+
+def version(value):
+    try:
+        return tuple(int(part) for part in value.split(".")[:3])
+    except ValueError:
+        raise SystemExit(2)
+
+raise SystemExit(0 if version(sys.argv[2]) >= version(sys.argv[1]) else 1)
+PY
+then
+    echo "Rust $minimum_rust_version or newer is required; found $actual_rust_version" >&2
+    exit 2
+fi
+
+mkdir -p "$root_dir/target"
+audit_dir=$(mktemp -d "$root_dir/target/rust-mutation-audit.XXXXXX")
+candidate_mutants="$audit_dir/candidates.json"
+selected_mutants="$audit_dir/selected-mutants.json"
+cargo_mutants_config="$audit_dir/cargo-mutants.toml"
+
+# CLAUDE.md standing fact: mutation-test with the test binary deleted first. A
+# stale unit-test binary makes a red assertion look green, lagging the result by
+# exactly one iteration, so clear it before cargo-mutants takes its baseline.
+find "$root_dir/target" -type f -path '*/deps/imas_mvdd_loader-*' ! -name '*.*' -delete
+
+cd -- "$root_dir"
+cargo mutants --no-config --all-features --list --json >"$candidate_mutants"
+python3 scripts/check-rust-mutation-audit.py \
+    --line-scope "$line_scope" \
+    --candidate-mutants "$candidate_mutants" \
+    --write-selection "$selected_mutants" \
+    --write-cargo-mutants-config "$cargo_mutants_config"
+
+# A raw missed mutant gives cargo-mutants a nonzero status. Its complete report
+# below distinguishes a real audit failure from an accepted exclusion.
+cargo mutants --config "$cargo_mutants_config" --all-features --output "$audit_dir" -- --lib || true
+
+if python3 scripts/check-rust-mutation-audit.py \
+    --line-scope "$line_scope" \
+    --audit "$audit" \
+    --selected "$selected_mutants" \
+    --mutants "$audit_dir/mutants.out/mutants.json" \
+    --outcomes "$audit_dir/mutants.out/outcomes.json" \
+    --dispositions "$dispositions"; then
+    checker_status=0
+else
+    checker_status=$?
+fi
+
+echo "mutation audit report: $audit_dir (elapsed ${SECONDS}s)"
+# Cargo-mutants reports raw misses as a nonzero status. The checker is the
+# policy authority: it accounts for documented equivalent/integration-only
+# exclusions, the score floors and timeouts. Keep the raw report above, but
+# return the post-classification verdict so a fully accepted audit can pass.
+exit "$checker_status"
