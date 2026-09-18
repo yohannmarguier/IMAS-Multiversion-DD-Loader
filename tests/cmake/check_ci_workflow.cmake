@@ -315,6 +315,7 @@ read_file_lines("${GRAPH_SETUP_ACTION_FILE}" graph_setup_action_lines)
 read_job(fast fast_job)
 read_job(full full_job)
 read_job(graph-provisioning graph_provisioning_job)
+read_job(graph-abi graph_abi_job)
 read_top_level_mapping(env workflow_env)
 
 require_line(fast_job "build_type: [Debug, Release]"
@@ -329,6 +330,16 @@ require_line(graph_provisioning_job "- uses: ./.github/actions/setup-dd-graph"
     "provision the pinned DD graph through the shared setup action")
 require_line(graph_provisioning_job "run: echo 'DD graph provisioning smoke check passed'"
     "label graph provisioning as a smoke check rather than conversion coverage")
+require_line(graph_abi_job "- uses: ./.github/actions/setup-dd-graph"
+    "provision the pinned DD graph before graph-backed ABI checks")
+require_line(graph_abi_job "- uses: ./.github/actions/setup-toolchain"
+    "use the pinned toolchain for graph-backed ABI checks")
+require_line(graph_abi_job
+    "run: cargo test pinned_graph_returns_a_complete_equilibrium_scope --lib -- --ignored"
+    "fail when live graph acquisition cannot produce the pinned complete scope")
+require_line(graph_abi_job
+    "run: ctest --test-dir build -L graph-runtime-map --output-on-failure --no-tests=error"
+    "run the nonempty graph-selected C ABI matrix")
 
 foreach(job IN ITEMS fast_job full_job)
     require_line(${job} "- uses: ./.github/actions/setup-toolchain"

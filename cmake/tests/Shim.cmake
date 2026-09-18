@@ -310,7 +310,8 @@ target_compile_definitions(graph_runtime_map_test PRIVATE
     "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
 add_dependencies(graph_runtime_map_test imas_mvdd_graph_capi recording_stub)
 set_target_properties(graph_runtime_map_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib")
+    BUILD_RPATH "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib"
+    IMAS_MVDD_CTEST_LABEL graph-runtime-map)
 
 add_stub_test(graph-runtime-map-identity-operations
     graph_runtime_map_test identity-operations

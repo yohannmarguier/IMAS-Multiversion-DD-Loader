@@ -72,6 +72,28 @@ expect_guard_rejection(
     "full_job must fail when its selected test profile registers no tests")
 
 string(REPLACE
+    "ctest --test-dir build -L graph-runtime-map --output-on-failure --no-tests=error"
+    "ctest --test-dir build -L graph-runtime-map-missing --output-on-failure --no-tests=error"
+    graph_abi_missing_selection "${workflow}")
+if(workflow STREQUAL graph_abi_missing_selection)
+    message(FATAL_ERROR "Could not replace the graph ABI CTest label")
+endif()
+expect_guard_rejection(
+    graph-abi-missing-selection "${graph_abi_missing_selection}"
+    "graph_abi_job must run the nonempty graph-selected C ABI matrix")
+
+string(REPLACE
+    "run: cargo test pinned_graph_returns_a_complete_equilibrium_scope --lib -- --ignored"
+    "# run: cargo test pinned_graph_returns_a_complete_equilibrium_scope --lib -- --ignored"
+    graph_abi_without_acquisition "${workflow}")
+if(workflow STREQUAL graph_abi_without_acquisition)
+    message(FATAL_ERROR "Could not comment out the graph ABI acquisition check")
+endif()
+expect_guard_rejection(
+    graph-abi-without-acquisition "${graph_abi_without_acquisition}"
+    "graph_abi_job must fail when live graph acquisition")
+
+string(REPLACE
     "ref=$(head -n1 \"$GITHUB_WORKSPACE/IMAS_CORE_REF\" | tr -d '[:space:]')"
     "ref=690f5392a58e4c73131d6b723c72105e9fbdcc9f"
     inline_pin "${workflow}")
