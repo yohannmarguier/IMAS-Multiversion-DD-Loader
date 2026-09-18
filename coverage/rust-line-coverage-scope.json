@@ -114,7 +114,7 @@
     {
       "path": "src/version/version_stamp.rs",
       "start_line": 85,
-      "end_line": 138,
+      "end_line": 139,
       "reason": "the IMAS-Core discovery read: argument marshalling and buffer ownership, proven through the stub and real-Core stamp scenarios"
     },
     {
