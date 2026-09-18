@@ -26,6 +26,18 @@ impl GraphFactsSource for GraphTestSource {
         _attempt: &AcquisitionAttempt,
     ) -> Result<IdsGraphFacts, GraphSourceError> {
         match ids {
+            "equilibrium"
+                if std::env::var_os("IMAS_MVDD_GRAPH_TEST_SCOPE").as_deref()
+                    == Some(std::ffi::OsStr::new("coexistence")) =>
+            {
+                Ok(coexisting_equilibrium_scope(ids, GraphNodeKind::Leaf))
+            }
+            "equilibrium"
+                if std::env::var_os("IMAS_MVDD_GRAPH_TEST_SCOPE").as_deref()
+                    == Some(std::ffi::OsStr::new("coexistence-arraystruct")) =>
+            {
+                Ok(coexisting_equilibrium_scope(ids, GraphNodeKind::Structure))
+            }
             "equilibrium" => Ok(classified_equilibrium_scope()),
             "coexisting_equilibrium" => Ok(coexisting_equilibrium_scope(ids, GraphNodeKind::Leaf)),
             "coexisting_arraystruct_equilibrium" => {
@@ -254,6 +266,7 @@ fn cocos_equilibrium_scope(
         .collect(),
         nodes: vec![
             leaf(ids, "time"),
+            leaf(ids, "time_slice"),
             leaf(ids, "ids_properties/version_put/data_dictionary"),
             cocos_psi_leaf(ids, psi_label, psi_source, psi_expression),
         ],
@@ -479,6 +492,10 @@ fn coexisting_equilibrium_scope(ids: &str, j_kind: GraphNodeKind) -> IdsGraphFac
     let [j_tor, j_phi] = coexisting_rename_pair(ids, j_predecessor, j_successor, j_kind);
     let [b_field_tor, b_field_phi] =
         coexisting_rename_pair(ids, b_predecessor, b_successor, GraphNodeKind::Leaf);
+    let mut time_slice = leaf(ids, "time_slice");
+    time_slice
+        .endpoints
+        .push(coexistence_endpoint("3.42.0", GraphNodeKind::Leaf));
     IdsGraphFacts {
         complete: true,
         versions: ["3.39.0", "3.42.0", "4.0.0", "4.1.1"]
@@ -490,6 +507,8 @@ fn coexisting_equilibrium_scope(ids: &str, j_kind: GraphNodeKind) -> IdsGraphFac
             .collect(),
         nodes: vec![
             leaf(ids, "time"),
+            leaf(ids, "time_slice/time"),
+            time_slice,
             leaf(ids, "ids_properties/version_put/data_dictionary"),
             j_tor,
             j_phi,

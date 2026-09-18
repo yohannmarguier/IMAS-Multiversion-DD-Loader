@@ -94,6 +94,20 @@ expect_guard_rejection(
     "graph_abi_job must fail when live graph acquisition")
 
 string(REPLACE
+    "          ctest --test-dir build -R \"$pattern\" --output-on-failure --no-tests=error"
+    "          # ctest --test-dir build -R \"$pattern\" --output-on-failure --no-tests=error"
+    missing_coexistence_run "${workflow}")
+if(workflow STREQUAL missing_coexistence_run)
+    message(FATAL_ERROR "Could not comment out the graph coexistence test command")
+endif()
+string(APPEND missing_coexistence_run
+    "\n  decoy:\n    runs-on: ubuntu-latest\n    steps:\n"
+    "      - run: ctest --test-dir build -R \"$pattern\" --output-on-failure --no-tests=error\n")
+expect_guard_rejection(
+    missing-coexistence-run "${missing_coexistence_run}"
+    "full_job must execute the graph coexistence real-Core scenarios")
+
+string(REPLACE
     "ref=$(head -n1 \"$GITHUB_WORKSPACE/IMAS_CORE_REF\" | tr -d '[:space:]')"
     "ref=690f5392a58e4c73131d6b723c72105e9fbdcc9f"
     inline_pin "${workflow}")

@@ -160,6 +160,52 @@ add_real_core_test(equilibrium-read-conversion-disabled-is-unaffected
 add_real_core_test(equilibrium-read-copied-fixture-harness-reproves-renamed-read
     $<TARGET_FILE:equilibrium_read_test> copied-fixture-harness-reproves-renamed-read)
 
+# Issue #228 keeps the graph-selected source isolated from the production
+# library while exercising its 3.42.0 coexistence map through real Core and
+# the established copied-fixture/HDF5 oracle.
+add_executable(graph_coexistence_oracle_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/graph_coexistence_oracle_test.c")
+target_include_directories(graph_coexistence_oracle_test PRIVATE
+    ${_imas_core_include_dirs}
+    ${HDF5_C_INCLUDE_DIRS})
+target_compile_definitions(graph_coexistence_oracle_test PRIVATE
+    "EQUILIBRIUM_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/imas-python-fixtures/fixtures\"")
+target_link_libraries(graph_coexistence_oracle_test PRIVATE
+    imas_mvdd_loader_graph_test
+    ${HDF5_C_LIBRARIES})
+add_dependencies(graph_coexistence_oracle_test imas_mvdd_graph_capi)
+if(IMAS_CORE_BUILT_FROM_SOURCE)
+    add_dependencies(graph_coexistence_oracle_test ${IMAS_CORE_AL_TARGET})
+endif()
+set_target_properties(graph_coexistence_oracle_test PROPERTIES
+    BUILD_RPATH "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib")
+
+add_real_core_test(read-coexistence-forward-selects-primary-then-falls-back
+    $<TARGET_FILE:graph_coexistence_oracle_test>
+    read-coexistence-forward-selects-primary-then-falls-back)
+add_real_core_test(read-coexistence-forward-arraystruct-falls-back-between-j-candidates
+    $<TARGET_FILE:graph_coexistence_oracle_test>
+    read-coexistence-forward-arraystruct-falls-back-between-j-candidates)
+add_real_core_test(read-coexistence-reverse-selects-the-4.1-successor
+    $<TARGET_FILE:graph_coexistence_oracle_test>
+    read-coexistence-reverse-selects-the-4.1-successor)
+add_real_core_test(write-delete-coexistence-forward-is-primary-only-and-fans-out
+    $<TARGET_FILE:graph_coexistence_oracle_test>
+    write-delete-coexistence-forward-is-primary-only-and-fans-out)
+add_real_core_test(write-coexistence-reverse-non-primary-refuses
+    $<TARGET_FILE:graph_coexistence_oracle_test>
+    write-coexistence-reverse-non-primary-refuses)
+set_tests_properties(
+    read-coexistence-forward-selects-primary-then-falls-back
+    read-coexistence-reverse-selects-the-4.1-successor
+    write-delete-coexistence-forward-is-primary-only-and-fans-out
+    write-coexistence-reverse-non-primary-refuses
+    PROPERTIES
+    ENVIRONMENT "IMAS_MVDD_GRAPH_TEST_SCOPE=coexistence")
+set_tests_properties(read-coexistence-forward-arraystruct-falls-back-between-j-candidates
+    PROPERTIES
+    ENVIRONMENT "IMAS_MVDD_GRAPH_TEST_SCOPE=coexistence-arraystruct")
+
 # --- Issue #133: on-disk oracle proof for the write and delete seams. Each
 # scenario mutates its own private copy of the fixture pair and reads the
 # result back with raw HDF5, never through the shim. No RESOURCE_LOCK is
