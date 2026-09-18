@@ -20,7 +20,7 @@ use crate::conversion::conversion_map::{ArtifactDdVersion, CocosConvention};
 
 const VERSIONS: &str = "MATCH (v:DDVersion) RETURN v.id AS release, v.cocos AS cocos ORDER BY v.id SKIP $skip LIMIT $limit";
 const VERSIONS_COUNT: &str = "MATCH (v:DDVersion) RETURN count(v) AS count";
-const NODES: &str = "MATCH (n:IMASNode {ids: $ids}) RETURN n.id AS path, n.ids AS ids, n.data_type AS data_type, n.ndim AS ndim, n.units AS units, n.coordinates AS coordinates, n.timebase AS timebase, n.change_nbc_version AS change_nbc_version, n.change_nbc_previous_name AS change_nbc_previous_name, n.change_nbc_previous_type AS change_nbc_previous_type, n.cocos_label_transformation AS cocos_label_transformation, n.cocos_transformation_expression AS cocos_transformation_expression, n.cocos_label_source AS cocos_label_source, n.renamed_to AS renamed_to, [(n)-[:INTRODUCED_IN]->(v:DDVersion) | v.id] AS introduced, [(n)-[:DEPRECATED_IN]->(v:DDVersion) | v.id] AS deprecated ORDER BY n.id SKIP $skip LIMIT $limit";
+const NODES: &str = "MATCH (n:IMASNode {ids: $ids}) RETURN n.id AS path, n.ids AS ids, n.data_type AS data_type, n.ndim AS ndim, n.units AS units, [(n)-[r:HAS_COORDINATE]->(coordinate) | [r.dimension, coordinate.id]] AS coordinate_relationships, n.timebase AS timebase, n.change_nbc_version AS change_nbc_version, n.change_nbc_previous_name AS change_nbc_previous_name, n.change_nbc_previous_type AS change_nbc_previous_type, n.cocos_label_transformation AS cocos_label_transformation, n.cocos_transformation_expression AS cocos_transformation_expression, n.cocos_label_source AS cocos_label_source, n.renamed_to AS renamed_to, [(n)-[:INTRODUCED_IN]->(v:DDVersion) | v.id] AS introduced, [(n)-[:DEPRECATED_IN]->(v:DDVersion) | v.id] AS deprecated ORDER BY n.id SKIP $skip LIMIT $limit";
 const NODES_COUNT: &str = "MATCH (n:IMASNode {ids: $ids}) RETURN count(n) AS count";
 const EVENTS: &str = "MATCH (n:IMASNode {ids: $ids})<-[:FOR_IMAS_PATH]-(c:IMASNodeChange)-[:IN_VERSION]->(v:DDVersion) MATCH (c)-[:FOR_IMAS_PATH]->(owner:IMASNode) RETURN c.id AS id, n.id AS path, v.id AS release, c.change_type AS kind, c.old_value AS old_value, c.new_value AS new_value, c.semantic_type AS semantic_type, c.unit_change_subtype AS unit_change_subtype, collect(DISTINCT owner.ids) AS owner_ids ORDER BY c.id SKIP $skip LIMIT $limit";
 const EVENTS_COUNT: &str = "MATCH (n:IMASNode {ids: $ids})<-[:FOR_IMAS_PATH]-(c:IMASNodeChange)-[:IN_VERSION]->(v:DDVersion) RETURN count(c) AS count";
@@ -403,6 +403,38 @@ fn validate_raw_scope(
         let path = required_string(row, "path")?;
         if !paths.insert(path) {
             return Err(GraphSourceError("duplicate node path".to_string()));
+        }
+        let relationships = match row.get("coordinate_relationships") {
+            Some(GraphValue::List(relationships)) => relationships,
+            Some(GraphValue::Null) => {
+                return Err(GraphSourceError(
+                    "coordinate relationships must be an empty list, not typed null".to_string(),
+                ));
+            }
+            _ => {
+                return Err(GraphSourceError(
+                    "coordinate relationships are missing or not a list".to_string(),
+                ));
+            }
+        };
+        let mut dimensions = HashSet::new();
+        for relationship in relationships {
+            let GraphValue::List(values) = relationship else {
+                return Err(GraphSourceError(
+                    "coordinate relationship is not a two-value list".to_string(),
+                ));
+            };
+            let [GraphValue::Integer(dimension), GraphValue::String(target)] = values.as_slice()
+            else {
+                return Err(GraphSourceError(
+                    "coordinate relationship has an invalid dimension or target".to_string(),
+                ));
+            };
+            if *dimension < 0 || target.is_empty() || !dimensions.insert(*dimension) {
+                return Err(GraphSourceError(
+                    "coordinate relationships repeat or contain an invalid dimension".to_string(),
+                ));
+            }
         }
         for lifecycle_column in ["introduced", "deprecated"] {
             let values = match row.get(lifecycle_column) {

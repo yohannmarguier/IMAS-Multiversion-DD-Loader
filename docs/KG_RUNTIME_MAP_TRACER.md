@@ -41,6 +41,32 @@ deadline/single-flight implementation, runtime source switch, or C ABI
 adapter. Those additions must retain this complete-map-or-explicit-failure
 boundary and consume a shared attempt deadline rather than resetting it.
 
+## Coordinate and timebase evidence (#222)
+
+Coordinate relationships are now projected from `HAS_COORDINATE` separately
+from the raw list strings in `coordinates` history events. The relationships
+are unversioned and may be omitted or strip index notation, so their absence
+or equality as empty lists cannot certify coordinate equivalence. A map marks
+one endpoint exact only when nonempty raw coordinate declarations and their
+timebase are positionally established as the same paths or as directly
+evidenced correspondences, and either each raw dimension is corroborated by a
+preserved relationship or an applicable producer verdict classifies it
+`Equivalent`. Unequal declarations alone are unresolved, not an inference
+that resampling is required. Transport validates relationship dimensions;
+targets outside the IDS-node inventory (including `IMASCoordinateSpec`) are
+local non-corroborating facts, not scope failures. It deliberately leaves
+them unversioned raw facts until an adapter can establish their historical
+meaning.
+
+A producer-established `RequiresResampling` verdict stays localized as the
+existing `Unmappable` refusal, while an `UnboundedScope` verdict fails the
+whole acquisition. The graph-selected C ABI scenario exercises an unsafe
+timebase independently from a safe field in a write and an arraystruct open;
+both preserve existing refusal ordering and prevent the Core call. Their
+seam-specific CTest names preserve the test-suite grouping convention. See
+`docs/history/runtime-map-coordinate-timebase-222.md` for the focused checks,
+candidate live evidence and the explicitly unrun real-Core/HLI cases.
+
 ## Neo4j acquisition boundary (#212)
 
 `conversion::runtime_map::neo4j_graph` selects the Rust `neo4j` 0.2 Bolt
