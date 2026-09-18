@@ -195,3 +195,40 @@ unchanged source path. Raw Neo4j transport still ends at `Neo4jRawScope`; this
 tracer consumes the same complete `GraphFactsSource` boundary used by the
 controlled graph-stage source, rather than adding a second map interpreter or
 a graph-specific C ABI.
+## Opening families and lifecycle around acquisition (#225)
+
+The graph-stage C ABI tracer now covers the opening adapter around the same
+controlled complete-map interface. One source scope can deliberately become
+unavailable after its first successful load, proving that global, slice,
+timerange, plugin-global and plugin-slice openings retain and reuse the map
+after their earlier roots close. Reopening the same occurrence also exercises
+the cached-mismatch global `datapath` route, using #217's already-evidenced
+rename rule. The #225 availability cases themselves remain identity-only, so
+they verify adapter routing and retention without adding a scientific
+conversion rule.
+
+The tracer separately preserves matching and absent stamps, malformed-stamp
+cleanup, conversion-disabled forwarding, a Core slice-open failure, and the
+non-read `READ_OP` stamp probe. It also proves that a reentrant Core read and
+the untranslated plugin-binding seam retain their existing bypass contracts
+while a graph-backed root is live. An unavailable IDS refuses each linkable
+opening family after it opened Core, through that family's matching end seam,
+without a loss record. A transient controlled failure succeeds only on a later
+opening, proving that a terminal failed attempt is not retained as either a
+map or an occurrence-cache mismatch.
+
+The coordinator's focused Rust tests remain the synchronization evidence: they
+cover same-key joining, registry access while a leader and joiner wait for a
+map, independent different-key progress, shared deadlines, retention after
+graph shutdown, shared failures and later retry, and fencing of late expiry.
+The public C ABI scenarios supply the opening-family, cleanup and lifecycle
+evidence; no test controls were added to the shipped ABI.
+
+Verified in the recording-stub profile with `cargo fmt --check`, `cargo test
+runtime_map --lib` (34 passed; one pinned-live-graph check ignored), `cargo
+clippy --all-targets --features graph-test-source -- -D warnings`, then
+`cmake -S . -B build-issue225 -DCMAKE_BUILD_TYPE=Debug
+-DIMAS_MVDD_REAL_CORE_TESTS=OFF`, `cmake --build build-issue225 -j2`, and
+`ctest --test-dir build-issue225 --output-on-failure` (234 passed). The live
+Neo4j, real-Core and HLI completion obligations remain outside this controlled
+tracer ticket.

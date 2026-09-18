@@ -1,9 +1,11 @@
 //! Controlled graph-fact source for the graph-selected C-ABI tracer.
 //!
-//! This exists only in the separately built test shim.  It drives the same
+//! This exists only in the separately built test shim. It drives the same
 //! complete-map acquisition coordinator used by a future live graph source,
-//! while keeping the recording-stub scenarios hermetic and leaving production
-//! source selection unchanged.
+//! while keeping recording-stub scenarios hermetic and production source
+//! selection unchanged.
+
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{
     AcquisitionAttempt, EndpointMetadata, GraphFactsSource, GraphNode, GraphNodeKind, GraphRename,
@@ -13,18 +15,41 @@ use crate::conversion::conversion_map::ArtifactDdVersion;
 
 pub(crate) struct GraphTestSource;
 
+static ONCE_SCOPE_LOADS: AtomicUsize = AtomicUsize::new(0);
+static RECOVERING_SCOPE_LOADS: AtomicUsize = AtomicUsize::new(0);
+
 impl GraphFactsSource for GraphTestSource {
     fn load_ids_facts(
         &self,
         ids: &str,
         _attempt: &AcquisitionAttempt,
     ) -> Result<IdsGraphFacts, GraphSourceError> {
-        if ids != "equilibrium" {
-            return Err(GraphSourceError(format!(
+        match ids {
+            "equilibrium" => Ok(equilibrium_scope()),
+            // This source becomes unavailable after one completed scope. The
+            // graph-stage ABI scenarios use it to prove that a retained map
+            // survives root closure without contacting the graph again.
+            "equilibrium_once" if ONCE_SCOPE_LOADS.fetch_add(1, Ordering::SeqCst) == 0 => {
+                Ok(identity_scope(ids))
+            }
+            "equilibrium_once" => Err(GraphSourceError(
+                "controlled graph source was shut down after its first scope".to_string(),
+            )),
+            // A later open must own a fresh acquisition after a failed one.
+            // The first failure and later complete scope make that retry
+            // externally observable through the unchanged C ABI.
+            "recovering_equilibrium"
+                if RECOVERING_SCOPE_LOADS.fetch_add(1, Ordering::SeqCst) == 0 =>
+            {
+                Err(GraphSourceError(
+                    "controlled graph source is temporarily unavailable".to_string(),
+                ))
+            }
+            "recovering_equilibrium" => Ok(identity_scope(ids)),
+            _ => Err(GraphSourceError(format!(
                 "controlled graph source has no complete scope for IDS {ids}"
-            )));
+            ))),
         }
-        Ok(identity_equilibrium_scope())
     }
 }
 
@@ -32,9 +57,9 @@ fn graph_release(value: &str) -> ArtifactDdVersion {
     ArtifactDdVersion::new(value).expect("the controlled graph release is valid")
 }
 
-fn leaf(path: &str) -> GraphNode {
+fn leaf(ids: &str, path: &str) -> GraphNode {
     GraphNode {
-        ids: "equilibrium".to_string(),
+        ids: ids.to_string(),
         path: path.to_string(),
         introduced: vec![graph_release("3.39.0")],
         removed: Vec::new(),
@@ -56,8 +81,8 @@ fn leaf(path: &str) -> GraphNode {
     }
 }
 
-fn renamed_leaf(path: &str, introduced: &str, removed: Option<&str>) -> GraphNode {
-    let mut node = leaf(path);
+fn renamed_leaf(ids: &str, path: &str, introduced: &str, removed: Option<&str>) -> GraphNode {
+    let mut node = leaf(ids, path);
     node.introduced = vec![graph_release(introduced)];
     node.removed = removed.into_iter().map(graph_release).collect();
     if !node
@@ -80,7 +105,27 @@ fn renamed_leaf(path: &str, introduced: &str, removed: Option<&str>) -> GraphNod
     node
 }
 
-fn identity_equilibrium_scope() -> IdsGraphFacts {
+fn identity_scope(ids: &str) -> IdsGraphFacts {
+    IdsGraphFacts {
+        complete: true,
+        versions: ["3.39.0", "4.1.1"]
+            .into_iter()
+            .map(|release_text| GraphVersion {
+                release: graph_release(release_text),
+                cocos: None,
+            })
+            .collect(),
+        nodes: vec![
+            leaf(ids, "time"),
+            leaf(ids, "ids_properties/version_put/data_dictionary"),
+        ],
+        events: Vec::new(),
+        successors: Vec::new(),
+    }
+}
+
+fn equilibrium_scope() -> IdsGraphFacts {
+    let ids = "equilibrium";
     let mut facts = IdsGraphFacts {
         complete: true,
         versions: ["3.39.0", "3.42.0", "4.0.0", "4.1.1"]
@@ -91,9 +136,10 @@ fn identity_equilibrium_scope() -> IdsGraphFacts {
             })
             .collect(),
         nodes: vec![
-            leaf("time"),
-            leaf("ids_properties/version_put/data_dictionary"),
+            leaf(ids, "time"),
+            leaf(ids, "ids_properties/version_put/data_dictionary"),
             renamed_leaf(
+                ids,
                 "time_slice/global_quantities/beta_normal",
                 "3.39.0",
                 Some("4.0.0"),
@@ -103,15 +149,20 @@ fn identity_equilibrium_scope() -> IdsGraphFacts {
                     release: graph_release("4.0.0"),
                     previous_name: "beta_normal".to_string(),
                 }],
-                ..renamed_leaf("time_slice/global_quantities/beta_tor_norm", "4.0.0", None)
+                ..renamed_leaf(
+                    ids,
+                    "time_slice/global_quantities/beta_tor_norm",
+                    "4.0.0",
+                    None,
+                )
             },
-            renamed_leaf("time_slice/constraints/j_tor", "3.39.0", Some("4.0.0")),
+            renamed_leaf(ids, "time_slice/constraints/j_tor", "3.39.0", Some("4.0.0")),
             GraphNode {
                 rename_declarations: vec![GraphRename {
                     release: graph_release("3.42.0"),
                     previous_name: "j_tor".to_string(),
                 }],
-                ..renamed_leaf("time_slice/constraints/j_phi", "3.42.0", None)
+                ..renamed_leaf(ids, "time_slice/constraints/j_phi", "3.42.0", None)
             },
         ],
         events: Vec::new(),

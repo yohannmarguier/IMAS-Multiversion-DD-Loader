@@ -1,5 +1,6 @@
 use super::*;
 use crate::conversion::conversion_map::{Direction, Outcome, RefusalReason, Rel};
+use crate::registry::context_registry::REGISTRY;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -527,6 +528,32 @@ fn concurrent_same_key_requests_share_one_construction_and_one_result() {
                 .is_some()
         );
     }
+}
+
+#[test]
+fn registry_access_remains_available_while_a_map_acquisition_waits() {
+    let source = GateSource::new(complete_identity_scope());
+    let joined = Arc::new(JoinObserver::new());
+    let coordinator = Arc::new(RuntimeMapCoordinator::with_observers(
+        source.clone(),
+        Duration::from_secs(5),
+        Arc::new(SystemClock::new()),
+        Arc::new(NoopAttemptObserver),
+        joined.clone(),
+    ));
+    let leader_coordinator = Arc::clone(&coordinator);
+    let leader = thread::spawn(move || leader_coordinator.acquire(&request()));
+    source.wait_until_started();
+
+    let joiner_coordinator = Arc::clone(&coordinator);
+    let joiner = thread::spawn(move || joiner_coordinator.acquire(&request()));
+    joined.wait_until_joined();
+
+    assert!(REGISTRY.lookup(i32::MIN).is_none());
+
+    source.release();
+    assert!(leader.join().expect("leader must not panic").is_ok());
+    assert!(joiner.join().expect("joiner must not panic").is_ok());
 }
 
 #[test]
