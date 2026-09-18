@@ -116,6 +116,127 @@ static void scenario_renamed_delete_hli_old(void) {
                             "time_slice/global_quantities/beta_tor_norm");
 }
 
+static int open_moved_parent_gap(int *operation_ctx_out) {
+    int operation_ctx = open_mismatched_occurrence("moved_descendants", NULL);
+    int size = -1;
+    int parent_ctx = -1;
+    int gap_ctx = -1;
+    const char *new_parent = "/time_slice/current/profiles_1d";
+    const char *old_parent = "/time_slice/legacy/profiles_1d";
+
+    CHECK_OK(al_begin_arraystruct_action(operation_ctx, new_parent, "/time", &size, &parent_ctx));
+    CHECK(strcmp(string_from_stub("recording_stub_arraystruct_path"), old_parent) == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_arraystruct_timebase"), "/time") == 0);
+    CHECK_OK(al_begin_arraystruct_action(parent_ctx, "gap", "/time", &size, &gap_ctx));
+    CHECK(strcmp(string_from_stub("recording_stub_arraystruct_path"), "gap") == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_arraystruct_timebase"), "/time") == 0);
+
+    *operation_ctx_out = operation_ctx;
+    return gap_ctx;
+}
+
+static void scenario_moved_parent_opens_nested_arraystruct(void) {
+    int operation_ctx = -1;
+    (void)open_moved_parent_gap(&operation_ctx);
+    check_no_loss_entry(operation_ctx);
+
+    printf("graph_runtime_map_test moved-parent-opens-nested-arraystruct: a relative parent "
+           "move retained the stored child anchor\n");
+}
+
+static void scenario_moved_parent_reads_nested_path_and_timebase(void) {
+    int operation_ctx = -1;
+    int gap_ctx = open_moved_parent_gap(&operation_ctx);
+
+    void *read_data = NULL;
+    int read_size[1] = {0};
+    CHECK_OK(al_read_data(gap_ctx, "r", "r", &read_data, IMAS_DOUBLE_DATA, 1, read_size));
+    CHECK(read_data != NULL);
+    CHECK(strcmp(string_from_stub("recording_stub_read_field"), "r") == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_read_timebase"), "r") == 0);
+    check_no_loss_entry(operation_ctx);
+
+    printf("graph_runtime_map_test moved-parent-reads-nested-path-and-timebase: a relative "
+           "child read resolved field and timebase independently\n");
+}
+
+static void scenario_moved_parent_writes_absolute_path_and_timebase(void) {
+    int operation_ctx = -1;
+    (void)open_moved_parent_gap(&operation_ctx);
+    const char *new_r = "/time_slice/current/profiles_1d/gap/r";
+    const char *old_r = "/time_slice/legacy/profiles_1d/gap/r";
+
+    double write_data[] = {12.5};
+    int write_size[] = {1};
+    CHECK_OK(al_write_data(operation_ctx, new_r, "/time", write_data, IMAS_DOUBLE_DATA, 1,
+                           write_size));
+    CHECK(strcmp(string_from_stub("recording_stub_write_field"), old_r) == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_write_timebase"), "/time") == 0);
+    check_no_loss_entry(operation_ctx);
+
+    printf("graph_runtime_map_test moved-parent-writes-absolute-path-and-timebase: a nested "
+           "write resolved field and timebase independently\n");
+}
+
+static void scenario_moved_parent_deletes_a_relative_child(void) {
+    int operation_ctx = -1;
+    int gap_ctx = open_moved_parent_gap(&operation_ctx);
+
+    CHECK_OK(al_delete_data(gap_ctx, "r"));
+    CHECK(strcmp(string_from_stub("recording_stub_delete_path"), "r") == 0);
+    check_no_loss_entry(operation_ctx);
+
+    printf("graph_runtime_map_test moved-parent-deletes-a-relative-child: a nested delete "
+           "resolved beneath the moved parent\n");
+}
+
+static void scenario_moved_parent_admits_a_trivial_child_delete(void) {
+    int operation_ctx = open_mismatched_occurrence("moved_descendants", NULL);
+    CHECK_OK(al_delete_data(operation_ctx, "/time_slice/current/profiles_1d/gap"));
+    CHECK(strcmp(string_from_stub("recording_stub_delete_path"),
+                 "/time_slice/legacy/profiles_1d/gap") == 0);
+    check_no_loss_entry(operation_ctx);
+
+    printf("graph_runtime_map_test moved-parent-admits-a-trivial-child-delete: the moved "
+           "subtree retained the existing delete safety rule\n");
+}
+
+static void scenario_moved_parent_refuses_an_escaping_delete(void) {
+    int operation_ctx = open_mismatched_occurrence("moved_descendants", NULL);
+    int deletes_before = int_from_stub("recording_stub_delete_call_count");
+    const char *caller_path = "time_slice/legacy/profiles_1d";
+
+    al_status_t status = al_delete_data(operation_ctx, caller_path);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status,
+                          "this subtree delete would leave data at a stored path outside the requested subtree",
+                          caller_path, "3.39.0", "4.1.1");
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
+    check_loss_at(operation_ctx, 0, caller_path, IMAS_MVDD_FIDELITY_UNMAPPABLE,
+                  IMAS_MVDD_LOSS_OPERATION_DELETE);
+
+    printf("graph_runtime_map_test moved-parent-refuses-an-escaping-delete: a child that "
+           "leaves the moved subtree still protects the delete boundary\n");
+}
+
+static void scenario_graph_exact_gap_r_omits_the_xml_parent_loss(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    void *read_data = NULL;
+    int read_size[1] = {0};
+    const char *caller_path = "time_slice/boundary_separatrix/gap/r";
+
+    CHECK_OK(al_read_data(operation_ctx, caller_path, "", &read_data, IMAS_DOUBLE_DATA, 1,
+                          read_size));
+    CHECK(read_data != NULL);
+    CHECK(strcmp(read_data, "recording-stub: read data payload") == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_read_field"), "time_slice/boundary/gap/r") == 0);
+    check_no_loss_entry(operation_ctx);
+
+    printf("graph_runtime_map_test graph-exact-gap-r-omits-the-xml-parent-loss: graph "
+           "evidence kept the XML path, payload and status while omitting inherited loss\n");
+}
+
 static void scenario_scientific_gate_refuses_caller_path(void) {
     int operation_ctx = open_mismatched_equilibrium();
     void *read_data = (void *)1;
@@ -721,6 +842,17 @@ static const shim_test_scenario SCENARIOS[] = {
     {"renamed-write-hli-old", scenario_renamed_write_hli_old},
     {"renamed-delete-hli-new", scenario_renamed_delete_hli_new},
     {"renamed-delete-hli-old", scenario_renamed_delete_hli_old},
+    {"moved-parent-opens-nested-arraystruct", scenario_moved_parent_opens_nested_arraystruct},
+    {"moved-parent-reads-nested-path-and-timebase",
+     scenario_moved_parent_reads_nested_path_and_timebase},
+    {"moved-parent-writes-absolute-path-and-timebase",
+     scenario_moved_parent_writes_absolute_path_and_timebase},
+    {"moved-parent-deletes-a-relative-child", scenario_moved_parent_deletes_a_relative_child},
+    {"moved-parent-admits-a-trivial-child-delete",
+     scenario_moved_parent_admits_a_trivial_child_delete},
+    {"moved-parent-refuses-an-escaping-delete", scenario_moved_parent_refuses_an_escaping_delete},
+    {"graph-exact-gap-r-omits-the-xml-parent-loss",
+     scenario_graph_exact_gap_r_omits_the_xml_parent_loss},
     {"scientific-gate-refuses-caller-path", scenario_scientific_gate_refuses_caller_path},
     {"acquisition-failure-cleans-up-open-context", scenario_acquisition_failure_cleans_up_open_context},
     {"read-unit-refusal-preserves-caller-data-without-forwarding",

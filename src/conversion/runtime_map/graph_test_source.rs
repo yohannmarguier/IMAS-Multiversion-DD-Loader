@@ -27,6 +27,7 @@ impl GraphFactsSource for GraphTestSource {
     ) -> Result<IdsGraphFacts, GraphSourceError> {
         match ids {
             "equilibrium" => Ok(classified_equilibrium_scope()),
+            "moved_descendants" => Ok(moved_descendants_scope()),
             // This source becomes unavailable after one completed scope. The
             // graph-stage ABI scenarios use it to prove that a retained map
             // survives root closure without contacting the graph again.
@@ -112,6 +113,37 @@ fn leaf(ids: &str, path: &str) -> GraphNode {
             })
             .collect(),
     }
+}
+
+fn structure(ids: &str, path: &str) -> GraphNode {
+    let mut node = leaf(ids, path);
+    for endpoint in &mut node.endpoints {
+        endpoint.kind = GraphNodeKind::Structure;
+        endpoint.data_type = "STRUCTURE".to_string();
+        endpoint.ndim = 0;
+    }
+    node
+}
+
+fn old_only(mut node: GraphNode) -> GraphNode {
+    node.endpoints.truncate(1);
+    node.removed = vec![graph_release("4.0.0")];
+    node
+}
+
+fn new_only(mut node: GraphNode) -> GraphNode {
+    let endpoint = node
+        .endpoints
+        .get(1)
+        .expect("controlled nodes carry a 4.1.1 endpoint")
+        .clone();
+    node.endpoints.remove(0);
+    node.endpoints.push(EndpointMetadata {
+        release: graph_release("4.0.0"),
+        ..endpoint
+    });
+    node.introduced = vec![graph_release("4.0.0")];
+    node
 }
 
 fn renamed_leaf(ids: &str, path: &str, introduced: &str, removed: Option<&str>) -> GraphNode {
@@ -257,6 +289,83 @@ fn identity_scope(ids: &str) -> IdsGraphFacts {
     }
 }
 
+fn moved_descendants_scope() -> IdsGraphFacts {
+    let ids = "moved_descendants";
+    let old_parent = "time_slice/legacy/profiles_1d";
+    let new_parent = "time_slice/current/profiles_1d";
+    let old_gap = format!("{old_parent}/gap");
+    let new_gap = format!("{new_parent}/gap");
+    let old_r = format!("{old_parent}/gap/r");
+    let new_r = format!("{new_parent}/gap/r");
+    let old_identifier = format!("{old_parent}/gap/identifier");
+    let old_escaping = format!("{old_parent}/escaped");
+    let new_escaping = "time_slice/outside/escaped";
+
+    let mut new_parent_node = new_only(structure(ids, new_parent));
+    new_parent_node.rename_declarations = vec![GraphRename {
+        release: graph_release("4.0.0"),
+        previous_name: "../legacy/profiles_1d".to_string(),
+    }];
+    let mut new_gap_node = new_only(structure(ids, &new_gap));
+    new_gap_node.rename_declarations = vec![GraphRename {
+        release: graph_release("4.0.0"),
+        previous_name: "../../legacy/profiles_1d/gap".to_string(),
+    }];
+    let mut new_r_node = new_only(leaf(ids, &new_r));
+    new_r_node.rename_declarations = vec![GraphRename {
+        release: graph_release("4.0.0"),
+        previous_name: "../../../legacy/profiles_1d/gap/r".to_string(),
+    }];
+    let mut new_escaping_node = new_only(leaf(ids, new_escaping));
+    new_escaping_node.rename_declarations = vec![GraphRename {
+        release: graph_release("4.0.0"),
+        previous_name: "../legacy/profiles_1d/escaped".to_string(),
+    }];
+
+    IdsGraphFacts {
+        complete: true,
+        versions: ["3.39.0", "4.0.0", "4.1.1"]
+            .into_iter()
+            .map(|release| GraphVersion {
+                release: graph_release(release),
+                cocos: None,
+            })
+            .collect(),
+        nodes: vec![
+            leaf(ids, "time"),
+            leaf(ids, "ids_properties/version_put/data_dictionary"),
+            old_only(structure(ids, old_parent)),
+            new_parent_node,
+            old_only(structure(ids, &old_gap)),
+            new_gap_node,
+            old_only(leaf(ids, &old_r)),
+            new_r_node,
+            old_only(leaf(ids, &old_identifier)),
+            old_only(leaf(ids, &old_escaping)),
+            new_escaping_node,
+        ],
+        events: Vec::new(),
+        successors: vec![
+            GraphSuccessor {
+                from_path: old_parent.to_string(),
+                to_path: new_parent.to_string(),
+            },
+            GraphSuccessor {
+                from_path: old_r,
+                to_path: new_r,
+            },
+            GraphSuccessor {
+                from_path: old_gap,
+                to_path: new_gap,
+            },
+            GraphSuccessor {
+                from_path: old_escaping,
+                to_path: new_escaping.to_string(),
+            },
+        ],
+    }
+}
+
 fn classified_equilibrium_scope() -> IdsGraphFacts {
     let ids = "equilibrium";
     let mut facts = IdsGraphFacts {
@@ -345,6 +454,37 @@ fn classified_equilibrium_scope() -> IdsGraphFacts {
             },
         ],
     };
+    let old_gap = "time_slice/boundary/gap";
+    let new_gap = "time_slice/boundary_separatrix/gap";
+    let old_r = format!("{old_gap}/r");
+    let new_r = format!("{new_gap}/r");
+    let mut new_gap_node = new_only(structure(ids, new_gap));
+    new_gap_node.rename_declarations = vec![GraphRename {
+        release: graph_release("4.0.0"),
+        previous_name: "../boundary/gap".to_string(),
+    }];
+    let mut new_r_node = new_only(leaf(ids, &new_r));
+    new_r_node.rename_declarations = vec![GraphRename {
+        release: graph_release("4.0.0"),
+        previous_name: "../../boundary/gap/r".to_string(),
+    }];
+    facts.nodes.extend([
+        old_only(structure(ids, old_gap)),
+        new_gap_node,
+        old_only(leaf(ids, &old_r)),
+        new_r_node,
+        new_only(leaf(ids, &format!("{new_gap}/identifier"))),
+    ]);
+    facts.successors.extend([
+        GraphSuccessor {
+            from_path: old_gap.to_string(),
+            to_path: new_gap.to_string(),
+        },
+        GraphSuccessor {
+            from_path: old_r,
+            to_path: new_r,
+        },
+    ]);
     for node in facts
         .nodes
         .iter_mut()

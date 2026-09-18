@@ -344,6 +344,34 @@ add_stub_test(delete-graph-runtime-map-renamed-hli-old
     graph_runtime_map_test renamed-delete-hli-old
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
+add_stub_test(arraystruct-path-graph-runtime-map-moved-parent-opens-nested
+    graph_runtime_map_test moved-parent-opens-nested-arraystruct
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(read-graph-runtime-map-moved-parent-nested-path-and-timebase
+    graph_runtime_map_test moved-parent-reads-nested-path-and-timebase
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(write-graph-runtime-map-moved-parent-absolute-path-and-timebase
+    graph_runtime_map_test moved-parent-writes-absolute-path-and-timebase
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(delete-graph-runtime-map-moved-parent-relative-child
+    graph_runtime_map_test moved-parent-deletes-a-relative-child
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(delete-graph-runtime-map-moved-parent-admits-a-trivial-child-delete
+    graph_runtime_map_test moved-parent-admits-a-trivial-child-delete
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(delete-graph-runtime-map-moved-parent-refuses-an-escaping-delete
+    graph_runtime_map_test moved-parent-refuses-an-escaping-delete
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+add_stub_test(read-graph-runtime-map-exact-gap-r-omits-the-xml-parent-loss
+    graph_runtime_map_test graph-exact-gap-r-omits-the-xml-parent-loss
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
 add_stub_test(read-graph-runtime-map-scientific-gate-refuses-caller-path
     graph_runtime_map_test scientific-gate-refuses-caller-path
     HLI_DD_VERSION 4.1.1
