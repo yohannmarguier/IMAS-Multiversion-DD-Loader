@@ -1,5 +1,5 @@
 use super::*;
-use crate::conversion::conversion_map::{Direction, Outcome, RefusalReason, Rel};
+use crate::conversion::conversion_map::{Direction, Outcome, RefusalReason, Rel, RuleExplanation};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -379,6 +379,36 @@ fn endpoint(release: &str, kind: GraphNodeKind, data_type: &str, ndim: u8) -> En
     }
 }
 
+fn endpoint_with_unit(
+    release: &str,
+    kind: GraphNodeKind,
+    data_type: &str,
+    ndim: u8,
+    unit: &str,
+) -> EndpointMetadata {
+    let mut endpoint = endpoint(release, kind, data_type, ndim);
+    endpoint.unit = Some(unit.to_string());
+    endpoint
+}
+
+fn unit_event(
+    path: &str,
+    old_value: &str,
+    new_value: &str,
+    evidence: UnitChangeEvidence,
+) -> GraphEvent {
+    GraphEvent {
+        id: format!("{path}:units:4.1.1"),
+        path: path.to_string(),
+        release: ArtifactDdVersion::new("4.1.1").expect("fixture release is valid"),
+        field: "units".to_string(),
+        kind: "units_changed".to_string(),
+        old_value: Some(old_value.to_string()),
+        new_value: Some(new_value.to_string()),
+        unit_change: Some(evidence),
+    }
+}
+
 fn node(path: &str, left: EndpointMetadata, right: EndpointMetadata) -> GraphNode {
     GraphNode {
         ids: "equilibrium".to_string(),
@@ -427,6 +457,7 @@ fn complete_identity_scope() -> IdsGraphFacts {
             kind: "structure_changed".to_string(),
             old_value: Some("INT_1D".to_string()),
             new_value: Some("STRUCT_ARRAY".to_string()),
+            unit_change: None,
         }],
         successors: Vec::new(),
     }
@@ -765,6 +796,115 @@ fn acquisition_returns_a_complete_identity_map_and_localized_retype_refusal() {
 }
 
 #[test]
+fn acquisition_classifies_unit_evidence_without_conflating_it_with_retypes() {
+    let mut facts = complete_identity_scope();
+    facts.nodes[2].endpoints = vec![
+        endpoint_with_unit("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1, "m"),
+        endpoint_with_unit("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1, "metre"),
+    ];
+    facts.nodes.extend([
+        node(
+            "time_slice/unit_dimensionally_compatible",
+            endpoint_with_unit("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1, "m"),
+            endpoint_with_unit("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1, "cm"),
+        ),
+        node(
+            "time_slice/unit_sentinel_resolved",
+            endpoint_with_unit("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1, "1"),
+            endpoint_with_unit("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1, "dimensionless"),
+        ),
+        node(
+            "time_slice/unit_requires_scale_or_offset",
+            endpoint_with_unit("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1, "m"),
+            endpoint_with_unit("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1, "cm"),
+        ),
+    ]);
+    facts.nodes.push(GraphNode {
+        ids: "equilibrium".to_string(),
+        path: "grids_ggd/grid/space/coordinates_type/identifier".to_string(),
+        introduced: vec![ArtifactDdVersion::new("4.1.1").expect("fixture release is valid")],
+        removed: Vec::new(),
+        endpoints: vec![endpoint("4.1.1", GraphNodeKind::Leaf, "STR_0D", 0)],
+    });
+    facts.events.extend([
+        unit_event(
+            "time_slice/profiles_1d/rho_tor",
+            "m",
+            "metre",
+            UnitChangeEvidence::Cosmetic,
+        ),
+        unit_event(
+            "time_slice/unit_dimensionally_compatible",
+            "m",
+            "cm",
+            UnitChangeEvidence::DimensionallyCompatible,
+        ),
+        unit_event(
+            "time_slice/unit_sentinel_resolved",
+            "1",
+            "dimensionless",
+            UnitChangeEvidence::SentinelResolved,
+        ),
+        unit_event(
+            "time_slice/unit_requires_scale_or_offset",
+            "m",
+            "cm",
+            UnitChangeEvidence::RequiredScaleOrOffset,
+        ),
+    ]);
+
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("unit uncertainty is local to the affected paths");
+
+    for direction in [Direction::Forward, Direction::Reverse] {
+        assert!(matches!(
+            map.resolve("time_slice/profiles_1d/rho_tor", direction),
+            Some(RuleExplanation {
+                outcome: Outcome::Path { .. },
+                fidelity: Fidelity::Exact,
+                ..
+            })
+        ));
+        assert_eq!(
+            map.resolve("time_slice/unit_dimensionally_compatible", direction)
+                .expect("the unresolved unit path remains claimed")
+                .outcome,
+            Outcome::Refusal(RefusalReason::Unmappable)
+        );
+        assert!(matches!(
+            map.resolve("time_slice/unit_sentinel_resolved", direction),
+            Some(RuleExplanation {
+                outcome: Outcome::Path { .. },
+                fidelity: Fidelity::Exact,
+                ..
+            })
+        ));
+        assert_eq!(
+            map.resolve("time_slice/unit_requires_scale_or_offset", direction)
+                .expect("the unsupported unit path remains claimed")
+                .outcome,
+            Outcome::Refusal(RefusalReason::UnitRedefinition)
+        );
+        assert_eq!(
+            map.resolve("grids_ggd/grid/space/coordinates_type", direction)
+                .expect("the reconstructed type change remains claimed")
+                .outcome,
+            Outcome::Refusal(RefusalReason::UnservableRetype)
+        );
+        assert_eq!(
+            map.resolve(
+                "grids_ggd/grid/space/coordinates_type/identifier",
+                direction
+            )
+            .expect("a new descendant inherits its parent's retype refusal")
+            .outcome,
+            Outcome::Refusal(RefusalReason::UnservableRetype)
+        );
+    }
+}
+
+#[test]
 fn acquisition_preserves_a_whole_source_failure() {
     let source = ControlledSource {
         result: Err(GraphSourceError("graph unavailable".to_string())),
@@ -907,6 +1047,7 @@ fn acquisition_keeps_reused_spelling_across_a_reappearance_unmappable() {
             kind: "path_removed".to_string(),
             old_value: None,
             new_value: None,
+            unit_change: None,
         },
         GraphEvent {
             id: "rho_tor:path_added:4.1.1".to_string(),
@@ -916,6 +1057,7 @@ fn acquisition_keeps_reused_spelling_across_a_reappearance_unmappable() {
             kind: "path_added".to_string(),
             old_value: None,
             new_value: None,
+            unit_change: None,
         },
     ]);
     let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })

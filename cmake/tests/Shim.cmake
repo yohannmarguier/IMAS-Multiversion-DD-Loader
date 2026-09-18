@@ -324,6 +324,22 @@ add_stub_test(graph-runtime-map-acquisition-failure-cleans-up-open-context
     graph_runtime_map_test acquisition-failure-cleans-up-open-context
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
+add_stub_test(read-graph-runtime-map-unit-refusal-preserves-caller-data-without-forwarding
+    graph_runtime_map_test read-unit-refusal-preserves-caller-data-without-forwarding
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(write-graph-runtime-map-unit-refusal-preserves-caller-data-without-forwarding
+    graph_runtime_map_test write-unit-refusal-preserves-caller-data-without-forwarding
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(delete-graph-runtime-map-unit-refusal-does-not-forward
+    graph_runtime_map_test delete-unit-refusal-does-not-forward
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(loss-graph-runtime-map-unit-refusals-keep-operation-order
+    graph_runtime_map_test loss-unit-refusals-keep-operation-order
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
 
 # Not a refusal scenario: the artifact's four chi_squared `<redefine>` entries
 # were removed after review, so these paths now forward verbatim. Registered

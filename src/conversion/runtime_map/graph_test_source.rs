@@ -6,8 +6,8 @@
 //! source selection unchanged.
 
 use super::{
-    AcquisitionAttempt, EndpointMetadata, GraphFactsSource, GraphNode, GraphNodeKind,
-    GraphSourceError, GraphVersion, IdsGraphFacts,
+    AcquisitionAttempt, EndpointMetadata, GraphEvent, GraphFactsSource, GraphNode, GraphNodeKind,
+    GraphSourceError, GraphVersion, IdsGraphFacts, UnitChangeEvidence,
 };
 use crate::conversion::conversion_map::ArtifactDdVersion;
 
@@ -24,7 +24,7 @@ impl GraphFactsSource for GraphTestSource {
                 "controlled graph source has no complete scope for IDS {ids}"
             )));
         }
-        Ok(identity_equilibrium_scope())
+        Ok(classified_equilibrium_scope())
     }
 }
 
@@ -55,7 +55,32 @@ fn leaf(path: &str) -> GraphNode {
     }
 }
 
-fn identity_equilibrium_scope() -> IdsGraphFacts {
+fn unit_leaf(path: &str, stored_unit: &str, hli_unit: &str) -> GraphNode {
+    let mut node = leaf(path);
+    node.endpoints[0].unit = Some(stored_unit.to_string());
+    node.endpoints[1].unit = Some(hli_unit.to_string());
+    node
+}
+
+fn unit_event(
+    path: &str,
+    old_value: &str,
+    new_value: &str,
+    unit_change: UnitChangeEvidence,
+) -> GraphEvent {
+    GraphEvent {
+        id: format!("{path}:units:4.1.1"),
+        path: path.to_string(),
+        release: graph_release("4.1.1"),
+        field: "units".to_string(),
+        kind: "units_changed".to_string(),
+        old_value: Some(old_value.to_string()),
+        new_value: Some(new_value.to_string()),
+        unit_change: Some(unit_change),
+    }
+}
+
+fn classified_equilibrium_scope() -> IdsGraphFacts {
     IdsGraphFacts {
         complete: true,
         versions: ["3.39.0", "4.1.1"]
@@ -66,10 +91,26 @@ fn identity_equilibrium_scope() -> IdsGraphFacts {
             })
             .collect(),
         nodes: vec![
-            leaf("time"),
+            unit_leaf("time", "s", "second"),
+            unit_leaf("unit_dimensionally_compatible", "m", "cm"),
+            unit_leaf("unit_requires_scale_or_offset", "m", "cm"),
             leaf("ids_properties/version_put/data_dictionary"),
         ],
-        events: Vec::new(),
+        events: vec![
+            unit_event("time", "s", "second", UnitChangeEvidence::SentinelResolved),
+            unit_event(
+                "unit_dimensionally_compatible",
+                "m",
+                "cm",
+                UnitChangeEvidence::DimensionallyCompatible,
+            ),
+            unit_event(
+                "unit_requires_scale_or_offset",
+                "m",
+                "cm",
+                UnitChangeEvidence::RequiredScaleOrOffset,
+            ),
+        ],
         successors: Vec::new(),
     }
 }

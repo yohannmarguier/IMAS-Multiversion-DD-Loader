@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 
 use super::conversion_map::{
     ArtifactDdVersion, CocosConvention, ConversionMap, EndpointInventory, EndpointNode,
-    EndpointNodeKind, Fidelity, LoadError, Rel, SelectorStage, Side, TypedConversionMap, TypedRule,
+    EndpointNodeKind, Fidelity, LoadError, Rel, SelectorStage, Side, TypedConversionMap,
+    TypedRedefine, TypedRule,
 };
 
 #[cfg(feature = "graph-test-source")]
@@ -88,6 +89,28 @@ pub(crate) struct GraphEvent {
     /// field; replay never evaluates them.
     pub old_value: Option<String>,
     pub new_value: Option<String>,
+    /// The producer's unit-change classification, present only for a
+    /// field-qualified `units` event. The endpoint unit strings themselves
+    /// do not establish whether changing a declaration changes values.
+    pub unit_change: Option<UnitChangeEvidence>,
+}
+
+/// Value-behaviour evidence attached to one producer-classified unit event.
+///
+/// Cosmetic spelling and sentinel resolution are declaration-only. Dimensional
+/// compatibility proves neither scale nor offset, while confirmed scale or
+/// offset evidence establishes a numerical transformation this shim cannot
+/// run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnitChangeEvidence {
+    /// Textual spelling changes without changing values.
+    Cosmetic,
+    /// A known sentinel spelling is resolved to its declaration.
+    SentinelResolved,
+    /// Dimensions match, but value scale and offset remain unknown.
+    DimensionallyCompatible,
+    /// Evidence establishes a numerical scale or offset this shim cannot apply.
+    RequiredScaleOrOffset,
 }
 
 /// A directed correspondence edge from the graph's successor stream.
@@ -390,7 +413,32 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
         let mut rules = Vec::with_capacity(facts.nodes.len());
         let mut hli_endpoint = Vec::with_capacity(facts.nodes.len());
         let mut stored_endpoint = Vec::with_capacity(facts.nodes.len());
+        let mut redefines = Vec::new();
         let mut endpoint_evidence_complete = true;
+        let mut retyped_anchors = Vec::new();
+        for node in &facts.nodes {
+            attempt
+                .check(AcquisitionStage::RuleConstruction)
+                .map_err(|expired| AcquisitionFailure::TimedOut {
+                    stage: expired.stage,
+                })?;
+            if let (
+                EndpointState::Present {
+                    metadata: hli_metadata,
+                    ..
+                },
+                EndpointState::Present {
+                    metadata: stored_metadata,
+                    ..
+                },
+            ) = (
+                replay_endpoint(&facts, node, &request.hli_dd)?,
+                replay_endpoint(&facts, node, &request.stored_dd)?,
+            ) && metadata_is_retyped(&hli_metadata, &stored_metadata)
+            {
+                retyped_anchors.push(node.path.as_str());
+            }
+        }
         for node in &facts.nodes {
             attempt
                 .check(AcquisitionStage::RuleConstruction)
@@ -399,77 +447,114 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
                 })?;
             let hli_metadata = replay_endpoint(&facts, node, &request.hli_dd)?;
             let stored_metadata = replay_endpoint(&facts, node, &request.stored_dd)?;
-            let (rel, left, right, fidelity) = match (&hli_metadata, &stored_metadata) {
-                (
-                    EndpointState::Present {
-                        metadata: hli_metadata,
-                        interval_start: hli_start,
-                    },
-                    EndpointState::Present {
-                        metadata: stored_metadata,
-                        interval_start: stored_start,
-                    },
-                ) => {
-                    hli_endpoint.push(endpoint_node(node, hli_metadata));
-                    stored_endpoint.push(endpoint_node(node, stored_metadata));
-                    if hli_start != stored_start
-                        || has_cocos_evidence(hli_metadata, stored_metadata)
-                    {
+            let inherits_retyped_anchor = retyped_anchors
+                .iter()
+                .any(|anchor| path_is_descendant_of(&node.path, anchor));
+            let (rel, selector_stage, left, right, fidelity) =
+                match (&hli_metadata, &stored_metadata) {
+                    (
+                        EndpointState::Present {
+                            metadata: hli_metadata,
+                            interval_start: hli_start,
+                        },
+                        EndpointState::Present {
+                            metadata: stored_metadata,
+                            interval_start: stored_start,
+                        },
+                    ) => {
+                        hli_endpoint.push(endpoint_node(node, hli_metadata));
+                        stored_endpoint.push(endpoint_node(node, stored_metadata));
+                        let relation = if hli_start != stored_start {
+                            // A reused spelling starts a distinct historical role.
+                            // Unit evidence cannot establish that the roles carry
+                            // the same value semantics.
+                            EndpointRelation::Unresolved
+                        } else {
+                            endpoint_relation(&facts, node, hli_metadata, stored_metadata)
+                        };
+                        match relation {
+                            EndpointRelation::Retyped => (
+                                Rel::Retyped,
+                                SelectorStage::Subtree,
+                                Some(node.path.clone()),
+                                Some(node.path.clone()),
+                                Fidelity::Unmappable,
+                            ),
+                            EndpointRelation::UnitRedefinition => {
+                                redefines.push(TypedRedefine {
+                                    glob: node.path.clone(),
+                                    fidelity_forward: Fidelity::Exact,
+                                    fidelity_reverse: Fidelity::Exact,
+                                });
+                                (
+                                    Rel::Identical,
+                                    SelectorStage::Exact,
+                                    Some(node.path.clone()),
+                                    Some(node.path.clone()),
+                                    Fidelity::Exact,
+                                )
+                            }
+                            EndpointRelation::Exact => (
+                                Rel::Identical,
+                                SelectorStage::Exact,
+                                Some(node.path.clone()),
+                                Some(node.path.clone()),
+                                Fidelity::Exact,
+                            ),
+                            EndpointRelation::Unresolved => (
+                                Rel::Identical,
+                                SelectorStage::Exact,
+                                Some(node.path.clone()),
+                                Some(node.path.clone()),
+                                Fidelity::Unmappable,
+                            ),
+                        }
+                    }
+                    (EndpointState::Present { metadata, .. }, EndpointState::Absent) => {
+                        hli_endpoint.push(endpoint_node(node, metadata));
+                        if inherits_retyped_anchor {
+                            // The parent retype is a subtree refusal. A one-sided
+                            // descendant must not shadow it with a generic absence.
+                            continue;
+                        }
                         (
-                            Rel::Identical,
+                            Rel::LeftOnly,
+                            SelectorStage::Exact,
                             Some(node.path.clone()),
+                            None,
+                            Fidelity::Unmappable,
+                        )
+                    }
+                    (EndpointState::Absent, EndpointState::Present { metadata, .. }) => {
+                        stored_endpoint.push(endpoint_node(node, metadata));
+                        if inherits_retyped_anchor {
+                            // See the matching left-only case above.
+                            continue;
+                        }
+                        (
+                            Rel::RightOnly,
+                            SelectorStage::Exact,
+                            None,
                             Some(node.path.clone()),
                             Fidelity::Unmappable,
                         )
-                    } else if same_representation(hli_metadata, stored_metadata) {
+                    }
+                    (EndpointState::Absent, EndpointState::Absent) => continue,
+                    _ => {
+                        endpoint_evidence_complete = false;
                         (
                             Rel::Identical,
-                            Some(node.path.clone()),
-                            Some(node.path.clone()),
-                            Fidelity::Exact,
-                        )
-                    } else {
-                        (
-                            Rel::Retyped,
+                            SelectorStage::Exact,
                             Some(node.path.clone()),
                             Some(node.path.clone()),
                             Fidelity::Unmappable,
                         )
                     }
-                }
-                (EndpointState::Present { metadata, .. }, EndpointState::Absent) => {
-                    hli_endpoint.push(endpoint_node(node, metadata));
-                    (
-                        Rel::LeftOnly,
-                        Some(node.path.clone()),
-                        None,
-                        Fidelity::Unmappable,
-                    )
-                }
-                (EndpointState::Absent, EndpointState::Present { metadata, .. }) => {
-                    stored_endpoint.push(endpoint_node(node, metadata));
-                    (
-                        Rel::RightOnly,
-                        None,
-                        Some(node.path.clone()),
-                        Fidelity::Unmappable,
-                    )
-                }
-                (EndpointState::Absent, EndpointState::Absent) => continue,
-                _ => {
-                    endpoint_evidence_complete = false;
-                    (
-                        Rel::Identical,
-                        Some(node.path.clone()),
-                        Some(node.path.clone()),
-                        Fidelity::Unmappable,
-                    )
-                }
-            };
+                };
             rules.push(TypedRule {
                 id: format!("endpoint:{}", node.path),
                 rel,
-                selector_stage: SelectorStage::Exact,
+                selector_stage,
                 left,
                 right,
                 froms: Vec::new(),
@@ -492,7 +577,7 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
             default_identical: false,
             rules,
             sign_flips: Vec::new(),
-            redefines: Vec::new(),
+            redefines,
         })
         .map_err(|error| {
             attempt
@@ -1196,17 +1281,106 @@ fn invalid_event(event: &GraphEvent) -> AcquisitionFailure {
     }
 }
 
-/// Endpoint presence is established by the release attached to each metadata
-/// row. Identity compares the independently reconstructed representation, not
-/// that endpoint label itself.
-fn same_representation(left: &EndpointMetadata, right: &EndpointMetadata) -> bool {
-    left.kind == right.kind
-        && left.data_type == right.data_type
-        && left.ndim == right.ndim
-        && left.unit == right.unit
-        && left.timebase_path == right.timebase_path
-        && left.coordinate_paths == right.coordinate_paths
-        && !has_cocos_evidence(left, right)
+enum EndpointRelation {
+    Exact,
+    Retyped,
+    UnitRedefinition,
+    Unresolved,
+}
+
+/// Classifies the endpoint behaviour that the existing map representation can
+/// express without turning a unit declaration into an invented conversion.
+///
+/// Type and rank evidence takes precedence: an otherwise exact spelling is
+/// still the engine's unconditional retype refusal. Coordinate and timebase
+/// interpretation remains outside this unit-only step, so a discrepancy there
+/// stays a localized unresolved conversion until its own evidence is handled.
+fn endpoint_relation(
+    facts: &IdsGraphFacts,
+    node: &GraphNode,
+    hli: &EndpointMetadata,
+    stored: &EndpointMetadata,
+) -> EndpointRelation {
+    if metadata_is_retyped(hli, stored) {
+        return EndpointRelation::Retyped;
+    }
+    if hli.timebase_path != stored.timebase_path
+        || hli.coordinate_paths != stored.coordinate_paths
+        || has_cocos_evidence(hli, stored)
+    {
+        return EndpointRelation::Unresolved;
+    }
+
+    match unit_evidence_between(facts, node, &hli.release, &stored.release) {
+        UnitEvidenceVerdict::DeclarationOnly => EndpointRelation::Exact,
+        UnitEvidenceVerdict::RequiredUnsupportedTransformation => {
+            EndpointRelation::UnitRedefinition
+        }
+        UnitEvidenceVerdict::Unresolved => EndpointRelation::Unresolved,
+        UnitEvidenceVerdict::NoChange if hli.unit == stored.unit => EndpointRelation::Exact,
+        UnitEvidenceVerdict::NoChange => EndpointRelation::Unresolved,
+    }
+}
+
+fn metadata_is_retyped(hli: &EndpointMetadata, stored: &EndpointMetadata) -> bool {
+    hli.kind != stored.kind || hli.data_type != stored.data_type || hli.ndim != stored.ndim
+}
+
+fn path_is_descendant_of(path: &str, ancestor: &str) -> bool {
+    path.strip_prefix(ancestor)
+        .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+enum UnitEvidenceVerdict {
+    NoChange,
+    DeclarationOnly,
+    RequiredUnsupportedTransformation,
+    Unresolved,
+}
+
+/// Folds only the producer classification for applicable unit events. A
+/// compatible dimension is explicitly not a factor-one proof: without a
+/// declaration-only classification, a scale or offset may still be required.
+fn unit_evidence_between(
+    facts: &IdsGraphFacts,
+    node: &GraphNode,
+    first: &ArtifactDdVersion,
+    second: &ArtifactDdVersion,
+) -> UnitEvidenceVerdict {
+    let first_key = numeric_release(first);
+    let second_key = numeric_release(second);
+    let (earlier, later) = if first_key <= second_key {
+        (first_key, second_key)
+    } else {
+        (second_key, first_key)
+    };
+    let mut declaration_only = false;
+    let mut unresolved = false;
+    for event in &facts.events {
+        if event.path != node.path || event_field(event).ok() != Some("units") {
+            continue;
+        }
+        let release = numeric_release(&event.release);
+        if release <= earlier || release > later {
+            continue;
+        }
+        match event.unit_change {
+            Some(UnitChangeEvidence::Cosmetic | UnitChangeEvidence::SentinelResolved) => {
+                declaration_only = true;
+            }
+            Some(UnitChangeEvidence::RequiredScaleOrOffset) => {
+                return UnitEvidenceVerdict::RequiredUnsupportedTransformation;
+            }
+            Some(UnitChangeEvidence::DimensionallyCompatible) | None => unresolved = true,
+        }
+    }
+    if unresolved {
+        UnitEvidenceVerdict::Unresolved
+    } else if declaration_only {
+        UnitEvidenceVerdict::DeclarationOnly
+    } else {
+        UnitEvidenceVerdict::NoChange
+    }
 }
 
 fn has_cocos_evidence(left: &EndpointMetadata, right: &EndpointMetadata) -> bool {

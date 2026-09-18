@@ -110,6 +110,27 @@ compatibility alone, or adopt raw-string inequality as a permanent refusal
 policy. The prototype's chi-squared refusals do not settle those specific
 fields. This review has not resolved each unit discrepancy.
 
+### Runtime unit-evidence handoff (#221)
+
+The runtime-map boundary receives a producer classification with the unit
+event; endpoint unit strings alone are never used to derive a numerical
+factor. Its controlled source contract records these evidence-backed outcomes
+in both map directions:
+
+- `Cosmetic` (`m` to `metre`) and `SentinelResolved` (`s` to `second`) are
+  declaration-only and resolve exactly.
+- `DimensionallyCompatible` (`m` to `cm`) remains a localized `Unmappable`
+  refusal: compatible dimensions do not prove factor one or zero offset.
+- `RequiredScaleOrOffset` (`m` to `cm`) is a localized
+  `UnitRedefinition` refusal because the numerical operation is known but not
+  executable by this shim.
+
+The query contract already retains `semantic_type` and `unit_change_subtype`
+for a live source. No Neo4j executor or synthetic conversion factor is added
+here; an adapter that cannot supply one of the classifications must leave the
+path unresolved. The controlled examples are source-contract fixtures, not a
+claim that any particular live DD path has that evidence.
+
 Discarded callbacks, unrecorded historical metadata updates, coordinate-
 convention documentation events and role reuse remain bounded evidence
 limitations described in the research. They are not permission for identity
