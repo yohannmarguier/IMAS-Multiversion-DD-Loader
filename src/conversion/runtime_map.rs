@@ -19,6 +19,7 @@ use super::conversion_map::{
 
 #[cfg(feature = "graph-test-source")]
 pub(crate) mod graph_test_source;
+mod neo4j_facts;
 pub(crate) mod neo4j_graph;
 
 /// The IDS and exact DD endpoints a caller wants to serve.
@@ -50,6 +51,7 @@ pub(crate) enum GraphNodeKind {
 pub(crate) enum CocosLabelSource {
     Xml,
     InferredSignFlip,
+    InferredForward,
     InferredExpression,
     Other,
 }
@@ -104,6 +106,10 @@ pub(crate) struct GraphNode {
     pub rename_declarations: Vec<GraphRename>,
     pub coordinate_relationships: Vec<CoordinateRelationship>,
     pub endpoints: Vec<EndpointMetadata>,
+    /// Released-producer properties, not an observed historical endpoint.
+    /// Ordinary fields date from the last addition; timebase is refreshed.
+    /// Replay reconciles these distinct anchors with the event ledger.
+    pub source_metadata: Option<EndpointMetadata>,
 }
 
 /// One dated previous-name declaration from a node's NBC history.
@@ -131,6 +137,7 @@ pub(crate) struct GraphEvent {
     /// field-qualified `units` event. The endpoint unit strings themselves
     /// do not establish whether changing a declaration changes values.
     pub unit_change: Option<UnitChangeEvidence>,
+    pub semantic_type: Option<String>,
     /// Coordinate/timebase behaviour established by the producer for this
     /// event. Raw coordinate declarations and current relationship targets
     /// are not enough to manufacture this verdict: their omission and their
@@ -468,10 +475,10 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
             })?;
         let hli = graph_side(&facts.versions, &request.hli_dd, attempt)?;
         let stored = graph_side(&facts.versions, &request.stored_dd, attempt)?;
+        validate_coordinate_scope(&facts, &request.hli_dd, &request.stored_dd, attempt)?;
         let direct_renames = direct_renames(&facts, request, attempt)?;
         let coexistence = coexistence_plans(&facts, request, attempt)?;
         let coexistence_paths = coexistence.paths.clone();
-        validate_coordinate_scope(&facts, &request.hli_dd, &request.stored_dd, attempt)?;
         let mut rules = coexistence.rules;
         let mut hli_endpoint = Vec::with_capacity(facts.nodes.len());
         let mut stored_endpoint = Vec::with_capacity(facts.nodes.len());
@@ -804,7 +811,7 @@ fn coexistence_plans(
     let mut paths = HashSet::new();
 
     for successor in &facts.nodes {
-        for declaration in &successor.rename_declarations {
+        for declaration in inherited_rename_declarations(&nodes, successor, &request.ids) {
             attempt
                 .check(AcquisitionStage::RuleConstruction)
                 .map_err(|expired| AcquisitionFailure::TimedOut {
@@ -847,7 +854,15 @@ fn coexistence_plans(
             // A path-only candidate is valid only when all the representation
             // facts it carries are identical. COCOS evidence deliberately
             // fails this check until candidate-specific transforms are built.
-            let history_is_servable = same_representation(&predecessor_at_start, &successor_at_end);
+            let history_is_servable = same_representation(&predecessor_at_start, &successor_at_end)
+                && correspondence_has_evidence(
+                    facts,
+                    predecessor,
+                    &predecessor_at_start,
+                    earlier,
+                    later,
+                )
+                && correspondence_has_evidence(facts, successor, &successor_at_end, earlier, later);
 
             let predecessor_hli = replay_endpoint(facts, predecessor, &request.hli_dd)?;
             let successor_hli = replay_endpoint(facts, successor, &request.hli_dd)?;
@@ -860,12 +875,6 @@ fn coexistence_plans(
                     + usize::from(matches!(successor_stored, EndpointState::Present { .. }));
             if !matches!((hli_count, stored_count), (1, 2) | (2, 1)) {
                 continue;
-            }
-            if !history_is_servable {
-                return Err(invalid_node(
-                    successor,
-                    "a coexistence correspondence lacks a servable value representation",
-                ));
             }
 
             let (sole_endpoint, candidate_endpoints) = if hli_count == 1 {
@@ -884,20 +893,19 @@ fn coexistence_plans(
                 | (EndpointState::Absent, EndpointState::Present { metadata, .. }) => metadata,
                 _ => unreachable!("one coexistence side has exactly one endpoint"),
             };
-            if candidate_endpoints
+            let candidates_servable = !candidate_endpoints
                 .iter()
                 .filter_map(|state| match state {
                     EndpointState::Present { metadata, .. } => Some(metadata),
                     EndpointState::Absent => None,
                     EndpointState::Unanchored => None,
                 })
-                .any(|candidate| !same_representation(sole_metadata, candidate))
-            {
-                return Err(invalid_node(
-                    successor,
-                    "an endpoint-valid coexistence candidate lacks a servable representation",
-                ));
-            }
+                .any(|candidate| !same_representation(sole_metadata, candidate));
+            let fidelity = if history_is_servable && candidates_servable {
+                Fidelity::Exact
+            } else {
+                Fidelity::Unmappable
+            };
 
             let froms = vec![
                 TypedFromEntry {
@@ -909,19 +917,9 @@ fn coexistence_plans(
                     precedence: 2,
                 },
             ];
-            // An evidenced coexistence of two structures supplies the
-            // candidate anchors for their nested contexts. Descendant rules
-            // still take precedence where the complete graph scope records
-            // a child-specific outcome, but otherwise the established
-            // structure relationship must remain available beneath the
-            // context that the arraystruct seam actually opened.
-            let selector_stage = if predecessor_at_start.kind == GraphNodeKind::Structure
-                && successor_at_end.kind == GraphNodeKind::Structure
-            {
-                SelectorStage::Subtree
-            } else {
-                SelectorStage::Exact
-            };
+            // Every descendant is independently endpoint-checked. An anchor
+            // must never manufacture a target for an unknown child.
+            let selector_stage = SelectorStage::Exact;
             let rule = if hli_count == 1 {
                 let left = if matches!(successor_hli, EndpointState::Present { .. }) {
                     successor.path.clone()
@@ -935,8 +933,8 @@ fn coexistence_plans(
                     left: Some(left),
                     right: None,
                     froms,
-                    fidelity_forward: Fidelity::Exact,
-                    fidelity_reverse: Fidelity::Exact,
+                    fidelity_forward: fidelity,
+                    fidelity_reverse: fidelity,
                 }
             } else {
                 let right = if matches!(successor_stored, EndpointState::Present { .. }) {
@@ -951,8 +949,8 @@ fn coexistence_plans(
                     left: None,
                     right: Some(right),
                     froms,
-                    fidelity_forward: Fidelity::Exact,
-                    fidelity_reverse: Fidelity::Exact,
+                    fidelity_forward: fidelity,
+                    fidelity_reverse: fidelity,
                 }
             };
             paths.extend([predecessor_path, successor.path.clone()]);
@@ -960,6 +958,35 @@ fn coexistence_plans(
         }
     }
     Ok(CoexistencePlan { rules, paths })
+}
+
+fn inherited_rename_declarations(
+    nodes: &HashMap<&str, &GraphNode>,
+    node: &GraphNode,
+    ids: &str,
+) -> Vec<GraphRename> {
+    for ancestor_path in ancestor_paths(&node.path) {
+        let Some(ancestor) = nodes.get(ancestor_path.as_str()) else {
+            continue;
+        };
+        if ancestor.rename_declarations.is_empty() {
+            continue;
+        }
+        return ancestor
+            .rename_declarations
+            .iter()
+            .filter_map(|declaration| {
+                let previous =
+                    normalize_previous_name(&declaration.previous_name, &ancestor.path, ids)?;
+                let suffix = node.path.strip_prefix(&ancestor.path)?;
+                Some(GraphRename {
+                    release: declaration.release.clone(),
+                    previous_name: format!("{ids}/{previous}{suffix}"),
+                })
+            })
+            .collect();
+    }
+    Vec::new()
 }
 
 fn add_endpoint_node(endpoint: &mut Vec<EndpointNode>, node: &GraphNode, state: &EndpointState) {
@@ -990,9 +1017,6 @@ fn direct_renames(
             .map_err(|expired| AcquisitionFailure::TimedOut {
                 stage: expired.stage,
             })?;
-        if witness.rename_declarations.is_empty() {
-            continue;
-        }
         if successor_cycle_involving(facts, &witness.path, &request.ids) {
             continue;
         }
@@ -1050,7 +1074,10 @@ fn direct_renames(
         if !is_distinct_role_change(&older_role, &newer_role) {
             continue;
         }
-        if !same_representation(&older_metadata, &newer_metadata) {
+        if !same_representation(&older_metadata, &newer_metadata)
+            || !correspondence_has_evidence(facts, older, &older_metadata, earlier, later)
+            || !correspondence_has_evidence(facts, newer, &newer_metadata, earlier, later)
+        {
             continue;
         }
         let moved_parent = older_metadata.kind == GraphNodeKind::Structure
@@ -1356,6 +1383,14 @@ pub(crate) struct RuntimeMapCoordinator<S> {
 }
 
 impl<S> RuntimeMapCoordinator<S> {
+    pub(crate) fn with_deadline(source: S, deadline: Duration) -> Self {
+        Self {
+            acquirer: RuntimeMapAcquirer::with_deadline(source, deadline),
+            state: Mutex::new(CoordinatorState::default()),
+            observer: Arc::new(NoopCoordinatorObserver),
+        }
+    }
+
     pub(crate) fn new(source: S) -> Self {
         Self {
             acquirer: RuntimeMapAcquirer::new(source),
@@ -1464,12 +1499,18 @@ impl<S: GraphFactsSource> RuntimeMapCoordinator<S> {
             .acquirer
             .acquire_with_attempt(request, &attempt.attempt)
             .map(Arc::new);
-        attempt.publish(result.clone());
-
         let mut state = self
             .state
             .lock()
             .expect("runtime map coordinator mutex is not poisoned");
+        // Lock acquisition is part of publication, too. A waiter may already
+        // have terminated this attempt while the leader was constructing it.
+        let result = result.and_then(|map| {
+            attempt.attempt.check(AcquisitionStage::Publication)?;
+            Ok(map)
+        });
+        attempt.publish(result);
+        let result = attempt.wait();
         if state
             .attempts
             .get(&key)
@@ -1693,12 +1734,17 @@ fn replay_endpoint(
         .rev()
         .find(|&index| presence[index] && (index == 0 || !presence[index - 1]))
         .expect("present interval has a start");
-    let Some(mut metadata) = node
+    let observed_anchor = node
         .endpoints
         .iter()
         .find(|metadata| metadata.release == releases[interval_start])
-        .cloned()
-    else {
+        .cloned();
+    let source_anchor = if observed_anchor.is_none() {
+        source_interval_anchor(facts, node, &releases, &presence, interval_start)?
+    } else {
+        None
+    };
+    let Some(mut metadata) = observed_anchor.or(source_anchor) else {
         return Ok(EndpointState::Unanchored);
     };
     for release in &releases[interval_start + 1..=requested_index] {
@@ -1718,11 +1764,92 @@ fn replay_endpoint(
             release: requested.clone(),
         });
     }
+    if node.source_metadata.is_some() && data_type_rank(&metadata.data_type) != Some(metadata.ndim)
+    {
+        return Err(invalid_node(node, "historical datatype and rank disagree"));
+    }
     metadata.release = requested.clone();
     Ok(EndpointState::Present {
         metadata,
         interval_start: releases[interval_start].clone(),
     })
+}
+
+/// Interpret the released producer's property ages here, alongside lifecycle
+/// and metadata replay. The wire adapter never manufactures endpoint rows.
+fn source_interval_anchor(
+    facts: &IdsGraphFacts,
+    node: &GraphNode,
+    releases: &[ArtifactDdVersion],
+    presence: &[bool],
+    start: usize,
+) -> Result<Option<EndpointMetadata>, AcquisitionFailure> {
+    let Some(mut metadata) = node.source_metadata.clone() else {
+        return Ok(None);
+    };
+    let end = (start + 1..releases.len())
+        .find(|&i| !presence[i])
+        .unwrap_or(releases.len());
+    let last_interval = !presence[end..].iter().any(|present| *present);
+    for field in ["data_type", "ndim", "units", "timebase", "coordinates"] {
+        let first = releases[start + 1..end].iter().find_map(|release| {
+            metadata_events_at(facts, node, release)
+                .into_iter()
+                .find(|event| event_field(event).ok() == Some(field))
+        });
+        if let Some(event) = first {
+            let old = event
+                .old_value
+                .as_deref()
+                .ok_or_else(|| invalid_event(event))?;
+            set_metadata_value(&mut metadata, field, old, &event.id)?;
+        } else if !last_interval {
+            // A readdition overwrote the earlier interval's properties.
+            return Ok(None);
+        }
+    }
+    let latest_addition = node
+        .introduced
+        .iter()
+        .chain(
+            facts
+                .events
+                .iter()
+                .filter(|event| event.path == node.path && event.kind == "path_added")
+                .map(|event| &event.release),
+        )
+        .max_by_key(|release| numeric_release(release));
+    if let Some(addition) = latest_addition
+        && numeric_release(addition) >= numeric_release(&releases[start])
+        && (end == releases.len() || numeric_release(addition) < numeric_release(&releases[end]))
+    {
+        let mut observed = metadata.clone();
+        for release in &releases[start + 1..end] {
+            if numeric_release(release) > numeric_release(addition) {
+                break;
+            }
+            for event in metadata_events_at(facts, node, release) {
+                if matches!(event_field(event), Ok("data_type" | "ndim" | "units")) {
+                    apply_metadata_event(&mut observed, event)?;
+                }
+            }
+        }
+        let source = node
+            .source_metadata
+            .as_ref()
+            .expect("source metadata was cloned");
+        for field in ["data_type", "ndim", "units"] {
+            if metadata_value(&observed, field)? != metadata_value(source, field)? {
+                return Err(AcquisitionFailure::ContradictoryHistory {
+                    path: node.path.clone(),
+                    field: field.to_string(),
+                    release: addition.clone(),
+                });
+            }
+        }
+    }
+    metadata.release = releases[start].clone();
+    Ok(Some(metadata))
 }
 
 fn sorted_releases(versions: &[GraphVersion]) -> Vec<ArtifactDdVersion> {
@@ -1833,7 +1960,12 @@ fn apply_metadata_event(
     let (Some(old), Some(new)) = (event.old_value.as_deref(), event.new_value.as_deref()) else {
         return Err(invalid_event(event));
     };
-    if metadata_value(metadata, field)? != old {
+    let agrees = if field == "coordinates" {
+        metadata.coordinate_paths == parse_string_list(old, &event.id)?
+    } else {
+        metadata_value(metadata, field)? == old
+    };
+    if !agrees {
         return Err(AcquisitionFailure::ContradictoryHistory {
             path: event.path.clone(),
             field: field.to_string(),
@@ -1850,6 +1982,8 @@ fn event_field(event: &GraphEvent) -> Result<&str, AcquisitionFailure> {
     }
     match field {
         "data_type" | "ndim" | "units" | "timebase" | "coordinates" => Ok(field),
+        "timebasepath" => Ok("timebase"),
+        "node_type" => Ok(field),
         // Raw COCOS label events describe the XML history.  They do not
         // overwrite a separately-proven backfilled class on the endpoint:
         // the two evidence forms are intentionally not interchangeable.
@@ -1857,7 +1991,8 @@ fn event_field(event: &GraphEvent) -> Result<&str, AcquisitionFailure> {
         | "documentation"
         | "lifecycle_status"
         | "maxoccur"
-        | "identifier_enum" => Ok(field),
+        | "identifier_enum"
+        | "identifier_enum_name" => Ok(field),
         _ => Err(invalid_event(event)),
     }
 }
@@ -1873,6 +2008,22 @@ fn metadata_value(metadata: &EndpointMetadata, field: &str) -> Result<String, Ac
     }
 }
 
+fn data_type_rank(value: &str) -> Option<u8> {
+    match value {
+        "STRUCTURE" => Some(0),
+        "STRUCT_ARRAY" => Some(1),
+        value => value.split_once('_').and_then(|(family, rank)| {
+            if !matches!(family, "FLT" | "INT" | "STR" | "CPX") {
+                return None;
+            }
+            rank.strip_suffix('D')?
+                .parse::<u8>()
+                .ok()
+                .filter(|rank| *rank <= 7)
+        }),
+    }
+}
+
 fn set_metadata_value(
     metadata: &mut EndpointMetadata,
     field: &str,
@@ -1880,11 +2031,20 @@ fn set_metadata_value(
     id: &str,
 ) -> Result<(), AcquisitionFailure> {
     match field {
-        "data_type" if !value.is_empty() => metadata.data_type = value.to_string(),
+        "data_type" if data_type_rank(value).is_some() => {
+            metadata.data_type = value.to_string();
+            metadata.kind = if matches!(value, "STRUCTURE" | "STRUCT_ARRAY") {
+                GraphNodeKind::Structure
+            } else {
+                GraphNodeKind::Leaf
+            };
+        }
         "ndim" => {
             metadata.ndim = value
-                .parse()
-                .map_err(|_| AcquisitionFailure::InvalidEventValue { id: id.to_string() })?
+                .parse::<u8>()
+                .ok()
+                .filter(|rank| *rank <= 7)
+                .ok_or_else(|| AcquisitionFailure::InvalidEventValue { id: id.to_string() })?
         }
         "units" => metadata.unit = (!value.is_empty()).then(|| value.to_string()),
         "timebase" => metadata.timebase_path = (!value.is_empty()).then(|| value.to_string()),
@@ -1906,6 +2066,9 @@ fn render_list(values: &[String]) -> String {
 }
 
 fn parse_string_list(value: &str, id: &str) -> Result<Vec<String>, AcquisitionFailure> {
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
     let bytes = value.as_bytes();
     if bytes.first() != Some(&b'[') || bytes.last() != Some(&b']') {
         return Err(AcquisitionFailure::InvalidEventValue { id: id.to_string() });
@@ -1973,6 +2136,38 @@ fn same_representation(left: &EndpointMetadata, right: &EndpointMetadata) -> boo
         && !endpoint_has_cocos_evidence(right)
 }
 
+fn correspondence_has_evidence(
+    facts: &IdsGraphFacts,
+    node: &GraphNode,
+    metadata: &EndpointMetadata,
+    first: &ArtifactDdVersion,
+    second: &ArtifactDdVersion,
+) -> bool {
+    if unsupported_semantic_change(facts, node, first, second) {
+        return false;
+    }
+    if !matches!(
+        unit_evidence_between(facts, node, first, second),
+        UnitEvidenceVerdict::NoChange | UnitEvidenceVerdict::DeclarationOnly
+    ) {
+        return false;
+    }
+    // Controlled endpoint observations carry raw coordinate declarations.
+    // A raw-source node must additionally corroborate its unversioned edges;
+    // two missing collections alone cannot prove a rename's representation.
+    if node.source_metadata.is_some() {
+        let mut earlier = metadata.clone();
+        earlier.release = first.clone();
+        let mut later = metadata.clone();
+        later.release = second.clone();
+        return matches!(
+            coordinate_evidence_between(facts, node, &earlier, &later, &[]),
+            CoordinateEvidenceVerdict::Equivalent
+        );
+    }
+    true
+}
+
 fn invalid_event(event: &GraphEvent) -> AcquisitionFailure {
     AcquisitionFailure::InvalidEventValue {
         id: event.id.clone(),
@@ -2018,6 +2213,9 @@ fn endpoint_relation(
     if metadata_is_retyped(hli, stored) {
         return EndpointRelation::Retyped;
     }
+    if unsupported_semantic_change(facts, node, &hli.release, &stored.release) {
+        return EndpointRelation::Unresolved;
+    }
     match coordinate_evidence_between(facts, node, hli, stored, direct_renames) {
         CoordinateEvidenceVerdict::Equivalent => {}
         CoordinateEvidenceVerdict::RequiresResampling => {
@@ -2035,6 +2233,28 @@ fn endpoint_relation(
         UnitEvidenceVerdict::NoChange if hli.unit == stored.unit => EndpointRelation::Exact,
         UnitEvidenceVerdict::NoChange => EndpointRelation::Unresolved,
     }
+}
+
+/// The producer's scientific documentation verdict is evidence, not prose
+/// that may be silently ignored. Only supported sign changes have a handler.
+fn unsupported_semantic_change(
+    facts: &IdsGraphFacts,
+    node: &GraphNode,
+    first: &ArtifactDdVersion,
+    second: &ArtifactDdVersion,
+) -> bool {
+    facts.events.iter().any(|event| {
+        event.path == node.path
+            && event_applies_between(event, first, second)
+            && (matches!(
+                event.field.as_str(),
+                "node_type" | "identifier_enum" | "identifier_enum_name"
+            ) || (event.field == "documentation"
+                && !matches!(
+                    event.semantic_type.as_deref(),
+                    None | Some("none" | "definition_clarification" | "sign_convention")
+                )))
+    })
 }
 
 enum CoordinateEvidenceVerdict {
@@ -2061,6 +2281,87 @@ fn coordinate_evidence_between(
             && event.coordinate_evidence == Some(CoordinateChangeEvidence::RequiresResampling)
     }) {
         return CoordinateEvidenceVerdict::RequiresResampling;
+    }
+
+    // Rank zero proves there are no array coordinates to reconcile. A
+    // missing relationship alone is not used as that proof for arrays.
+    if hli.ndim == 0
+        && stored.ndim == 0
+        && hli.coordinate_paths.is_empty()
+        && stored.coordinate_paths.is_empty()
+        && hli.timebase_path == stored.timebase_path
+        && !facts.events.iter().any(|event| {
+            event.path == node.path
+                && event_applies_between(event, &hli.release, &stored.release)
+                && matches!(
+                    event_field(event),
+                    Ok("coordinates" | "timebase" | "node_type")
+                )
+        })
+    {
+        return CoordinateEvidenceVerdict::Equivalent;
+    }
+
+    // The producer creates these edges at addition. Within one appearance
+    // interval a complete dimension set and no coordinate/timebase changes
+    // establish stable representation, even for a non-path coordinate spec.
+    // This is distinct from treating absent edges as an empty raw declaration.
+    if node.source_metadata.is_some()
+        && !node.coordinate_relationships.iter().all(|relationship| {
+            let Some(target) = facts
+                .nodes
+                .iter()
+                .find(|candidate| candidate.path == relationship.target_path)
+            else {
+                // Decoder only populates source coordinate_paths for known
+                // in-scope paths or producer-labelled coordinate specs.
+                return true;
+            };
+            let releases = sorted_releases(&facts.versions);
+            presence_timeline(facts, target, &releases).is_ok_and(|presence| {
+                [&hli.release, &stored.release].iter().all(|endpoint| {
+                    releases
+                        .iter()
+                        .position(|release| release == *endpoint)
+                        .is_some_and(|index| presence[index])
+                })
+            })
+        })
+    {
+        return CoordinateEvidenceVerdict::Unresolved;
+    }
+    if node.source_metadata.is_some()
+        && hli.ndim == stored.ndim
+        && hli.timebase_path == stored.timebase_path
+        && hli.coordinate_paths == stored.coordinate_paths
+        && !facts.events.iter().any(|event| {
+            event.path == node.path
+                && event_applies_between(event, &hli.release, &stored.release)
+                && matches!(
+                    event_field(event),
+                    Ok("coordinates" | "timebase" | "node_type")
+                )
+        })
+        && ((hli.coordinate_paths.len() == usize::from(hli.ndim)
+            && node.coordinate_relationships.len() == usize::from(hli.ndim)
+            && node
+                .coordinate_relationships
+                .iter()
+                .enumerate()
+                .all(|(i, coordinate)| {
+                    coordinate.dimension == i
+                        && hli.coordinate_paths.get(i) == Some(&coordinate.target_path)
+                }))
+            || (hli.kind == GraphNodeKind::Structure
+                && hli.ndim == 1
+                && hli
+                    .timebase_path
+                    .as_ref()
+                    .is_some_and(|path| !path.is_empty())
+                && hli.coordinate_paths.is_empty()
+                && node.coordinate_relationships.is_empty()))
+    {
+        return CoordinateEvidenceVerdict::Equivalent;
     }
 
     let Some(hli_timebase) = hli.timebase_path.as_deref() else {
@@ -2294,7 +2595,11 @@ fn supported_cocos_label(metadata: &EndpointMetadata) -> Option<&str> {
     if metadata.cocos_transformation_expression.is_some()
         || !matches!(
             metadata.cocos_label_source,
-            Some(CocosLabelSource::Xml | CocosLabelSource::InferredSignFlip)
+            Some(
+                CocosLabelSource::Xml
+                    | CocosLabelSource::InferredSignFlip
+                    | CocosLabelSource::InferredForward
+            )
         )
     {
         return None;
@@ -2365,7 +2670,7 @@ fn collect_cocos_evidence(
                 }
                 evidence.forms.insert(CocosEvidenceForm::RawLabelHistory);
             }
-            "documentation" => {
+            "documentation" if event.semantic_type.as_deref() == Some("sign_convention") => {
                 if event.old_value.is_none() || event.new_value.is_none() {
                     return Err(invalid_event(event));
                 }

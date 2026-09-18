@@ -408,6 +408,7 @@ fn unit_event(
         kind: "units_changed".to_string(),
         old_value: Some(old_value.to_string()),
         new_value: Some(new_value.to_string()),
+        semantic_type: None,
         unit_change: Some(evidence),
         coordinate_evidence: None,
     }
@@ -428,6 +429,7 @@ fn representation_event(
         kind: format!("{field}_changed"),
         old_value: Some(old_value.to_string()),
         new_value: Some(new_value.to_string()),
+        semantic_type: None,
         unit_change: None,
         coordinate_evidence,
     }
@@ -435,6 +437,7 @@ fn representation_event(
 
 fn node(path: &str, left: EndpointMetadata, right: EndpointMetadata) -> GraphNode {
     GraphNode {
+        source_metadata: None,
         ids: "equilibrium".to_string(),
         path: path.to_string(),
         introduced: vec![ArtifactDdVersion::new("3.39.0").expect("fixture release is valid")],
@@ -475,7 +478,7 @@ fn complete_identity_scope() -> IdsGraphFacts {
             node(
                 "grids_ggd/grid/space/coordinates_type",
                 endpoint("3.39.0", GraphNodeKind::Leaf, "INT_1D", 1),
-                endpoint("4.1.1", GraphNodeKind::Leaf, "STRUCT_ARRAY", 1),
+                endpoint("4.1.1", GraphNodeKind::Structure, "STRUCT_ARRAY", 1),
             ),
             node(
                 "time",
@@ -491,6 +494,7 @@ fn complete_identity_scope() -> IdsGraphFacts {
             kind: "structure_changed".to_string(),
             old_value: Some("INT_1D".to_string()),
             new_value: Some("STRUCT_ARRAY".to_string()),
+            semantic_type: None,
             unit_change: None,
             coordinate_evidence: None,
         }],
@@ -752,6 +756,7 @@ fn historical_node(
     kind: GraphNodeKind,
 ) -> GraphNode {
     GraphNode {
+        source_metadata: None,
         ids: "pulse_schedule".to_string(),
         path: path.to_string(),
         introduced: vec![ArtifactDdVersion::new(introduced).expect("fixture release is valid")],
@@ -1230,6 +1235,7 @@ fn acquisition_classifies_unit_evidence_without_conflating_it_with_retypes() {
         ),
     ]);
     facts.nodes.push(GraphNode {
+        source_metadata: None,
         ids: "equilibrium".to_string(),
         path: "grids_ggd/grid/space/coordinates_type/identifier".to_string(),
         introduced: vec![ArtifactDdVersion::new("4.1.1").expect("fixture release is valid")],
@@ -1674,6 +1680,7 @@ fn acquisition_ignores_coordinate_events_outside_the_requested_release_pair() {
         kind: "coordinates_changed".to_string(),
         old_value: Some("['time']".to_string()),
         new_value: Some("['time']".to_string()),
+        semantic_type: None,
         unit_change: None,
         coordinate_evidence: Some(CoordinateChangeEvidence::UnboundedScope),
     });
@@ -1709,6 +1716,7 @@ fn acquisition_keeps_reused_spelling_across_a_reappearance_unmappable() {
             kind: "path_removed".to_string(),
             old_value: None,
             new_value: None,
+            semantic_type: None,
             unit_change: None,
             coordinate_evidence: None,
         },
@@ -1720,6 +1728,7 @@ fn acquisition_keeps_reused_spelling_across_a_reappearance_unmappable() {
             kind: "path_added".to_string(),
             old_value: None,
             new_value: None,
+            semantic_type: None,
             unit_change: None,
             coordinate_evidence: None,
         },
@@ -2178,11 +2187,35 @@ fn acquisition_uses_successor_first_candidates_only_at_the_coexisting_endpoint()
 
 #[test]
 fn acquisition_extends_an_evidenced_coexisting_structure_to_its_descendants() {
-    let map = RuntimeMapAcquirer::new(ControlledSource {
-        result: Ok(coexistence_facts()),
-    })
-    .acquire(&request_between("3.42.0", "4.1.1"))
-    .expect("the established structure coexistence must construct a map");
+    let mut facts = coexistence_facts();
+    for parent in [
+        "time_slice/constraints/j_tor",
+        "time_slice/constraints/j_phi",
+    ] {
+        let mut child = facts
+            .nodes
+            .iter()
+            .find(|node| node.path == parent)
+            .unwrap()
+            .clone();
+        child.path.push_str("/measured");
+        child.rename_declarations.clear();
+        facts.nodes.push(child);
+    }
+    facts.successors.push(GraphSuccessor {
+        from_path: "time_slice/constraints/j_tor/measured".into(),
+        to_path: "time_slice/constraints/j_phi/measured".into(),
+    });
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request_between("3.42.0", "4.1.1"))
+        .unwrap();
+    assert!(
+        map.resolve(
+            "time_slice/constraints/j_phi/not_in_either_endpoint",
+            Direction::Forward
+        )
+        .is_none()
+    );
 
     let explanation = map
         .resolve("time_slice/constraints/j_phi/measured", Direction::Forward)
@@ -2204,7 +2237,7 @@ fn acquisition_extends_an_evidenced_coexisting_structure_to_its_descendants() {
 }
 
 #[test]
-fn acquisition_rejects_a_coexistence_candidate_without_servable_value_evidence() {
+fn acquisition_localizes_a_coexistence_candidate_without_servable_value_evidence() {
     let mut facts = coexistence_facts();
     for node in facts
         .nodes
@@ -2216,11 +2249,18 @@ fn acquisition_rejects_a_coexistence_candidate_without_servable_value_evidence()
         }
     }
 
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request_between("3.42.0", "4.1.1"))
+        .expect("uncertainty is confined to the candidate family");
+    assert_eq!(
+        map.resolve("time_slice/constraints/j_phi", Direction::Forward)
+            .unwrap()
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
     assert!(matches!(
-        RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
-            .acquire(&request_between("3.42.0", "4.1.1")),
-        Err(AcquisitionFailure::InvalidNode { ref path, .. })
-            if path == "time_slice/constraints/j_phi"
+        map.resolve("time", Direction::Forward).unwrap().outcome,
+        Outcome::Path { .. }
     ));
 }
 
@@ -2323,6 +2363,7 @@ fn acquisition_deduplicates_corroborating_cocos_evidence() {
             kind: "metadata_changed".to_string(),
             old_value: Some("psi".to_string()),
             new_value: Some(String::new()),
+            semantic_type: None,
             unit_change: None,
             coordinate_evidence: None,
         },
@@ -2334,6 +2375,7 @@ fn acquisition_deduplicates_corroborating_cocos_evidence() {
             kind: "metadata_changed".to_string(),
             old_value: Some("poloidal flux".to_string()),
             new_value: Some("COCOS convention changed".to_string()),
+            semantic_type: Some("sign_convention".into()),
             unit_change: None,
             coordinate_evidence: None,
         },
@@ -2368,6 +2410,7 @@ fn acquisition_refuses_a_conflicting_raw_cocos_label_replacement() {
         kind: "metadata_changed".to_string(),
         old_value: Some("psi".to_string()),
         new_value: Some("phi".to_string()),
+        semantic_type: None,
         unit_change: None,
         coordinate_evidence: None,
     });
@@ -2445,4 +2488,32 @@ fn acquisition_localizes_unservable_or_out_of_pair_cocos_evidence() {
             }
         ));
     }
+}
+
+#[test]
+fn acquisition_propagates_a_dated_parent_to_endpoint_valid_children() {
+    let mut facts = pulse_schedule_historical_facts();
+    for (path, added, removed) in [
+        ("ec/antenna/name", "3.22.0", Some("3.26.0")),
+        ("ec/launcher/name", "3.26.0", Some("3.40.0")),
+        ("ec/beam/name", "3.40.0", None),
+    ] {
+        facts
+            .nodes
+            .push(historical_node(path, added, removed, GraphNodeKind::Leaf));
+    }
+    for path in ["ec/antenna/name", "ec/launcher/name"] {
+        facts.successors.push(GraphSuccessor {
+            from_path: path.into(),
+            to_path: "ec/beam/name".into(),
+        });
+    }
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&historical_request("3.25.0", "3.30.0"))
+        .unwrap();
+    assert!(
+        matches!(map.resolve("ec/launcher/name", Direction::Forward).unwrap().outcome,
+        Outcome::Path { ref resolved_path, .. } if resolved_path == "ec/antenna/name")
+    );
+    assert!(map.resolve("ec/beam/name", Direction::Forward).is_none());
 }

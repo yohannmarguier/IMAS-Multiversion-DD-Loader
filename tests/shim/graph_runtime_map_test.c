@@ -24,17 +24,35 @@ static void arm_reentrant_read(const char *field) {
 }
 
 static int open_coexisting_equilibrium(void) {
+#ifdef IMAS_MVDD_LIVE_GRAPH
+    return open_mismatched_occurrence("equilibrium", NULL);
+#else
     return open_mismatched_occurrence("coexisting_equilibrium", NULL);
+#endif
 }
 
 static int open_coexisting_arraystruct_equilibrium(int rwmode) {
     int pulse_ctx = -1;
     int operation_ctx = -1;
     CHECK_OK(al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, &pulse_ctx));
-    CHECK_OK(al_begin_global_action(pulse_ctx, "coexisting_arraystruct_equilibrium", "", rwmode,
-                                   &operation_ctx));
+#ifdef IMAS_MVDD_LIVE_GRAPH
+    const char *ids = "equilibrium";
+#else
+    const char *ids = "coexisting_arraystruct_equilibrium";
+#endif
+    CHECK_OK(al_begin_global_action(pulse_ctx, ids, "", rwmode, &operation_ctx));
     return operation_ctx;
 }
+
+/* The live DD child is a scalar with no timebase. The controlled fixture
+ * deliberately keeps its array shape for the existing mechanism coverage. */
+#ifdef IMAS_MVDD_LIVE_GRAPH
+#define NESTED_RANK 0
+#define NESTED_TIMEBASE ""
+#else
+#define NESTED_RANK 1
+#define NESTED_TIMEBASE "time"
+#endif
 
 static void scenario_coexistence_arraystruct_keeps_the_opened_anchor(void) {
     int operation_ctx = open_coexisting_arraystruct_equilibrium(30 /* READ_OP */);
@@ -48,21 +66,22 @@ static void scenario_coexistence_arraystruct_keeps_the_opened_anchor(void) {
     CHECK(strcmp(string_from_stub("recording_stub_arraystruct_path"),
                  "time_slice/constraints/j_tor") == 0);
 
-    void *read_data = NULL;
+    double scalar = -9e40;
+    void *read_data = &scalar;
     int read_size[1] = {0};
     int reads_before = int_from_stub("recording_stub_read_call_count");
-    CHECK_OK(al_read_data(child_ctx, "measured", "time", &read_data, IMAS_DOUBLE_DATA, 1,
+    CHECK_OK(al_read_data(child_ctx, "measured", NESTED_TIMEBASE, &read_data, IMAS_DOUBLE_DATA, NESTED_RANK,
                           read_size));
     CHECK(read_data != NULL);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 1);
     CHECK(strcmp(string_from_stub("recording_stub_read_field"), "measured") == 0);
-    CHECK(strcmp(string_from_stub("recording_stub_read_timebase"), "time") == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_read_timebase"), NESTED_TIMEBASE) == 0);
 
     double value = 42.0;
     int write_size[1] = {1};
     int writes_before = int_from_stub("recording_stub_write_call_count");
     al_status_t write_status =
-        al_write_data(child_ctx, "measured", "time", &value, IMAS_DOUBLE_DATA, 1, write_size);
+        al_write_data(child_ctx, "measured", NESTED_TIMEBASE, &value, IMAS_DOUBLE_DATA, NESTED_RANK, write_size);
     CHECK(write_status.code == IMAS_MVDD_CONVERSION_ERROR);
     CHECK_REFUSAL_MESSAGE(write_status,
                           "this candidate plan has no precedence-1 source for a write",
@@ -76,9 +95,9 @@ static void scenario_coexistence_arraystruct_keeps_the_opened_anchor(void) {
     CHECK_OK(al_delete_data(child_ctx, "measured"));
     CHECK(strcmp(string_from_stub("recording_stub_delete_path"), "measured") == 0);
 
-    read_data = NULL;
-    CHECK_OK(al_read_data(child_ctx, "/time_slice/constraints/j_phi/measured", "time",
-                          &read_data, IMAS_DOUBLE_DATA, 1, read_size));
+    read_data = &scalar;
+    CHECK_OK(al_read_data(child_ctx, "/time_slice/constraints/j_phi/measured", NESTED_TIMEBASE,
+                          &read_data, IMAS_DOUBLE_DATA, NESTED_RANK, read_size));
     CHECK(read_data != NULL);
     CHECK(strcmp(string_from_stub("recording_stub_read_field"),
                  "/time_slice/constraints/j_phi/measured") == 0);
@@ -141,9 +160,10 @@ static void scenario_coexistence_arraystruct_plugin_twin_keeps_the_primary_ancho
     CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"),
                  "time_slice/constraints/j_phi") == 0);
 
-    void *read_data = NULL;
+    double scalar = -9e40;
+    void *read_data = &scalar;
     int read_size[1] = {0};
-    CHECK_OK(al_read_data(child_ctx, "measured", "time", &read_data, IMAS_DOUBLE_DATA, 1,
+    CHECK_OK(al_read_data(child_ctx, "measured", NESTED_TIMEBASE, &read_data, IMAS_DOUBLE_DATA, NESTED_RANK,
                           read_size));
     CHECK(read_data != NULL);
     CHECK(strcmp(string_from_stub("recording_stub_read_field"), "measured") == 0);

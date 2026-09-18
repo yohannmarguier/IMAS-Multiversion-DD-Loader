@@ -287,6 +287,8 @@ if(DEFINED PINNED_FORTRAN_CORE_JOB OR DEFINED PINNED_CPP_CORE_JOB
     require_matching_line(fortran_hli_job
             "HLI_TOTAL_TESTS - HLI_DISABLED_TESTS"
             "retain the ordinary HLI enabled-test count assertion")
+    require_matching_line(fortran_hli_job "-DIMAS_MVDD_GRAPH_TEST_SOURCE=live"
+        "build the installed Fortran graph package with the live source")
     require_line(fortran_hli_job "- uses: ./.github/actions/setup-dd-graph"
             "start the pinned graph before the graph-backed Fortran scenario")
     require_line(fortran_hli_job
@@ -351,13 +353,15 @@ require_line(graph_provisioning_job "run: echo 'DD graph provisioning smoke chec
     "label graph provisioning as a smoke check rather than conversion coverage")
 require_line(graph_abi_job "- uses: ./.github/actions/setup-dd-graph"
     "provision the pinned DD graph before graph-backed ABI checks")
+require_matching_line(graph_abi_job "-DIMAS_MVDD_GRAPH_TEST_SOURCE=live"
+    "select the live source for graph-required ABI checks")
 require_line(graph_abi_job "- uses: ./.github/actions/setup-toolchain"
     "use the pinned toolchain for graph-backed ABI checks")
 require_line(graph_abi_job
-    "run: cargo test pinned_graph_returns_a_complete_equilibrium_scope --lib -- --ignored"
+    "run: bash tests/scripts/check-live-acquisition.sh"
     "fail when live graph acquisition cannot produce the pinned complete scope")
 require_line(graph_abi_job
-    "run: ctest --test-dir build -L graph-runtime-map --output-on-failure --no-tests=error"
+    "run: ctest --test-dir build -L live-graph --output-on-failure --no-tests=error"
     "run the nonempty graph-selected C ABI matrix")
 
 foreach(job IN ITEMS fast_job full_job)

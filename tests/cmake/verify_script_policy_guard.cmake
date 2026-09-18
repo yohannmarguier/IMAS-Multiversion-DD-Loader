@@ -37,7 +37,9 @@ function(expect_guard_rejection fixture_name fixture_contents
         message(FATAL_ERROR
             "The script-policy guard accepted the ${fixture_name} fixture")
     endif()
-    string(FIND "${guard_diagnostic}" "${expected_diagnostic}"
+    # CMake wraps diagnostics according to the fixture's absolute path length.
+    string(REGEX REPLACE "[ \t\r\n]+" " " normalized_diagnostic "${guard_diagnostic}")
+    string(FIND "${normalized_diagnostic}" "${expected_diagnostic}"
         expected_diagnostic_position)
     if(expected_diagnostic_position EQUAL -1)
         message(FATAL_ERROR

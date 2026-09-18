@@ -313,215 +313,220 @@ set_target_properties(graph_runtime_map_test PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib"
     IMAS_MVDD_CTEST_LABEL graph-runtime-map)
 
-add_stub_test(graph-runtime-map-identity-operations
-    graph_runtime_map_test identity-operations
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(graph-runtime-map-reverse-identity-operations
-    graph_runtime_map_test identity-operations
-    HLI_DD_VERSION 3.39.0
-    STAMP_VERSION 4.1.1)
-add_stub_test(read-graph-runtime-map-coexistence-falls-back-to-predecessor
-    graph_runtime_map_test coexistence-read-falls-back-to-the-predecessor
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.42.0
-    ENV "RECORDING_STUB_READ_NOT_FOUND_FIELD=time_slice/constraints/j_phi")
-add_stub_test(arraystruct-graph-runtime-map-coexistence-keeps-opened-anchor
-    graph_runtime_map_test coexistence-arraystruct-keeps-the-opened-anchor
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.42.0
-    ENV "RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS=time_slice/constraints/j_phi")
-add_stub_test(arraystruct-graph-runtime-map-coexistence-opens-when-every-candidate-is-empty
-    graph_runtime_map_test coexistence-arraystruct-opens-when-every-candidate-is-empty
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.42.0
-    ENV "RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS=time_slice/constraints/j_phi,time_slice/constraints/j_tor")
-add_stub_test(arraystruct-graph-runtime-map-coexistence-write-mode-uses-primary-without-probing
-    graph_runtime_map_test coexistence-arraystruct-write-mode-uses-primary-without-probing
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.42.0
-    ENV "RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS=time_slice/constraints/j_phi")
-add_stub_test(arraystruct-graph-runtime-map-coexistence-plugin-twin-keeps-primary-anchor
-    graph_runtime_map_test coexistence-arraystruct-plugin-twin-keeps-the-primary-anchor
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.42.0)
-add_stub_test(write-graph-runtime-map-coexistence-uses-primary-and-records-skipped-path
-    graph_runtime_map_test coexistence-write-uses-primary-and-records-the-skipped-path
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.42.0)
-add_stub_test(write-graph-runtime-map-coexistence-reverse-refuses-non-primary-source
-    graph_runtime_map_test coexistence-reverse-write-refuses-the-non-primary-source
-    HLI_DD_VERSION 3.42.0
-    STAMP_VERSION 4.1.1)
-add_stub_test(delete-graph-runtime-map-coexistence-visits-every-candidate-in-order
-    graph_runtime_map_test coexistence-delete-visits-every-candidate-in-order
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.42.0)
-add_stub_test(read-graph-runtime-map-renamed-hli-new
-    graph_runtime_map_test renamed-read-hli-new
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(read-graph-runtime-map-renamed-hli-old
-    graph_runtime_map_test renamed-read-hli-old
-    HLI_DD_VERSION 3.39.0
-    STAMP_VERSION 4.1.1)
-add_stub_test(write-graph-runtime-map-renamed-hli-new
-    graph_runtime_map_test renamed-write-hli-new
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(write-graph-runtime-map-renamed-hli-old
-    graph_runtime_map_test renamed-write-hli-old
-    HLI_DD_VERSION 3.39.0
-    STAMP_VERSION 4.1.1)
-add_stub_test(delete-graph-runtime-map-renamed-hli-new
-    graph_runtime_map_test renamed-delete-hli-new
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(delete-graph-runtime-map-renamed-hli-old
-    graph_runtime_map_test renamed-delete-hli-old
-    HLI_DD_VERSION 3.39.0
-    STAMP_VERSION 4.1.1)
-add_stub_test(graph-runtime-map-historical-nested-operations-hli-new
-    graph_runtime_map_test historical-nested-operations-hli-new
-    HLI_DD_VERSION 3.30.0
-    STAMP_VERSION 3.25.0)
-add_stub_test(graph-runtime-map-historical-nested-operations-hli-old
-    graph_runtime_map_test historical-nested-operations-hli-old
-    HLI_DD_VERSION 3.25.0
-    STAMP_VERSION 3.30.0)
-add_stub_test(arraystruct-path-graph-runtime-map-moved-parent-opens-nested
-    graph_runtime_map_test moved-parent-opens-nested-arraystruct
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(read-graph-runtime-map-moved-parent-nested-path-and-timebase
-    graph_runtime_map_test moved-parent-reads-nested-path-and-timebase
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(write-graph-runtime-map-moved-parent-absolute-path-and-timebase
-    graph_runtime_map_test moved-parent-writes-absolute-path-and-timebase
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(delete-graph-runtime-map-moved-parent-relative-child
-    graph_runtime_map_test moved-parent-deletes-a-relative-child
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(delete-graph-runtime-map-moved-parent-admits-a-trivial-child-delete
-    graph_runtime_map_test moved-parent-admits-a-trivial-child-delete
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(delete-graph-runtime-map-moved-parent-refuses-an-escaping-delete
-    graph_runtime_map_test moved-parent-refuses-an-escaping-delete
-    HLI_DD_VERSION 3.39.0
-    STAMP_VERSION 4.1.1)
-add_stub_test(read-graph-runtime-map-exact-gap-r-omits-the-xml-parent-loss
-    graph_runtime_map_test graph-exact-gap-r-omits-the-xml-parent-loss
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(read-graph-runtime-map-scientific-gate-refuses-caller-path
-    graph_runtime_map_test scientific-gate-refuses-caller-path
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(graph-runtime-map-psi-read-flips-once-and-write-uses-its-inverse
-    graph_runtime_map_test psi-read-flips-once-and-write-uses-its-inverse
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0
-    ENV "RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-2.0,-9.0e40")
-add_stub_test(graph-runtime-map-reverse-psi-read-flips-once-and-write-uses-its-inverse
-    graph_runtime_map_test psi-read-flips-once-and-write-uses-its-inverse
-    HLI_DD_VERSION 3.39.0
-    STAMP_VERSION 4.1.1
-    ENV "RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-2.0,-9.0e40")
-add_stub_test(graph-runtime-map-unknown-cocos-refuses-only-the-affected-operations
-    graph_runtime_map_test unknown-cocos-refuses-only-the-affected-operations
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(graph-runtime-map-compound-cocos-refuses-only-the-affected-operations
-    graph_runtime_map_test compound-cocos-refuses-only-the-affected-operations
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(graph-runtime-map-missing-cocos-refuses-only-the-affected-operations
-    graph_runtime_map_test missing-cocos-refuses-only-the-affected-operations
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(graph-runtime-map-acquisition-failure-cleans-up-open-context
-    graph_runtime_map_test acquisition-failure-cleans-up-open-context
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(read-graph-runtime-map-unit-refusal-preserves-caller-data-without-forwarding
-    graph_runtime_map_test read-unit-refusal-preserves-caller-data-without-forwarding
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(write-graph-runtime-map-unit-refusal-preserves-caller-data-without-forwarding
-    graph_runtime_map_test write-unit-refusal-preserves-caller-data-without-forwarding
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
+if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "live")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/LiveGraph.cmake")
+else()
+    add_stub_test(graph-runtime-map-identity-operations
+        graph_runtime_map_test identity-operations
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(graph-runtime-map-reverse-identity-operations
+        graph_runtime_map_test identity-operations
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
+    add_stub_test(read-graph-runtime-map-coexistence-falls-back-to-predecessor
+        graph_runtime_map_test coexistence-read-falls-back-to-the-predecessor
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.42.0
+        ENV "RECORDING_STUB_READ_NOT_FOUND_FIELD=time_slice/constraints/j_phi")
+    add_stub_test(arraystruct-graph-runtime-map-coexistence-keeps-opened-anchor
+        graph_runtime_map_test coexistence-arraystruct-keeps-the-opened-anchor
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.42.0
+        ENV "RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS=time_slice/constraints/j_phi")
+    add_stub_test(arraystruct-graph-runtime-map-coexistence-opens-when-every-candidate-is-empty
+        graph_runtime_map_test coexistence-arraystruct-opens-when-every-candidate-is-empty
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.42.0
+        ENV "RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS=time_slice/constraints/j_phi,time_slice/constraints/j_tor")
+    add_stub_test(arraystruct-graph-runtime-map-coexistence-write-mode-uses-primary-without-probing
+        graph_runtime_map_test coexistence-arraystruct-write-mode-uses-primary-without-probing
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.42.0
+        ENV "RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS=time_slice/constraints/j_phi")
+    add_stub_test(arraystruct-graph-runtime-map-coexistence-plugin-twin-keeps-primary-anchor
+        graph_runtime_map_test coexistence-arraystruct-plugin-twin-keeps-the-primary-anchor
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.42.0)
+    add_stub_test(write-graph-runtime-map-coexistence-uses-primary-and-records-skipped-path
+        graph_runtime_map_test coexistence-write-uses-primary-and-records-the-skipped-path
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.42.0)
+    add_stub_test(write-graph-runtime-map-coexistence-reverse-refuses-non-primary-source
+        graph_runtime_map_test coexistence-reverse-write-refuses-the-non-primary-source
+        HLI_DD_VERSION 3.42.0
+        STAMP_VERSION 4.1.1)
+    add_stub_test(delete-graph-runtime-map-coexistence-visits-every-candidate-in-order
+        graph_runtime_map_test coexistence-delete-visits-every-candidate-in-order
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.42.0)
+    add_stub_test(read-graph-runtime-map-renamed-hli-new
+        graph_runtime_map_test renamed-read-hli-new
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(read-graph-runtime-map-renamed-hli-old
+        graph_runtime_map_test renamed-read-hli-old
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
+    add_stub_test(write-graph-runtime-map-renamed-hli-new
+        graph_runtime_map_test renamed-write-hli-new
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(write-graph-runtime-map-renamed-hli-old
+        graph_runtime_map_test renamed-write-hli-old
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
+    add_stub_test(delete-graph-runtime-map-renamed-hli-new
+        graph_runtime_map_test renamed-delete-hli-new
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(delete-graph-runtime-map-renamed-hli-old
+        graph_runtime_map_test renamed-delete-hli-old
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
+    add_stub_test(graph-runtime-map-historical-nested-operations-hli-new
+        graph_runtime_map_test historical-nested-operations-hli-new
+        HLI_DD_VERSION 3.30.0
+        STAMP_VERSION 3.25.0)
+    add_stub_test(graph-runtime-map-historical-nested-operations-hli-old
+        graph_runtime_map_test historical-nested-operations-hli-old
+        HLI_DD_VERSION 3.25.0
+        STAMP_VERSION 3.30.0)
+    add_stub_test(arraystruct-path-graph-runtime-map-moved-parent-opens-nested
+        graph_runtime_map_test moved-parent-opens-nested-arraystruct
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(read-graph-runtime-map-moved-parent-nested-path-and-timebase
+        graph_runtime_map_test moved-parent-reads-nested-path-and-timebase
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(write-graph-runtime-map-moved-parent-absolute-path-and-timebase
+        graph_runtime_map_test moved-parent-writes-absolute-path-and-timebase
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(delete-graph-runtime-map-moved-parent-relative-child
+        graph_runtime_map_test moved-parent-deletes-a-relative-child
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(delete-graph-runtime-map-moved-parent-admits-a-trivial-child-delete
+        graph_runtime_map_test moved-parent-admits-a-trivial-child-delete
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(delete-graph-runtime-map-moved-parent-refuses-an-escaping-delete
+        graph_runtime_map_test moved-parent-refuses-an-escaping-delete
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1)
+    add_stub_test(read-graph-runtime-map-exact-gap-r-omits-the-xml-parent-loss
+        graph_runtime_map_test graph-exact-gap-r-omits-the-xml-parent-loss
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(read-graph-runtime-map-scientific-gate-refuses-caller-path
+        graph_runtime_map_test scientific-gate-refuses-caller-path
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(graph-runtime-map-psi-read-flips-once-and-write-uses-its-inverse
+        graph_runtime_map_test psi-read-flips-once-and-write-uses-its-inverse
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-2.0,-9.0e40")
+    add_stub_test(graph-runtime-map-reverse-psi-read-flips-once-and-write-uses-its-inverse
+        graph_runtime_map_test psi-read-flips-once-and-write-uses-its-inverse
+        HLI_DD_VERSION 3.39.0
+        STAMP_VERSION 4.1.1
+        ENV "RECORDING_STUB_READ_DOUBLE_VALUES=1.5,-2.0,-9.0e40")
+    add_stub_test(graph-runtime-map-unknown-cocos-refuses-only-the-affected-operations
+        graph_runtime_map_test unknown-cocos-refuses-only-the-affected-operations
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(graph-runtime-map-compound-cocos-refuses-only-the-affected-operations
+        graph_runtime_map_test compound-cocos-refuses-only-the-affected-operations
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(graph-runtime-map-missing-cocos-refuses-only-the-affected-operations
+        graph_runtime_map_test missing-cocos-refuses-only-the-affected-operations
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(graph-runtime-map-acquisition-failure-cleans-up-open-context
+        graph_runtime_map_test acquisition-failure-cleans-up-open-context
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(read-graph-runtime-map-unit-refusal-preserves-caller-data-without-forwarding
+        graph_runtime_map_test read-unit-refusal-preserves-caller-data-without-forwarding
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(write-graph-runtime-map-unit-refusal-preserves-caller-data-without-forwarding
+        graph_runtime_map_test write-unit-refusal-preserves-caller-data-without-forwarding
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-add_stub_test(write-graph-runtime-map-timebase-resampling-refuses-without-forwarding
-    graph_runtime_map_test timebase-resampling-refuses-write-without-forwarding
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(arraystruct-graph-runtime-map-timebase-resampling-refuses-without-forwarding
-    graph_runtime_map_test timebase-resampling-refuses-arraystruct-without-forwarding
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(delete-graph-runtime-map-unit-refusal-does-not-forward
-    graph_runtime_map_test delete-unit-refusal-does-not-forward
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(loss-graph-runtime-map-unit-refusals-keep-operation-order
-    graph_runtime_map_test loss-unit-refusals-keep-operation-order
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(graph-runtime-map-opening-families-reuse-a-retained-map
-    graph_runtime_map_test opening-families-reuse-a-retained-map
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(graph-runtime-map-cached-mismatch-translates-global-datapath
-    graph_runtime_map_test cached-mismatch-translates-global-datapath
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(graph-runtime-map-write-mode-uses-read-op-stamp-probe
-    graph_runtime_map_test write-mode-uses-its-read-op-stamp-probe
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(graph-runtime-map-absent-stamp-is-a-passthrough
-    graph_runtime_map_test nonmismatch-opening-families-are-passthrough
-    HLI_DD_VERSION 4.1.1)
-add_stub_test(graph-runtime-map-matching-stamp-is-a-passthrough
-    graph_runtime_map_test nonmismatch-opening-families-are-passthrough
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 4.1.1)
-add_stub_test(graph-runtime-map-malformed-stamp-refuses-and-ends-every-family
-    graph_runtime_map_test malformed-stamp-refuses-and-ends-every-family
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION malformed)
-add_stub_test(graph-runtime-map-conversion-disabled-is-a-plain-forward
-    graph_runtime_map_test conversion-disabled-is-a-plain-forward)
-add_stub_test(graph-runtime-map-core-failure-is-a-plain-forward
-    graph_runtime_map_test core-failure-is-a-plain-forward
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0
-    ENV "RECORDING_STUB_SLICE_FAIL=1")
-add_stub_test(graph-runtime-map-failure-closes-every-opening-family
-    graph_runtime_map_test failure-closes-every-opening-family
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(graph-runtime-map-later-open-retries-a-failed-acquisition
-    graph_runtime_map_test later-open-retries-a-failed-acquisition
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(graph-runtime-map-reentrant-read-is-passthrough-under-graph-open
-    graph_runtime_map_test reentrant-read-is-passthrough-under-graph-open
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
-add_stub_test(graph-runtime-map-passthrough-is-unchanged-under-graph-open
-    graph_runtime_map_test passthrough-is-unchanged-under-graph-open
-    HLI_DD_VERSION 4.1.1
-    STAMP_VERSION 3.39.0)
+    add_stub_test(write-graph-runtime-map-timebase-resampling-refuses-without-forwarding
+        graph_runtime_map_test timebase-resampling-refuses-write-without-forwarding
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(arraystruct-graph-runtime-map-timebase-resampling-refuses-without-forwarding
+        graph_runtime_map_test timebase-resampling-refuses-arraystruct-without-forwarding
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(delete-graph-runtime-map-unit-refusal-does-not-forward
+        graph_runtime_map_test delete-unit-refusal-does-not-forward
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(loss-graph-runtime-map-unit-refusals-keep-operation-order
+        graph_runtime_map_test loss-unit-refusals-keep-operation-order
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(graph-runtime-map-opening-families-reuse-a-retained-map
+        graph_runtime_map_test opening-families-reuse-a-retained-map
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(graph-runtime-map-cached-mismatch-translates-global-datapath
+        graph_runtime_map_test cached-mismatch-translates-global-datapath
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(graph-runtime-map-write-mode-uses-read-op-stamp-probe
+        graph_runtime_map_test write-mode-uses-its-read-op-stamp-probe
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(graph-runtime-map-absent-stamp-is-a-passthrough
+        graph_runtime_map_test nonmismatch-opening-families-are-passthrough
+        HLI_DD_VERSION 4.1.1)
+    add_stub_test(graph-runtime-map-matching-stamp-is-a-passthrough
+        graph_runtime_map_test nonmismatch-opening-families-are-passthrough
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 4.1.1)
+    add_stub_test(graph-runtime-map-malformed-stamp-refuses-and-ends-every-family
+        graph_runtime_map_test malformed-stamp-refuses-and-ends-every-family
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION malformed)
+    add_stub_test(graph-runtime-map-conversion-disabled-is-a-plain-forward
+        graph_runtime_map_test conversion-disabled-is-a-plain-forward)
+    add_stub_test(graph-runtime-map-core-failure-is-a-plain-forward
+        graph_runtime_map_test core-failure-is-a-plain-forward
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0
+        ENV "RECORDING_STUB_SLICE_FAIL=1")
+    add_stub_test(graph-runtime-map-failure-closes-every-opening-family
+        graph_runtime_map_test failure-closes-every-opening-family
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(graph-runtime-map-later-open-retries-a-failed-acquisition
+        graph_runtime_map_test later-open-retries-a-failed-acquisition
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(graph-runtime-map-reentrant-read-is-passthrough-under-graph-open
+        graph_runtime_map_test reentrant-read-is-passthrough-under-graph-open
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
+    add_stub_test(graph-runtime-map-passthrough-is-unchanged-under-graph-open
+        graph_runtime_map_test passthrough-is-unchanged-under-graph-open
+        HLI_DD_VERSION 4.1.1
+        STAMP_VERSION 3.39.0)
 
-# Not a refusal scenario: the artifact's four chi_squared `<redefine>` entries
-# were removed after review, so these paths now forward verbatim. Registered
-# beside the other pass-through reads rather than with the refusal group.
+    # Not a refusal scenario: the artifact's four chi_squared `<redefine>` entries
+    # were removed after review, so these paths now forward verbatim. Registered
+    # beside the other pass-through reads rather than with the refusal group.
+endif()
+
 add_stub_test(read-path-redefined-unit-path-forwards-verbatim
     read_path_test redefined-unit-path-forwards-verbatim
     HLI_DD_VERSION 4.1.1

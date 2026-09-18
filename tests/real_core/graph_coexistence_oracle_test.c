@@ -6,6 +6,7 @@
  * hide both a primary-only write and a delete that missed one candidate. */
 
 #include <stdio.h>
+#include <dlfcn.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -387,8 +388,146 @@ static void scenario_reverse_read_selects_the_4_1_successor(void) {
            "a 3.42.0 b_field_tor read resolved to stored 4.1.1 b_field_phi\n");
 }
 
+static void check_dataset_contains(const char *file_path, const char *dataset_path, double expected,
+                                   int every_value) {
+    hid_t file = H5Fopen(file_path, H5F_ACC_RDONLY, H5P_DEFAULT);
+    CHECK(file >= 0);
+    hid_t dataset = H5Dopen2(file, dataset_path, H5P_DEFAULT);
+    CHECK(dataset >= 0);
+    hid_t space = H5Dget_space(dataset);
+    CHECK(space >= 0);
+    hssize_t count = H5Sget_simple_extent_npoints(space);
+    CHECK(count > 0);
+    double *values = malloc((size_t)count * sizeof *values);
+    CHECK(values != NULL);
+    CHECK(H5Dread(dataset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, values) >= 0);
+    int found = 0;
+    for (hssize_t index = 0; index < count; ++index) {
+        if (values[index] == expected) found = 1;
+        if (every_value) CHECK(values[index] == expected);
+    }
+    CHECK(found);
+    free(values);
+    CHECK(H5Sclose(space) >= 0);
+    CHECK(H5Dclose(dataset) >= 0);
+    CHECK(H5Fclose(file) >= 0);
+}
+
+static void live_j_operations(int reverse) {
+    const char *stored_version = reverse ? "4.1.1" : "3.42.0";
+    const char *read_anchor = reverse ? "constraints/j_tor" : "constraints/j_phi";
+    if (reverse) {
+        create_real_core_fixture_copy(&copied_fixture, EQUILIBRIUM_FIXTURE_DIR, stored_version,
+                                      "/tmp/imas-mvdd-live-coexistence-XXXXXX");
+        CHECK(atexit(remove_fixture_pair) == 0);
+    } else {
+        prepare_coexisting_fixture();
+    }
+    CHECK_OK(imas_mvdd_set_hli_dd_version(reverse ? "3.42.0" : "4.1.1"));
+    char file[1024];
+    equilibrium_file_path(file, sizeof file);
+    fill_double_dataset(file, J_PHI_RECONSTRUCTED_DATASET, 47.0);
+    double unrelated[FIXTURE_SLICE_CAPACITY], after[FIXTURE_SLICE_CAPACITY];
+    int unrelated_count = read_double_slices_from_disk(file, IP_DATASET, unrelated, FIXTURE_SLICE_CAPACITY);
+
+    int pulse = open_fixture_pulse(), operation = -1;
+    int slice = open_slice_context(pulse, READ_OP, &operation);
+    int entries = -1, j = -1;
+    CHECK_OK(al_begin_arraystruct_action(slice, read_anchor, "", &entries, &j));
+    CHECK(entries > 0);
+    double value = EMPTY_DOUBLE;
+    void *data = &value;
+    CHECK_OK(al_read_data(j, "reconstructed", "", &data, DOUBLE_DATA, 0, NULL));
+    CHECK(value == 47.0);
+    /* Establish the pinned HDF5 backend's absolute-path limitation through
+     * Core directly, using the same stored context and its stored spelling.
+     * This is a baseline, not proof of successful absolute-path access. */
+    void *core = dlopen(REAL_CORE_LIBRARY_PATH, RTLD_NOW | RTLD_LOCAL);
+    CHECK(core != NULL);
+    typedef al_status_t (*core_read_fn)(int, const char *, const char *, void **, int, int, int *);
+    /* The plugin twin enters the backend directly; Core's al_read_data
+     * calls it by symbol and could be interposed again on ELF platforms. */
+    core_read_fn core_read = (core_read_fn)dlsym(core, "al_plugin_read_data");
+    CHECK(core_read != NULL);
+    value = EMPTY_DOUBLE;
+    CHECK_OK(core_read(j, "reconstructed", "", &data, DOUBLE_DATA, 0, NULL));
+    CHECK(value == 47.0);
+    value = EMPTY_DOUBLE;
+    CHECK_OK(core_read(j, "/time_slice/constraints/j_phi/reconstructed", "", &data,
+                       DOUBLE_DATA, 0, NULL));
+    CHECK(value == EMPTY_DOUBLE);
+    value = EMPTY_DOUBLE;
+    CHECK_OK(al_read_data(j, reverse ? "/time_slice/constraints/j_tor/reconstructed"
+                                     : "/time_slice/constraints/j_phi/reconstructed",
+                          "", &data, DOUBLE_DATA, 0, NULL));
+    CHECK(value == EMPTY_DOUBLE);
+    CHECK(dlclose(core) == 0);
+    printf("pinned Core limitation: absolute read beneath a child returns EMPTY both "
+           "directly and through the live shim\n");
+    CHECK_OK(al_end_action(j));
+    close_slice_context(slice, operation, pulse);
+
+    pulse = open_fixture_pulse();
+    CHECK_OK(al_begin_slice_action(pulse, "equilibrium", WRITE_OP, APPENDED_SLICE_TIME,
+                                   UNDEFINED_INTERP, &operation));
+    entries = 1;
+    CHECK_OK(al_begin_arraystruct_action(operation, "time_slice", "", &entries, &slice));
+    entries = 1;
+    CHECK_OK(al_begin_arraystruct_action(slice, "constraints/j_phi", "", &entries, &j));
+    value = 77.0;
+    CHECK_OK(al_write_data(j, "reconstructed", "", &value, DOUBLE_DATA, 0, NULL));
+    check_no_loss_entry(j); /* the fixed primary anchor filters its sibling */
+    CHECK_OK(al_end_action(j));
+    close_slice_context(slice, operation, pulse);
+    check_dataset_contains(file, J_PHI_RECONSTRUCTED_DATASET, 77.0, 0);
+    if (!reverse) check_dataset_contains(file, J_TOR_RECONSTRUCTED_DATASET, 29.0, 1);
+    check_stamp_still_reads(stored_version);
+
+    pulse = open_fixture_pulse();
+    CHECK_OK(al_begin_global_action(pulse, "equilibrium", "", WRITE_OP, &operation));
+    if (reverse) {
+        al_status_t refusal = al_delete_data(operation, "time_slice/constraints/j_tor/reconstructed");
+        CHECK(refusal.code == IMAS_MVDD_CONVERSION_ERROR);
+        CHECK_REFUSAL_MESSAGE(refusal,
+            "this path is a non-primary source and cannot delete a shared stored slot",
+            "time_slice/constraints/j_tor/reconstructed", "3.42.0", "4.1.1");
+        check_loss_at(operation, 0, "time_slice/constraints/j_tor/reconstructed",
+                      IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_DELETE);
+    }
+    CHECK_OK(al_delete_data(operation, "time_slice/constraints/j_phi/reconstructed"));
+    if (!reverse) {
+        check_loss_at(operation, 0, "time_slice/constraints/j_phi/reconstructed",
+                      IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_DELETE);
+        check_loss_at(operation, 1, "time_slice/constraints/j_tor/reconstructed",
+                      IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_DELETE);
+    }
+    CHECK_OK(al_end_action(operation));
+    CHECK_OK(al_close_pulse(pulse, CLOSE_PULSE));
+    CHECK(!dataset_exists_on_disk(file, J_PHI_RECONSTRUCTED_DATASET));
+    if (!reverse) CHECK(!dataset_exists_on_disk(file, J_TOR_RECONSTRUCTED_DATASET));
+    CHECK(read_double_slices_from_disk(file, IP_DATASET, after, FIXTURE_SLICE_CAPACITY) == unrelated_count);
+    for (int index = 0; index < unrelated_count; ++index) CHECK(after[index] == unrelated[index]);
+    check_stamp_still_reads(stored_version);
+
+    pulse = open_fixture_pulse();
+    slice = open_slice_context(pulse, READ_OP, &operation);
+    entries = -1;
+    CHECK_OK(al_begin_arraystruct_action(slice, read_anchor, "", &entries, &j));
+    value = 123.0;
+    data = &value;
+    CHECK_OK(al_read_data(j, "reconstructed", "", &data, DOUBLE_DATA, 0, NULL));
+    CHECK(data == &value && value == EMPTY_DOUBLE);
+    CHECK_OK(al_end_action(j));
+    close_slice_context(slice, operation, pulse);
+}
+
+static void scenario_live_forward(void) { live_j_operations(0); }
+static void scenario_live_reverse(void) { live_j_operations(1); }
+
 int main(int argc, char **argv) {
     static const shim_test_scenario scenarios[] = {
+        {"live-j-forward", scenario_live_forward},
+        {"live-j-reverse", scenario_live_reverse},
         {"read-coexistence-forward-selects-primary-then-falls-back",
          scenario_forward_read_selects_primary_then_falls_back},
         {"read-coexistence-forward-arraystruct-falls-back-between-j-candidates",

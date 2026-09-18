@@ -105,6 +105,7 @@ fn convention(value: Option<&str>) -> Option<CocosConvention> {
 }
 fn leaf(ids: &str, path: &str) -> GraphNode {
     GraphNode {
+        source_metadata: None,
         ids: ids.to_string(),
         path: path.to_string(),
         introduced: vec![graph_release("3.39.0")],
@@ -156,6 +157,7 @@ fn retyped_leaf(ids: &str, path: &str) -> GraphNode {
         .get_mut(1)
         .expect("controlled nodes carry an HLI endpoint");
     hli.data_type = "STRUCT_ARRAY".to_string();
+    hli.kind = GraphNodeKind::Structure;
     node
 }
 
@@ -241,6 +243,7 @@ fn unit_event(
         kind: "units_changed".to_string(),
         old_value: Some(old_value.to_string()),
         new_value: Some(new_value.to_string()),
+        semantic_type: None,
         unit_change: Some(unit_change),
         coordinate_evidence: None,
     }
@@ -255,6 +258,7 @@ fn resampling_event(path: &str) -> GraphEvent {
         kind: "timebase_changed".to_string(),
         old_value: Some("time".to_string()),
         new_value: Some("time".to_string()),
+        semantic_type: None,
         unit_change: None,
         coordinate_evidence: Some(CoordinateChangeEvidence::RequiresResampling),
     }
@@ -298,6 +302,7 @@ fn cocos_equilibrium_scope(
             kind: "metadata_changed".to_string(),
             old_value: Some("psi".to_string()),
             new_value: Some(String::new()),
+            semantic_type: None,
             unit_change: None,
             coordinate_evidence: None,
         }],
@@ -331,6 +336,7 @@ fn historical_node(
     kind: GraphNodeKind,
 ) -> GraphNode {
     GraphNode {
+        source_metadata: None,
         ids: "pulse_schedule".to_string(),
         path: path.to_string(),
         introduced: vec![graph_release(introduced)],
@@ -513,7 +519,7 @@ fn coexisting_equilibrium_scope(ids: &str, j_kind: GraphNodeKind) -> IdsGraphFac
     time_slice
         .endpoints
         .push(coexistence_endpoint("3.42.0", GraphNodeKind::Leaf));
-    IdsGraphFacts {
+    let mut facts = IdsGraphFacts {
         complete: true,
         versions: ["3.39.0", "3.42.0", "4.0.0", "4.1.1"]
             .into_iter()
@@ -543,7 +549,32 @@ fn coexisting_equilibrium_scope(ids: &str, j_kind: GraphNodeKind) -> IdsGraphFac
                 to_path: b_successor.to_string(),
             },
         ],
+    };
+    // The controlled scope explicitly supplies every descendant exercised by
+    // the ABI oracles. A structure relation does not invent child membership.
+    for suffix in ["measured", "reconstructed", "time"] {
+        for parent in [j_predecessor, j_successor] {
+            let mut child = facts
+                .nodes
+                .iter()
+                .find(|node| node.path == parent)
+                .unwrap()
+                .clone();
+            child.path = format!("{parent}/{suffix}");
+            child.rename_declarations.clear();
+            for endpoint in &mut child.endpoints {
+                endpoint.kind = GraphNodeKind::Leaf;
+                endpoint.data_type = "FLT_1D".into();
+                endpoint.ndim = 1;
+            }
+            facts.nodes.push(child);
+        }
+        facts.successors.push(GraphSuccessor {
+            from_path: format!("{j_predecessor}/{suffix}"),
+            to_path: format!("{j_successor}/{suffix}"),
+        });
     }
+    facts
 }
 
 fn moved_descendants_scope() -> IdsGraphFacts {
@@ -711,6 +742,7 @@ fn classified_equilibrium_scope() -> IdsGraphFacts {
                 kind: "metadata_changed".to_string(),
                 old_value: Some("psi".to_string()),
                 new_value: Some(String::new()),
+                semantic_type: None,
                 unit_change: None,
                 coordinate_evidence: None,
             },
@@ -722,6 +754,7 @@ fn classified_equilibrium_scope() -> IdsGraphFacts {
                 kind: "structure_changed".to_string(),
                 old_value: Some("INT_1D".to_string()),
                 new_value: Some("STRUCT_ARRAY".to_string()),
+                semantic_type: None,
                 unit_change: None,
                 coordinate_evidence: None,
             },

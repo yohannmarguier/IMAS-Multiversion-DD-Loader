@@ -496,7 +496,10 @@ impl EndpointInventory {
     /// Adapts the legacy artifact's exact leaf lists. These lists are the
     /// existing compatibility input for delete classification; they are not a
     /// claim that the artifact-completeness proof exhausts its DD version.
-    #[cfg_attr(feature = "graph-test-source", allow(dead_code))]
+    #[cfg_attr(
+        any(feature = "graph-test-source", feature = "graph-live-source"),
+        allow(dead_code)
+    )]
     pub(crate) fn complete_leaf_paths(paths: &str) -> Self {
         Self::complete(
             paths

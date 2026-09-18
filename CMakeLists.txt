@@ -271,12 +271,21 @@ set(CARGO_COMMON_ARGS
     --package "${IMAS_MVDD_PACKAGE}"
     --profile "${CARGO_PROFILE}")
 
+set(IMAS_MVDD_GRAPH_TEST_SOURCE "controlled" CACHE STRING "Source for the private graph test/package instance (controlled or live)")
+set_property(CACHE IMAS_MVDD_GRAPH_TEST_SOURCE PROPERTY STRINGS controlled live)
+if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "live")
+    set(_graph_source_feature graph-live-source)
+elseif(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "controlled")
+    set(_graph_source_feature graph-test-source)
+else()
+    message(FATAL_ERROR "IMAS_MVDD_GRAPH_TEST_SOURCE must be controlled or live")
+endif()
 set(CARGO_GRAPH_COMMON_ARGS
     --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
     --target-dir "${IMAS_MVDD_GRAPH_CARGO_TARGET_DIR}"
     --package "${IMAS_MVDD_PACKAGE}"
     --profile "${CARGO_PROFILE}"
-    --features graph-test-source)
+    --features ${_graph_source_feature})
 
 if(IMAS_MVDD_CARGO_OFFLINE)
     list(APPEND CARGO_COMMON_ARGS --offline)

@@ -72,8 +72,8 @@ expect_guard_rejection(
     "full_job must fail when its selected test profile registers no tests")
 
 string(REPLACE
-    "ctest --test-dir build -L graph-runtime-map --output-on-failure --no-tests=error"
-    "ctest --test-dir build -L graph-runtime-map-missing --output-on-failure --no-tests=error"
+    "ctest --test-dir build -L live-graph --output-on-failure --no-tests=error"
+    "ctest --test-dir build -L live-graph-missing --output-on-failure --no-tests=error"
     graph_abi_missing_selection "${workflow}")
 if(workflow STREQUAL graph_abi_missing_selection)
     message(FATAL_ERROR "Could not replace the graph ABI CTest label")
@@ -83,8 +83,8 @@ expect_guard_rejection(
     "graph_abi_job must run the nonempty graph-selected C ABI matrix")
 
 string(REPLACE
-    "run: cargo test pinned_graph_returns_a_complete_equilibrium_scope --lib -- --ignored"
-    "# run: cargo test pinned_graph_returns_a_complete_equilibrium_scope --lib -- --ignored"
+    "run: bash tests/scripts/check-live-acquisition.sh"
+    "# run: bash tests/scripts/check-live-acquisition.sh"
     graph_abi_without_acquisition "${workflow}")
 if(workflow STREQUAL graph_abi_without_acquisition)
     message(FATAL_ERROR "Could not comment out the graph ABI acquisition check")

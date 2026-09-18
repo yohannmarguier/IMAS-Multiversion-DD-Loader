@@ -10,6 +10,75 @@ use std::time::Duration;
 type Row = std::collections::BTreeMap<String, GraphValue>;
 type Reply = (std::collections::BTreeMap<String, GraphValue>, Vec<Row>);
 
+#[test]
+fn raw_scope_acquires_a_supported_scalar_without_inventing_coordinates() {
+    use crate::conversion::conversion_map::{Direction, Outcome};
+    use crate::conversion::runtime_map::{MapRequest, RuntimeMapAcquirer};
+    let executor = scalar_executor();
+    let source = Neo4jScopeSource::new(executor, 2).unwrap();
+    let map = RuntimeMapAcquirer::new(source)
+        .acquire(&MapRequest {
+            ids: "equilibrium".into(),
+            stored_dd: ArtifactDdVersion::new("3.39.0").unwrap(),
+            hli_dd: ArtifactDdVersion::new("4.1.1").unwrap(),
+        })
+        .expect("complete raw evidence reaches the existing map constructor");
+    assert!(matches!(
+        map.resolve("ids_properties/homogeneous_time", Direction::Forward)
+            .unwrap()
+            .outcome,
+        Outcome::Path { .. }
+    ));
+}
+
+fn scalar_executor() -> ControlledExecutor {
+    ControlledExecutor::default()
+        .reply(query_parameters(None, 0), count(2))
+        .reply(
+            query_parameters(None, 0),
+            vec![
+                row(&[
+                    ("release", GraphValue::String("3.39.0".into())),
+                    ("cocos", GraphValue::Null),
+                ]),
+                row(&[
+                    ("release", GraphValue::String("4.1.1".into())),
+                    ("cocos", GraphValue::String("17".into())),
+                ]),
+            ],
+        )
+        .reply(query_parameters(Some("equilibrium"), 0), count(1))
+        .reply(
+            query_parameters(Some("equilibrium"), 0),
+            vec![row(&[
+                ("ids", GraphValue::String("equilibrium".into())),
+                (
+                    "path",
+                    GraphValue::String("equilibrium/ids_properties/homogeneous_time".into()),
+                ),
+                ("data_type", GraphValue::String("INT_0D".into())),
+                ("ndim", GraphValue::Integer(0)),
+                ("units", GraphValue::Null),
+                ("timebase", GraphValue::Null),
+                ("coordinate_relationships", GraphValue::List(vec![])),
+                (
+                    "introduced",
+                    GraphValue::List(vec![GraphValue::String("3.39.0".into())]),
+                ),
+                ("deprecated", GraphValue::List(vec![])),
+                ("change_nbc_version", GraphValue::Null),
+                ("change_nbc_description", GraphValue::Null),
+                ("change_nbc_previous_name", GraphValue::Null),
+                ("change_nbc_previous_type", GraphValue::Null),
+                ("cocos_label_transformation", GraphValue::Null),
+                ("cocos_transformation_expression", GraphValue::Null),
+                ("cocos_label_source", GraphValue::Null),
+            ])],
+        )
+        .reply(query_parameters(Some("equilibrium"), 0), count(0))
+        .reply(query_parameters(Some("equilibrium"), 0), count(0))
+}
+
 #[derive(Default)]
 struct ControlledExecutor {
     replies: RefCell<Vec<Reply>>,
@@ -139,8 +208,9 @@ fn complete_executor() -> ControlledExecutor {
                     (
                         "coordinate_relationships",
                         GraphValue::List(vec![GraphValue::List(vec![
-                            GraphValue::Integer(0),
+                            GraphValue::Integer(1),
                             GraphValue::String("time".to_string()),
+                            GraphValue::String("path".into()),
                         ])]),
                     ),
                     ("introduced", GraphValue::List(Vec::new())),
@@ -169,8 +239,12 @@ fn complete_executor() -> ControlledExecutor {
                 ("release", GraphValue::String("4.1.1".to_string())),
                 ("kind", GraphValue::String("structure_changed".to_string())),
                 (
-                    "owner_ids",
-                    GraphValue::List(vec![GraphValue::String("equilibrium".to_string())]),
+                    "releases",
+                    GraphValue::List(vec![GraphValue::String("4.1.1".into())]),
+                ),
+                (
+                    "owners",
+                    GraphValue::List(vec![GraphValue::String("time_slice".to_string())]),
                 ),
             ])],
         )
@@ -203,8 +277,9 @@ fn retrieves_all_schema_streams_with_bound_pagination_and_typed_nulls() {
     assert_eq!(
         scope.nodes[0]["coordinate_relationships"],
         GraphValue::List(vec![GraphValue::List(vec![
-            GraphValue::Integer(0),
+            GraphValue::Integer(1),
             GraphValue::String("time".to_string()),
+            GraphValue::String("path".into()),
         ])])
     );
 }
@@ -324,125 +399,557 @@ fn rejects_duplicate_event_ids_even_when_their_rows_are_otherwise_valid() {
 #[test]
 #[ignore = "requires the pinned Neo4j graph provisioned by CI"]
 fn pinned_graph_returns_complete_reference_scopes() {
-    let config = Neo4jConfig {
+    let config = live_config();
+    use crate::conversion::conversion_map::{Direction, Outcome};
+    use crate::conversion::runtime_map::{MapRequest, RuntimeMapCoordinator};
+    let coordinator =
+        RuntimeMapCoordinator::with_deadline(Neo4jFactsSource(config), Duration::from_secs(120));
+    for (ids, first, second) in [
+        ("equilibrium", "3.39.0", "4.1.1"),
+        ("equilibrium", "3.42.0", "4.1.1"),
+        ("pulse_schedule", "3.25.0", "3.30.0"),
+    ] {
+        for (stored, hli) in [(first, second), (second, first)] {
+            let request = MapRequest {
+                ids: ids.into(),
+                stored_dd: ArtifactDdVersion::new(stored).unwrap(),
+                hli_dd: ArtifactDdVersion::new(hli).unwrap(),
+            };
+            let map = coordinator
+                .acquire(&request)
+                .unwrap_or_else(|error| panic!("{ids} {stored} -> {hli}: {error:?}"));
+            assert!(matches!(
+                map.resolve("ids_properties/homogeneous_time", Direction::Forward)
+                    .unwrap()
+                    .outcome,
+                Outcome::Path { .. }
+            ));
+            if ids == "equilibrium" {
+                use crate::conversion::conversion_map::ValueTransformation;
+                let psi = map
+                    .resolve("time_slice/profiles_1d/psi", Direction::Forward)
+                    .unwrap();
+                assert!(matches!(
+                    psi.outcome,
+                    Outcome::Path {
+                        value_transformation: ValueTransformation::SignFlip { .. },
+                        ..
+                    }
+                ));
+                let j = if hli == "4.1.1" { "j_phi" } else { "j_tor" };
+                let field = format!("time_slice/constraints/{j}/measured");
+                assert!(matches!(
+                    map.resolve(&field, Direction::Forward).unwrap().outcome,
+                    Outcome::Path { .. }
+                ));
+                {
+                    let field = format!(
+                        "time_slice/global_quantities/magnetic_axis/b_field_{}",
+                        if hli == "4.1.1" { "phi" } else { "tor" }
+                    );
+                    let outcome = map.resolve(&field, Direction::Forward);
+                    assert!(outcome.is_some(), "missing endpoint {field}");
+                    assert!(
+                        matches!(outcome.unwrap().outcome, Outcome::Refusal(_)),
+                        "unsupported evidence became a value conversion: {field}"
+                    );
+                }
+                assert!(matches!(
+                    map.resolve("time_slice/boundary/outline/r", Direction::Forward)
+                        .unwrap()
+                        .outcome,
+                    Outcome::Path { .. }
+                ));
+                if hli == "4.1.1" {
+                    assert!(matches!(
+                        map.resolve("time_slice/boundary/gap", Direction::Forward)
+                            .unwrap()
+                            .outcome,
+                        Outcome::Refusal(_)
+                    ));
+                    assert!(matches!(
+                        map.resolve("grids_ggd/grid/space/coordinates_type", Direction::Forward)
+                            .unwrap()
+                            .outcome,
+                        Outcome::Refusal(_)
+                    ));
+                }
+            } else {
+                let (caller, target) = if hli == "3.30.0" {
+                    ("launcher", "antenna")
+                } else {
+                    ("antenna", "launcher")
+                };
+                for suffix in ["", "/name"] {
+                    let field = format!("ec/{caller}{suffix}");
+                    let outcome = map.resolve(&field, Direction::Forward).unwrap();
+                    assert!(
+                        matches!(outcome.outcome, Outcome::Path { resolved_path, .. } if resolved_path == format!("ec/{target}{suffix}"))
+                    );
+                }
+                assert!(
+                    map.resolve("ec/beam/name", Direction::Forward).is_none(),
+                    "an intermediate witness is not an endpoint"
+                );
+            }
+            eprintln!("live complete acquisition succeeded: {ids} {stored} -> {hli}");
+        }
+    }
+}
+
+#[test]
+fn acquisition_rejects_an_event_with_multiple_owners_in_the_same_ids() {
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[5].1[0].insert(
+        "owners".into(),
+        GraphValue::List(vec![
+            GraphValue::String("time_slice".into()),
+            GraphValue::String("ids_properties/version_put/data_dictionary".into()),
+        ]),
+    );
+    let source = Neo4jScopeSource::new(executor, 2).unwrap();
+    assert!(source.load_raw_scope("equilibrium", &attempt()).is_err());
+}
+
+#[test]
+fn raw_array_coordinates_use_complete_one_based_relationships_without_cocos_fallback() {
+    use crate::conversion::conversion_map::{Direction, Outcome};
+    use crate::conversion::runtime_map::{MapRequest, RuntimeMapAcquirer};
+    let executor = scalar_executor();
+    {
+        let mut replies = executor.replies.borrow_mut();
+        let node = &mut replies[3].1[0];
+        node.insert("path".into(), GraphValue::String("equilibrium/time".into()));
+        node.insert("data_type".into(), GraphValue::String("FLT_1D".into()));
+        node.insert("ndim".into(), GraphValue::Integer(1));
+        node.insert("timebase".into(), GraphValue::String("time".into()));
+        node.insert(
+            "coordinate_relationships".into(),
+            GraphValue::List(vec![GraphValue::List(vec![
+                GraphValue::Integer(1),
+                GraphValue::String("1...N".into()),
+                GraphValue::String("spec".into()),
+            ])]),
+        );
+    }
+    let map = RuntimeMapAcquirer::new(Neo4jScopeSource::new(executor, 2).unwrap())
+        .acquire(&MapRequest {
+            ids: "equilibrium".into(),
+            stored_dd: ArtifactDdVersion::new("3.39.0").unwrap(),
+            hli_dd: ArtifactDdVersion::new("4.1.1").unwrap(),
+        })
+        .unwrap();
+    assert!(matches!(
+        map.resolve("time", Direction::Forward).unwrap().outcome,
+        Outcome::Path { .. }
+    ));
+}
+
+fn raw_event(field: &str, kind: &str, old: GraphValue, new: GraphValue) -> Row {
+    let path = "equilibrium/ids_properties/homogeneous_time";
+    row(&[
+        ("id", GraphValue::String(format!("{path}:{field}:4.1.1"))),
+        ("path", GraphValue::String(path.into())),
+        ("release", GraphValue::String("4.1.1".into())),
+        (
+            "releases",
+            GraphValue::List(vec![GraphValue::String("4.1.1".into())]),
+        ),
+        (
+            "owners",
+            GraphValue::List(vec![GraphValue::String(path.into())]),
+        ),
+        ("kind", GraphValue::String(kind.into())),
+        ("old_value", old),
+        ("new_value", new),
+        ("semantic_type", GraphValue::Null),
+        ("unit_change_subtype", GraphValue::Null),
+    ])
+}
+
+fn add_raw_event(executor: &ControlledExecutor, event: Row) {
+    let mut replies = executor.replies.borrow_mut();
+    replies[4].1 = count(1);
+    replies.insert(5, (query_parameters(Some("equilibrium"), 0), vec![event]));
+}
+
+fn acquire_raw(
+    executor: ControlledExecutor,
+) -> Result<
+    crate::conversion::conversion_map::ConversionMap,
+    crate::conversion::runtime_map::AcquisitionFailure,
+> {
+    use crate::conversion::runtime_map::{MapRequest, RuntimeMapAcquirer};
+    RuntimeMapAcquirer::new(Neo4jScopeSource::new(executor, 2).unwrap()).acquire(&MapRequest {
+        ids: "equilibrium".into(),
+        stored_dd: ArtifactDdVersion::new("3.39.0").unwrap(),
+        hli_dd: ArtifactDdVersion::new("4.1.1").unwrap(),
+    })
+}
+
+#[test]
+fn raw_acquisition_rejects_unknown_required_event_semantics() {
+    let executor = scalar_executor();
+    add_raw_event(
+        &executor,
+        raw_event(
+            "data_type",
+            "unknown_transform",
+            GraphValue::String("INT_0D".into()),
+            GraphValue::String("INT_0D".into()),
+        ),
+    );
+    assert!(
+        acquire_raw(executor).is_err(),
+        "an unknown kind must not become identity"
+    );
+}
+
+#[test]
+fn raw_acquisition_replays_a_type_change_from_the_addition_property() {
+    use crate::conversion::conversion_map::{Direction, Outcome, RefusalReason};
+    let executor = scalar_executor();
+    add_raw_event(
+        &executor,
+        raw_event(
+            "data_type",
+            "data_type",
+            GraphValue::String("INT_0D".into()),
+            GraphValue::String("STRUCTURE".into()),
+        ),
+    );
+    let map = acquire_raw(executor).unwrap();
+    assert_eq!(
+        map.resolve("ids_properties/homogeneous_time", Direction::Forward)
+            .unwrap()
+            .outcome,
+        Outcome::Refusal(RefusalReason::UnservableRetype)
+    );
+}
+
+#[test]
+fn raw_acquisition_rejects_invalid_required_type_rank_and_columns() {
+    for (key, value) in [
+        ("data_type", GraphValue::String("invented_type".into())),
+        ("ndim", GraphValue::Integer(8)),
+        ("ndim", GraphValue::Integer(1)),
+        ("units", GraphValue::Integer(1)),
+        ("introduced", GraphValue::Null),
+    ] {
+        let executor = scalar_executor();
+        executor.replies.borrow_mut()[3].1[0].insert(key.into(), value);
+        assert!(acquire_raw(executor).is_err(), "accepted malformed {key}");
+    }
+    let executor = scalar_executor();
+    executor.replies.borrow_mut()[3].1[0].remove("timebase");
+    assert!(acquire_raw(executor).is_err());
+}
+
+#[test]
+fn raw_acquisition_is_invariant_to_release_row_order() {
+    use crate::conversion::conversion_map::Direction;
+    let ordered = acquire_raw(scalar_executor()).unwrap();
+    let shuffled = scalar_executor();
+    shuffled.replies.borrow_mut()[1].1.reverse();
+    let shuffled = acquire_raw(shuffled).unwrap();
+    assert_eq!(
+        ordered.resolve("ids_properties/homogeneous_time", Direction::Forward),
+        shuffled.resolve("ids_properties/homogeneous_time", Direction::Forward)
+    );
+}
+
+#[test]
+fn raw_scientific_documentation_and_node_type_changes_cannot_become_identity() {
+    use crate::conversion::conversion_map::{Direction, Outcome};
+    for field in ["documentation", "node_type"] {
+        let executor = scalar_executor();
+        let mut event = raw_event(
+            field,
+            field,
+            GraphValue::String("old".into()),
+            GraphValue::String("new".into()),
+        );
+        event.insert(
+            "semantic_type".into(),
+            GraphValue::String("coordinate_convention".into()),
+        );
+        add_raw_event(&executor, event);
+        let map = acquire_raw(executor).unwrap();
+        assert!(
+            matches!(
+                map.resolve("ids_properties/homogeneous_time", Direction::Forward)
+                    .unwrap()
+                    .outcome,
+                Outcome::Refusal(_)
+            ),
+            "accepted unsupported {field} change"
+        );
+    }
+}
+
+#[test]
+#[ignore = "stops and restarts the explicitly named task-owned Neo4j container"]
+fn pinned_live_map_survives_graph_shutdown() {
+    use crate::conversion::runtime_map::{MapRequest, RuntimeMapCoordinator};
+    use std::process::Command;
+    let container = std::env::var("IMAS_MVDD_TEST_GRAPH_CONTAINER")
+        .expect("name an isolated disposable graph service, never a shared service");
+    struct Restart(String);
+    impl Drop for Restart {
+        fn drop(&mut self) {
+            let _ = Command::new("docker").args(["start", &self.0]).status();
+        }
+    }
+    let coordinator = RuntimeMapCoordinator::with_deadline(
+        Neo4jFactsSource(live_config()),
+        Duration::from_secs(120),
+    );
+    let request = MapRequest {
+        ids: "equilibrium".into(),
+        hli_dd: ArtifactDdVersion::new("4.1.1").unwrap(),
+        stored_dd: ArtifactDdVersion::new("3.39.0").unwrap(),
+    };
+    let map = coordinator.acquire(&request).unwrap();
+    let retained = Arc::downgrade(&map);
+    drop(map);
+    let _restart = Restart(container.clone());
+    assert!(
+        Command::new("docker")
+            .args(["stop", &container])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let cached = coordinator.acquire(&request).unwrap();
+    assert!(Arc::ptr_eq(&cached, &retained.upgrade().unwrap()));
+    let uncached = MapRequest {
+        stored_dd: ArtifactDdVersion::new("3.42.0").unwrap(),
+        ..request
+    };
+    assert!(coordinator.acquire(&uncached).is_err());
+    assert!(
+        Command::new("docker")
+            .args(["start", &container])
+            .status()
+            .unwrap()
+            .success()
+    );
+    // Service readiness may lag `docker start`; each iteration is an explicit
+    // later request, never an automatic retry inside an occurrence open.
+    let started = std::time::Instant::now();
+    loop {
+        if coordinator.acquire(&uncached).is_ok() {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "graph never became ready"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn live_config() -> Neo4jConfig {
+    Neo4jConfig {
         uri: std::env::var("NEO4J_URI").expect("graph CI supplies NEO4J_URI"),
         username: std::env::var("NEO4J_USERNAME").expect("graph CI supplies NEO4J_USERNAME"),
         password: std::env::var("NEO4J_PASSWORD").expect("graph CI supplies NEO4J_PASSWORD"),
-        database: "neo4j".to_string(),
+        database: std::env::var("NEO4J_DATABASE").unwrap_or_else(|_| "neo4j".into()),
         page_size: 256,
-        connection_timeout: std::time::Duration::from_secs(5),
-    };
-    let attempt = AcquisitionAttempt::new(
-        Duration::from_secs(30),
-        Arc::new(ManualClock::default()),
-        Arc::new(NoopObserver),
-    );
-    let executor =
-        BoltExecutor::connect(&config, &attempt).expect("pinned graph accepts Bolt connections");
-    let source = Neo4jScopeSource::new(executor, config.page_size).expect("CI page size is valid");
-    let scope = source
-        .load_raw_scope("equilibrium", &attempt)
-        .expect("pinned graph returns every requested scope stream");
-    assert!(
-        scope
-            .versions
-            .iter()
-            .any(|row| { row.get("release") == Some(&GraphValue::String("3.39.0".to_string())) })
-    );
-    assert!(
-        scope
-            .versions
-            .iter()
-            .any(|row| { row.get("release") == Some(&GraphValue::String("4.1.1".to_string())) })
-    );
-    assert!(
-        scope
-            .versions
-            .iter()
-            .any(|row| { row.get("release") == Some(&GraphValue::String("3.42.0".to_string())) })
-    );
-    assert!(scope.nodes.iter().any(|row| {
-        row.get("path")
-            == Some(&GraphValue::String(
-                "ids_properties/version_put/data_dictionary".to_string(),
-            ))
-    }));
-    let psi = scope
-        .nodes
-        .iter()
-        .find(|row| {
-            row.get("path")
-                == Some(&GraphValue::String(
-                    "time_slice/profiles_1d/psi".to_string(),
-                ))
-        })
-        .expect("pinned graph exposes the psi COCOS evidence row");
-    assert_eq!(
-        psi.get("cocos_label_transformation"),
-        Some(&GraphValue::String("psi_like".to_string()))
-    );
-    assert_eq!(
-        psi.get("cocos_label_source"),
-        Some(&GraphValue::String("inferred_sign_flip".to_string()))
-    );
-    assert_eq!(
-        psi.get("cocos_transformation_expression"),
-        Some(&GraphValue::Null)
-    );
-    assert!(scope.versions.iter().any(|row| {
-        row.get("release") == Some(&GraphValue::String("3.39.0".to_string()))
-            && row.get("cocos") == Some(&GraphValue::String("11".to_string()))
-    }));
-    assert!(scope.versions.iter().any(|row| {
-        row.get("release") == Some(&GraphValue::String("4.1.1".to_string()))
-            && row.get("cocos") == Some(&GraphValue::String("17".to_string()))
-    }));
-    assert!(scope.events.iter().any(|row| {
-        row.get("path")
-            == Some(&GraphValue::String(
-                "time_slice/profiles_1d/psi".to_string(),
-            ))
-            && matches!(row.get("id"), Some(GraphValue::String(id)) if id.contains("cocos_label_transformation"))
-    }));
-    assert!(
-        !scope.events.is_empty(),
-        "live history stream must not be elided"
-    );
-    assert!(
-        !scope.successors.is_empty(),
-        "live successor stream must not be elided"
-    );
+        connection_timeout: Duration::from_secs(5),
+    }
+}
 
-    let pulse_attempt = AcquisitionAttempt::new(
-        Duration::from_secs(30),
-        Arc::new(ManualClock::default()),
-        Arc::new(NoopObserver),
-    );
-    let pulse_scope = source
-        .load_raw_scope("pulse_schedule", &pulse_attempt)
-        .expect("pinned graph returns every pulse_schedule scope stream");
-    for release in ["3.25.0", "3.30.0"] {
-        assert!(
-            pulse_scope.versions.iter().any(|row| {
-                row.get("release") == Some(&GraphValue::String(release.to_string()))
-            })
-        );
-    }
-    for path in [
-        "ec/antenna",
-        "ec/launcher",
-        "ec/antenna/launching_angle_pol",
-        "ec/launcher/steering_angle_pol",
+#[test]
+fn raw_faults_never_reach_a_complete_map() {
+    for fault in [
+        "duplicate",
+        "short",
+        "query",
+        "owner",
+        "release",
+        "event_duplicate",
+        "dangling",
     ] {
+        let executor = scalar_executor();
+        match fault {
+            "duplicate" => {
+                let mut replies = executor.replies.borrow_mut();
+                replies[2].1 = count(2);
+                let duplicate = replies[3].1[0].clone();
+                replies[3].1.push(duplicate);
+            }
+            "short" => executor.replies.borrow_mut()[2].1 = count(2),
+            "query" => {
+                executor.replies.borrow_mut().truncate(3);
+            }
+            "dangling" => {
+                let mut replies = executor.replies.borrow_mut();
+                replies[5].1 = count(1);
+                replies.push((
+                    query_parameters(Some("equilibrium"), 0),
+                    vec![row(&[
+                        (
+                            "from_path",
+                            GraphValue::String(
+                                "equilibrium/ids_properties/homogeneous_time".into(),
+                            ),
+                        ),
+                        ("to_path", GraphValue::String("other/time".into())),
+                    ])],
+                ));
+            }
+            _ => {
+                let mut event = raw_event(
+                    "data_type",
+                    "data_type",
+                    GraphValue::String("INT_0D".into()),
+                    GraphValue::String("INT_0D".into()),
+                );
+                if fault == "owner" {
+                    event.insert("owners".into(), GraphValue::List(vec![]));
+                }
+                if fault == "release" {
+                    event.insert("releases".into(), GraphValue::List(vec![]));
+                }
+                add_raw_event(&executor, event);
+                if fault == "event_duplicate" {
+                    let mut replies = executor.replies.borrow_mut();
+                    replies[4].1 = count(2);
+                    let duplicate = replies[5].1[0].clone();
+                    replies[5].1.push(duplicate);
+                }
+            }
+        }
+        assert!(acquire_raw(executor).is_err(), "accepted {fault} evidence");
+    }
+}
+
+#[test]
+fn raw_acquisition_rejects_malformed_metadata_event_values() {
+    for (field, old, new) in [("data_type", "INT_0D", "BOGUS"), ("ndim", "0", "255")] {
+        let executor = scalar_executor();
+        add_raw_event(
+            &executor,
+            raw_event(
+                field,
+                field,
+                GraphValue::String(old.into()),
+                GraphValue::String(new.into()),
+            ),
+        );
         assert!(
-            pulse_scope
-                .nodes
-                .iter()
-                .any(|row| { row.get("path") == Some(&GraphValue::String(path.to_string())) })
+            acquire_raw(executor).is_err(),
+            "accepted malformed {field} history"
         );
     }
-    assert!(
-        pulse_scope.successors.len() >= 4,
-        "pulse_schedule's dated historical correspondence must retain its successor evidence"
+}
+
+#[test]
+fn raw_addition_property_must_agree_with_its_event_history() {
+    let executor = scalar_executor();
+    add_raw_event(
+        &executor,
+        raw_event(
+            "data_type",
+            "data_type",
+            GraphValue::String("FLT_0D".into()),
+            GraphValue::String("STRUCTURE".into()),
+        ),
     );
+    assert!(
+        acquire_raw(executor).is_err(),
+        "discarded a contradictory INT_0D addition anchor"
+    );
+}
+
+#[test]
+fn raw_array_cannot_use_a_coordinate_absent_at_an_endpoint() {
+    use crate::conversion::conversion_map::{Direction, Outcome};
+    let executor = scalar_executor();
+    {
+        let mut replies = executor.replies.borrow_mut();
+        replies[2].1 = count(2);
+        let mut target = replies[3].1[0].clone();
+        target.insert("path".into(), GraphValue::String("equilibrium/axis".into()));
+        target.insert(
+            "introduced".into(),
+            GraphValue::List(vec![GraphValue::String("4.1.1".into())]),
+        );
+        let node = &mut replies[3].1[0];
+        node.insert(
+            "path".into(),
+            GraphValue::String("equilibrium/value".into()),
+        );
+        node.insert("data_type".into(), GraphValue::String("FLT_1D".into()));
+        node.insert("ndim".into(), GraphValue::Integer(1));
+        node.insert("timebase".into(), GraphValue::String("time".into()));
+        node.insert(
+            "coordinate_relationships".into(),
+            GraphValue::List(vec![GraphValue::List(vec![
+                GraphValue::Integer(1),
+                GraphValue::String("equilibrium/axis".into()),
+                GraphValue::String("path".into()),
+            ])]),
+        );
+        replies[3].1.push(target);
+    }
+    let map = acquire_raw(executor).unwrap();
+    assert!(matches!(
+        map.resolve("value", Direction::Forward).unwrap().outcome,
+        Outcome::Refusal(_)
+    ));
+}
+
+#[test]
+fn raw_identifier_enum_change_is_a_local_refusal() {
+    use crate::conversion::conversion_map::{Direction, Outcome};
+    let executor = scalar_executor();
+    add_raw_event(
+        &executor,
+        raw_event(
+            "identifier_enum_name",
+            "structure_changed",
+            GraphValue::String("old_enum".into()),
+            GraphValue::String("new_enum".into()),
+        ),
+    );
+    let map = acquire_raw(executor).unwrap();
+    assert!(matches!(
+        map.resolve("ids_properties/homogeneous_time", Direction::Forward)
+            .unwrap()
+            .outcome,
+        Outcome::Refusal(_)
+    ));
+}
+
+#[test]
+fn raw_structure_timebase_does_not_hide_a_dangling_coordinate() {
+    use crate::conversion::conversion_map::{Direction, Outcome};
+    let executor = scalar_executor();
+    {
+        let mut replies = executor.replies.borrow_mut();
+        let node = &mut replies[3].1[0];
+        node.insert(
+            "data_type".into(),
+            GraphValue::String("STRUCT_ARRAY".into()),
+        );
+        node.insert("ndim".into(), GraphValue::Integer(1));
+        node.insert("timebase".into(), GraphValue::String("time".into()));
+        node.insert(
+            "coordinate_relationships".into(),
+            GraphValue::List(vec![GraphValue::List(vec![
+                GraphValue::Integer(1),
+                GraphValue::String("equilibrium/missing".into()),
+                GraphValue::String("path".into()),
+            ])]),
+        );
+    }
+    let map = acquire_raw(executor).unwrap();
+    assert!(matches!(
+        map.resolve("ids_properties/homogeneous_time", Direction::Forward)
+            .unwrap()
+            .outcome,
+        Outcome::Refusal(_)
+    ));
 }

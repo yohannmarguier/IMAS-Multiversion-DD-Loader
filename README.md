@@ -145,14 +145,20 @@ The live graph-acquisition contract has a configurable whole-attempt deadline
 of five seconds by default. It covers connection, graph reads, validation,
 construction and publication; later stages receive the remaining time rather
 than restarting the budget. An internal caller uses
-`RuntimeMapAcquirer::with_deadline` to choose a different bound; there is no
-environment or C-ABI deadline setting. When that source is selected, a first
+`RuntimeMapAcquirer::with_deadline` to choose a different bound. The private
+`graph-live-source` test instance accepts `IMAS_MVDD_GRAPH_DEADLINE_SECONDS`;
+there is no public C-ABI deadline setting. When that source is selected, a first
 mismatched occurrence needs the selected graph and a complete map before it can
 open. A successful map is retained for the process lifetime, so later opens of
 the same IDS/version key reuse it without another graph request; updates
 therefore happen explicitly between HLI processes, not through a live refresh.
 The ordinary installed library remains XML-selected, and the private CI package
-uses controlled complete facts until #233 chooses normal source selection.
+defaults to controlled complete facts. Configure
+`-DIMAS_MVDD_GRAPH_TEST_SOURCE=live` to build its live-source variant and its
+installed `graph-package` with `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`
+and optional `NEO4J_DATABASE` supplied at execution. See
+[the live source contract](docs/KG_LIVE_SOURCE_CONTRACT.md) for reproducible
+checks and evidence; #233 owns the ordinary production source switch.
 
 Between HLI runs, stop and later restart the same recorded pin without any
 release lookup or download:

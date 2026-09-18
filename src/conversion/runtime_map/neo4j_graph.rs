@@ -18,14 +18,16 @@ use neo4j::{ValueReceive, ValueSend};
 use super::{AcquisitionAttempt, AcquisitionStage, AttemptExpired, GraphSourceError};
 use crate::conversion::conversion_map::{ArtifactDdVersion, CocosConvention};
 
-const VERSIONS: &str = "MATCH (v:DDVersion) RETURN v.id AS release, v.cocos AS cocos ORDER BY v.id SKIP $skip LIMIT $limit";
+const VERSIONS: &str = "MATCH (v:DDVersion) RETURN v.id AS release, toString(v.cocos) AS cocos ORDER BY v.id SKIP $skip LIMIT $limit";
 const VERSIONS_COUNT: &str = "MATCH (v:DDVersion) RETURN count(v) AS count";
-const NODES: &str = "MATCH (n:IMASNode {ids: $ids}) RETURN n.id AS path, n.ids AS ids, n.data_type AS data_type, n.ndim AS ndim, n.units AS units, [(n)-[r:HAS_COORDINATE]->(coordinate) | [r.dimension, coordinate.id]] AS coordinate_relationships, n.timebase AS timebase, n.change_nbc_version AS change_nbc_version, n.change_nbc_previous_name AS change_nbc_previous_name, n.change_nbc_previous_type AS change_nbc_previous_type, n.cocos_label_transformation AS cocos_label_transformation, n.cocos_transformation_expression AS cocos_transformation_expression, n.cocos_label_source AS cocos_label_source, n.renamed_to AS renamed_to, [(n)-[:INTRODUCED_IN]->(v:DDVersion) | v.id] AS introduced, [(n)-[:DEPRECATED_IN]->(v:DDVersion) | v.id] AS deprecated ORDER BY n.id SKIP $skip LIMIT $limit";
+const NODES: &str = "MATCH (n:IMASNode {ids: $ids}) RETURN n.id AS path, n.ids AS ids, n.data_type AS data_type, n.ndim AS ndim, n.unit AS units, [(n)-[r:HAS_COORDINATE]->(coordinate) | [r.dimension, coordinate.id, CASE WHEN coordinate:IMASNode THEN 'path' WHEN coordinate:IMASCoordinateSpec THEN 'spec' ELSE 'unknown' END]] AS coordinate_relationships, n.timebasepath AS timebase, n.change_nbc_version AS change_nbc_version, n.change_nbc_description AS change_nbc_description, n.change_nbc_previous_name AS change_nbc_previous_name, n.change_nbc_previous_type AS change_nbc_previous_type, n.cocos_label_transformation AS cocos_label_transformation, n.cocos_transformation_expression AS cocos_transformation_expression, n.cocos_label_source AS cocos_label_source, n.renamed_to AS renamed_to, [(n)-[:INTRODUCED_IN]->(v:DDVersion) | v.id] AS introduced, [(n)-[:DEPRECATED_IN]->(v:DDVersion) | v.id] AS deprecated ORDER BY n.id SKIP $skip LIMIT $limit";
 const NODES_COUNT: &str = "MATCH (n:IMASNode {ids: $ids}) RETURN count(n) AS count";
-const EVENTS: &str = "MATCH (n:IMASNode {ids: $ids})<-[:FOR_IMAS_PATH]-(c:IMASNodeChange)-[:IN_VERSION]->(v:DDVersion) MATCH (c)-[:FOR_IMAS_PATH]->(owner:IMASNode) RETURN c.id AS id, n.id AS path, v.id AS release, c.change_type AS kind, c.old_value AS old_value, c.new_value AS new_value, c.semantic_type AS semantic_type, c.unit_change_subtype AS unit_change_subtype, collect(DISTINCT owner.ids) AS owner_ids ORDER BY c.id SKIP $skip LIMIT $limit";
-const EVENTS_COUNT: &str = "MATCH (n:IMASNode {ids: $ids})<-[:FOR_IMAS_PATH]-(c:IMASNodeChange)-[:IN_VERSION]->(v:DDVersion) RETURN count(c) AS count";
-const SUCCESSORS: &str = "MATCH (from:IMASNode {ids: $ids})-[:RENAMED_TO]->(to:IMASNode {ids: $ids}) RETURN from.id AS from_path, to.id AS to_path ORDER BY from.id, to.id SKIP $skip LIMIT $limit";
-const SUCCESSORS_COUNT: &str = "MATCH (from:IMASNode {ids: $ids})-[:RENAMED_TO]->(to:IMASNode {ids: $ids}) RETURN count(*) AS count";
+const EVENTS: &str = "MATCH (n:IMASNode {ids: $ids})<-[:FOR_IMAS_PATH]-(c:IMASNodeChange) RETURN c.id AS id, n.id AS path, head([(c)-[:IN_VERSION]->(v:DDVersion) | v.id]) AS release, [(c)-[:IN_VERSION]->(v:DDVersion) | v.id] AS releases, [(c)-[:FOR_IMAS_PATH]->(owner:IMASNode) | owner.id] AS owners, c.change_type AS kind, c.old_value AS old_value, c.new_value AS new_value, c.semantic_type AS semantic_type, c.unit_change_subtype AS unit_change_subtype ORDER BY c.id SKIP $skip LIMIT $limit";
+const EVENTS_COUNT: &str =
+    "MATCH (n:IMASNode {ids: $ids})<-[:FOR_IMAS_PATH]-(c:IMASNodeChange) RETURN count(c) AS count";
+const SUCCESSORS: &str = "MATCH (from:IMASNode {ids: $ids})-[:RENAMED_TO]->(to:IMASNode) RETURN from.id AS from_path, to.id AS to_path ORDER BY from.id, to.id SKIP $skip LIMIT $limit";
+const SUCCESSORS_COUNT: &str =
+    "MATCH (from:IMASNode {ids: $ids})-[:RENAMED_TO]->(to:IMASNode) RETURN count(*) AS count";
 
 /// A typed Cypher value.  `Null` is distinct from a missing column and from
 /// an empty string/list, which is essential for the snapshot's COCOS fields.
@@ -424,13 +426,21 @@ fn validate_raw_scope(
                     "coordinate relationship is not a two-value list".to_string(),
                 ));
             };
-            let [GraphValue::Integer(dimension), GraphValue::String(target)] = values.as_slice()
+            let [
+                GraphValue::Integer(dimension),
+                GraphValue::String(target),
+                GraphValue::String(kind),
+            ] = values.as_slice()
             else {
                 return Err(GraphSourceError(
                     "coordinate relationship has an invalid dimension or target".to_string(),
                 ));
             };
-            if *dimension < 0 || target.is_empty() || !dimensions.insert(*dimension) {
+            if *dimension < 1
+                || target.is_empty()
+                || !matches!(kind.as_str(), "path" | "spec")
+                || !dimensions.insert(*dimension)
+            {
                 return Err(GraphSourceError(
                     "coordinate relationships repeat or contain an invalid dimension".to_string(),
                 ));
@@ -494,15 +504,18 @@ fn validate_raw_scope(
             ));
         }
         required_string(row, "kind")?;
-        match row.get("owner_ids") {
-            Some(GraphValue::List(owners))
-                if owners.len() == 1
-                    && matches!(owners.as_slice(), [GraphValue::String(owner)] if owner == ids) => {
-            }
-            _ => {
-                return Err(GraphSourceError(
-                    "event is not wholly owned by the requested IDS".to_string(),
-                ));
+        for (column, expected) in [
+            ("owners", path),
+            ("releases", required_string(row, "release")?),
+        ] {
+            match row.get(column) {
+                Some(GraphValue::List(values))
+                    if values.as_slice() == [GraphValue::String(expected)] => {}
+                _ => {
+                    return Err(GraphSourceError(format!(
+                        "event must have exactly one matching {column} reference"
+                    )));
+                }
             }
         }
     }
@@ -528,3 +541,26 @@ fn validate_raw_scope(
 #[cfg(test)]
 #[path = "../tests/neo4j_graph.rs"]
 mod tests;
+
+impl<E: CypherExecutor> super::GraphFactsSource for Neo4jScopeSource<E> {
+    fn load_ids_facts(
+        &self,
+        ids: &str,
+        attempt: &AcquisitionAttempt,
+    ) -> Result<super::IdsGraphFacts, GraphSourceError> {
+        super::neo4j_facts::decode(ids, self.load_raw_scope(ids, attempt)?, attempt)
+    }
+}
+
+/// Connect only after the acquirer has started its one attempt.
+pub(crate) struct Neo4jFactsSource(pub Neo4jConfig);
+impl super::GraphFactsSource for Neo4jFactsSource {
+    fn load_ids_facts(
+        &self,
+        ids: &str,
+        attempt: &AcquisitionAttempt,
+    ) -> Result<super::IdsGraphFacts, GraphSourceError> {
+        let executor = BoltExecutor::connect(&self.0, attempt)?;
+        Neo4jScopeSource::new(executor, self.0.page_size)?.load_ids_facts(ids, attempt)
+    }
+}

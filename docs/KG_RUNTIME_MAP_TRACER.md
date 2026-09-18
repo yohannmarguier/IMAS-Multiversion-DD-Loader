@@ -36,10 +36,9 @@ cargo test conversion_map --lib
 cargo clippy --all-targets -- -D warnings
 ```
 
-The tracer is intentionally not a graph transport, historical reconstruction,
-deadline/single-flight implementation, runtime source switch, or C ABI
-adapter. Those additions must retain this complete-map-or-explicit-failure
-boundary and consume a shared attempt deadline rather than resetting it.
+The original #211 tracer established the complete-map-or-explicit-failure
+boundary. The transport, replay, deadline, coordinator and private C ABI
+integration described below now consume that same interface.
 
 ## Coordinate and timebase evidence (#222)
 
@@ -53,10 +52,11 @@ evidenced correspondences, and either each raw dimension is corroborated by a
 preserved relationship or an applicable producer verdict classifies it
 `Equivalent`. Unequal declarations alone are unresolved, not an inference
 that resampling is required. Transport validates relationship dimensions;
-targets outside the IDS-node inventory (including `IMASCoordinateSpec`) are
-local non-corroborating facts, not scope failures. It deliberately leaves
-them unversioned raw facts until an adapter can establish their historical
-meaning.
+targets outside the IDS-node inventory remain local unresolved dependencies.
+The live decoder separately identifies producer-labelled `IMASCoordinateSpec`
+targets. Complete stable specs can establish representation; path targets
+require membership at both endpoints. See the #212 source contract for the
+addition-age relationships and event-ledger interpretation.
 
 A producer-established `RequiresResampling` verdict stays localized as the
 existing `Unmappable` refusal, while an `UnboundedScope` verdict fails the
@@ -88,30 +88,21 @@ with `FOR_IMAS_PATH` and `IN_VERSION`, the measured
 optional `renamed_to` node annotation is projected too. The source does not
 substitute newer producer property names for this release contract.
 
-The driver applies bounded TCP connection and pool acquisition settings, a
-read-only server transaction timeout from the caller's supplied remaining
-attempt time, and consumes each response fully before accepting it. Those are
-the cancellation/remaining-time facilities handed to #214; per-query limits
-do **not** constitute its future whole-attempt deadline.
+`Neo4jFactsSource` now connects inside the caller's acquisition attempt and
+passes `Neo4jRawScope` through the schema decoder into `IdsGraphFacts`.
+Historical reconstruction stays in `RuntimeMapAcquirer`; source properties
+are distinct from observed endpoint metadata. The driver, decoder, replay,
+constructor, coordinator and publication consume one remaining deadline.
+Blocked driver workers cannot publish maps after the caller has timed out.
 
-The graph-required CI scenario provisions the pinned service and runs
-`pinned_graph_returns_complete_reference_scopes`. It verifies the live
-equilibrium scope contains 3.39.0, 3.42.0 and 4.1.1, its stamp metadata path,
-and unfiltered event/successor streams; it also verifies the pulse_schedule
-scope contains the 3.25.0/3.30.0 historical endpoint paths and their successor
-evidence. The local unit suite supplies shuffled pages and schema-faithful
-malformed rows for the same boundary. This machine did not have a running
-pinned graph, so the live scenario is recorded as CI-required rather than
-claimed as locally executed.
-
-Raw lifecycle and change records remain `Neo4jRawScope` at the transport
-boundary. The controlled acquisition facts replay numeric-version additions,
-removals and field-qualified metadata events into interval-local endpoints;
-they never treat a node's latest property as historical evidence. A reused
-spelling across an absence interval stays an explicit path-local refusal until
-correspondence evidence proves its role. The direct raw-to-fact adapter remains
-separate, and the three reference pairs have not been frozen into counts or
-claimed to map here.
+`bash tests/scripts/check-live-acquisition.sh` exercises complete validated
+maps for all three reference pairs in both directions, then resolves supported
+paths and evidence-dependent refusals. It rejects a zero-test filter. The
+pinned archive was acquired and these queries were executed locally during
+#212's repair; the earlier raw-only smoke check is no longer the completion
+claim. [KG_LIVE_SOURCE_CONTRACT.md](KG_LIVE_SOURCE_CONTRACT.md) records source
+property ages, nulls, event provenance, configuration and the verification
+matrix. Controlled facts below remain separate mechanism coverage.
 
 ## Whole-attempt deadline (#214)
 
@@ -425,20 +416,30 @@ startup, and a setup failure fails the job.
 The existing HLI configuration still consumes the ordinary installed
 XML-selected package and runs its full asserted suite. A second `build-graph`
 configuration enables only `AL_SHIM_GRAPH_RUNTIME_SCENARIO` and finds
-`build-shim/graph-package`, which is the private graph-test-source package.
+`build-shim/graph-package`, configured with `IMAS_MVDD_GRAPH_TEST_SOURCE=live`
+so its library uses `graph-live-source`.
 It builds the same pinned Core fork, verifies that checkout's commit, rejects
 an empty `al-fortran-test-shim-graph-runtime` selection, then executes that
 generated-HLI conversion scenario with the normal HDF5 backend. Its job summary
 records the Fortran and Core pins, selected graph release and manifest digest,
 and selected scenario count without reporting credentials.
 
-This ties the installed HLI conversion and graph provisioning gates together
-while keeping their evidence honest: the scenario's map facts are controlled
-until #233 changes normal source selection, whereas `graph-abi` continues to
-prove live complete-scope acquisition. Formatting, isolated Rust tests and the
+The generated Fortran scenario now acquires its map from live Neo4j; the
+same private source is selected in `graph-abi` and the installed-Core CI
+profile. Functional validation explicitly selects a 120-second deadline;
+the default remains five seconds. #233 still owns the production cutover. Formatting, isolated Rust tests and the
 ordinary XML package path remain graph-service-independent. One selected
 snapshot applies for an HLI process; map acquisition has its shared configurable
 five-second whole-attempt deadline and successful maps are reused for that
 process lifetime. Operators start or update the selected snapshot explicitly
 between HLI processes as documented in README.md; no graph archive, database or
 credential belongs in Git.
+
+## Live repair verification (#212)
+
+The earlier #216–#231 entries describe the controlled-source milestones at
+the time they landed. Their mechanism tests remain. The current live variant
+also runs genuine Core operations on all three reference pairs and the pinned
+installed Fortran scenario. The source contract and executed-command matrix
+are in [KG_LIVE_SOURCE_CONTRACT.md](KG_LIVE_SOURCE_CONTRACT.md); neither an
+available Neo4j service nor a controlled test alone counts as live evidence.

@@ -169,9 +169,11 @@ target_include_directories(graph_coexistence_oracle_test PRIVATE
     ${_imas_core_include_dirs}
     ${HDF5_C_INCLUDE_DIRS})
 target_compile_definitions(graph_coexistence_oracle_test PRIVATE
+    "REAL_CORE_LIBRARY_PATH=\"$<TARGET_FILE:${IMAS_CORE_AL_TARGET}>\""
     "EQUILIBRIUM_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/imas-python-fixtures/fixtures\"")
 target_link_libraries(graph_coexistence_oracle_test PRIVATE
     imas_mvdd_loader_graph_test
+    ${CMAKE_DL_LIBS}
     ${HDF5_C_LIBRARIES})
 add_dependencies(graph_coexistence_oracle_test imas_mvdd_graph_capi)
 if(IMAS_CORE_BUILT_FROM_SOURCE)
@@ -180,6 +182,7 @@ endif()
 set_target_properties(graph_coexistence_oracle_test PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib")
 
+if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "controlled")
 add_real_core_test(read-coexistence-forward-selects-primary-then-falls-back
     $<TARGET_FILE:graph_coexistence_oracle_test>
     read-coexistence-forward-selects-primary-then-falls-back)
@@ -205,6 +208,16 @@ set_tests_properties(
 set_tests_properties(read-coexistence-forward-arraystruct-falls-back-between-j-candidates
     PROPERTIES
     ENVIRONMENT "IMAS_MVDD_GRAPH_TEST_SCOPE=coexistence-arraystruct")
+
+else()
+    foreach(direction IN ITEMS forward reverse)
+        add_real_core_test(live-graph-core-coexistence-${direction}
+            $<TARGET_FILE:graph_coexistence_oracle_test> live-j-${direction})
+    endforeach()
+    add_real_core_test(live-graph-core-coexistence-nested
+        $<TARGET_FILE:graph_coexistence_oracle_test>
+        read-coexistence-forward-arraystruct-falls-back-between-j-candidates)
+endif()
 
 # --- Issue #133: on-disk oracle proof for the write and delete seams. Each
 # scenario mutates its own private copy of the fixture pair and reads the
@@ -275,6 +288,29 @@ target_link_libraries(graph_runtime_map_oracle_test PRIVATE
 add_dependencies(graph_runtime_map_oracle_test imas_mvdd_graph_capi)
 set_target_properties(graph_runtime_map_oracle_test PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib")
+
+if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "live")
+    target_compile_definitions(graph_runtime_map_oracle_test PRIVATE IMAS_MVDD_LIVE_GRAPH=1)
+    foreach(family IN ITEMS equilibrium_read write_delete_oracle)
+        add_executable(live_${family}_test "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/${family}_test.c")
+        target_include_directories(live_${family}_test PRIVATE ${_imas_core_include_dirs} ${HDF5_C_INCLUDE_DIRS})
+        target_compile_definitions(live_${family}_test PRIVATE
+            "EQUILIBRIUM_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/imas-python-fixtures/fixtures\"")
+        target_compile_definitions(live_${family}_test PRIVATE IMAS_MVDD_LIVE_GRAPH=1)
+        target_link_libraries(live_${family}_test PRIVATE imas_mvdd_loader_graph_test ${HDF5_C_LIBRARIES})
+        add_dependencies(live_${family}_test imas_mvdd_graph_capi)
+        set_target_properties(live_${family}_test PROPERTIES BUILD_RPATH "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib")
+    endforeach()
+    foreach(direction IN ITEMS forward reverse)
+        add_real_core_test(live-graph-core-${direction}-rename-read
+            $<TARGET_FILE:live_equilibrium_read_test> ${direction}-reads-renamed-value-through-own-spelling
+            RESOURCE_LOCK equilibrium-fixture-dd-${direction})
+        foreach(scenario IN ITEMS lands-on-the-stored-spelling flips-the-sign-on-disk refusal-leaves-the-stamp-untouched)
+            add_real_core_test(live-graph-core-${direction}-${scenario}
+                $<TARGET_FILE:live_write_delete_oracle_test> write-oracle-${direction}-${scenario})
+        endforeach()
+    endforeach()
+endif()
 
 add_real_core_test(read-graph-pulse-schedule-forward
     $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-forward-read)

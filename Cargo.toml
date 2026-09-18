@@ -26,6 +26,8 @@ capi = []
 # through the controlled graph-fact source. It is never enabled for staging or
 # installation of the production shim.
 graph-test-source = []
+# Private integration instance using the same live source as Rust acquisition.
+graph-live-source = []
 
 # --- cargo-c configuration -------------------------------------------------
 # Drives header generation (cbindgen), soname/versioning and the .pc file.

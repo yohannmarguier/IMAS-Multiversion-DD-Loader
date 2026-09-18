@@ -24,7 +24,7 @@ env:
 
 jobs:
   # This job proves the pinned graph can be provisioned and fully acquired at
-  # the Rust boundary. It proves neither map interpretation nor C ABI behavior.
+  # the Rust acquisition interface, including reconstruction and resolution.
   graph-provisioning:
     name: Pinned DD graph provisioning smoke check
     runs-on: ubuntu-latest
@@ -38,18 +38,19 @@ jobs:
       - uses: ./.github/actions/setup-toolchain
 
       - name: Acquire the complete live reference scopes
-        run: cargo test pinned_graph_returns_complete_reference_scopes --lib -- --ignored
+        run: bash tests/scripts/check-live-acquisition.sh
 
       - name: Record provisioning scope
         run: echo 'DD graph provisioning smoke check passed'
 
-  # This is intentionally separate from fast: the graph-selected shim has a
-  # controlled source so its C ABI scenarios remain hermetic, while this job
-  # makes the pinned live acquisition they are based on a required CI input.
+  # The private live source consumes the pinned service. Fast retains the
+  # service-independent controlled-source ABI scenarios.
   graph-abi:
     name: Pinned DD graph C ABI matrix
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      IMAS_MVDD_GRAPH_DEADLINE_SECONDS: 120
 
     steps:
       - uses: actions/checkout@v4
@@ -59,18 +60,19 @@ jobs:
       - uses: ./.github/actions/setup-toolchain
 
       - name: Acquire the complete live equilibrium scope
-        run: cargo test pinned_graph_returns_a_complete_equilibrium_scope --lib -- --ignored
+        run: bash tests/scripts/check-live-acquisition.sh
 
       - name: Configure graph ABI recording-stub profile
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DIMAS_MVDD_GRAPH_TEST_SOURCE=live \
             -DIMAS_MVDD_REAL_CORE_TESTS=OFF
 
       - name: Build graph-selected C ABI test instance
         run: cmake --build build
 
       - name: Test graph-selected C ABI matrix
-        run: ctest --test-dir build -L graph-runtime-map --output-on-failure --no-tests=error
+        run: ctest --test-dir build -L live-graph --output-on-failure --no-tests=error
 
   fast:
     runs-on: ubuntu-latest
@@ -201,8 +203,11 @@ jobs:
           cmake --install build/_deps/al-core-build --prefix "$PWD/al-core-dist"
 
       - name: Configure, build and test installed IMAS-Core lookup
+        env:
+          IMAS_MVDD_GRAPH_DEADLINE_SECONDS: 120
         run: |
           cmake -S . -B build-installed-mode -DCMAKE_BUILD_TYPE=Release \
+            -DIMAS_MVDD_GRAPH_TEST_SOURCE=live \
             -DCMAKE_PREFIX_PATH="$PWD/al-core-dist"
           cmake --build build-installed-mode
           ctest --test-dir build-installed-mode --output-on-failure --no-tests=error

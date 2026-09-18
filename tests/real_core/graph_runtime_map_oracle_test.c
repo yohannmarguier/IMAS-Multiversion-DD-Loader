@@ -28,20 +28,40 @@ typedef struct {
     const char *stored_disk_path;
 } historical_direction;
 
+#ifdef IMAS_MVDD_LIVE_GRAPH
+typedef int historical_value;
+#define HISTORICAL_DATATYPE INTEGER_DATA
+#define SEED_VALUE 12
+#define POL_PATH "steering_angle_pol/envelope_type"
+#define OLD_POL_PATH "launching_angle_pol/envelope_type"
+#define POL_DISK "steering_angle_pol&envelope_type"
+#define OLD_POL_DISK "launching_angle_pol&envelope_type"
+#define AOS_DISK "[]"
+#else
+typedef double historical_value;
+#define HISTORICAL_DATATYPE DOUBLE_DATA
+#define SEED_VALUE 12.5
+#define POL_PATH "steering_angle_pol"
+#define OLD_POL_PATH "launching_angle_pol"
+#define POL_DISK POL_PATH
+#define OLD_POL_DISK OLD_POL_PATH
+#define AOS_DISK ""
+#endif
+
 static const historical_direction FORWARD = {
     "3.30.0",
     "3.25.0",
-    "ec/launcher/steering_angle_pol",
-    "ec/antenna/launching_angle_pol",
-    "/pulse_schedule/ec&antenna&launching_angle_pol",
+    "ec/launcher/" POL_PATH,
+    "ec/antenna/" OLD_POL_PATH,
+    "/pulse_schedule/ec&antenna" AOS_DISK "&" OLD_POL_DISK,
 };
 
 static const historical_direction REVERSE = {
     "3.25.0",
     "3.30.0",
-    "ec/antenna/launching_angle_pol",
-    "ec/launcher/steering_angle_pol",
-    "/pulse_schedule/ec&launcher&steering_angle_pol",
+    "ec/antenna/" OLD_POL_PATH,
+    "ec/launcher/" POL_PATH,
+    "/pulse_schedule/ec&launcher" AOS_DISK "&" POL_DISK,
 };
 
 static void remove_pulse(void) {
@@ -145,6 +165,30 @@ static int open_pulse(int action) {
     return context;
 }
 
+static int leaf_context(int operation_context, const char **path) {
+#ifdef IMAS_MVDD_LIVE_GRAPH
+    const char *separator = strchr(*path + strlen("ec/"), '/');
+    CHECK(separator != NULL);
+    char anchor[64];
+    size_t length = (size_t)(separator - *path);
+    CHECK(length < sizeof anchor);
+    memcpy(anchor, *path, length);
+    anchor[length] = '\0';
+    int size = 1;
+    int child = -1;
+    CHECK_OK(al_begin_arraystruct_action(operation_context, anchor, "", &size, &child));
+    *path = separator + 1;
+    return child;
+#else
+    (void)path;
+    return operation_context;
+#endif
+}
+
+static void close_leaf_context(int leaf, int operation) {
+    if (leaf != operation) CHECK_OK(al_end_action(leaf));
+}
+
 static void seed_stored_pulse(const char *stored_version, const char *stored_path,
                               int seed_converted_leaf) {
     make_pulse_directory();
@@ -153,9 +197,11 @@ static void seed_stored_pulse(const char *stored_version, const char *stored_pat
     CHECK_OK(al_begin_global_action(pulse_context, "pulse_schedule", "", WRITE_OP,
                                     &operation_context));
     if (seed_converted_leaf) {
-        double value = 12.5;
-        CHECK_OK(al_write_data(operation_context, stored_path, "", &value, DOUBLE_DATA, 0,
+        historical_value value = SEED_VALUE;
+        int leaf = leaf_context(operation_context, &stored_path);
+        CHECK_OK(al_write_data(leaf, stored_path, "", &value, HISTORICAL_DATATYPE, 0,
                                NULL));
+        close_leaf_context(leaf, operation_context);
     }
     CHECK_OK(al_end_action(operation_context));
     CHECK_OK(al_close_pulse(pulse_context, CLOSE_PULSE));
@@ -170,17 +216,20 @@ static void scenario_read(const historical_direction *direction) {
     int operation_context = -1;
     CHECK_OK(al_begin_global_action(pulse_context, "pulse_schedule", "", READ_OP,
                                     &operation_context));
-    double value = 0.0;
+    historical_value value = 0;
+    const char *path = direction->caller_path;
+    int leaf = leaf_context(operation_context, &path);
     void *buffer = &value;
     int shape[MAXDIM] = {0};
     CHECK_OK(
-        al_read_data(operation_context, direction->caller_path, "", &buffer, DOUBLE_DATA, 0, shape));
+        al_read_data(leaf, path, "", &buffer, HISTORICAL_DATATYPE, 0, shape));
     CHECK(buffer == &value);
-    CHECK(value == 12.5);
+    CHECK(value == SEED_VALUE);
+    close_leaf_context(leaf, operation_context);
     CHECK_OK(al_end_action(operation_context));
     CHECK_OK(al_close_pulse(pulse_context, CLOSE_PULSE));
     check_stamp(direction->stored_version);
-    CHECK(read_stored_scalar(direction->stored_disk_path) == 12.5);
+    CHECK(read_stored_scalar(direction->stored_disk_path) == SEED_VALUE);
     CHECK(read_stored_scalar("/pulse_schedule/unrelated") == 99.0);
 }
 
@@ -191,9 +240,12 @@ static void scenario_write(const historical_direction *direction) {
     int operation_context = -1;
     CHECK_OK(al_begin_global_action(pulse_context, "pulse_schedule", "", WRITE_OP,
                                     &operation_context));
-    double value = 42.0;
+    historical_value value = 42;
+    const char *path = direction->caller_path;
+    int leaf = leaf_context(operation_context, &path);
     CHECK_OK(
-        al_write_data(operation_context, direction->caller_path, "", &value, DOUBLE_DATA, 0, NULL));
+        al_write_data(leaf, path, "", &value, HISTORICAL_DATATYPE, 0, NULL));
+    close_leaf_context(leaf, operation_context);
     CHECK_OK(al_end_action(operation_context));
     CHECK_OK(al_close_pulse(pulse_context, CLOSE_PULSE));
     CHECK(read_stored_scalar(direction->stored_disk_path) == 42.0);

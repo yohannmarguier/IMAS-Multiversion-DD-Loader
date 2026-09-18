@@ -180,7 +180,10 @@ struct State {
     /// Losses are separate from cloned conversion snapshots so a child never
     /// accidentally owns a copied log. A root context owns exactly one log.
     loss_logs: HashMap<ContextId, LossLog>,
-    #[cfg_attr(feature = "graph-test-source", allow(dead_code))]
+    #[cfg_attr(
+        any(feature = "graph-test-source", feature = "graph-live-source"),
+        allow(dead_code)
+    )]
     maps: HashMap<MapCacheKey, Weak<ConversionMap>>,
 }
 
@@ -471,7 +474,10 @@ impl ContextRegistry {
     /// Exposed beyond `record_root` so a seam can translate a path (e.g.
     /// `al_begin_global_action`'s `datapath`) against an already-known
     /// mismatch before any context exists yet to record.
-    #[cfg_attr(feature = "graph-test-source", allow(dead_code))]
+    #[cfg_attr(
+        any(feature = "graph-test-source", feature = "graph-live-source"),
+        allow(dead_code)
+    )]
     pub(crate) fn get_or_create_map(
         &self,
         key: MapCacheKey,

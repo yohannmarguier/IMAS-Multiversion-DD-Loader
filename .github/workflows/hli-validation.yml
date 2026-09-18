@@ -198,13 +198,14 @@ jobs:
           set -euo pipefail
           cmake -S . -B build-shim \
             -DCMAKE_BUILD_TYPE=Release \
+            -DIMAS_MVDD_GRAPH_TEST_SOURCE=live \
             -DIMAS_MVDD_REAL_CORE_TESTS=OFF
           cmake --build build-shim
           cmake --install build-shim --prefix "$PWD/dist"
 
       # This uses the installed-package shape without changing the ordinary
       # installation above: graph-package is a build-tree-only prefix whose
-      # library has Cargo's internal graph-test-source feature enabled.
+      # library has Cargo's internal graph-live-source feature enabled.
       - name: Package the graph-selected shim for the Fortran scenario
         run: cmake --build build-shim --target imas_mvdd_graph_test_package -j"$(nproc)"
 
@@ -368,6 +369,8 @@ jobs:
           test "$actual" = "$expected"
 
       - name: Run the graph-backed Fortran conversion scenario
+        env:
+          IMAS_MVDD_GRAPH_DEADLINE_SECONDS: 120
         working-directory: hli
         run: |
           set -euo pipefail
@@ -393,7 +396,7 @@ jobs:
             echo "| Selected HLI scenarios | \`$graph_scenario_count\` |"
             echo
             echo "The pinned graph was started by the shared setup action. This"
-            echo "HLI scenario uses the private graph-selected test package; it"
+            echo "HLI scenario uses graph-live-source and acquires its map over Bolt; it"
             echo "does not select a graph source in the shipped installation."
           } >> "$GITHUB_STEP_SUMMARY"
 

@@ -16,17 +16,19 @@
 
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::Arc;
-#[cfg(feature = "graph-test-source")]
+#[cfg(any(feature = "graph-test-source", feature = "graph-live-source"))]
 use std::sync::LazyLock;
 
 use crate::al_status_t;
 use crate::conversion::conversion_map::ConversionMap;
 use crate::conversion::known_artifacts;
 use crate::conversion::path_conversion::{self, ContextPathResolution};
-#[cfg(feature = "graph-test-source")]
-use crate::conversion::runtime_map::{
-    MapRequest, RuntimeMapCoordinator, graph_test_source::GraphTestSource,
-};
+#[cfg(all(feature = "graph-test-source", not(feature = "graph-live-source")))]
+use crate::conversion::runtime_map::graph_test_source::GraphTestSource;
+#[cfg(feature = "graph-live-source")]
+use crate::conversion::runtime_map::neo4j_graph::{Neo4jConfig, Neo4jFactsSource};
+#[cfg(any(feature = "graph-test-source", feature = "graph-live-source"))]
+use crate::conversion::runtime_map::{MapRequest, RuntimeMapCoordinator};
 use crate::conversion::seam_policy;
 use crate::core::core_binding::{READ_OP_ID, forward_status};
 use crate::registry::context_registry::{MapCacheKey, REGISTRY, RootRegistration};
@@ -539,7 +541,7 @@ fn resolve_conversion_map(
     stored: &crate::version::dd_version::DdVersion,
     hli: &crate::version::dd_version::DdVersion,
 ) -> MapAcquisition {
-    #[cfg(not(feature = "graph-test-source"))]
+    #[cfg(not(any(feature = "graph-test-source", feature = "graph-live-source")))]
     {
         match known_artifacts::lookup(ids, stored, hli) {
             Some(artifact) => {
@@ -553,7 +555,7 @@ fn resolve_conversion_map(
         }
     }
 
-    #[cfg(feature = "graph-test-source")]
+    #[cfg(any(feature = "graph-test-source", feature = "graph-live-source"))]
     {
         match (
             crate::conversion::conversion_map::ArtifactDdVersion::new(stored.to_string()),
@@ -565,7 +567,7 @@ fn resolve_conversion_map(
                     stored_dd,
                     hli_dd,
                 };
-                match graph_test_coordinator().acquire(&request) {
+                match acquire_graph_map(&request) {
                     Ok(map) => MapAcquisition::Ready(ReadyConversionMap {
                         map,
                         direction_to_stored: crate::conversion::conversion_map::Direction::Forward,
@@ -578,13 +580,42 @@ fn resolve_conversion_map(
     }
 }
 
-#[cfg(feature = "graph-test-source")]
-static GRAPH_TEST_COORDINATOR: LazyLock<RuntimeMapCoordinator<GraphTestSource>> =
-    LazyLock::new(|| RuntimeMapCoordinator::new(GraphTestSource));
+#[cfg(all(feature = "graph-test-source", not(feature = "graph-live-source")))]
+fn acquire_graph_map(request: &MapRequest) -> Result<Arc<ConversionMap>, ()> {
+    static COORDINATOR: LazyLock<RuntimeMapCoordinator<GraphTestSource>> =
+        LazyLock::new(|| RuntimeMapCoordinator::new(GraphTestSource));
+    COORDINATOR.acquire(request).map_err(|_| ())
+}
 
-#[cfg(feature = "graph-test-source")]
-fn graph_test_coordinator() -> &'static RuntimeMapCoordinator<GraphTestSource> {
-    &GRAPH_TEST_COORDINATOR
+#[cfg(feature = "graph-live-source")]
+fn acquire_graph_map(request: &MapRequest) -> Result<Arc<ConversionMap>, ()> {
+    static COORDINATOR: LazyLock<Result<RuntimeMapCoordinator<Neo4jFactsSource>, ()>> =
+        LazyLock::new(|| {
+            let config = Neo4jConfig {
+                uri: std::env::var("NEO4J_URI").map_err(|_| ())?,
+                username: std::env::var("NEO4J_USERNAME").map_err(|_| ())?,
+                password: std::env::var("NEO4J_PASSWORD").map_err(|_| ())?,
+                database: std::env::var("NEO4J_DATABASE").unwrap_or_else(|_| "neo4j".into()),
+                page_size: 256,
+                connection_timeout: std::time::Duration::from_secs(5),
+            };
+            let deadline = match std::env::var("IMAS_MVDD_GRAPH_DEADLINE_SECONDS") {
+                Ok(value) => std::time::Duration::from_secs(value.parse().map_err(|_| ())?),
+                Err(std::env::VarError::NotPresent) => {
+                    crate::conversion::runtime_map::DEFAULT_ACQUISITION_DEADLINE
+                }
+                Err(_) => return Err(()),
+            };
+            Ok(RuntimeMapCoordinator::with_deadline(
+                Neo4jFactsSource(config),
+                deadline,
+            ))
+        });
+    COORDINATOR
+        .as_ref()
+        .map_err(|_| ())?
+        .acquire(request)
+        .map_err(|_| ())
 }
 
 fn acquisition_refusal(
@@ -610,7 +641,10 @@ fn map_cache_key(
 /// only as a legacy `get_or_create_map` cache-miss closure, so this runs at
 /// most once per `(IDS, stored, HLI)` key for as long as some record still
 /// references the resulting map.
-#[cfg_attr(feature = "graph-test-source", allow(dead_code))]
+#[cfg_attr(
+    any(feature = "graph-test-source", feature = "graph-live-source"),
+    allow(dead_code)
+)]
 pub(super) fn load_artifact(artifact: &known_artifacts::ArtifactMatch) -> ConversionMap {
     ConversionMap::load_with_endpoint_inventories(
         artifact.xml,
