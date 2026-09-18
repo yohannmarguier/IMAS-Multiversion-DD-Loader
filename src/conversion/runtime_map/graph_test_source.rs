@@ -28,6 +28,7 @@ impl GraphFactsSource for GraphTestSource {
         match ids {
             "equilibrium" => Ok(classified_equilibrium_scope()),
             "moved_descendants" => Ok(moved_descendants_scope()),
+            "pulse_schedule" => Ok(pulse_schedule_historical_scope()),
             // This source becomes unavailable after one completed scope. The
             // graph-stage ABI scenarios use it to prove that a retained map
             // survives root closure without contacting the graph again.
@@ -286,6 +287,126 @@ fn identity_scope(ids: &str) -> IdsGraphFacts {
         ],
         events: Vec::new(),
         successors: Vec::new(),
+    }
+}
+
+fn historical_node(
+    path: &str,
+    introduced: &str,
+    removed: Option<&str>,
+    kind: GraphNodeKind,
+) -> GraphNode {
+    GraphNode {
+        ids: "pulse_schedule".to_string(),
+        path: path.to_string(),
+        introduced: vec![graph_release(introduced)],
+        removed: removed.into_iter().map(graph_release).collect(),
+        rename_declarations: Vec::new(),
+        coordinate_relationships: vec![CoordinateRelationship {
+            dimension: 0,
+            target_path: "time".to_string(),
+        }],
+        endpoints: vec![EndpointMetadata {
+            release: graph_release(introduced),
+            kind,
+            data_type: match kind {
+                GraphNodeKind::Leaf => "FLT_1D".to_string(),
+                GraphNodeKind::Structure => "STRUCTURE".to_string(),
+            },
+            ndim: match kind {
+                GraphNodeKind::Leaf => 1,
+                GraphNodeKind::Structure => 0,
+            },
+            unit: None,
+            timebase_path: Some("time".to_string()),
+            coordinate_paths: vec!["time".to_string()],
+            cocos_label_transformation: None,
+            cocos_transformation_expression: None,
+            cocos_label_source: None,
+        }],
+    }
+}
+
+fn pulse_schedule_historical_scope() -> IdsGraphFacts {
+    let mut beam = historical_node("ec/beam", "3.40.0", None, GraphNodeKind::Structure);
+    beam.rename_declarations = vec![
+        GraphRename {
+            release: graph_release("3.26.0"),
+            previous_name: "antenna".to_string(),
+        },
+        GraphRename {
+            release: graph_release("3.40.0"),
+            previous_name: "launcher".to_string(),
+        },
+    ];
+    let mut steering = historical_node(
+        "ec/beam/steering_angle_pol",
+        "3.40.0",
+        None,
+        GraphNodeKind::Leaf,
+    );
+    steering.rename_declarations = vec![GraphRename {
+        release: graph_release("3.26.0"),
+        previous_name: "launching_angle_pol".to_string(),
+    }];
+
+    IdsGraphFacts {
+        complete: true,
+        versions: ["3.22.0", "3.25.0", "3.26.0", "3.30.0", "3.40.0"]
+            .into_iter()
+            .map(|release| GraphVersion {
+                release: graph_release(release),
+                cocos: None,
+            })
+            .collect(),
+        nodes: vec![
+            historical_node("time", "3.22.0", None, GraphNodeKind::Leaf),
+            historical_node(
+                "ec/antenna",
+                "3.22.0",
+                Some("3.26.0"),
+                GraphNodeKind::Structure,
+            ),
+            historical_node(
+                "ec/launcher",
+                "3.26.0",
+                Some("3.40.0"),
+                GraphNodeKind::Structure,
+            ),
+            beam,
+            historical_node(
+                "ec/antenna/launching_angle_pol",
+                "3.22.0",
+                Some("3.26.0"),
+                GraphNodeKind::Leaf,
+            ),
+            historical_node(
+                "ec/launcher/steering_angle_pol",
+                "3.26.0",
+                Some("3.40.0"),
+                GraphNodeKind::Leaf,
+            ),
+            steering,
+        ],
+        events: Vec::new(),
+        successors: vec![
+            GraphSuccessor {
+                from_path: "ec/antenna".to_string(),
+                to_path: "ec/beam".to_string(),
+            },
+            GraphSuccessor {
+                from_path: "ec/launcher".to_string(),
+                to_path: "ec/beam".to_string(),
+            },
+            GraphSuccessor {
+                from_path: "ec/antenna/launching_angle_pol".to_string(),
+                to_path: "ec/beam/steering_angle_pol".to_string(),
+            },
+            GraphSuccessor {
+                from_path: "ec/launcher/steering_angle_pol".to_string(),
+                to_path: "ec/beam/steering_angle_pol".to_string(),
+            },
+        ],
     }
 }
 

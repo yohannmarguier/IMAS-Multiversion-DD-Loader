@@ -699,6 +699,108 @@ fn moved_parent_facts() -> IdsGraphFacts {
     facts
 }
 
+fn historical_node(
+    path: &str,
+    introduced: &str,
+    removed: Option<&str>,
+    kind: GraphNodeKind,
+) -> GraphNode {
+    GraphNode {
+        ids: "pulse_schedule".to_string(),
+        path: path.to_string(),
+        introduced: vec![ArtifactDdVersion::new(introduced).expect("fixture release is valid")],
+        removed: removed
+            .into_iter()
+            .map(|release| ArtifactDdVersion::new(release).expect("fixture release is valid"))
+            .collect(),
+        rename_declarations: Vec::new(),
+        coordinate_relationships: vec![CoordinateRelationship {
+            dimension: 0,
+            target_path: "time".to_string(),
+        }],
+        endpoints: vec![endpoint(introduced, kind, "FLT_1D", 1)],
+    }
+}
+
+fn pulse_schedule_historical_facts() -> IdsGraphFacts {
+    let mut beam = historical_node("ec/beam", "3.40.0", None, GraphNodeKind::Structure);
+    beam.rename_declarations = vec![
+        GraphRename {
+            release: ArtifactDdVersion::new("3.26.0").expect("fixture release is valid"),
+            previous_name: "antenna".to_string(),
+        },
+        GraphRename {
+            release: ArtifactDdVersion::new("3.40.0").expect("fixture release is valid"),
+            previous_name: "launcher".to_string(),
+        },
+    ];
+    let mut steering = historical_node(
+        "ec/beam/steering_angle_pol",
+        "3.40.0",
+        None,
+        GraphNodeKind::Leaf,
+    );
+    steering.rename_declarations = vec![GraphRename {
+        release: ArtifactDdVersion::new("3.26.0").expect("fixture release is valid"),
+        previous_name: "launching_angle_pol".to_string(),
+    }];
+
+    IdsGraphFacts {
+        complete: true,
+        versions: ["3.22.0", "3.25.0", "3.26.0", "3.30.0", "3.40.0"]
+            .into_iter()
+            .map(|release| version(release, None))
+            .collect(),
+        nodes: vec![
+            historical_node(
+                "ec/antenna",
+                "3.22.0",
+                Some("3.26.0"),
+                GraphNodeKind::Structure,
+            ),
+            historical_node(
+                "ec/launcher",
+                "3.26.0",
+                Some("3.40.0"),
+                GraphNodeKind::Structure,
+            ),
+            beam,
+            historical_node(
+                "ec/antenna/launching_angle_pol",
+                "3.22.0",
+                Some("3.26.0"),
+                GraphNodeKind::Leaf,
+            ),
+            historical_node(
+                "ec/launcher/steering_angle_pol",
+                "3.26.0",
+                Some("3.40.0"),
+                GraphNodeKind::Leaf,
+            ),
+            steering,
+        ],
+        events: Vec::new(),
+        successors: vec![
+            GraphSuccessor {
+                from_path: "ec/antenna".to_string(),
+                to_path: "ec/beam".to_string(),
+            },
+            GraphSuccessor {
+                from_path: "ec/launcher".to_string(),
+                to_path: "ec/beam".to_string(),
+            },
+            GraphSuccessor {
+                from_path: "ec/antenna/launching_angle_pol".to_string(),
+                to_path: "ec/beam/steering_angle_pol".to_string(),
+            },
+            GraphSuccessor {
+                from_path: "ec/launcher/steering_angle_pol".to_string(),
+                to_path: "ec/beam/steering_angle_pol".to_string(),
+            },
+        ],
+    }
+}
+
 fn request() -> MapRequest {
     MapRequest {
         ids: "equilibrium".to_string(),
@@ -711,6 +813,14 @@ fn request_for(ids: &str) -> MapRequest {
     MapRequest {
         ids: ids.to_string(),
         ..request()
+    }
+}
+
+fn historical_request(stored_dd: &str, hli_dd: &str) -> MapRequest {
+    MapRequest {
+        ids: "pulse_schedule".to_string(),
+        stored_dd: ArtifactDdVersion::new(stored_dd).expect("fixture release is valid"),
+        hli_dd: ArtifactDdVersion::new(hli_dd).expect("fixture release is valid"),
     }
 }
 
@@ -1693,6 +1803,154 @@ fn acquisition_emits_an_evidenced_direct_rename_in_both_directions() {
     assert_eq!(
         forward.resolve("not/from/the/complete/scope", Direction::Forward),
         None
+    );
+}
+
+#[test]
+fn acquisition_relates_dated_historical_endpoints_without_promoting_witnesses() {
+    let facts = pulse_schedule_historical_facts();
+    let newer_hli = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(facts.clone()),
+    })
+    .acquire(&historical_request("3.25.0", "3.30.0"))
+    .expect("dated antenna and launcher roles establish a complete historical map");
+    let older_hli = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&historical_request("3.30.0", "3.25.0"))
+        .expect("the inverse request uses the same historical roles");
+
+    for (map, parent, child, expected_parent, expected_child) in [
+        (
+            &newer_hli,
+            "ec/launcher",
+            "ec/launcher/steering_angle_pol",
+            "ec/antenna",
+            "ec/antenna/launching_angle_pol",
+        ),
+        (
+            &older_hli,
+            "ec/antenna",
+            "ec/antenna/launching_angle_pol",
+            "ec/launcher",
+            "ec/launcher/steering_angle_pol",
+        ),
+    ] {
+        assert!(matches!(
+            map.resolve(parent, Direction::Forward),
+            Some(RuleExplanation {
+                rel: Some(Rel::Renamed),
+                outcome: Outcome::Path { ref resolved_path, .. },
+                ..
+            }) if resolved_path == expected_parent
+        ));
+        assert!(matches!(
+            map.resolve(child, Direction::Forward),
+            Some(RuleExplanation {
+                rel: Some(Rel::Renamed),
+                outcome: Outcome::Path { ref resolved_path, .. },
+                ..
+            }) if resolved_path == expected_child
+        ));
+        assert_eq!(map.resolve("ec/beam", Direction::Forward), None);
+        assert_eq!(
+            map.resolve("ec/beam/steering_angle_pol", Direction::Forward),
+            None
+        );
+    }
+
+    let mut shuffled = pulse_schedule_historical_facts();
+    shuffled.versions.reverse();
+    shuffled.nodes.reverse();
+    shuffled.successors.reverse();
+    shuffled
+        .nodes
+        .iter_mut()
+        .for_each(|node| node.rename_declarations.reverse());
+    let shuffled = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(shuffled),
+    })
+    .acquire(&historical_request("3.25.0", "3.30.0"))
+    .expect("row order cannot change dated endpoint roles");
+    for path in ["ec/launcher", "ec/launcher/steering_angle_pol"] {
+        assert_eq!(
+            newer_hli.resolve(path, Direction::Forward),
+            shuffled.resolve(path, Direction::Forward)
+        );
+    }
+}
+
+#[test]
+fn acquisition_localizes_unreliable_historical_roles() {
+    let assert_unmappable = |facts: IdsGraphFacts| {
+        let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+            .acquire(&historical_request("3.25.0", "3.30.0"))
+            .expect("an ambiguous local role must not invalidate independent paths");
+        assert_eq!(
+            map.resolve("ec/launcher", Direction::Forward)
+                .expect("the later endpoint remains claimed")
+                .outcome,
+            Outcome::Refusal(RefusalReason::Unmappable)
+        );
+    };
+
+    let mut conflicting_date = pulse_schedule_historical_facts();
+    conflicting_date.nodes[2]
+        .rename_declarations
+        .push(GraphRename {
+            release: ArtifactDdVersion::new("3.26.0").expect("fixture release is valid"),
+            previous_name: "not_antenna".to_string(),
+        });
+    assert_unmappable(conflicting_date);
+
+    let mut self_referential_role = pulse_schedule_historical_facts();
+    self_referential_role.nodes[2].rename_declarations[0].previous_name = "beam".to_string();
+    assert_unmappable(self_referential_role);
+
+    let mut successor_cycle = pulse_schedule_historical_facts();
+    successor_cycle.successors.push(GraphSuccessor {
+        from_path: "ec/beam".to_string(),
+        to_path: "ec/antenna".to_string(),
+    });
+    let map = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(successor_cycle),
+    })
+    .acquire(&historical_request("3.25.0", "3.30.0"))
+    .expect("a local successor cycle must not invalidate independent paths");
+    for path in ["ec/launcher", "ec/launcher/steering_angle_pol"] {
+        assert_eq!(
+            map.resolve(path, Direction::Forward)
+                .expect("each role depending on the cycle remains claimed")
+                .outcome,
+            Outcome::Refusal(RefusalReason::Unmappable)
+        );
+    }
+
+    let mut reused_spelling = pulse_schedule_historical_facts();
+    reused_spelling.nodes[0]
+        .introduced
+        .push(ArtifactDdVersion::new("3.30.0").expect("fixture release is valid"));
+    assert_unmappable(reused_spelling);
+
+    let mut missing_interval_anchor = pulse_schedule_historical_facts();
+    missing_interval_anchor.nodes[0].endpoints.clear();
+    assert_unmappable(missing_interval_anchor);
+
+    let mut ignored_earlier_conflict = pulse_schedule_historical_facts();
+    ignored_earlier_conflict.nodes[2]
+        .rename_declarations
+        .push(GraphRename {
+            release: ArtifactDdVersion::new("3.26.0").expect("fixture release is valid"),
+            previous_name: "not_antenna".to_string(),
+        });
+    let map = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(ignored_earlier_conflict),
+    })
+    .acquire(&historical_request("3.30.0", "3.40.0"))
+    .expect("a local history conflict must not invalidate the complete map");
+    assert_eq!(
+        map.resolve("ec/beam", Direction::Forward)
+            .expect("the later endpoint remains claimed")
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
     );
 }
 

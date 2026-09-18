@@ -292,3 +292,32 @@ clippy --all-targets --features graph-test-source -- -D warnings`, and the
 recording-stub CMake profile's seam-named moved/fidelity C ABI scenarios. This does
 not add multi-release reconstruction, candidate anchors or a scientific
 transformation; those remain the bounded work of #219 and #224.
+
+## Dated historical roles (#219)
+
+The map acquirer now projects a rename witness's dated NBC declarations back
+to each requested endpoint. It selects the first declaration after that
+endpoint in numeric release order and applies the deepest child declaration
+before an ancestor substitution at the same stage. The projected spellings
+must both exist at their exact endpoints with the same representation, and
+each non-witness spelling needs a `RENAMED_TO` edge to corroborate its role.
+The later witness is never emitted as an endpoint rule merely because it
+connects the history.
+
+The controlled `pulse_schedule` scope records antenna → launcher → beam and
+the `launching_angle_pol` → `steering_angle_pol` exception. Its 3.25.0 ↔
+3.30.0 maps therefore relate antenna/launcher and their child spellings while
+leaving beam unclaimed at both endpoints. Conflicting same-date declarations,
+successor cycles, reused spellings, self-referential history, and missing
+endpoint anchors stay localized as `UNMAPPABLE`; reordering releases, nodes,
+successor rows, or aligned declarations changes no result. The graph-stage C
+ABI tracer exercises the same maps through nested arraystruct opening plus
+child reads, writes and deletes in both directions.
+
+The focused checks are `cargo test
+acquisition_relates_dated_historical_endpoints_without_promoting_witnesses
+--lib`, `cargo test acquisition_localizes_unreliable_historical_roles --lib`,
+and the two `graph-runtime-map-historical-nested-operations` CTests in the
+recording-stub profile. The live Neo4j source still stops at its raw-scope
+boundary, and real-Core persistence plus the remaining pulse-schedule
+scientific classifiers/oracle remain for #229.
