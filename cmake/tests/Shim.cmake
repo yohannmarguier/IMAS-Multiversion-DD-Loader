@@ -368,6 +368,52 @@ add_stub_test(loss-graph-runtime-map-unit-refusals-keep-operation-order
     graph_runtime_map_test loss-unit-refusals-keep-operation-order
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
+add_stub_test(graph-runtime-map-opening-families-reuse-a-retained-map
+    graph_runtime_map_test opening-families-reuse-a-retained-map
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(graph-runtime-map-cached-mismatch-translates-global-datapath
+    graph_runtime_map_test cached-mismatch-translates-global-datapath
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(graph-runtime-map-write-mode-uses-read-op-stamp-probe
+    graph_runtime_map_test write-mode-uses-its-read-op-stamp-probe
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(graph-runtime-map-absent-stamp-is-a-passthrough
+    graph_runtime_map_test nonmismatch-opening-families-are-passthrough
+    HLI_DD_VERSION 4.1.1)
+add_stub_test(graph-runtime-map-matching-stamp-is-a-passthrough
+    graph_runtime_map_test nonmismatch-opening-families-are-passthrough
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 4.1.1)
+add_stub_test(graph-runtime-map-malformed-stamp-refuses-and-ends-every-family
+    graph_runtime_map_test malformed-stamp-refuses-and-ends-every-family
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION malformed)
+add_stub_test(graph-runtime-map-conversion-disabled-is-a-plain-forward
+    graph_runtime_map_test conversion-disabled-is-a-plain-forward)
+add_stub_test(graph-runtime-map-core-failure-is-a-plain-forward
+    graph_runtime_map_test core-failure-is-a-plain-forward
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0
+    ENV "RECORDING_STUB_SLICE_FAIL=1")
+add_stub_test(graph-runtime-map-failure-closes-every-opening-family
+    graph_runtime_map_test failure-closes-every-opening-family
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(graph-runtime-map-later-open-retries-a-failed-acquisition
+    graph_runtime_map_test later-open-retries-a-failed-acquisition
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(graph-runtime-map-reentrant-read-is-passthrough-under-graph-open
+    graph_runtime_map_test reentrant-read-is-passthrough-under-graph-open
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(graph-runtime-map-passthrough-is-unchanged-under-graph-open
+    graph_runtime_map_test passthrough-is-unchanged-under-graph-open
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
 
 # Not a refusal scenario: the artifact's four chi_squared `<redefine>` entries
 # were removed after review, so these paths now forward verbatim. Registered
