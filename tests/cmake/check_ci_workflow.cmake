@@ -282,6 +282,25 @@ if(DEFINED PINNED_FORTRAN_CORE_JOB OR DEFINED PINNED_CPP_CORE_JOB
     require_line(fortran_hli_job
             "hli/imas-python-fixtures/.venv/bin/python -m pip install -r .github/hli-fixture-requirements.txt"
             "install the HLI fixture dependencies")
+    require_line(fortran_hli_job "ctest --output-on-failure --no-tests=error"
+            "retain the ordinary installed-shim HLI suite")
+    require_matching_line(fortran_hli_job
+            "HLI_TOTAL_TESTS - HLI_DISABLED_TESTS"
+            "retain the ordinary HLI enabled-test count assertion")
+    require_line(fortran_hli_job "- uses: ./.github/actions/setup-dd-graph"
+            "start the pinned graph before the graph-backed Fortran scenario")
+    require_line(fortran_hli_job
+            "run: cmake --build build-shim --target imas_mvdd_graph_test_package -j\"$(nproc)\""
+            "package the private graph-selected shim for the installed Fortran scenario")
+    require_matching_line(fortran_hli_job
+            "-DAL_SHIM_GRAPH_RUNTIME_SCENARIO=ON"
+            "configure the graph-backed Fortran scenario explicitly")
+    require_matching_line(fortran_hli_job
+            "ctest --test-dir build-graph -R '\\^al-fortran-test-shim-graph-runtime\\$'"
+            "run the graph-backed Fortran conversion scenario")
+    require_matching_line(fortran_hli_job
+            "test \"\\$graph_scenario_count\" -gt 0"
+            "reject an empty graph-backed Fortran scenario selection")
     check_component_pinned_core_linkage(${PINNED_CPP_CORE_JOB} CPP workflow)
     check_component_pinned_core_linkage(${PINNED_MATLAB_CORE_JOB} MATLAB workflow)
     check_component_pinned_core_linkage(${PINNED_JAVA_CORE_JOB} JAVA workflow)
