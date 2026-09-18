@@ -39,8 +39,8 @@ static void scenario_identity_operations(void) {
     CHECK(strcmp(string_from_stub("recording_stub_delete_path"), "time") == 0);
     check_no_loss_entry(operation_ctx);
 
-    printf("graph_runtime_map_test identity-operations: graph-acquired map kept identity "
-           "read, write and leaf delete on the existing C ABI\n");
+    printf("graph_runtime_map_test identity-operations: declaration-only unit evidence kept "
+           "identity read, write and leaf delete on the existing C ABI\n");
 }
 
 static void scenario_renamed_read(const char *caller_path, const char *stored_path) {
@@ -161,6 +161,93 @@ static void scenario_acquisition_failure_cleans_up_open_context(void) {
            "unsupported graph map without retaining a context\n");
 }
 
+static void scenario_read_unit_refusal_preserves_caller_data_without_forwarding(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    int size[1] = {73};
+    void *read_data = (void *)1;
+
+    al_status_t status = al_read_data(operation_ctx, "unit_dimensionally_compatible", "time",
+                                      &read_data, IMAS_DOUBLE_DATA, 1, size);
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path has no safe conversion between DD versions",
+                          "unit_dimensionally_compatible", "4.1.1", "3.39.0");
+    CHECK(read_data == (void *)1);
+    CHECK(size[0] == 73);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
+    check_loss_at(operation_ctx, 0, "unit_dimensionally_compatible",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_READ);
+
+    printf("graph_runtime_map_test read-unit-refusal-preserves-caller-data-without-forwarding: "
+           "unresolved unit path refused before Core or caller-buffer mutation\n");
+}
+
+static void scenario_write_unit_refusal_preserves_caller_data_without_forwarding(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    int size[1] = {73};
+    double write_data[] = {12.5};
+
+    al_status_t status =
+        al_write_data(operation_ctx, "unit_requires_scale_or_offset", "time", write_data,
+                      IMAS_DOUBLE_DATA, 1, size);
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path's unit was redefined and cannot be converted",
+                          "unit_requires_scale_or_offset", "4.1.1", "3.39.0");
+    CHECK(write_data[0] == 12.5);
+    CHECK(size[0] == 73);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    check_loss_at(operation_ctx, 0, "unit_requires_scale_or_offset",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    printf("graph_runtime_map_test write-unit-refusal-preserves-caller-data-without-forwarding: "
+           "known scale-or-offset path refused before Core or caller-buffer mutation\n");
+}
+
+static void scenario_delete_unit_refusal_does_not_forward(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int deletes_before = int_from_stub("recording_stub_delete_call_count");
+
+    al_status_t status = al_delete_data(operation_ctx, "unit_requires_scale_or_offset");
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path's unit was redefined and cannot be converted",
+                          "unit_requires_scale_or_offset", "4.1.1", "3.39.0");
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before);
+    check_loss_at(operation_ctx, 0, "unit_requires_scale_or_offset",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_DELETE);
+
+    printf("graph_runtime_map_test delete-unit-refusal-does-not-forward: "
+           "known scale-or-offset path refused before Core\n");
+}
+
+static void scenario_loss_unit_refusals_keep_operation_order(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int size[1] = {73};
+    void *read_data = (void *)1;
+    double write_data[] = {12.5};
+
+    CHECK(al_read_data(operation_ctx, "unit_dimensionally_compatible", "time", &read_data,
+                       IMAS_DOUBLE_DATA, 1, size)
+              .code
+          == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(al_write_data(operation_ctx, "unit_requires_scale_or_offset", "time", write_data,
+                        IMAS_DOUBLE_DATA, 1, size)
+              .code
+          == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK(al_delete_data(operation_ctx, "unit_requires_scale_or_offset").code
+          == IMAS_MVDD_CONVERSION_ERROR);
+
+    check_loss_at(operation_ctx, 0, "unit_dimensionally_compatible",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_READ);
+    check_loss_at(operation_ctx, 1, "unit_requires_scale_or_offset",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_WRITE);
+    check_loss_at(operation_ctx, 2, "unit_requires_scale_or_offset",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_DELETE);
+
+    printf("graph_runtime_map_test loss-unit-refusals-keep-operation-order: "
+           "read, write and delete losses retain their caller-path order\n");
+}
+
 static const shim_test_scenario SCENARIOS[] = {
     {"identity-operations", scenario_identity_operations},
     {"renamed-read-hli-new", scenario_renamed_read_hli_new},
@@ -171,6 +258,12 @@ static const shim_test_scenario SCENARIOS[] = {
     {"renamed-delete-hli-old", scenario_renamed_delete_hli_old},
     {"scientific-gate-refuses-caller-path", scenario_scientific_gate_refuses_caller_path},
     {"acquisition-failure-cleans-up-open-context", scenario_acquisition_failure_cleans_up_open_context},
+    {"read-unit-refusal-preserves-caller-data-without-forwarding",
+     scenario_read_unit_refusal_preserves_caller_data_without_forwarding},
+    {"write-unit-refusal-preserves-caller-data-without-forwarding",
+     scenario_write_unit_refusal_preserves_caller_data_without_forwarding},
+    {"delete-unit-refusal-does-not-forward", scenario_delete_unit_refusal_does_not_forward},
+    {"loss-unit-refusals-keep-operation-order", scenario_loss_unit_refusals_keep_operation_order},
 };
 
 int main(int argc, char **argv) { return RUN_NAMED_SCENARIO(argc, argv, SCENARIOS); }
