@@ -323,7 +323,7 @@ fn rejects_duplicate_event_ids_even_when_their_rows_are_otherwise_valid() {
 
 #[test]
 #[ignore = "requires the pinned Neo4j graph provisioned by CI"]
-fn pinned_graph_returns_a_complete_equilibrium_scope() {
+fn pinned_graph_returns_complete_reference_scopes() {
     let config = Neo4jConfig {
         uri: std::env::var("NEO4J_URI").expect("graph CI supplies NEO4J_URI"),
         username: std::env::var("NEO4J_USERNAME").expect("graph CI supplies NEO4J_USERNAME"),
@@ -354,6 +354,12 @@ fn pinned_graph_returns_a_complete_equilibrium_scope() {
             .versions
             .iter()
             .any(|row| { row.get("release") == Some(&GraphValue::String("4.1.1".to_string())) })
+    );
+    assert!(
+        scope
+            .versions
+            .iter()
+            .any(|row| { row.get("release") == Some(&GraphValue::String("3.42.0".to_string())) })
     );
     assert!(scope.nodes.iter().any(|row| {
         row.get("path")
@@ -405,5 +411,38 @@ fn pinned_graph_returns_a_complete_equilibrium_scope() {
     assert!(
         !scope.successors.is_empty(),
         "live successor stream must not be elided"
+    );
+
+    let pulse_attempt = AcquisitionAttempt::new(
+        Duration::from_secs(30),
+        Arc::new(ManualClock::default()),
+        Arc::new(NoopObserver),
+    );
+    let pulse_scope = source
+        .load_raw_scope("pulse_schedule", &pulse_attempt)
+        .expect("pinned graph returns every pulse_schedule scope stream");
+    for release in ["3.25.0", "3.30.0"] {
+        assert!(
+            pulse_scope.versions.iter().any(|row| {
+                row.get("release") == Some(&GraphValue::String(release.to_string()))
+            })
+        );
+    }
+    for path in [
+        "ec/antenna",
+        "ec/launcher",
+        "ec/antenna/launching_angle_pol",
+        "ec/launcher/steering_angle_pol",
+    ] {
+        assert!(
+            pulse_scope
+                .nodes
+                .iter()
+                .any(|row| { row.get("path") == Some(&GraphValue::String(path.to_string())) })
+        );
+    }
+    assert!(
+        pulse_scope.successors.len() >= 4,
+        "pulse_schedule's dated historical correspondence must retain its successor evidence"
     );
 }

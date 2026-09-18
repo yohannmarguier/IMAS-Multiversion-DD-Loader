@@ -350,6 +350,19 @@ static void scenario_historical_nested_operations(const char *caller_parent,
     CHECK(strcmp(string_from_stub("recording_stub_read_field"), stored_child) == 0);
     CHECK(strcmp(string_from_stub("recording_stub_read_timebase"), "/time") == 0);
 
+    char absolute_caller_child[256];
+    char absolute_stored_child[256];
+    int caller_length = snprintf(absolute_caller_child, sizeof absolute_caller_child, "/%s/%s",
+                                 caller_parent, caller_child);
+    int stored_length = snprintf(absolute_stored_child, sizeof absolute_stored_child, "/%s/%s",
+                                 stored_parent, stored_child);
+    CHECK(caller_length > 0 && (size_t)caller_length < sizeof absolute_caller_child);
+    CHECK(stored_length > 0 && (size_t)stored_length < sizeof absolute_stored_child);
+    CHECK_OK(al_read_data(child_ctx, absolute_caller_child, "/time", &read_data, IMAS_DOUBLE_DATA,
+                          1, read_size));
+    CHECK(strcmp(string_from_stub("recording_stub_read_field"), absolute_stored_child) == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_read_timebase"), "/time") == 0);
+
     CHECK_OK(al_write_data(child_ctx, caller_child, "/time", write_data, IMAS_DOUBLE_DATA, 1,
                            write_size));
     CHECK(strcmp(string_from_stub("recording_stub_write_field"), stored_child) == 0);
