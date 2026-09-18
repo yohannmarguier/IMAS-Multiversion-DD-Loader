@@ -365,6 +365,18 @@ if("-DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON" IN_LIST fast_job)
 endif()
 require_line(full_job "uses: actions/cache@v4"
     "cache the acquired IMAS-Core build")
+require_line(full_job "uses: ./.github/actions/setup-dd-graph"
+    "provision the pinned DD graph before graph-selected real-Core coverage")
+require_line(full_job "- name: Test graph coexistence real-Core scenarios"
+    "run the graph coexistence real-Core scenarios explicitly")
+require_line(full_job "expected=5"
+    "retain the five graph coexistence scenarios as a nonzero executed count")
+require_line(full_job
+    "actual=$(ctest --test-dir build -N -R \"$pattern\" | grep -cE '^  Test #[0-9]+:')"
+    "count the registered graph coexistence real-Core scenarios")
+require_line(full_job
+    "ctest --test-dir build -R \"$pattern\" --output-on-failure --no-tests=error"
+    "execute the graph coexistence real-Core scenarios")
 require_line(full_job "-DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON"
     "download the pinned real IMAS-Core")
 check_pinned_core_linkage(full workflow)

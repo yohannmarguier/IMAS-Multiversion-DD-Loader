@@ -129,6 +129,13 @@ jobs:
 
       - uses: ./.github/actions/setup-toolchain
 
+      # Issue #228's real-Core coexistence scenarios exercise the graph-selected
+      # ABI tracer. Provision the pinned graph in this job too, so their
+      # registration and execution cannot silently drift away from the graph
+      # contract that supplies their complete scope.
+      - name: Provision pinned DD graph for real-Core coexistence coverage
+        uses: ./.github/actions/setup-dd-graph
+
       - name: Resolve IMAS-Core reference
         id: imas_core_ref
         run: |
@@ -172,6 +179,15 @@ jobs:
 
       - name: Build
         run: cmake --build build
+
+      - name: Test graph coexistence real-Core scenarios
+        run: |
+          set -euo pipefail
+          pattern='^(read-coexistence|write-coexistence|write-delete-coexistence)-'
+          expected=5
+          actual=$(ctest --test-dir build -N -R "$pattern" | grep -cE '^  Test #[0-9]+:')
+          test "$actual" -eq "$expected"
+          ctest --test-dir build -R "$pattern" --output-on-failure --no-tests=error
 
       - name: Test drift and real-Core seams
         run: ctest --test-dir build --output-on-failure --no-tests=error
