@@ -105,6 +105,15 @@ function(add_stub_test name executable)
 
     add_test(NAME "${name}" COMMAND ${executable} ${ARG_UNPARSED_ARGUMENTS})
     set_tests_properties("${name}" PROPERTIES ENVIRONMENT "${environment}")
+    # The executable selects the test map source.  Keep that assignment on the
+    # target so the shared harness can label every scenario without duplicating
+    # a source-specific wrapper around its environment contract.
+    if(TARGET "${executable}")
+        get_property(source_label TARGET "${executable}" PROPERTY IMAS_MVDD_CTEST_LABEL)
+        if(source_label)
+            set_property(TEST "${name}" APPEND PROPERTY LABELS "${source_label}")
+        endif()
+    endif()
     if(NOT DEFINED ARG_HLI_DD_VERSION)
         set_property(TEST "${name}" APPEND PROPERTY ENVIRONMENT_MODIFICATION
             "IMAS_MVDD_HLI_DD_VERSION=unset:")

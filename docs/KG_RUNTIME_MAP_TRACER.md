@@ -321,3 +321,43 @@ and the two `graph-runtime-map-historical-nested-operations` CTests in the
 recording-stub profile. The live Neo4j source still stops at its raw-scope
 boundary, and real-Core persistence plus the remaining pulse-schedule
 scientific classifiers/oracle remain for #229.
+
+## Graph/fixture matrix registration (#226)
+
+The CTest source assignment is explicit rather than inferred from an XML
+expectation: every scenario executed by `graph_runtime_map_test` inherits the
+`graph-runtime-map` label from that target, while the retained mechanism suites
+continue to link the ordinary staged XML-selected shim and have no such label.
+The graph-labelled matrix is therefore selectable without copying the shared
+recording-stub harness or turning the installed shim into a runtime source
+switch.
+
+The `graph-abi` CI job provisions the committed graph snapshot, proves the
+live complete equilibrium scope at the Rust boundary, then builds the
+recording-stub profile and runs `ctest -L graph-runtime-map --no-tests=error`.
+CTest retains the executed scenario count in the job log; an empty label
+selection, failed provisioning, or failed acquisition is a failed job. The
+normal `fast` job remains graph-service-independent and continues to run the
+XML fixtures, explicit NoSource scalar/array ABI cases, formatting, and
+isolated Rust tests.
+
+The selected graph scenarios are the requirement ledger, not a second map
+oracle:
+
+| Requirement | Graph-selected shared-harness scenarios | XML fixture assignment or documented difference |
+| --- | --- | --- |
+| Read, primary-only write, delete fan-out and losses | `coexistence-*`, `renamed-*`, `psi-*`, and `unit-refusal-*` | XML retains its artifact candidate and NoSource scalar/array behavior. Graph excludes unsupported scientific paths and records graph candidate paths in write/delete losses. |
+| Nested stored anchors and historical paths | `moved-parent-*`, `historical-nested-operations-*`, and arraystruct coexistence cases | XML retains its `move-gap` inherited loss; graph `gap/r` is exact and deliberately has no loss. |
+| Plugin twins, reentry, passthrough and lifecycle | plugin-arraystruct coexistence, `reentrant-read-*`, `passthrough-*`, opening-family, failure-cleanup and retry cases | XML passthrough and mechanism suites remain unchanged; no source selection reaches the installed ABI. |
+| Evidence-specific candidates and transformations | coexistence fallback/order, direct renames, psi sign flips, unknown/compound/missing COCOS and unit/timebase refusals | Unproven aliases remain refusals; unresolved removal does not become graph absence. Declaration-only units are exact, while required or insufficient numerical evidence refuses. |
+
+This makes the final-cutover assignments mechanical: keep the ordinary staged
+target for XML fixtures, move only `graph-runtime-map` labelled scenarios when
+the production source changes, and preserve any documented expectation
+difference instead of silently changing an XML assertion.
+
+At registration, the Debug recording-stub profile selected and passed 50/50
+`graph-runtime-map` CTests. The pinned live graph was not started for that
+local matrix run; `graph-abi` makes its setup and complete-scope acquisition a
+CI prerequisite rather than silently treating a controlled source as a live
+graph result.
