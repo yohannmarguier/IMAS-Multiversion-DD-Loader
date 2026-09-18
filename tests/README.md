@@ -348,8 +348,11 @@ no C-ABI test can reach.
 Runs `tests/coverage/check-rust-line-coverage-audit.sh`, the compact fixture
 suite for the local Rust decision-coverage audit. It proves that the checker
 adds covered and total lines across groups, does not average percentages, fails
-an aggregate pass with one below-floor group, and refuses reports that omit or
-empty a required source measurement. It does not run the full audit: the
+an aggregate pass with one below-floor group, refuses reports that omit or
+empty a required source measurement, and — against a throwaway source tree it
+builds itself — refuses a group range that stops short of its file's inline
+test module unless the remainder is a declared exclusion. It does not run the
+full audit: the
 ordinary CI job runs the checked-in command and uploads its LCOV report even
 when the threshold rejects it.
 
@@ -359,7 +362,8 @@ Runs `tests/coverage/check-rust-mutation-audit.sh`, the compact fixture suite
 for the local Rust mutation audit. It reuses the line audit's six-group scope,
 checks group and aggregate thresholds, rejects a timed-out mutant even when its
 numeric score clears the floor, excludes only a precisely documented equivalent
-or integration-only survivor, and refuses incomplete cargo-mutants reports. It
+or integration-only survivor, refuses a candidate mutant belonging to no group
+and no declared exclusion, and refuses incomplete cargo-mutants reports. It
 does not run cargo-mutants itself; the full audit remains a manual local command.
 
 ### `equilibrium-artifact-coverage-floor`
