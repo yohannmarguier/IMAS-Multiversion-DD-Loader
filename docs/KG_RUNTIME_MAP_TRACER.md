@@ -169,3 +169,29 @@ build-issue216 -j2`, and `ctest --test-dir build-issue216 --output-on-failure`
 check still requires CI's pinned Neo4j service. This tracer deliberately
 serves only its controlled equilibrium identity scope, not a live graph or the
 unimplemented semantic mappings.
+
+## Evidenced direct rename tracer (#217)
+
+`GraphRename` carries a dated NBC previous-name declaration on the newer
+node. `RuntimeMapAcquirer` now emits an exact `Renamed` rule only when that
+declaration falls inside the requested chronological interval, its local or
+IDS-qualified spelling normalizes to an exact older endpoint member, and the
+flattened `RENAMED_TO` stream corroborates the same direct pair. Both endpoint
+metadata representations must match without COCOS evidence before the rule is
+servable. The existing resolver remains the only rule executor.
+
+The graph-stage source uses `beta_normal` → `beta_tor_norm` as its controlled
+tracer. The C ABI scenarios prove reads, writes and leaf deletes reach the
+actual stored spelling in both 4.1.1 → 3.39.0 and 3.39.0 → 4.1.1 directions.
+The `j_tor` → `j_phi` declaration is deliberately present but COCOS-labelled:
+it is traced as an `UNMAPPABLE` read refusal naming the caller path, without a
+Core read. An uncorroborated declaration, conflicting/missing endpoint evidence
+or a representation/value mismatch likewise remains localized to refusal;
+neither an alias nor a missing target becomes identity or a write target.
+
+The focused Rust test also reverses release, node and successor input order and
+asserts identical resolution. XML-backed mechanism scenarios remain on their
+unchanged source path. Raw Neo4j transport still ends at `Neo4jRawScope`; this
+tracer consumes the same complete `GraphFactsSource` boundary used by the
+controlled graph-stage source, rather than adding a second map interpreter or
+a graph-specific C ABI.

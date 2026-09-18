@@ -71,7 +71,18 @@ pub(crate) struct GraphNode {
     /// reappearance into one lifetime.
     pub introduced: Vec<ArtifactDdVersion>,
     pub removed: Vec<ArtifactDdVersion>,
+    /// Dated predecessor names declared by this node's NBC history.  The
+    /// spelling is kept on the declaring (newer) node because a local name is
+    /// relative to that node's parent, not to the IDS root.
+    pub rename_declarations: Vec<GraphRename>,
     pub endpoints: Vec<EndpointMetadata>,
+}
+
+/// One dated previous-name declaration from a node's NBC history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GraphRename {
+    pub release: ArtifactDdVersion,
+    pub previous_name: String,
 }
 
 /// One versioned graph event. The tracer validates references but refuses to
@@ -387,6 +398,7 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
             })?;
         let hli = graph_side(&facts.versions, &request.hli_dd, attempt)?;
         let stored = graph_side(&facts.versions, &request.stored_dd, attempt)?;
+        let direct_renames = direct_renames(&facts, request, attempt)?;
         let mut rules = Vec::with_capacity(facts.nodes.len());
         let mut hli_endpoint = Vec::with_capacity(facts.nodes.len());
         let mut stored_endpoint = Vec::with_capacity(facts.nodes.len());
@@ -399,6 +411,32 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
                 })?;
             let hli_metadata = replay_endpoint(&facts, node, &request.hli_dd)?;
             let stored_metadata = replay_endpoint(&facts, node, &request.stored_dd)?;
+            if let Some(rename) = direct_renames
+                .iter()
+                .find(|rename| rename.left == node.path)
+            {
+                add_endpoint_node(&mut hli_endpoint, node, &hli_metadata);
+                add_endpoint_node(&mut stored_endpoint, node, &stored_metadata);
+                rules.push(TypedRule {
+                    id: format!("rename:{}:{}", rename.left, rename.right),
+                    rel: Rel::Renamed,
+                    selector_stage: SelectorStage::Exact,
+                    left: Some(rename.left.clone()),
+                    right: Some(rename.right.clone()),
+                    froms: Vec::new(),
+                    fidelity_forward: Fidelity::Exact,
+                    fidelity_reverse: Fidelity::Exact,
+                });
+                continue;
+            }
+            if direct_renames
+                .iter()
+                .any(|rename| rename.right == node.path)
+            {
+                add_endpoint_node(&mut hli_endpoint, node, &hli_metadata);
+                add_endpoint_node(&mut stored_endpoint, node, &stored_metadata);
+                continue;
+            }
             let (rel, left, right, fidelity) = match (&hli_metadata, &stored_metadata) {
                 (
                     EndpointState::Present {
@@ -506,6 +544,154 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
             })?;
         Ok(map)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DirectRename {
+    left: String,
+    right: String,
+}
+
+fn add_endpoint_node(endpoint: &mut Vec<EndpointNode>, node: &GraphNode, state: &EndpointState) {
+    if let EndpointState::Present { metadata, .. } = state {
+        endpoint.push(endpoint_node(node, metadata));
+    }
+}
+
+/// Identifies only a dated, direct predecessor declaration corroborated by
+/// the flattened successor stream.  The successor is a witness, never a
+/// substitute for the declaration's date or value semantics.
+fn direct_renames(
+    facts: &IdsGraphFacts,
+    request: &MapRequest,
+    attempt: &AcquisitionAttempt,
+) -> Result<Vec<DirectRename>, AcquisitionFailure> {
+    let (earlier, later) = chronological_endpoints(request);
+    let nodes: HashMap<_, _> = facts
+        .nodes
+        .iter()
+        .map(|node| (node.path.as_str(), node))
+        .collect();
+    let mut candidates = Vec::new();
+
+    for newer in &facts.nodes {
+        for declaration in &newer.rename_declarations {
+            attempt
+                .check(AcquisitionStage::RuleConstruction)
+                .map_err(|expired| AcquisitionFailure::TimedOut {
+                    stage: expired.stage,
+                })?;
+            if !release_is_between(&declaration.release, earlier, later) {
+                continue;
+            }
+            let Some(previous) =
+                normalize_previous_name(&declaration.previous_name, &newer.path, &request.ids)
+            else {
+                continue;
+            };
+            let Some(older) = nodes.get(previous.as_str()) else {
+                continue;
+            };
+            if !facts.successors.iter().any(|successor| {
+                normalize_ids_path(&successor.from_path, &request.ids) == previous
+                    && normalize_ids_path(&successor.to_path, &request.ids) == newer.path
+            }) {
+                continue;
+            }
+            let EndpointState::Present {
+                metadata: older_metadata,
+                ..
+            } = replay_endpoint(facts, older, earlier)?
+            else {
+                continue;
+            };
+            if !matches!(replay_endpoint(facts, older, later)?, EndpointState::Absent) {
+                continue;
+            }
+            if !matches!(
+                replay_endpoint(facts, newer, earlier)?,
+                EndpointState::Absent
+            ) {
+                continue;
+            }
+            let EndpointState::Present {
+                metadata: newer_metadata,
+                ..
+            } = replay_endpoint(facts, newer, later)?
+            else {
+                continue;
+            };
+            if !same_representation(&older_metadata, &newer_metadata) {
+                continue;
+            }
+            candidates.push((previous, newer.path.clone()));
+        }
+    }
+
+    candidates.sort();
+    candidates.dedup();
+    Ok(candidates
+        .iter()
+        .filter(|(previous, newer)| {
+            candidates
+                .iter()
+                .filter(|(candidate_previous, _)| candidate_previous == previous)
+                .count()
+                == 1
+                && candidates
+                    .iter()
+                    .filter(|(_, candidate_newer)| candidate_newer == newer)
+                    .count()
+                    == 1
+        })
+        .map(|(previous, newer)| {
+            if request.hli_dd == *earlier {
+                DirectRename {
+                    left: previous.clone(),
+                    right: newer.clone(),
+                }
+            } else {
+                DirectRename {
+                    left: newer.clone(),
+                    right: previous.clone(),
+                }
+            }
+        })
+        .collect())
+}
+
+fn chronological_endpoints(request: &MapRequest) -> (&ArtifactDdVersion, &ArtifactDdVersion) {
+    if numeric_release(&request.hli_dd) < numeric_release(&request.stored_dd) {
+        (&request.hli_dd, &request.stored_dd)
+    } else {
+        (&request.stored_dd, &request.hli_dd)
+    }
+}
+
+fn release_is_between(
+    release: &ArtifactDdVersion,
+    earlier: &ArtifactDdVersion,
+    later: &ArtifactDdVersion,
+) -> bool {
+    let release = numeric_release(release);
+    numeric_release(earlier) < release && release <= numeric_release(later)
+}
+
+fn normalize_previous_name(previous_name: &str, declaring_path: &str, ids: &str) -> Option<String> {
+    let previous_name = normalize_ids_path(previous_name, ids);
+    if previous_name.is_empty() || previous_name.split('/').any(|segment| segment == "..") {
+        return None;
+    }
+    if previous_name.contains('/') {
+        return Some(previous_name);
+    }
+    declaring_path
+        .rsplit_once('/')
+        .map(|(parent, _)| format!("{parent}/{previous_name}"))
+}
+
+fn normalize_ids_path(path: &str, ids: &str) -> String {
+    strip_ids_prefix(path, ids)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -846,11 +1032,11 @@ fn validate_complete_scope(
             .map_err(|expired| AcquisitionFailure::TimedOut {
                 stage: expired.stage,
             })?;
-        if !paths.contains(successor.from_path.as_str())
-            || !paths.contains(successor.to_path.as_str())
-        {
+        let from_path = normalize_ids_path(&successor.from_path, &request.ids);
+        let to_path = normalize_ids_path(&successor.to_path, &request.ids);
+        if !paths.contains(from_path.as_str()) || !paths.contains(to_path.as_str()) {
             return Err(AcquisitionFailure::InvalidNode {
-                path: successor.from_path.clone(),
+                path: from_path,
                 reason: "successor does not reference nodes in this complete scope".to_string(),
             });
         }
