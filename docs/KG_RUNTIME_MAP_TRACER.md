@@ -363,3 +363,54 @@ At registration, the Debug recording-stub profile selected and passed 50/50
 local matrix run; `graph-abi` makes its setup and complete-scope acquisition a
 CI prerequisite rather than silently treating a controlled source as a live
 graph result.
+
+## Installed Fortran graph scenario (#230)
+
+The private `graph-test-source` package can now be assembled under a build
+tree with `cmake --build <shim-build> --target
+imas_mvdd_graph_test_package`. It uses the same Cargo-c package shape as the
+normal install — library, generated header, pkg-config metadata and CMake
+package configuration — but never changes `cmake --install` or production
+XML selection. Its build-tree prefix is `<shim-build>/graph-package`.
+
+The pinned IMAS-Fortran revision `cd6ea111948bbff7b07b36b39992c56b565dea9b`
+on `feat/runtime-conversion-mapping-issue-230` adds the opt-in
+`AL_SHIM_GRAPH_RUNTIME_SCENARIO`. With that switch on and
+`CMAKE_PREFIX_PATH=<shim-build>/graph-package`, its
+`al-fortran-test-shim-graph-runtime` test drives generated `ids_put_slice`
+and `ids_get` calls against a private copy of the DD-3.39.0 equilibrium
+fixture. It writes `time_slice/profiles_1d/psi` with `[-2.5, 7.25]` through a
+DD-4.1.1 HLI, then reads the same values back after the graph-derived COCOS
+write inverse and read flip. The scope also exposes `coordinates_type` as a
+retype: the HLI reports `PARTIAL_READ` and retains the relative leaf spelling
+plus the `container changed shape` reason in its skip log. This is the HLI's
+honest refusal surface; it does not claim the shim C ABI's joined loss path.
+
+Executed on macOS with the isolated package, the exact
+`IMAS_CORE_REF` fork `dae4abdd9428bd28f47063f8f575bdc8abd915f2`, HDF5, and
+DD 4.1.1:
+
+```console
+cmake -S . -B build-shim -DCMAKE_BUILD_TYPE=Release \
+  -DIMAS_MVDD_REAL_CORE_TESTS=OFF
+cmake --build build-shim --target imas_mvdd_graph_test_package -j2
+
+cmake -S hli -B hli/build -DCMAKE_BUILD_TYPE=Debug \
+  -DAL_USE_MULTIVERSION_SHIM=ON -DAL_SHIM_GRAPH_RUNTIME_SCENARIO=ON \
+  -DCMAKE_PREFIX_PATH="$PWD/build-shim/graph-package" -DDD_VERSION=4.1.1 \
+  -DAL_BACKEND_HDF5=ON -DAL_BACKEND_MDSPLUS=OFF -DAL_BACKEND_UDA=OFF \
+  -DAL_TESTS=ON -DAL_EXAMPLES=OFF -DAL_PLAYGROUND=OFF -DAL_PLUGINS=OFF \
+  -DAL_HLI_DOCS=OFF \
+  -DAL_CORE_GIT_REPOSITORY=https://github.com/yohannmarguier/IMAS-Core.git \
+  -DAL_CORE_VERSION=dae4abdd9428bd28f47063f8f575bdc8abd915f2
+cmake --build hli/build --target al-fortran-test-shim-graph-runtime -j2
+cmake --build hli/build --target al-core-runtime -j2
+ctest --test-dir hli/build -R '^al-fortran-test-shim-graph-runtime$' \
+  --output-on-failure --no-tests=error
+```
+
+The selected CTest ran its fixture copy, loss-log cleanup and the nonzero HLI
+scenario: all 3 passed. This is an installed graph-selected test instance with
+controlled complete facts; it is not a production source switch or a claim
+that a live Neo4j service was used. #231 owns provisioning the pinned graph in
+CI and the full existing HLI job; #233 remains the production source cutover.

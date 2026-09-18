@@ -142,6 +142,23 @@ fn structure(ids: &str, path: &str) -> GraphNode {
     node
 }
 
+fn retyped_leaf(ids: &str, path: &str) -> GraphNode {
+    let mut node = leaf(ids, path);
+    let stored = node
+        .endpoints
+        .first_mut()
+        .expect("controlled nodes carry a stored endpoint");
+    stored.data_type = "INT_1D".to_string();
+    stored.ndim = 1;
+
+    let hli = node
+        .endpoints
+        .get_mut(1)
+        .expect("controlled nodes carry an HLI endpoint");
+    hli.data_type = "STRUCT_ARRAY".to_string();
+    node
+}
+
 fn old_only(mut node: GraphNode) -> GraphNode {
     node.endpoints.truncate(1);
     node.removed = vec![graph_release("4.0.0")];
@@ -623,6 +640,13 @@ fn classified_equilibrium_scope() -> IdsGraphFacts {
         })
         .collect(),
         nodes: vec![
+            // The installed Fortran graph scenario writes this one supported
+            // COCOS leaf through generated HLI calls, then reads it back. The
+            // enclosing AOS and its time coordinate are explicit endpoint
+            // facts too: a graph map never infers those anchors from a child.
+            structure(ids, "time_slice"),
+            leaf(ids, "time_slice/time"),
+            leaf(ids, "ids_properties/homogeneous_time"),
             unit_leaf(ids, "time", "s", "second"),
             unit_leaf(ids, "unit_dimensionally_compatible", "m", "cm"),
             unit_leaf(ids, "unit_requires_scale_or_offset", "m", "cm"),
@@ -655,6 +679,14 @@ fn classified_equilibrium_scope() -> IdsGraphFacts {
                 }],
                 ..renamed_leaf(ids, "time_slice/constraints/j_phi", "3.42.0", None)
             },
+            // This is the one HLI-visible refusal in the focused scenario.
+            // The endpoint representation mismatch is served by the existing
+            // Retyped policy; the test observes its normal PARTIAL_READ/skip
+            // channel rather than pretending a graph map can reshape it.
+            structure(ids, "grids_ggd"),
+            structure(ids, "grids_ggd/grid"),
+            structure(ids, "grids_ggd/grid/space"),
+            retyped_leaf(ids, "grids_ggd/grid/space/coordinates_type"),
         ],
         events: vec![
             unit_event("time", "s", "second", UnitChangeEvidence::SentinelResolved),
@@ -679,6 +711,17 @@ fn classified_equilibrium_scope() -> IdsGraphFacts {
                 kind: "metadata_changed".to_string(),
                 old_value: Some("psi".to_string()),
                 new_value: Some(String::new()),
+                unit_change: None,
+                coordinate_evidence: None,
+            },
+            GraphEvent {
+                id: "coordinates_type:data_type:4.1.1".to_string(),
+                path: "grids_ggd/grid/space/coordinates_type".to_string(),
+                release: graph_release("4.1.1"),
+                field: "data_type".to_string(),
+                kind: "structure_changed".to_string(),
+                old_value: Some("INT_1D".to_string()),
+                new_value: Some("STRUCT_ARRAY".to_string()),
                 unit_change: None,
                 coordinate_evidence: None,
             },
@@ -735,4 +778,23 @@ fn classified_equilibrium_scope() -> IdsGraphFacts {
         }
     }
     facts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conversion::runtime_map::{MapRequest, RuntimeMapAcquirer};
+
+    #[test]
+    fn equilibrium_scope_constructs_for_the_installed_fortran_scenario() {
+        let request = MapRequest {
+            ids: "equilibrium".to_string(),
+            stored_dd: graph_release("3.39.0"),
+            hli_dd: graph_release("4.1.1"),
+        };
+
+        RuntimeMapAcquirer::new(GraphTestSource)
+            .acquire(&request)
+            .expect("the controlled equilibrium scope must build before an installed HLI uses it");
+    }
 }

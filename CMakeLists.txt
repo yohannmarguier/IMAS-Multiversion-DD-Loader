@@ -473,6 +473,62 @@ write_basic_package_version_file(
     VERSION "${PROJECT_VERSION}"
     COMPATIBILITY SameMajorVersion)
 
+# The graph-selected crate feature is test-only, but an installed HLI has to
+# discover it through the same package contract as any downstream consumer.
+# Keep that package under the build directory and behind an explicit target:
+# `cmake --install` continues to install the production XML-selected library.
+set(IMAS_MVDD_GRAPH_PACKAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/graph-package")
+set(IMAS_MVDD_GRAPH_PACKAGE_LIBRARY
+    "${IMAS_MVDD_GRAPH_PACKAGE_DIR}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}${IMAS_MVDD_LIB_NAME}${CMAKE_SHARED_LIBRARY_SUFFIX}")
+set(IMAS_MVDD_GRAPH_PACKAGE_HEADER
+    "${IMAS_MVDD_GRAPH_PACKAGE_DIR}/include/${IMAS_MVDD_LIB_NAME}.h")
+set(IMAS_MVDD_GRAPH_PACKAGE_CONFIG_DIR
+    "${IMAS_MVDD_GRAPH_PACKAGE_DIR}/${IMAS_MVDD_PACKAGE_CONFIG_DIR}")
+set(IMAS_MVDD_GRAPH_PACKAGE_CONFIG
+    "${IMAS_MVDD_GRAPH_PACKAGE_CONFIG_DIR}/${IMAS_MVDD_PACKAGE}Config.cmake")
+set(IMAS_MVDD_GRAPH_PACKAGE_VERSION
+    "${IMAS_MVDD_GRAPH_PACKAGE_CONFIG_DIR}/${IMAS_MVDD_PACKAGE}ConfigVersion.cmake")
+set(CARGO_GRAPH_PACKAGE_ARGS
+    --prefix "${IMAS_MVDD_GRAPH_PACKAGE_DIR}"
+    --libdir "${IMAS_MVDD_GRAPH_PACKAGE_DIR}/lib"
+    --includedir "${IMAS_MVDD_GRAPH_PACKAGE_DIR}/include")
+set(IMAS_MVDD_GRAPH_CARGO_PACKAGE_COMMAND
+    "${CMAKE_COMMAND}" -E env --unset=MAKEFLAGS --unset=MFLAGS --unset=IMAS_CORE_BUILD_RPATH
+    -- "${CARGO_EXECUTABLE}" cinstall ${CARGO_GRAPH_COMMON_ARGS} ${CARGO_GRAPH_PACKAGE_ARGS})
+
+add_custom_command(
+    OUTPUT
+        "${IMAS_MVDD_GRAPH_PACKAGE_LIBRARY}"
+        "${IMAS_MVDD_GRAPH_PACKAGE_HEADER}"
+        "${IMAS_MVDD_GRAPH_PACKAGE_CONFIG}"
+        "${IMAS_MVDD_GRAPH_PACKAGE_VERSION}"
+    COMMAND ${IMAS_MVDD_GRAPH_CARGO_PACKAGE_COMMAND}
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${IMAS_MVDD_GRAPH_PACKAGE_CONFIG_DIR}"
+    COMMAND "${CMAKE_COMMAND}" -E copy
+        "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}Config.cmake"
+        "${IMAS_MVDD_GRAPH_PACKAGE_CONFIG}"
+    COMMAND "${CMAKE_COMMAND}" -E copy
+        "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}ConfigVersion.cmake"
+        "${IMAS_MVDD_GRAPH_PACKAGE_VERSION}"
+    DEPENDS
+        ${IMAS_MVDD_RUST_SOURCES}
+        "${CMAKE_CURRENT_SOURCE_DIR}/build.rs"
+        "${CMAKE_CURRENT_SOURCE_DIR}/IMAS_CORE_VERSION"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cbindgen.toml"
+        "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}Config.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}ConfigVersion.cmake"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Packaging graph-selected ${IMAS_MVDD_LIB_NAME} for an installed HLI test"
+    VERBATIM)
+
+add_custom_target(imas_mvdd_graph_test_package
+    DEPENDS
+        "${IMAS_MVDD_GRAPH_PACKAGE_LIBRARY}"
+        "${IMAS_MVDD_GRAPH_PACKAGE_HEADER}"
+        "${IMAS_MVDD_GRAPH_PACKAGE_CONFIG}"
+        "${IMAS_MVDD_GRAPH_PACKAGE_VERSION}")
+
 install(FILES
         "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}Config.cmake"
         "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}ConfigVersion.cmake"
