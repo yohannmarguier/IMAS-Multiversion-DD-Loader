@@ -102,6 +102,12 @@ impl LossFileEffects for ProcessEffects {
     }
 }
 
+/// How far the first-loss filename search walks before giving up. A collision
+/// needs another log written in the same UTC second by the same process id, so
+/// the real count is zero or one; the bound exists so exhaustion is an outcome
+/// this module can report and a test can reach, not an unreachable branch.
+const MAX_FILENAME_COLLISIONS: u32 = 1_000;
+
 /// One append-only writer. Production holds one process-local instance, while
 /// tests construct fresh writers with their own state and temporary directory.
 /// Both parameters are open because both are substituted: every recoverable
@@ -186,7 +192,7 @@ impl<F: LossFileFacts, E: LossFileEffects> LossFileWriter<F, E> {
             return None;
         }
 
-        for suffix in 0_u32.. {
+        for suffix in 0..=MAX_FILENAME_COLLISIONS {
             let suffix = if suffix == 0 {
                 String::new()
             } else {
@@ -223,7 +229,12 @@ impl<F: LossFileFacts, E: LossFileEffects> LossFileWriter<F, E> {
                 }
             }
         }
-        unreachable!("the u32 suffix space cannot be exhausted")
+        self.report_failure(format_args!(
+            "could not write loss log in {}: {} names taken for this second and process",
+            directory.display(),
+            MAX_FILENAME_COLLISIONS + 1
+        ));
+        None
     }
 
     /// Reports one filesystem failure without changing an HLI call's outcome.
@@ -355,8 +366,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        LossFileEffects, LossFileEntry, LossFileFacts, LossFileWriter, ProcessEffects,
-        ProcessFacts, select_directory, utc_timestamp,
+        LossFileEffects, LossFileEntry, LossFileFacts, LossFileWriter, MAX_FILENAME_COLLISIONS,
+        ProcessEffects, ProcessFacts, select_directory, utc_timestamp,
     };
     use crate::conversion::conversion_map::Fidelity;
     use crate::loss::LossOperation;
@@ -670,6 +681,37 @@ mod tests {
         }
     }
 
+    /// Every name is taken, so the search can only exhaust its bound.
+    struct AlwaysCollides {
+        attempts: AtomicUsize,
+        diagnostics: AtomicUsize,
+    }
+
+    impl LossFileEffects for AlwaysCollides {
+        fn create_log(&self, _path: &std::path::Path) -> io::Result<std::fs::File> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            Err(io::Error::new(io::ErrorKind::AlreadyExists, "name taken"))
+        }
+
+        fn write_preamble(
+            &self,
+            _file: &mut std::fs::File,
+            _timestamp: &str,
+            _process_id: u32,
+            _entry: &LossFileEntry,
+        ) -> io::Result<()> {
+            panic!("no file was ever created")
+        }
+
+        fn append(&self, _path: &std::path::Path, _line: &str) -> io::Result<()> {
+            panic!("an exhausted search must disable delivery")
+        }
+
+        fn report_failure(&self, _message: &str) {
+            self.diagnostics.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     struct AppendFails {
         attempts: AtomicUsize,
     }
@@ -822,6 +864,33 @@ mod tests {
         assert!(writer.file_failed.load(Ordering::Relaxed));
         assert!(writer.log_path.get().is_some_and(Option::is_none));
         assert_eq!(writer.written_keys.lock().unwrap().len(), 2);
+        assert!(fs::read_dir(directory.path()).unwrap().next().is_none());
+    }
+
+    /// The suffix search is bounded, so a directory where every candidate name
+    /// collides ends in one reported failure rather than an endless retry. It
+    /// tries the bare name and every suffix once, and nothing else.
+    #[test]
+    fn an_exhausted_filename_search_reports_once_and_delivers_nothing() {
+        let directory = TestDirectory::new();
+        let writer = LossFileWriter::with_effects(
+            FixedFacts::in_directory(&directory),
+            AlwaysCollides {
+                attempts: AtomicUsize::new(0),
+                diagnostics: AtomicUsize::new(0),
+            },
+        );
+
+        writer.retain(entry());
+        writer.retain(entry());
+
+        assert_eq!(
+            writer.effects.attempts.load(Ordering::Relaxed),
+            MAX_FILENAME_COLLISIONS as usize + 1
+        );
+        assert_eq!(writer.effects.diagnostics.load(Ordering::Relaxed), 1);
+        assert!(writer.file_failed.load(Ordering::Relaxed));
+        assert!(writer.log_path.get().is_some_and(Option::is_none));
         assert!(fs::read_dir(directory.path()).unwrap().next().is_none());
     }
 
