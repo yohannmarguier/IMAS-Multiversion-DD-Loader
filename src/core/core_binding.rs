@@ -862,6 +862,27 @@ mod tests {
         }
     }
 
+    /// Both unresolvable shapes hand back the status they were built with —
+    /// the one every status-returning seam reports in IMAS-Core's place.
+    #[test]
+    fn an_unresolvable_core_reports_the_status_it_retained() {
+        let detected_version = CString::new("3.22.0").unwrap();
+        for error in [
+            ResolutionError::Unavailable(failure("no IMAS-Core here")),
+            ResolutionError::VersionMismatch {
+                status: failure("no IMAS-Core here"),
+                detected_version,
+            },
+        ] {
+            let retained = error.status();
+            assert_eq!(retained.code, -1);
+            assert_eq!(
+                unsafe { CStr::from_ptr(retained.message.as_ptr()) }.to_bytes_with_nul(),
+                b"override with $IMAS_CORE_LIBRARY if this is wrong; no IMAS-Core here\0"
+            );
+        }
+    }
+
     /// An unavailable IMAS-Core has no version and no constant table to fall
     /// back to, so each accessor reports the null every caller already checks.
     #[test]
