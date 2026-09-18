@@ -484,8 +484,8 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
                 add_endpoint_node(&mut stored_endpoint, node, &stored_metadata);
                 rules.push(TypedRule {
                     id: format!("rename:{}:{}", rename.left, rename.right),
-                    rel: Rel::Renamed,
-                    selector_stage: SelectorStage::Exact,
+                    rel: rename.rel,
+                    selector_stage: rename.selector_stage,
                     left: Some(rename.left.clone()),
                     right: Some(rename.right.clone()),
                     froms: Vec::new(),
@@ -693,6 +693,8 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
 struct DirectRename {
     left: String,
     right: String,
+    rel: Rel,
+    selector_stage: SelectorStage,
 }
 
 fn add_endpoint_node(endpoint: &mut Vec<EndpointNode>, node: &GraphNode, state: &EndpointState) {
@@ -767,7 +769,10 @@ fn direct_renames(
             if !same_representation(&older_metadata, &newer_metadata) {
                 continue;
             }
-            candidates.push((previous, newer.path.clone()));
+            let moved_parent = older_metadata.kind == GraphNodeKind::Structure
+                && newer_metadata.kind == GraphNodeKind::Structure
+                && parent_path(&previous) != parent_path(&newer.path);
+            candidates.push((previous, newer.path.clone(), moved_parent));
         }
     }
 
@@ -775,28 +780,41 @@ fn direct_renames(
     candidates.dedup();
     Ok(candidates
         .iter()
-        .filter(|(previous, newer)| {
+        .filter(|(previous, newer, _)| {
             candidates
                 .iter()
-                .filter(|(candidate_previous, _)| candidate_previous == previous)
+                .filter(|(candidate_previous, _, _)| candidate_previous == previous)
                 .count()
                 == 1
                 && candidates
                     .iter()
-                    .filter(|(_, candidate_newer)| candidate_newer == newer)
+                    .filter(|(_, candidate_newer, _)| candidate_newer == newer)
                     .count()
                     == 1
         })
-        .map(|(previous, newer)| {
+        .map(|(previous, newer, moved_parent)| {
+            let rel = if *moved_parent {
+                Rel::Moved
+            } else {
+                Rel::Renamed
+            };
+            // A parent relation does not certify every spelling below it.
+            // Each propagated descendant must have its own endpoint-backed
+            // correspondence, so moved anchors remain exact selectors too.
+            let selector_stage = SelectorStage::Exact;
             if request.hli_dd == *earlier {
                 DirectRename {
                     left: previous.clone(),
                     right: newer.clone(),
+                    rel,
+                    selector_stage,
                 }
             } else {
                 DirectRename {
                     left: newer.clone(),
                     right: previous.clone(),
+                    rel,
+                    selector_stage,
                 }
             }
         })
@@ -821,16 +839,40 @@ fn release_is_between(
 }
 
 fn normalize_previous_name(previous_name: &str, declaring_path: &str, ids: &str) -> Option<String> {
-    let previous_name = normalize_ids_path(previous_name, ids);
-    if previous_name.is_empty() || previous_name.split('/').any(|segment| segment == "..") {
-        return None;
+    let is_ids_absolute = previous_name == ids
+        || previous_name
+            .strip_prefix(ids)
+            .is_some_and(|remainder| remainder.starts_with('/'));
+    let absolute = previous_name.starts_with('/') || is_ids_absolute;
+    let previous_name = previous_name.trim_start_matches('/');
+    let previous_name = if is_ids_absolute {
+        normalize_ids_path(previous_name, ids)
+    } else {
+        previous_name.to_string()
+    };
+    let mut segments = if absolute {
+        Vec::new()
+    } else {
+        declaring_path
+            .rsplit_once('/')
+            .map_or_else(Vec::new, |(parent, _)| {
+                parent.split('/').map(str::to_string).collect()
+            })
+    };
+    for segment in previous_name.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop()?;
+            }
+            segment => segments.push(segment.to_string()),
+        }
     }
-    if previous_name.contains('/') {
-        return Some(previous_name);
-    }
-    declaring_path
-        .rsplit_once('/')
-        .map(|(parent, _)| format!("{parent}/{previous_name}"))
+    (!segments.is_empty()).then(|| segments.join("/"))
+}
+
+fn parent_path(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(parent, _)| parent)
 }
 
 fn normalize_ids_path(path: &str, ids: &str) -> String {

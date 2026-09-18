@@ -510,6 +510,164 @@ fn direct_rename_facts() -> IdsGraphFacts {
     facts
 }
 
+fn moved_parent_facts() -> IdsGraphFacts {
+    let mut facts = complete_identity_scope();
+    let release = |value| ArtifactDdVersion::new(value).expect("fixture release is valid");
+    let old_parent = "time_slice/legacy/profiles_1d";
+    let new_parent = "time_slice/current/profiles_1d";
+
+    let mut old_parent_node = node(
+        old_parent,
+        endpoint("3.39.0", GraphNodeKind::Structure, "STRUCTURE", 0),
+        endpoint("4.1.1", GraphNodeKind::Structure, "STRUCTURE", 0),
+    );
+    old_parent_node.endpoints.truncate(1);
+    old_parent_node.removed = vec![release("4.0.0")];
+
+    let mut new_parent_node = node(
+        new_parent,
+        endpoint("3.39.0", GraphNodeKind::Structure, "STRUCTURE", 0),
+        endpoint("4.1.1", GraphNodeKind::Structure, "STRUCTURE", 0),
+    );
+    new_parent_node.endpoints.remove(0);
+    new_parent_node
+        .endpoints
+        .push(endpoint("4.0.0", GraphNodeKind::Structure, "STRUCTURE", 0));
+    new_parent_node.introduced = vec![release("4.0.0")];
+    new_parent_node.rename_declarations = vec![GraphRename {
+        release: release("4.0.0"),
+        previous_name: "../legacy/profiles_1d".to_string(),
+    }];
+
+    let old_gap = format!("{old_parent}/gap");
+    let new_gap = format!("{new_parent}/gap");
+    let mut old_gap_node = node(
+        &old_gap,
+        endpoint("3.39.0", GraphNodeKind::Structure, "STRUCTURE", 0),
+        endpoint("4.1.1", GraphNodeKind::Structure, "STRUCTURE", 0),
+    );
+    old_gap_node.endpoints.truncate(1);
+    old_gap_node.removed = vec![release("4.0.0")];
+    let mut new_gap_node = node(
+        &new_gap,
+        endpoint("3.39.0", GraphNodeKind::Structure, "STRUCTURE", 0),
+        endpoint("4.1.1", GraphNodeKind::Structure, "STRUCTURE", 0),
+    );
+    new_gap_node.endpoints.remove(0);
+    new_gap_node
+        .endpoints
+        .push(endpoint("4.0.0", GraphNodeKind::Structure, "STRUCTURE", 0));
+    new_gap_node.introduced = vec![release("4.0.0")];
+    new_gap_node.rename_declarations = vec![GraphRename {
+        release: release("4.0.0"),
+        previous_name: "../../legacy/profiles_1d/gap".to_string(),
+    }];
+
+    let old_r = format!("{old_parent}/gap/r");
+    let new_r = format!("{new_parent}/gap/r");
+    let mut old_r_node = node(
+        &old_r,
+        endpoint("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1),
+        endpoint("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1),
+    );
+    old_r_node.endpoints.truncate(1);
+    old_r_node.removed = vec![release("4.0.0")];
+    let mut new_r_node = node(
+        &new_r,
+        endpoint("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1),
+        endpoint("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1),
+    );
+    new_r_node.endpoints.remove(0);
+    new_r_node
+        .endpoints
+        .push(endpoint("4.0.0", GraphNodeKind::Leaf, "FLT_1D", 1));
+    new_r_node.introduced = vec![release("4.0.0")];
+    new_r_node.rename_declarations = vec![GraphRename {
+        release: release("4.0.0"),
+        previous_name: "../../../legacy/profiles_1d/gap/r".to_string(),
+    }];
+
+    let old_identifier = format!("{old_parent}/gap/identifier");
+    let mut old_identifier_node = node(
+        &old_identifier,
+        endpoint("3.39.0", GraphNodeKind::Leaf, "STR_0D", 0),
+        endpoint("4.1.1", GraphNodeKind::Leaf, "STR_0D", 0),
+    );
+    old_identifier_node.endpoints.truncate(1);
+    old_identifier_node.removed = vec![release("4.0.0")];
+
+    let old_escaping = format!("{old_parent}/escaped");
+    let new_escaping = "time_slice/outside/escaped";
+    let mut old_escaping_node = node(
+        &old_escaping,
+        endpoint("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1),
+        endpoint("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1),
+    );
+    old_escaping_node.endpoints.truncate(1);
+    old_escaping_node.removed = vec![release("4.0.0")];
+    let mut new_escaping_node = node(
+        new_escaping,
+        endpoint("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1),
+        endpoint("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1),
+    );
+    new_escaping_node.endpoints.remove(0);
+    new_escaping_node
+        .endpoints
+        .push(endpoint("4.0.0", GraphNodeKind::Leaf, "FLT_1D", 1));
+    new_escaping_node.introduced = vec![release("4.0.0")];
+    new_escaping_node.rename_declarations = vec![GraphRename {
+        release: release("4.0.0"),
+        previous_name: "../legacy/profiles_1d/escaped".to_string(),
+    }];
+
+    let mut escaped_root_node = node(
+        "time_slice/current/profiles_1d/unsafe",
+        endpoint("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1),
+        endpoint("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1),
+    );
+    escaped_root_node.endpoints.remove(0);
+    escaped_root_node
+        .endpoints
+        .push(endpoint("4.0.0", GraphNodeKind::Leaf, "FLT_1D", 1));
+    escaped_root_node.introduced = vec![release("4.0.0")];
+    escaped_root_node.rename_declarations = vec![GraphRename {
+        release: release("4.0.0"),
+        previous_name: "../../../../outside".to_string(),
+    }];
+
+    facts.nodes.extend([
+        old_parent_node,
+        new_parent_node,
+        old_gap_node,
+        new_gap_node,
+        old_r_node,
+        new_r_node,
+        old_identifier_node,
+        old_escaping_node,
+        new_escaping_node,
+        escaped_root_node,
+    ]);
+    facts.successors.extend([
+        GraphSuccessor {
+            from_path: old_parent.to_string(),
+            to_path: new_parent.to_string(),
+        },
+        GraphSuccessor {
+            from_path: old_r,
+            to_path: new_r,
+        },
+        GraphSuccessor {
+            from_path: old_gap,
+            to_path: new_gap,
+        },
+        GraphSuccessor {
+            from_path: old_escaping,
+            to_path: new_escaping.to_string(),
+        },
+    ]);
+    facts
+}
+
 fn request() -> MapRequest {
     MapRequest {
         ids: "equilibrium".to_string(),
@@ -1251,6 +1409,79 @@ fn acquisition_emits_an_evidenced_direct_rename_in_both_directions() {
     assert_eq!(
         forward.resolve("not/from/the/complete/scope", Direction::Forward),
         None
+    );
+}
+
+#[test]
+fn acquisition_moves_a_parent_without_hiding_its_child_exceptions() {
+    let facts = moved_parent_facts();
+    let forward = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(facts.clone()),
+    })
+    .acquire(&request())
+    .expect("the moved parent has complete endpoint evidence");
+    let reverse = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&MapRequest {
+            ids: "equilibrium".to_string(),
+            stored_dd: ArtifactDdVersion::new("4.1.1").expect("fixture release is valid"),
+            hli_dd: ArtifactDdVersion::new("3.39.0").expect("fixture release is valid"),
+        })
+        .expect("the inverse request keeps the same child evidence");
+
+    let parent = forward
+        .resolve("time_slice/current/profiles_1d", Direction::Forward)
+        .expect("the moved parent must be claimed");
+    assert_eq!(parent.rel, Some(Rel::Moved));
+    assert!(matches!(
+        parent.outcome,
+        Outcome::Path { ref resolved_path, .. }
+            if resolved_path == "time_slice/legacy/profiles_1d"
+    ));
+
+    let surviving_child = forward
+        .resolve("time_slice/current/profiles_1d/gap/r", Direction::Forward)
+        .expect("the surviving child must be claimed");
+    assert_eq!(surviving_child.fidelity, Fidelity::Exact);
+    assert!(matches!(
+        surviving_child.outcome,
+        Outcome::Path { ref resolved_path, .. }
+            if resolved_path == "time_slice/legacy/profiles_1d/gap/r"
+    ));
+
+    assert_eq!(
+        reverse
+            .resolve(
+                "time_slice/legacy/profiles_1d/gap/identifier",
+                Direction::Forward
+            )
+            .expect("the missing child must be claimed rather than inherited")
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+
+    assert!(matches!(
+        reverse
+            .resolve("time_slice/legacy/profiles_1d/escaped", Direction::Forward)
+            .expect("the escaping child must be claimed")
+            .outcome,
+        Outcome::Path { ref resolved_path, .. }
+            if resolved_path == "time_slice/outside/escaped"
+    ));
+
+    assert_eq!(
+        forward
+            .resolve("time_slice/current/profiles_1d/unsafe", Direction::Forward)
+            .expect("an IDS-root escape remains explicitly unresolved")
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+    assert_eq!(
+        forward.resolve(
+            "time_slice/current/profiles_1d/unrecorded_descendant",
+            Direction::Forward,
+        ),
+        None,
+        "a parent move cannot manufacture an unrecorded descendant"
     );
 }
 

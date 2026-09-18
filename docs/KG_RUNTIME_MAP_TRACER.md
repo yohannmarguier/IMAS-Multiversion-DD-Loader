@@ -236,3 +236,33 @@ clippy --all-targets --features graph-test-source -- -D warnings`, then
 `ctest --test-dir build-issue225 --output-on-failure` (234 passed). The live
 Neo4j, real-Core and HLI completion obligations remain outside this controlled
 tracer ticket.
+
+## Moved descendants, exceptions and per-field fidelity (#218)
+
+The runtime adapter now normalizes every non-absolute NBC previous name from
+the declaring node's parent, segment by segment. `..` may walk only within the
+IDS root; an escaping declaration never forms a correspondence. An evidenced
+structure relation whose parent changes becomes an exact `Moved` rule, while
+an ordinary direct relation remains an exact `Renamed` rule. A move never
+creates a wildcard suffix mapping: every descendant needs its own
+endpoint-backed correspondence. That preserves an independently evidenced
+child, an unresolved one-sided child, and a child that escapes the parent's
+target subtree.
+
+The controlled source supplies both a synthetic `moved_descendants` IDS and a
+graph-derived declaration of `boundary_separatrix/gap` → `boundary/gap`.
+Nested C ABI scenarios prove relative arraystruct opening, relative reads,
+independent absolute field/timebase writes, and deletes in 4.1.1 → 3.39.0;
+the reverse direction proves the existing escaping-subtree delete refusal.
+The graph `gap/r` read retains the XML fixture's stored path, payload and
+success status but has exact fidelity and no loss entry, while the XML suite
+continues to assert its inherited `LOSSY` loss separately. `gap/identifier`
+and an IDS-root-escaping declaration remain `UNMAPPABLE` rather than becoming
+absent or inheriting parent support.
+
+Verified with `cargo fmt --check`, `cargo test --features graph-test-source
+runtime_map --lib` (40 passed, one pinned-live-graph test ignored), `cargo
+clippy --all-targets --features graph-test-source -- -D warnings`, and the
+recording-stub CMake profile's seam-named moved/fidelity C ABI scenarios. This does
+not add multi-release reconstruction, candidate anchors or a scientific
+transformation; those remain the bounded work of #219 and #224.
