@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use super::conversion_map::{
     ArtifactDdVersion, CocosConvention, ConversionMap, EndpointInventory, EndpointNode,
     EndpointNodeKind, Fidelity, LoadError, Rel, SelectorStage, Side, TypedConversionMap,
-    TypedRedefine, TypedRule, TypedSignFlip,
+    TypedFromEntry, TypedRedefine, TypedRule, TypedSignFlip,
 };
 
 #[cfg(feature = "graph-test-source")]
@@ -469,14 +469,30 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
         let hli = graph_side(&facts.versions, &request.hli_dd, attempt)?;
         let stored = graph_side(&facts.versions, &request.stored_dd, attempt)?;
         let direct_renames = direct_renames(&facts, request, attempt)?;
+        let coexistence = coexistence_plans(&facts, request, attempt)?;
+        let coexistence_paths = coexistence.paths.clone();
         validate_coordinate_scope(&facts, &request.hli_dd, &request.stored_dd, attempt)?;
-        let mut rules = Vec::with_capacity(facts.nodes.len());
+        let mut rules = coexistence.rules;
         let mut hli_endpoint = Vec::with_capacity(facts.nodes.len());
         let mut stored_endpoint = Vec::with_capacity(facts.nodes.len());
         let mut redefines = Vec::new();
         let mut sign_flips = Vec::new();
         let mut endpoint_evidence_complete = true;
         let mut retyped_anchors = Vec::new();
+        for node in &facts.nodes {
+            if coexistence_paths.contains(&node.path) {
+                add_endpoint_node(
+                    &mut hli_endpoint,
+                    node,
+                    &replay_endpoint(&facts, node, &request.hli_dd)?,
+                );
+                add_endpoint_node(
+                    &mut stored_endpoint,
+                    node,
+                    &replay_endpoint(&facts, node, &request.stored_dd)?,
+                );
+            }
+        }
         for node in &facts.nodes {
             attempt
                 .check(AcquisitionStage::RuleConstruction)
@@ -508,6 +524,9 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
                 })?;
             let hli_metadata = replay_endpoint(&facts, node, &request.hli_dd)?;
             let stored_metadata = replay_endpoint(&facts, node, &request.stored_dd)?;
+            if coexistence_paths.contains(&node.path) {
+                continue;
+            }
             if let Some(rename) = direct_renames
                 .iter()
                 .find(|rename| rename.left == node.path)
@@ -759,6 +778,175 @@ struct DirectRename {
 struct EndpointRole {
     path: String,
     interval_start: ArtifactDdVersion,
+}
+
+struct CoexistencePlan {
+    rules: Vec<TypedRule>,
+    paths: HashSet<String>,
+}
+
+/// Builds a candidate plan only when a dated predecessor declaration and its
+/// successor witness establish exactly one spelling on one endpoint and both
+/// spellings on the other. The successor's date fixes precedence; graph row
+/// order and similar names are never consulted.
+fn coexistence_plans(
+    facts: &IdsGraphFacts,
+    request: &MapRequest,
+    attempt: &AcquisitionAttempt,
+) -> Result<CoexistencePlan, AcquisitionFailure> {
+    let (earlier, later) = chronological_endpoints(request);
+    let nodes: HashMap<_, _> = facts
+        .nodes
+        .iter()
+        .map(|node| (node.path.as_str(), node))
+        .collect();
+    let mut rules = Vec::new();
+    let mut paths = HashSet::new();
+
+    for successor in &facts.nodes {
+        for declaration in &successor.rename_declarations {
+            attempt
+                .check(AcquisitionStage::RuleConstruction)
+                .map_err(|expired| AcquisitionFailure::TimedOut {
+                    stage: expired.stage,
+                })?;
+            if numeric_release(&declaration.release) < numeric_release(earlier)
+                || numeric_release(&declaration.release) > numeric_release(later)
+            {
+                continue;
+            }
+            let Some(predecessor_path) =
+                normalize_previous_name(&declaration.previous_name, &successor.path, &request.ids)
+            else {
+                continue;
+            };
+            let Some(predecessor) = nodes.get(predecessor_path.as_str()) else {
+                continue;
+            };
+            if !facts.successors.iter().any(|edge| {
+                normalize_ids_path(&edge.from_path, &request.ids) == predecessor_path
+                    && normalize_ids_path(&edge.to_path, &request.ids) == successor.path
+            }) {
+                continue;
+            }
+
+            let EndpointState::Present {
+                metadata: predecessor_at_start,
+                ..
+            } = replay_endpoint(facts, predecessor, earlier)?
+            else {
+                continue;
+            };
+            let EndpointState::Present {
+                metadata: successor_at_end,
+                ..
+            } = replay_endpoint(facts, successor, later)?
+            else {
+                continue;
+            };
+            // A path-only candidate is valid only when all the representation
+            // facts it carries are identical. COCOS evidence deliberately
+            // fails this check until candidate-specific transforms are built.
+            let history_is_servable = same_representation(&predecessor_at_start, &successor_at_end);
+
+            let predecessor_hli = replay_endpoint(facts, predecessor, &request.hli_dd)?;
+            let successor_hli = replay_endpoint(facts, successor, &request.hli_dd)?;
+            let predecessor_stored = replay_endpoint(facts, predecessor, &request.stored_dd)?;
+            let successor_stored = replay_endpoint(facts, successor, &request.stored_dd)?;
+            let hli_count = usize::from(matches!(predecessor_hli, EndpointState::Present { .. }))
+                + usize::from(matches!(successor_hli, EndpointState::Present { .. }));
+            let stored_count =
+                usize::from(matches!(predecessor_stored, EndpointState::Present { .. }))
+                    + usize::from(matches!(successor_stored, EndpointState::Present { .. }));
+            if !matches!((hli_count, stored_count), (1, 2) | (2, 1)) {
+                continue;
+            }
+            if !history_is_servable {
+                return Err(invalid_node(
+                    successor,
+                    "a coexistence correspondence lacks a servable value representation",
+                ));
+            }
+
+            let (sole_endpoint, candidate_endpoints) = if hli_count == 1 {
+                (
+                    (&predecessor_hli, &successor_hli),
+                    [&predecessor_stored, &successor_stored],
+                )
+            } else {
+                (
+                    (&predecessor_stored, &successor_stored),
+                    [&predecessor_hli, &successor_hli],
+                )
+            };
+            let sole_metadata = match sole_endpoint {
+                (EndpointState::Present { metadata, .. }, EndpointState::Absent)
+                | (EndpointState::Absent, EndpointState::Present { metadata, .. }) => metadata,
+                _ => unreachable!("one coexistence side has exactly one endpoint"),
+            };
+            if candidate_endpoints
+                .iter()
+                .filter_map(|state| match state {
+                    EndpointState::Present { metadata, .. } => Some(metadata),
+                    EndpointState::Absent => None,
+                    EndpointState::Unanchored => None,
+                })
+                .any(|candidate| !same_representation(sole_metadata, candidate))
+            {
+                return Err(invalid_node(
+                    successor,
+                    "an endpoint-valid coexistence candidate lacks a servable representation",
+                ));
+            }
+
+            let froms = vec![
+                TypedFromEntry {
+                    path: successor.path.clone(),
+                    precedence: 1,
+                },
+                TypedFromEntry {
+                    path: predecessor_path.clone(),
+                    precedence: 2,
+                },
+            ];
+            let rule = if hli_count == 1 {
+                let left = if matches!(successor_hli, EndpointState::Present { .. }) {
+                    successor.path.clone()
+                } else {
+                    predecessor_path.clone()
+                };
+                TypedRule {
+                    id: format!("coexistence-split:{predecessor_path}:{}", successor.path),
+                    rel: Rel::Split,
+                    selector_stage: SelectorStage::Exact,
+                    left: Some(left),
+                    right: None,
+                    froms,
+                    fidelity_forward: Fidelity::Exact,
+                    fidelity_reverse: Fidelity::Exact,
+                }
+            } else {
+                let right = if matches!(successor_stored, EndpointState::Present { .. }) {
+                    successor.path.clone()
+                } else {
+                    predecessor_path.clone()
+                };
+                TypedRule {
+                    id: format!("coexistence-merged:{predecessor_path}:{}", successor.path),
+                    rel: Rel::Merged,
+                    selector_stage: SelectorStage::Exact,
+                    left: None,
+                    right: Some(right),
+                    froms,
+                    fidelity_forward: Fidelity::Exact,
+                    fidelity_reverse: Fidelity::Exact,
+                }
+            };
+            paths.extend([predecessor_path, successor.path.clone()]);
+            rules.push(rule);
+        }
+    }
+    Ok(CoexistencePlan { rules, paths })
 }
 
 fn add_endpoint_node(endpoint: &mut Vec<EndpointNode>, node: &GraphNode, state: &EndpointState) {

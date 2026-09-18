@@ -27,6 +27,7 @@ impl GraphFactsSource for GraphTestSource {
     ) -> Result<IdsGraphFacts, GraphSourceError> {
         match ids {
             "equilibrium" => Ok(classified_equilibrium_scope()),
+            "coexisting_equilibrium" => Ok(coexisting_equilibrium_scope()),
             "moved_descendants" => Ok(moved_descendants_scope()),
             "pulse_schedule" => Ok(pulse_schedule_historical_scope()),
             // This source becomes unavailable after one completed scope. The
@@ -405,6 +406,91 @@ fn pulse_schedule_historical_scope() -> IdsGraphFacts {
             GraphSuccessor {
                 from_path: "ec/launcher/steering_angle_pol".to_string(),
                 to_path: "ec/beam/steering_angle_pol".to_string(),
+            },
+        ],
+    }
+}
+
+fn coexisting_rename_pair(
+    ids: &str,
+    predecessor_path: &str,
+    successor_path: &str,
+) -> [GraphNode; 2] {
+    let mut predecessor = leaf(ids, predecessor_path);
+    predecessor.endpoints.truncate(1);
+    predecessor.endpoints.push(EndpointMetadata {
+        release: graph_release("3.42.0"),
+        kind: GraphNodeKind::Leaf,
+        data_type: "FLT_1D".to_string(),
+        ndim: 1,
+        unit: None,
+        timebase_path: Some("time".to_string()),
+        coordinate_paths: vec!["time".to_string()],
+        cocos_label_transformation: None,
+        cocos_transformation_expression: None,
+        cocos_label_source: None,
+    });
+    predecessor.removed = vec![graph_release("4.0.0")];
+
+    let mut successor = leaf(ids, successor_path);
+    successor.endpoints.remove(0);
+    successor.endpoints.push(EndpointMetadata {
+        release: graph_release("3.42.0"),
+        kind: GraphNodeKind::Leaf,
+        data_type: "FLT_1D".to_string(),
+        ndim: 1,
+        unit: None,
+        timebase_path: Some("time".to_string()),
+        coordinate_paths: vec!["time".to_string()],
+        cocos_label_transformation: None,
+        cocos_transformation_expression: None,
+        cocos_label_source: None,
+    });
+    successor.introduced = vec![graph_release("3.42.0")];
+    successor.rename_declarations = vec![GraphRename {
+        release: graph_release("3.42.0"),
+        previous_name: predecessor_path
+            .rsplit_once('/')
+            .map_or(predecessor_path, |(_, name)| name)
+            .to_string(),
+    }];
+    [predecessor, successor]
+}
+
+fn coexisting_equilibrium_scope() -> IdsGraphFacts {
+    let ids = "coexisting_equilibrium";
+    let j_predecessor = "time_slice/constraints/j_tor";
+    let j_successor = "time_slice/constraints/j_phi";
+    let b_predecessor = "time_slice/global_quantities/magnetic_axis/b_field_tor";
+    let b_successor = "time_slice/global_quantities/magnetic_axis/b_field_phi";
+    let [j_tor, j_phi] = coexisting_rename_pair(ids, j_predecessor, j_successor);
+    let [b_field_tor, b_field_phi] = coexisting_rename_pair(ids, b_predecessor, b_successor);
+    IdsGraphFacts {
+        complete: true,
+        versions: ["3.39.0", "3.42.0", "4.0.0", "4.1.1"]
+            .into_iter()
+            .map(|release| GraphVersion {
+                release: graph_release(release),
+                cocos: None,
+            })
+            .collect(),
+        nodes: vec![
+            leaf(ids, "time"),
+            leaf(ids, "ids_properties/version_put/data_dictionary"),
+            j_tor,
+            j_phi,
+            b_field_tor,
+            b_field_phi,
+        ],
+        events: Vec::new(),
+        successors: vec![
+            GraphSuccessor {
+                from_path: j_predecessor.to_string(),
+                to_path: j_successor.to_string(),
+            },
+            GraphSuccessor {
+                from_path: b_predecessor.to_string(),
+                to_path: b_successor.to_string(),
             },
         ],
     }
