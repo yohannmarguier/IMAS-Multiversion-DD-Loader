@@ -23,6 +23,89 @@ static void arm_reentrant_read(const char *field) {
     arm(al_read_data, field);
 }
 
+static int open_coexisting_equilibrium(void) {
+    return open_mismatched_occurrence("coexisting_equilibrium", NULL);
+}
+
+static void scenario_coexistence_read_falls_back_to_the_predecessor(void) {
+    int operation_ctx = open_coexisting_equilibrium();
+    void *read_data = NULL;
+    int read_size[1] = {0};
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+
+    CHECK_OK(al_read_data(operation_ctx, "time_slice/constraints/j_phi", "time", &read_data,
+                          IMAS_DOUBLE_DATA, 1, read_size));
+    CHECK(read_data != NULL);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 2);
+    CHECK(strcmp(string_from_stub("recording_stub_read_field"),
+                 "time_slice/constraints/j_tor") == 0);
+    check_no_loss_entry(operation_ctx);
+
+    printf("graph_runtime_map_test coexistence-read-falls-back-to-the-predecessor: a graph "
+           "candidate plan tried j_phi then j_tor\n");
+}
+
+static void scenario_coexistence_write_uses_primary_and_records_the_skipped_path(void) {
+    int operation_ctx = open_coexisting_equilibrium();
+    double value = 42.0;
+    int size[1] = {1};
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+
+    CHECK_OK(al_write_data(operation_ctx, "time_slice/constraints/j_phi", "time", &value,
+                           IMAS_DOUBLE_DATA, 1, size));
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before + 1);
+    CHECK(strcmp(string_from_stub("recording_stub_write_field"),
+                 "time_slice/constraints/j_phi") == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_write_timebase"), "time") == 0);
+    check_loss_at(operation_ctx, 0, "time_slice/constraints/j_tor",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    printf("graph_runtime_map_test coexistence-write-uses-primary-and-records-the-skipped-path: "
+           "the write did not fan out\n");
+}
+
+static void scenario_coexistence_reverse_write_refuses_the_non_primary_source(void) {
+    int operation_ctx = open_coexisting_equilibrium();
+    double value = 42.0;
+    int size[1] = {1};
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    al_status_t status =
+        al_write_data(operation_ctx, "time_slice/constraints/j_tor", "time", &value,
+                      IMAS_DOUBLE_DATA, 1, size);
+
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status,
+                          "this path is a non-primary source and cannot write a shared stored slot",
+                          "time_slice/constraints/j_tor", "3.42.0", "4.1.1");
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    check_loss_at(operation_ctx, 0, "time_slice/constraints/j_tor",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    printf("graph_runtime_map_test coexistence-reverse-write-refuses-the-non-primary-source: "
+           "the shared stored slot cannot be overwritten through j_tor\n");
+}
+
+static void scenario_coexistence_delete_visits_every_candidate_in_order(void) {
+    int operation_ctx = open_coexisting_equilibrium();
+    int deletes_before = int_from_stub("recording_stub_delete_call_count");
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+
+    CHECK_OK(al_delete_data(operation_ctx, "time_slice/constraints/j_phi"));
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 2);
+    CHECK(strcmp(string_at_from_stub("recording_stub_delete_path_at", deletes_before),
+                 "time_slice/constraints/j_phi") == 0);
+    CHECK(strcmp(string_at_from_stub("recording_stub_delete_path_at", deletes_before + 1),
+                 "time_slice/constraints/j_tor") == 0);
+    check_loss_at(operation_ctx, 0, "time_slice/constraints/j_phi",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_DELETE);
+    check_loss_at(operation_ctx, 1, "time_slice/constraints/j_tor",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_DELETE);
+
+    printf("graph_runtime_map_test coexistence-delete-visits-every-candidate-in-order: "
+           "candidate deletion used no presence probe\n");
+}
+
 static void scenario_identity_operations(void) {
     int operation_ctx = open_mismatched_equilibrium();
     void *read_data = NULL;
@@ -835,6 +918,14 @@ static void scenario_missing_cocos_refuses_only_the_affected_operations(void) {
 }
 
 static const shim_test_scenario SCENARIOS[] = {
+    {"coexistence-read-falls-back-to-the-predecessor",
+     scenario_coexistence_read_falls_back_to_the_predecessor},
+    {"coexistence-write-uses-primary-and-records-the-skipped-path",
+     scenario_coexistence_write_uses_primary_and_records_the_skipped_path},
+    {"coexistence-reverse-write-refuses-the-non-primary-source",
+     scenario_coexistence_reverse_write_refuses_the_non_primary_source},
+    {"coexistence-delete-visits-every-candidate-in-order",
+     scenario_coexistence_delete_visits_every_candidate_in_order},
     {"identity-operations", scenario_identity_operations},
     {"renamed-read-hli-new", scenario_renamed_read_hli_new},
     {"renamed-read-hli-old", scenario_renamed_read_hli_old},

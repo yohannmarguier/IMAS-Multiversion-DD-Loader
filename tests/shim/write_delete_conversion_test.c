@@ -18,13 +18,8 @@ static al_status_t write_field(int ctx_id, const char *field, const char *timeba
     return al_write_data(ctx_id, field, timebase, data, IMAS_DOUBLE_DATA, 1, size);
 }
 
-typedef const char *(*delete_path_at_fn)(int);
 typedef int (*data_event_kind_at_fn)(int);
 typedef const char *(*data_event_path_at_fn)(int);
-
-static const char *delete_path_at(int index) {
-    return ((delete_path_at_fn)stub_symbol_or_die("recording_stub_delete_path_at"))(index);
-}
 
 static int data_event_kind_at(int index) {
     return ((data_event_kind_at_fn)stub_symbol_or_die("recording_stub_data_event_kind_at"))(index);
@@ -658,15 +653,19 @@ static void scenario_delete_fans_out_over_candidates_in_declared_order(void) {
 
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 3);
-    CHECK(strcmp(delete_path_at(deletes_before), "time_slice/profiles_2d/b_field_phi") == 0);
-    CHECK(strcmp(delete_path_at(deletes_before + 1), "time_slice/profiles_2d/b_field_tor") ==
+    CHECK(strcmp(string_at_from_stub("recording_stub_delete_path_at", deletes_before),
+                 "time_slice/profiles_2d/b_field_phi") == 0);
+    CHECK(strcmp(string_at_from_stub("recording_stub_delete_path_at", deletes_before + 1),
+                 "time_slice/profiles_2d/b_field_tor") ==
           0);
-    CHECK(strcmp(delete_path_at(deletes_before + 2), "time_slice/profiles_2d/b_tor") == 0);
+    CHECK(strcmp(string_at_from_stub("recording_stub_delete_path_at", deletes_before + 2),
+                 "time_slice/profiles_2d/b_tor") == 0);
     CHECK(int_from_stub("recording_stub_data_event_count") == events_before + 3);
     for (int index = 0; index < 3; ++index) {
         CHECK(data_event_kind_at(events_before + index) == IMAS_MVDD_STUB_DATA_EVENT_DELETE);
         CHECK(strcmp(data_event_path_at(events_before + index),
-                     delete_path_at(deletes_before + index)) == 0);
+                     string_at_from_stub("recording_stub_delete_path_at", deletes_before + index)) ==
+          0);
     }
     CHECK(loss_count(operation_ctx) == 3);
     check_loss_at(operation_ctx, 0, "time_slice/profiles_2d/b_field_phi",
@@ -701,10 +700,13 @@ static void scenario_delete_reports_a_failure_and_continues(void) {
           0);
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 3);
-    CHECK(strcmp(delete_path_at(deletes_before), "time_slice/profiles_2d/b_field_phi") == 0);
-    CHECK(strcmp(delete_path_at(deletes_before + 1), "time_slice/profiles_2d/b_field_tor") ==
+    CHECK(strcmp(string_at_from_stub("recording_stub_delete_path_at", deletes_before),
+                 "time_slice/profiles_2d/b_field_phi") == 0);
+    CHECK(strcmp(string_at_from_stub("recording_stub_delete_path_at", deletes_before + 1),
+                 "time_slice/profiles_2d/b_field_tor") ==
           0);
-    CHECK(strcmp(delete_path_at(deletes_before + 2), "time_slice/profiles_2d/b_tor") == 0);
+    CHECK(strcmp(string_at_from_stub("recording_stub_delete_path_at", deletes_before + 2),
+                 "time_slice/profiles_2d/b_tor") == 0);
     CHECK(loss_count(operation_ctx) == 3);
     check_loss_at(operation_ctx, 0, "time_slice/profiles_2d/b_field_phi",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_DELETE);

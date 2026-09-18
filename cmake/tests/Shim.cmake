@@ -320,6 +320,23 @@ add_stub_test(graph-runtime-map-reverse-identity-operations
     graph_runtime_map_test identity-operations
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
+add_stub_test(read-graph-runtime-map-coexistence-falls-back-to-predecessor
+    graph_runtime_map_test coexistence-read-falls-back-to-the-predecessor
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.42.0
+    ENV "RECORDING_STUB_READ_NOT_FOUND_FIELD=time_slice/constraints/j_phi")
+add_stub_test(write-graph-runtime-map-coexistence-uses-primary-and-records-skipped-path
+    graph_runtime_map_test coexistence-write-uses-primary-and-records-the-skipped-path
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.42.0)
+add_stub_test(write-graph-runtime-map-coexistence-reverse-refuses-non-primary-source
+    graph_runtime_map_test coexistence-reverse-write-refuses-the-non-primary-source
+    HLI_DD_VERSION 3.42.0
+    STAMP_VERSION 4.1.1)
+add_stub_test(delete-graph-runtime-map-coexistence-visits-every-candidate-in-order
+    graph_runtime_map_test coexistence-delete-visits-every-candidate-in-order
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.42.0)
 add_stub_test(read-graph-runtime-map-renamed-hli-new
     graph_runtime_map_test renamed-read-hli-new
     HLI_DD_VERSION 4.1.1

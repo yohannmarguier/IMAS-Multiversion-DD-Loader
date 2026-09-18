@@ -541,6 +541,52 @@ fn direct_rename_facts() -> IdsGraphFacts {
     facts
 }
 
+fn coexistence_facts() -> IdsGraphFacts {
+    let mut facts = complete_identity_scope();
+    facts.versions.insert(1, version("3.42.0", Some("11")));
+
+    let mut predecessor = node(
+        "time_slice/constraints/j_tor",
+        endpoint("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1),
+        endpoint("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1),
+    );
+    predecessor.endpoints.truncate(1);
+    predecessor
+        .endpoints
+        .push(endpoint("3.42.0", GraphNodeKind::Leaf, "FLT_1D", 1));
+    predecessor.removed = vec![ArtifactDdVersion::new("4.0.0").expect("fixture release is valid")];
+
+    let mut successor = node(
+        "time_slice/constraints/j_phi",
+        endpoint("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1),
+        endpoint("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1),
+    );
+    successor.endpoints.remove(0);
+    successor
+        .endpoints
+        .push(endpoint("3.42.0", GraphNodeKind::Leaf, "FLT_1D", 1));
+    successor.introduced =
+        vec![ArtifactDdVersion::new("3.42.0").expect("fixture release is valid")];
+    successor.rename_declarations.push(GraphRename {
+        release: ArtifactDdVersion::new("3.42.0").expect("fixture release is valid"),
+        previous_name: "j_tor".to_string(),
+    });
+    facts.nodes.extend([predecessor, successor]);
+    facts.successors.push(GraphSuccessor {
+        from_path: "time_slice/constraints/j_tor".to_string(),
+        to_path: "time_slice/constraints/j_phi".to_string(),
+    });
+    facts
+}
+
+fn request_between(stored: &str, hli: &str) -> MapRequest {
+    MapRequest {
+        ids: "equilibrium".to_string(),
+        stored_dd: ArtifactDdVersion::new(stored).expect("fixture release is valid"),
+        hli_dd: ArtifactDdVersion::new(hli).expect("fixture release is valid"),
+    }
+}
+
 fn moved_parent_facts() -> IdsGraphFacts {
     let mut facts = complete_identity_scope();
     let release = |value| ArtifactDdVersion::new(value).expect("fixture release is valid");
@@ -1831,6 +1877,65 @@ fn acquisition_leaves_a_coexisting_rename_declaration_as_two_endpoint_rules() {
     explanation.outcome,
     Outcome::Path { ref resolved_path, .. }
         if resolved_path == "time_slice/global_quantities/beta_tor_norm"
+    ));
+}
+
+#[test]
+fn acquisition_uses_successor_first_candidates_only_at_the_coexisting_endpoint() {
+    let facts = coexistence_facts();
+    let coexistence = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(facts.clone()),
+    })
+    .acquire(&request_between("3.42.0", "4.1.1"))
+    .expect("the established coexistence must construct a map");
+    let explanation = coexistence
+        .resolve("time_slice/constraints/j_phi", Direction::Forward)
+        .expect("the successor must be claimed");
+    assert_eq!(explanation.rel, Some(Rel::Split));
+    let Outcome::Path { candidates, .. } = explanation.outcome else {
+        panic!("a coexistence must resolve to a candidate plan");
+    };
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|candidate| (candidate.path.as_str(), candidate.precedence))
+            .collect::<Vec<_>>(),
+        vec![
+            ("time_slice/constraints/j_phi", 1),
+            ("time_slice/constraints/j_tor", 2),
+        ]
+    );
+
+    let one_to_one = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request_between("3.39.0", "4.1.1"))
+        .expect("the non-coexisting endpoint must construct a map");
+    assert_eq!(
+        one_to_one
+            .resolve("time_slice/constraints/j_phi", Direction::Forward)
+            .expect("the successor must be claimed")
+            .rel,
+        Some(Rel::Renamed)
+    );
+}
+
+#[test]
+fn acquisition_rejects_a_coexistence_candidate_without_servable_value_evidence() {
+    let mut facts = coexistence_facts();
+    for node in facts
+        .nodes
+        .iter_mut()
+        .filter(|node| node.path.starts_with("time_slice/constraints/j_"))
+    {
+        for endpoint in &mut node.endpoints {
+            endpoint.cocos_label_transformation = Some("unproven".to_string());
+        }
+    }
+
+    assert!(matches!(
+        RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+            .acquire(&request_between("3.42.0", "4.1.1")),
+        Err(AcquisitionFailure::InvalidNode { ref path, .. })
+            if path == "time_slice/constraints/j_phi"
     ));
 }
 
