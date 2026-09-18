@@ -214,6 +214,50 @@ static void scenario_write_unit_refusal_preserves_caller_data_without_forwarding
            "known scale-or-offset path refused before Core or caller-buffer mutation\n");
 }
 
+static void scenario_timebase_resampling_refuses_write_without_forwarding(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    int write_size[1] = {73};
+    double write_data[] = {12.5};
+
+    al_status_t status = al_write_data(operation_ctx, "time", "resampling_timebase", write_data,
+                                       IMAS_DOUBLE_DATA, 1, write_size);
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path has no safe conversion between DD versions",
+                          "resampling_timebase", "4.1.1", "3.39.0");
+    CHECK(write_data[0] == 12.5);
+    CHECK(write_size[0] == 73);
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+
+    check_loss_at(operation_ctx, 0, "resampling_timebase", IMAS_MVDD_FIDELITY_UNMAPPABLE,
+                  IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    printf("graph_runtime_map_test timebase-resampling-refuses-write-without-forwarding: "
+           "a safe field could not mask an unsafe timebase at the write seam\n");
+}
+
+static void scenario_timebase_resampling_refuses_arraystruct_without_forwarding(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int arraystruct_before = int_from_stub("recording_stub_arraystruct_call_count");
+    int array_size = 73;
+    int child_ctx = -1;
+
+    al_status_t status = al_begin_arraystruct_action(operation_ctx, "time", "resampling_timebase",
+                                                      &array_size, &child_ctx);
+    CHECK(status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(status, "this path has no safe conversion between DD versions",
+                          "resampling_timebase", "4.1.1", "3.39.0");
+    CHECK(array_size == 73);
+    CHECK(child_ctx == -1);
+    CHECK(int_from_stub("recording_stub_arraystruct_call_count") == arraystruct_before);
+
+    check_loss_at(operation_ctx, 0, "resampling_timebase", IMAS_MVDD_FIDELITY_UNMAPPABLE,
+                  IMAS_MVDD_LOSS_OPERATION_READ);
+
+    printf("graph_runtime_map_test timebase-resampling-refuses-arraystruct-without-forwarding: "
+           "a safe path could not mask an unsafe timebase at the arraystruct seam\n");
+}
+
 static void scenario_delete_unit_refusal_does_not_forward(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int deletes_before = int_from_stub("recording_stub_delete_call_count");
@@ -683,6 +727,10 @@ static const shim_test_scenario SCENARIOS[] = {
      scenario_read_unit_refusal_preserves_caller_data_without_forwarding},
     {"write-unit-refusal-preserves-caller-data-without-forwarding",
      scenario_write_unit_refusal_preserves_caller_data_without_forwarding},
+    {"timebase-resampling-refuses-write-without-forwarding",
+     scenario_timebase_resampling_refuses_write_without_forwarding},
+    {"timebase-resampling-refuses-arraystruct-without-forwarding",
+     scenario_timebase_resampling_refuses_arraystruct_without_forwarding},
     {"delete-unit-refusal-does-not-forward", scenario_delete_unit_refusal_does_not_forward},
     {"loss-unit-refusals-keep-operation-order", scenario_loss_unit_refusals_keep_operation_order},
     {"opening-families-reuse-a-retained-map", scenario_opening_families_reuse_a_retained_map},

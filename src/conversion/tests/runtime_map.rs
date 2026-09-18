@@ -374,8 +374,8 @@ fn endpoint(release: &str, kind: GraphNodeKind, data_type: &str, ndim: u8) -> En
         data_type: data_type.to_string(),
         ndim,
         unit: None,
-        timebase_path: None,
-        coordinate_paths: Vec::new(),
+        timebase_path: Some("time".to_string()),
+        coordinate_paths: vec!["time".to_string()],
         cocos_label_transformation: None,
         cocos_transformation_expression: None,
         cocos_label_source: None,
@@ -409,6 +409,27 @@ fn unit_event(
         old_value: Some(old_value.to_string()),
         new_value: Some(new_value.to_string()),
         unit_change: Some(evidence),
+        coordinate_evidence: None,
+    }
+}
+
+fn representation_event(
+    path: &str,
+    field: &str,
+    old_value: &str,
+    new_value: &str,
+    coordinate_evidence: Option<CoordinateChangeEvidence>,
+) -> GraphEvent {
+    GraphEvent {
+        id: format!("{path}:{field}:4.1.1"),
+        path: path.to_string(),
+        release: ArtifactDdVersion::new("4.1.1").expect("fixture release is valid"),
+        field: field.to_string(),
+        kind: format!("{field}_changed"),
+        old_value: Some(old_value.to_string()),
+        new_value: Some(new_value.to_string()),
+        unit_change: None,
+        coordinate_evidence,
     }
 }
 
@@ -419,6 +440,10 @@ fn node(path: &str, left: EndpointMetadata, right: EndpointMetadata) -> GraphNod
         introduced: vec![ArtifactDdVersion::new("3.39.0").expect("fixture release is valid")],
         removed: Vec::new(),
         rename_declarations: Vec::new(),
+        coordinate_relationships: vec![CoordinateRelationship {
+            dimension: 0,
+            target_path: "time".to_string(),
+        }],
         endpoints: vec![left, right],
     }
 }
@@ -452,6 +477,11 @@ fn complete_identity_scope() -> IdsGraphFacts {
                 endpoint("3.39.0", GraphNodeKind::Leaf, "INT_1D", 1),
                 endpoint("4.1.1", GraphNodeKind::Leaf, "STRUCT_ARRAY", 1),
             ),
+            node(
+                "time",
+                endpoint("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1),
+                endpoint("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1),
+            ),
         ],
         events: vec![GraphEvent {
             id: "coordinates_type:data_type:4.1.1".to_string(),
@@ -462,6 +492,7 @@ fn complete_identity_scope() -> IdsGraphFacts {
             old_value: Some("INT_1D".to_string()),
             new_value: Some("STRUCT_ARRAY".to_string()),
             unit_change: None,
+            coordinate_evidence: None,
         }],
         successors: Vec::new(),
     }
@@ -492,16 +523,16 @@ fn direct_rename_facts() -> IdsGraphFacts {
 
     // The predecessor name is local to the declaring node. Endpoint histories
     // make beta_normal old-only and beta_tor_norm new-only.
-    facts.nodes[5].rename_declarations.push(GraphRename {
+    facts.nodes[6].rename_declarations.push(GraphRename {
         release: ArtifactDdVersion::new("4.0.0").expect("fixture release is valid"),
         previous_name: "beta_normal".to_string(),
     });
-    facts.nodes[5]
+    facts.nodes[6]
         .endpoints
         .push(endpoint("4.0.0", GraphNodeKind::Leaf, "FLT_1D", 1));
-    facts.nodes[4].removed =
+    facts.nodes[5].removed =
         vec![ArtifactDdVersion::new("4.0.0").expect("fixture release is valid")];
-    facts.nodes[5].introduced =
+    facts.nodes[6].introduced =
         vec![ArtifactDdVersion::new("4.0.0").expect("fixture release is valid")];
     facts.successors.push(GraphSuccessor {
         from_path: "equilibrium/time_slice/global_quantities/beta_normal".to_string(),
@@ -890,6 +921,10 @@ fn acquisition_classifies_unit_evidence_without_conflating_it_with_retypes() {
         introduced: vec![ArtifactDdVersion::new("4.1.1").expect("fixture release is valid")],
         removed: Vec::new(),
         rename_declarations: Vec::new(),
+        coordinate_relationships: vec![CoordinateRelationship {
+            dimension: 0,
+            target_path: "time".to_string(),
+        }],
         endpoints: vec![endpoint("4.1.1", GraphNodeKind::Leaf, "STR_0D", 0)],
     });
     facts.events.extend([
@@ -1094,6 +1129,253 @@ fn acquisition_keeps_missing_endpoint_evidence_as_a_local_refusal() {
 }
 
 #[test]
+fn acquisition_interprets_coordinate_and_timebase_evidence_without_guessing() {
+    let mut facts = complete_identity_scope();
+    let rho_tor = &mut facts.nodes[2];
+    for endpoint in &mut rho_tor.endpoints {
+        endpoint.coordinate_paths = vec!["time_slice/profiles_1d/rho_tor_norm".to_string()];
+        endpoint.timebase_path = Some("time".to_string());
+    }
+    facts.nodes.push(node(
+        "time_slice/profiles_1d/rho_tor_norm",
+        endpoint("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1),
+        endpoint("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1),
+    ));
+    facts.events.extend([
+        representation_event(
+            "time_slice/profiles_1d/rho_tor",
+            "coordinates",
+            "['time_slice/profiles_1d/rho_tor_norm']",
+            "['time_slice/profiles_1d/rho_tor_norm']",
+            Some(CoordinateChangeEvidence::Equivalent),
+        ),
+        representation_event(
+            "time_slice/profiles_1d/rho_tor",
+            "timebase",
+            "time",
+            "time",
+            Some(CoordinateChangeEvidence::Equivalent),
+        ),
+    ]);
+
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("established matching coordinate and timebase evidence must serve the path");
+    assert!(matches!(
+        map.resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .expect("the proved endpoint is claimed")
+            .outcome,
+        Outcome::Path {
+            value_transformation: ValueTransformation::None,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn acquisition_uses_an_established_path_correspondence_for_coordinate_equivalence() {
+    let mut facts = direct_rename_facts();
+    for endpoint in &mut facts.nodes[2].endpoints {
+        endpoint.timebase_path = Some("time".to_string());
+    }
+    facts.nodes[2].endpoints[0].coordinate_paths =
+        vec!["time_slice/global_quantities/beta_normal".to_string()];
+    facts.nodes[2].endpoints[1].coordinate_paths =
+        vec!["time_slice/global_quantities/beta_tor_norm".to_string()];
+    facts.events.push(representation_event(
+        "time_slice/profiles_1d/rho_tor",
+        "coordinates",
+        "['time_slice/global_quantities/beta_normal']",
+        "['time_slice/global_quantities/beta_tor_norm']",
+        Some(CoordinateChangeEvidence::Equivalent),
+    ));
+
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("the direct coordinate correspondence is established in this direction");
+    assert!(matches!(
+        map.resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .expect("the proved endpoint is claimed")
+            .outcome,
+        Outcome::Path {
+            value_transformation: ValueTransformation::None,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn acquisition_does_not_treat_empty_or_unequal_coordinate_sets_as_a_conversion_verdict() {
+    let mut empty_facts = complete_identity_scope();
+    empty_facts.nodes[2].endpoints[0].coordinate_paths.clear();
+    empty_facts.nodes[2].endpoints[1].coordinate_paths.clear();
+    let empty = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(empty_facts),
+    })
+    .acquire(&request())
+    .expect("unknown coordinate evidence stays localized");
+    assert_eq!(
+        empty
+            .resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .expect("the endpoint remains claimed")
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+
+    let mut unequal_facts = complete_identity_scope();
+    unequal_facts.nodes[2].endpoints[0].coordinate_paths = vec!["rho_old".to_string()];
+    unequal_facts.nodes[2].endpoints[1].coordinate_paths = vec!["rho_new".to_string()];
+    unequal_facts.events.push(representation_event(
+        "time_slice/profiles_1d/rho_tor",
+        "coordinates",
+        "['rho_old']",
+        "['rho_new']",
+        None,
+    ));
+    let unequal = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(unequal_facts),
+    })
+    .acquire(&request())
+    .expect("unequal lists alone do not establish resampling");
+    assert_eq!(
+        unequal
+            .resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .expect("the endpoint remains claimed")
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+}
+
+#[test]
+fn acquisition_requires_a_complete_relationship_or_producer_verdict_for_raw_coordinate_matches() {
+    let mut facts = complete_identity_scope();
+    facts.nodes[2].coordinate_relationships.clear();
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("unconfirmed coordinate evidence remains localized");
+
+    let explanation = map
+        .resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+        .expect("the endpoint remains claimed");
+    assert_eq!(
+        explanation.outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+    assert_eq!(
+        explanation.rule_id.as_deref(),
+        Some("coordinate-unresolved:time_slice/profiles_1d/rho_tor")
+    );
+}
+
+#[test]
+fn acquisition_rejects_duplicate_and_localizes_dangling_coordinate_relationships() {
+    let mut duplicate = complete_identity_scope();
+    duplicate.nodes[2]
+        .coordinate_relationships
+        .push(CoordinateRelationship {
+            dimension: 0,
+            target_path: "time".to_string(),
+        });
+    assert!(matches!(
+        RuntimeMapAcquirer::new(ControlledSource {
+            result: Ok(duplicate),
+        })
+        .acquire(&request()),
+        Err(AcquisitionFailure::InvalidNode { reason, .. }) if reason == "coordinate relationships repeat a dimension"
+    ));
+
+    let mut dangling = complete_identity_scope();
+    dangling.nodes[2].coordinate_relationships[0].target_path = "missing_coordinate".to_string();
+    let map = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(dangling),
+    })
+    .acquire(&request())
+    .expect("a coordinate-spec or unavailable target is bounded to this endpoint");
+    assert_eq!(
+        map.resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .expect("the endpoint remains claimed")
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+}
+
+#[test]
+fn acquisition_refuses_known_resampling_and_fails_unbounded_coordinate_scope() {
+    let mut resampling_facts = complete_identity_scope();
+    resampling_facts.nodes[2].endpoints[1].timebase_path = Some("rho_tor_time".to_string());
+    resampling_facts.events.push(representation_event(
+        "time_slice/profiles_1d/rho_tor",
+        "timebase",
+        "time",
+        "rho_tor_time",
+        Some(CoordinateChangeEvidence::RequiresResampling),
+    ));
+    let resampling = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(resampling_facts),
+    })
+    .acquire(&request())
+    .expect("a path-local unsupported resampling remains a usable complete map");
+    assert_eq!(
+        resampling
+            .resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .expect("the endpoint remains claimed")
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+    assert_eq!(
+        resampling
+            .resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .expect("the endpoint retains its evidence cause")
+            .rule_id
+            .as_deref(),
+        Some("coordinate-resampling:time_slice/profiles_1d/rho_tor")
+    );
+
+    let mut unbounded_facts = complete_identity_scope();
+    unbounded_facts.events.push(representation_event(
+        "time_slice/profiles_1d/rho_tor",
+        "coordinates",
+        "[]",
+        "[]",
+        Some(CoordinateChangeEvidence::UnboundedScope),
+    ));
+    assert!(matches!(
+        RuntimeMapAcquirer::new(ControlledSource {
+            result: Ok(unbounded_facts),
+        })
+        .acquire(&request()),
+        Err(AcquisitionFailure::UnboundedCoordinateScope { .. })
+    ));
+}
+
+#[test]
+fn acquisition_ignores_coordinate_events_outside_the_requested_release_pair() {
+    let mut facts = complete_identity_scope();
+    facts.versions.push(version("5.0.0", Some("17")));
+    facts.events.push(GraphEvent {
+        id: "rho_tor:coordinates:5.0.0".to_string(),
+        path: "time_slice/profiles_1d/rho_tor".to_string(),
+        release: ArtifactDdVersion::new("5.0.0").expect("fixture release is valid"),
+        field: "coordinates".to_string(),
+        kind: "coordinates_changed".to_string(),
+        old_value: Some("['time']".to_string()),
+        new_value: Some("['time']".to_string()),
+        unit_change: None,
+        coordinate_evidence: Some(CoordinateChangeEvidence::UnboundedScope),
+    });
+
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("a later unbounded finding cannot invalidate this release pair");
+    assert!(matches!(
+        map.resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .expect("the independently proved endpoint is claimed")
+            .outcome,
+        Outcome::Path { .. }
+    ));
+}
+
+#[test]
 fn acquisition_replays_a_field_qualified_generic_event() {
     assert!(matches!(
         RuntimeMapAcquirer::new(ControlledSource { result: Ok(complete_identity_scope()) }).acquire(&request()),
@@ -1114,6 +1396,7 @@ fn acquisition_keeps_reused_spelling_across_a_reappearance_unmappable() {
             old_value: None,
             new_value: None,
             unit_change: None,
+            coordinate_evidence: None,
         },
         GraphEvent {
             id: "rho_tor:path_added:4.1.1".to_string(),
@@ -1124,6 +1407,7 @@ fn acquisition_keeps_reused_spelling_across_a_reappearance_unmappable() {
             old_value: None,
             new_value: None,
             unit_change: None,
+            coordinate_evidence: None,
         },
     ]);
     let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
@@ -1279,7 +1563,7 @@ fn acquisition_keeps_an_uncorroborated_or_scientifically_unproven_rename_unmappa
         from_path: "time_slice/global_quantities/beta_normal".to_string(),
         to_path: "time_slice/global_quantities/beta_tor_norm".to_string(),
     });
-    facts.nodes[4].endpoints[0].cocos_label_transformation = Some("psi_like".to_string());
+    facts.nodes[5].endpoints[0].cocos_label_transformation = Some("psi_like".to_string());
     let scientifically_unproven = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
         .acquire(&request())
         .expect("a missing value proof localizes to the named endpoints");
@@ -1298,8 +1582,8 @@ fn acquisition_keeps_an_uncorroborated_or_scientifically_unproven_rename_unmappa
 #[test]
 fn acquisition_leaves_a_coexisting_rename_declaration_as_two_endpoint_rules() {
     let mut facts = direct_rename_facts();
-    facts.nodes[4].removed.clear();
-    facts.nodes[5].introduced =
+    facts.nodes[5].removed.clear();
+    facts.nodes[6].introduced =
         vec![ArtifactDdVersion::new("3.39.0").expect("fixture release is valid")];
     let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
         .acquire(&request())
@@ -1322,7 +1606,7 @@ fn acquisition_leaves_a_coexisting_rename_declaration_as_two_endpoint_rules() {
 #[test]
 fn acquisition_traces_missing_or_conflicting_direct_predecessors_as_refusals() {
     let mut missing = direct_rename_facts();
-    missing.nodes[5].rename_declarations[0].previous_name = "not_beta_normal".to_string();
+    missing.nodes[6].rename_declarations[0].previous_name = "not_beta_normal".to_string();
     let missing = RuntimeMapAcquirer::new(ControlledSource {
         result: Ok(missing),
     })
@@ -1419,6 +1703,7 @@ fn acquisition_deduplicates_corroborating_cocos_evidence() {
             old_value: Some("psi".to_string()),
             new_value: Some(String::new()),
             unit_change: None,
+            coordinate_evidence: None,
         },
         GraphEvent {
             id: "rho_tor:documentation:4.0.0".to_string(),
@@ -1429,6 +1714,7 @@ fn acquisition_deduplicates_corroborating_cocos_evidence() {
             old_value: Some("poloidal flux".to_string()),
             new_value: Some("COCOS convention changed".to_string()),
             unit_change: None,
+            coordinate_evidence: None,
         },
     ]);
     let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
@@ -1462,6 +1748,7 @@ fn acquisition_refuses_a_conflicting_raw_cocos_label_replacement() {
         old_value: Some("psi".to_string()),
         new_value: Some("phi".to_string()),
         unit_change: None,
+        coordinate_evidence: None,
     });
     let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
         .acquire(&request())

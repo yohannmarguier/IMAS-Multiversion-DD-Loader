@@ -8,9 +8,9 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{
-    AcquisitionAttempt, CocosLabelSource, EndpointMetadata, GraphEvent, GraphFactsSource,
-    GraphNode, GraphNodeKind, GraphRename, GraphSourceError, GraphSuccessor, GraphVersion,
-    IdsGraphFacts, UnitChangeEvidence,
+    AcquisitionAttempt, CocosLabelSource, CoordinateChangeEvidence, CoordinateRelationship,
+    EndpointMetadata, GraphEvent, GraphFactsSource, GraphNode, GraphNodeKind, GraphRename,
+    GraphSourceError, GraphSuccessor, GraphVersion, IdsGraphFacts, UnitChangeEvidence,
 };
 use crate::conversion::conversion_map::{ArtifactDdVersion, CocosConvention};
 
@@ -92,6 +92,10 @@ fn leaf(ids: &str, path: &str) -> GraphNode {
         introduced: vec![graph_release("3.39.0")],
         removed: Vec::new(),
         rename_declarations: Vec::new(),
+        coordinate_relationships: vec![CoordinateRelationship {
+            dimension: 0,
+            target_path: "time".to_string(),
+        }],
         endpoints: ["3.39.0", "4.1.1"]
             .into_iter()
             .map(|endpoint_release| EndpointMetadata {
@@ -100,8 +104,8 @@ fn leaf(ids: &str, path: &str) -> GraphNode {
                 data_type: "FLT_1D".to_string(),
                 ndim: 1,
                 unit: None,
-                timebase_path: None,
-                coordinate_paths: Vec::new(),
+                timebase_path: Some("time".to_string()),
+                coordinate_paths: vec!["time".to_string()],
                 cocos_label_transformation: None,
                 cocos_transformation_expression: None,
                 cocos_label_source: None,
@@ -125,8 +129,8 @@ fn renamed_leaf(ids: &str, path: &str, introduced: &str, removed: Option<&str>) 
             data_type: "FLT_1D".to_string(),
             ndim: 1,
             unit: None,
-            timebase_path: None,
-            coordinate_paths: Vec::new(),
+            timebase_path: Some("time".to_string()),
+            coordinate_paths: vec!["time".to_string()],
             cocos_label_transformation: None,
             cocos_transformation_expression: None,
             cocos_label_source: None,
@@ -172,6 +176,21 @@ fn unit_event(
         old_value: Some(old_value.to_string()),
         new_value: Some(new_value.to_string()),
         unit_change: Some(unit_change),
+        coordinate_evidence: None,
+    }
+}
+
+fn resampling_event(path: &str) -> GraphEvent {
+    GraphEvent {
+        id: format!("{path}:timebase:4.1.1"),
+        path: path.to_string(),
+        release: graph_release("4.1.1"),
+        field: "timebase".to_string(),
+        kind: "timebase_changed".to_string(),
+        old_value: Some("time".to_string()),
+        new_value: Some("time".to_string()),
+        unit_change: None,
+        coordinate_evidence: Some(CoordinateChangeEvidence::RequiresResampling),
     }
 }
 
@@ -213,6 +232,7 @@ fn cocos_equilibrium_scope(
             old_value: Some("psi".to_string()),
             new_value: Some(String::new()),
             unit_change: None,
+            coordinate_evidence: None,
         }],
         successors: Vec::new(),
     }
@@ -257,6 +277,7 @@ fn classified_equilibrium_scope() -> IdsGraphFacts {
             unit_leaf(ids, "time", "s", "second"),
             unit_leaf(ids, "unit_dimensionally_compatible", "m", "cm"),
             unit_leaf(ids, "unit_requires_scale_or_offset", "m", "cm"),
+            leaf(ids, "resampling_timebase"),
             leaf(ids, "ids_properties/version_put/data_dictionary"),
             cocos_psi_leaf(ids, "psi_like", CocosLabelSource::InferredSignFlip, None),
             renamed_leaf(
@@ -300,6 +321,7 @@ fn classified_equilibrium_scope() -> IdsGraphFacts {
                 "cm",
                 UnitChangeEvidence::RequiredScaleOrOffset,
             ),
+            resampling_event("resampling_timebase"),
             GraphEvent {
                 id: "psi:cocos_label_transformation:4.0.0".to_string(),
                 path: "time_slice/profiles_1d/psi".to_string(),
@@ -309,6 +331,7 @@ fn classified_equilibrium_scope() -> IdsGraphFacts {
                 old_value: Some("psi".to_string()),
                 new_value: Some(String::new()),
                 unit_change: None,
+                coordinate_evidence: None,
             },
         ],
         successors: vec![

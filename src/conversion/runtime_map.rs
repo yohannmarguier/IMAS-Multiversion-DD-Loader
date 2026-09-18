@@ -78,6 +78,16 @@ pub(crate) struct EndpointMetadata {
     pub cocos_label_source: Option<CocosLabelSource>,
 }
 
+/// One unversioned `HAS_COORDINATE` fact retained beside a node's versioned
+/// endpoint metadata. It can corroborate an exactly spelled raw declaration,
+/// but cannot erase the raw history's index notation or prove absence when it
+/// is missing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CoordinateRelationship {
+    pub dimension: usize,
+    pub target_path: String,
+}
+
 /// One IDS-relative node row together with every endpoint metadata row the
 /// controlled source established for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +102,7 @@ pub(crate) struct GraphNode {
     /// spelling is kept on the declaring (newer) node because a local name is
     /// relative to that node's parent, not to the IDS root.
     pub rename_declarations: Vec<GraphRename>,
+    pub coordinate_relationships: Vec<CoordinateRelationship>,
     pub endpoints: Vec<EndpointMetadata>,
 }
 
@@ -120,6 +131,11 @@ pub(crate) struct GraphEvent {
     /// field-qualified `units` event. The endpoint unit strings themselves
     /// do not establish whether changing a declaration changes values.
     pub unit_change: Option<UnitChangeEvidence>,
+    /// Coordinate/timebase behaviour established by the producer for this
+    /// event. Raw coordinate declarations and current relationship targets
+    /// are not enough to manufacture this verdict: their omission and their
+    /// differing index notation are known limits of the graph snapshot.
+    pub coordinate_evidence: Option<CoordinateChangeEvidence>,
 }
 
 /// Value-behaviour evidence attached to one producer-classified unit event.
@@ -138,6 +154,18 @@ pub(crate) enum UnitChangeEvidence {
     DimensionallyCompatible,
     /// Evidence establishes a numerical scale or offset this shim cannot apply.
     RequiredScaleOrOffset,
+}
+
+/// Conversion behaviour established for a coordinate or timebase change.
+///
+/// The shim can preserve a proven equivalent representation, but it has no
+/// resampler. An unbounded finding is deliberately an acquisition failure:
+/// marking every potentially affected endpoint safe would hide uncertainty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoordinateChangeEvidence {
+    Equivalent,
+    RequiresResampling,
+    UnboundedScope,
 }
 
 /// A directed correspondence edge from the graph's successor stream.
@@ -337,6 +365,9 @@ pub(crate) enum AcquisitionFailure {
         field: String,
         release: ArtifactDdVersion,
     },
+    UnboundedCoordinateScope {
+        path: String,
+    },
     InvalidEventValue {
         id: String,
     },
@@ -438,6 +469,7 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
         let hli = graph_side(&facts.versions, &request.hli_dd, attempt)?;
         let stored = graph_side(&facts.versions, &request.stored_dd, attempt)?;
         let direct_renames = direct_renames(&facts, request, attempt)?;
+        validate_coordinate_scope(&facts, &request.hli_dd, &request.stored_dd, attempt)?;
         let mut rules = Vec::with_capacity(facts.nodes.len());
         let mut hli_endpoint = Vec::with_capacity(facts.nodes.len());
         let mut stored_endpoint = Vec::with_capacity(facts.nodes.len());
@@ -552,7 +584,13 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
                                 // the same value semantics.
                                 EndpointRelation::Unresolved
                             } else {
-                                endpoint_relation(&facts, node, hli_metadata, stored_metadata)
+                                endpoint_relation(
+                                    &facts,
+                                    node,
+                                    hli_metadata,
+                                    stored_metadata,
+                                    &direct_renames,
+                                )
                             };
                             match relation {
                                 EndpointRelation::Retyped => (
@@ -596,7 +634,9 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
                                         Fidelity::Exact,
                                     )
                                 }
-                                EndpointRelation::Unresolved => (
+                                EndpointRelation::CoordinateResampling
+                                | EndpointRelation::CoordinateUnresolved
+                                | EndpointRelation::Unresolved => (
                                     Rel::Identical,
                                     SelectorStage::Exact,
                                     Some(node.path.clone()),
@@ -647,8 +687,24 @@ impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
                         )
                     }
                 };
+            let rule_id = match (&hli_metadata, &stored_metadata) {
+                (
+                    EndpointState::Present {
+                        metadata: hli_metadata,
+                        interval_start: hli_start,
+                    },
+                    EndpointState::Present {
+                        metadata: stored_metadata,
+                        interval_start: stored_start,
+                    },
+                ) if hli_start == stored_start => endpoint_rule_id(
+                    endpoint_relation(&facts, node, hli_metadata, stored_metadata, &direct_renames),
+                    node,
+                ),
+                _ => None,
+            };
             rules.push(TypedRule {
-                id: format!("endpoint:{}", node.path),
+                id: rule_id.unwrap_or_else(|| format!("endpoint:{}", node.path)),
                 rel,
                 selector_stage,
                 left,
@@ -1153,6 +1209,23 @@ fn validate_complete_scope(
         }
     }
 
+    for node in &facts.nodes {
+        let mut coordinate_dimensions = HashSet::new();
+        for relationship in &node.coordinate_relationships {
+            attempt
+                .check(AcquisitionStage::ScopeValidation)
+                .map_err(|expired| AcquisitionFailure::TimedOut {
+                    stage: expired.stage,
+                })?;
+            if !coordinate_dimensions.insert(relationship.dimension) {
+                return Err(invalid_node(
+                    node,
+                    "coordinate relationships repeat a dimension",
+                ));
+            }
+        }
+    }
+
     for event in &facts.events {
         attempt
             .check(AcquisitionStage::ScopeValidation)
@@ -1542,11 +1615,26 @@ fn invalid_event(event: &GraphEvent) -> AcquisitionFailure {
     }
 }
 
+#[derive(Clone, Copy)]
 enum EndpointRelation {
     Exact,
     Retyped,
     UnitRedefinition,
+    CoordinateResampling,
+    CoordinateUnresolved,
     Unresolved,
+}
+
+fn endpoint_rule_id(relation: EndpointRelation, node: &GraphNode) -> Option<String> {
+    match relation {
+        EndpointRelation::CoordinateResampling => {
+            Some(format!("coordinate-resampling:{}", node.path))
+        }
+        EndpointRelation::CoordinateUnresolved => {
+            Some(format!("coordinate-unresolved:{}", node.path))
+        }
+        _ => None,
+    }
 }
 
 /// Classifies the endpoint behaviour that the existing map representation can
@@ -1561,13 +1649,17 @@ fn endpoint_relation(
     node: &GraphNode,
     hli: &EndpointMetadata,
     stored: &EndpointMetadata,
+    direct_renames: &[DirectRename],
 ) -> EndpointRelation {
     if metadata_is_retyped(hli, stored) {
         return EndpointRelation::Retyped;
     }
-    if hli.timebase_path != stored.timebase_path || hli.coordinate_paths != stored.coordinate_paths
-    {
-        return EndpointRelation::Unresolved;
+    match coordinate_evidence_between(facts, node, hli, stored, direct_renames) {
+        CoordinateEvidenceVerdict::Equivalent => {}
+        CoordinateEvidenceVerdict::RequiresResampling => {
+            return EndpointRelation::CoordinateResampling;
+        }
+        CoordinateEvidenceVerdict::Unresolved => return EndpointRelation::CoordinateUnresolved,
     }
 
     match unit_evidence_between(facts, node, &hli.release, &stored.release) {
@@ -1579,6 +1671,150 @@ fn endpoint_relation(
         UnitEvidenceVerdict::NoChange if hli.unit == stored.unit => EndpointRelation::Exact,
         UnitEvidenceVerdict::NoChange => EndpointRelation::Unresolved,
     }
+}
+
+enum CoordinateEvidenceVerdict {
+    Equivalent,
+    RequiresResampling,
+    Unresolved,
+}
+
+/// Coordinates are conversion evidence only when the two endpoint declarations
+/// positively match. The graph's unversioned relationship edges can be absent
+/// or strip index notation, so empty or unequal collections do not establish
+/// either equivalence or resampling. A known resampling event remains a
+/// path-local unsupported conversion.
+fn coordinate_evidence_between(
+    facts: &IdsGraphFacts,
+    node: &GraphNode,
+    hli: &EndpointMetadata,
+    stored: &EndpointMetadata,
+    direct_renames: &[DirectRename],
+) -> CoordinateEvidenceVerdict {
+    if facts.events.iter().any(|event| {
+        event.path == node.path
+            && event_applies_between(event, &hli.release, &stored.release)
+            && event.coordinate_evidence == Some(CoordinateChangeEvidence::RequiresResampling)
+    }) {
+        return CoordinateEvidenceVerdict::RequiresResampling;
+    }
+
+    let Some(hli_timebase) = hli.timebase_path.as_deref() else {
+        return CoordinateEvidenceVerdict::Unresolved;
+    };
+    let Some(stored_timebase) = stored.timebase_path.as_deref() else {
+        return CoordinateEvidenceVerdict::Unresolved;
+    };
+    if !paths_correspond(hli_timebase, stored_timebase, direct_renames)
+        || hli.coordinate_paths.is_empty()
+        || hli.coordinate_paths.len() != stored.coordinate_paths.len()
+    {
+        return CoordinateEvidenceVerdict::Unresolved;
+    }
+    let paths_match = hli
+        .coordinate_paths
+        .iter()
+        .zip(&stored.coordinate_paths)
+        .all(|(hli_path, stored_path)| paths_correspond(hli_path, stored_path, direct_renames));
+    if !paths_match {
+        return CoordinateEvidenceVerdict::Unresolved;
+    }
+
+    if coordinate_relationships_corroborate(facts, node, hli, stored)
+        || facts.events.iter().any(|event| {
+            event.path == node.path
+                && event_applies_between(event, &hli.release, &stored.release)
+                && event.coordinate_evidence == Some(CoordinateChangeEvidence::Equivalent)
+        })
+    {
+        CoordinateEvidenceVerdict::Equivalent
+    } else {
+        CoordinateEvidenceVerdict::Unresolved
+    }
+}
+
+/// An unversioned relationship is affirmative evidence only when it preserves
+/// each raw endpoint declaration at the same dimension. Missing or normalized
+/// relationships deliberately leave the historical change unresolved.
+fn coordinate_relationships_corroborate(
+    facts: &IdsGraphFacts,
+    node: &GraphNode,
+    hli: &EndpointMetadata,
+    stored: &EndpointMetadata,
+) -> bool {
+    let mut dimensions = HashSet::new();
+    node.coordinate_relationships.len() == hli.coordinate_paths.len()
+        && node.coordinate_relationships.iter().all(|relationship| {
+            dimensions.insert(relationship.dimension)
+                && relationship.dimension < hli.coordinate_paths.len()
+                // A `HAS_COORDINATE` target may be an `IMASCoordinateSpec`,
+                // not an IDS node. A target outside this node inventory is
+                // therefore merely non-corroborating, never a scope failure.
+                && facts
+                    .nodes
+                    .iter()
+                    .any(|candidate| candidate.path == relationship.target_path)
+                && hli
+                    .coordinate_paths
+                    .get(relationship.dimension)
+                    .zip(stored.coordinate_paths.get(relationship.dimension))
+                    .is_some_and(|(hli_path, stored_path)| {
+                        hli_path == &relationship.target_path
+                            && stored_path == &relationship.target_path
+                    })
+        })
+}
+
+fn paths_correspond(hli_path: &str, stored_path: &str, direct_renames: &[DirectRename]) -> bool {
+    hli_path == stored_path
+        || direct_renames
+            .iter()
+            .any(|rename| rename.left == hli_path && rename.right == stored_path)
+}
+
+fn event_applies_between(
+    event: &GraphEvent,
+    first: &ArtifactDdVersion,
+    second: &ArtifactDdVersion,
+) -> bool {
+    let first = numeric_release(first);
+    let second = numeric_release(second);
+    let (earlier, later) = if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    let release = numeric_release(&event.release);
+    release > earlier && release <= later
+}
+
+fn validate_coordinate_scope(
+    facts: &IdsGraphFacts,
+    first: &ArtifactDdVersion,
+    second: &ArtifactDdVersion,
+    attempt: &AcquisitionAttempt,
+) -> Result<(), AcquisitionFailure> {
+    for event in &facts.events {
+        attempt
+            .check(AcquisitionStage::RuleConstruction)
+            .map_err(|expired| AcquisitionFailure::TimedOut {
+                stage: expired.stage,
+            })?;
+        if !event_applies_between(event, first, second) {
+            continue;
+        }
+        if event.coordinate_evidence.is_some()
+            && !matches!(event_field(event), Ok("coordinates" | "timebase"))
+        {
+            return Err(invalid_event(event));
+        }
+        if event.coordinate_evidence == Some(CoordinateChangeEvidence::UnboundedScope) {
+            return Err(AcquisitionFailure::UnboundedCoordinateScope {
+                path: event.path.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn metadata_is_retyped(hli: &EndpointMetadata, stored: &EndpointMetadata) -> bool {
@@ -1606,21 +1842,13 @@ fn unit_evidence_between(
     first: &ArtifactDdVersion,
     second: &ArtifactDdVersion,
 ) -> UnitEvidenceVerdict {
-    let first_key = numeric_release(first);
-    let second_key = numeric_release(second);
-    let (earlier, later) = if first_key <= second_key {
-        (first_key, second_key)
-    } else {
-        (second_key, first_key)
-    };
     let mut declaration_only = false;
     let mut unresolved = false;
     for event in &facts.events {
         if event.path != node.path || event_field(event).ok() != Some("units") {
             continue;
         }
-        let release = numeric_release(&event.release);
-        if release <= earlier || release > later {
+        if !event_applies_between(event, first, second) {
             continue;
         }
         match event.unit_change {

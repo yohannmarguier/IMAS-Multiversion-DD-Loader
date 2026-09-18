@@ -136,6 +136,13 @@ fn complete_executor() -> ControlledExecutor {
                 row(&[
                     ("ids", GraphValue::String("equilibrium".to_string())),
                     ("path", GraphValue::String("time_slice".to_string())),
+                    (
+                        "coordinate_relationships",
+                        GraphValue::List(vec![GraphValue::List(vec![
+                            GraphValue::Integer(0),
+                            GraphValue::String("time".to_string()),
+                        ])]),
+                    ),
                     ("introduced", GraphValue::List(Vec::new())),
                     ("deprecated", GraphValue::List(Vec::new())),
                 ]),
@@ -147,6 +154,7 @@ fn complete_executor() -> ControlledExecutor {
                             "ids_properties/version_put/data_dictionary".to_string(),
                         ),
                     ),
+                    ("coordinate_relationships", GraphValue::List(Vec::new())),
                     ("introduced", GraphValue::List(Vec::new())),
                     ("deprecated", GraphValue::List(Vec::new())),
                 ]),
@@ -192,6 +200,20 @@ fn retrieves_all_schema_streams_with_bound_pagination_and_typed_nulls() {
     assert_eq!(scope.events.len(), 1);
     assert_eq!(scope.successors.len(), 1);
     assert_eq!(scope.versions[1]["cocos"], GraphValue::Null);
+    assert_eq!(
+        scope.nodes[0]["coordinate_relationships"],
+        GraphValue::List(vec![GraphValue::List(vec![
+            GraphValue::Integer(0),
+            GraphValue::String("time".to_string()),
+        ])])
+    );
+}
+
+#[test]
+fn node_query_keeps_unversioned_coordinate_relationships_distinct_from_raw_history() {
+    assert!(NODES.contains("HAS_COORDINATE"));
+    assert!(NODES.contains("coordinate_relationships"));
+    assert!(!NODES.contains("n.coordinates"));
 }
 
 #[test]

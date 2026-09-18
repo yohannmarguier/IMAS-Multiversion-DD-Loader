@@ -382,6 +382,15 @@ add_stub_test(write-graph-runtime-map-unit-refusal-preserves-caller-data-without
     graph_runtime_map_test write-unit-refusal-preserves-caller-data-without-forwarding
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
+
+add_stub_test(write-graph-runtime-map-timebase-resampling-refuses-without-forwarding
+    graph_runtime_map_test timebase-resampling-refuses-write-without-forwarding
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
+add_stub_test(arraystruct-graph-runtime-map-timebase-resampling-refuses-without-forwarding
+    graph_runtime_map_test timebase-resampling-refuses-arraystruct-without-forwarding
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.39.0)
 add_stub_test(delete-graph-runtime-map-unit-refusal-does-not-forward
     graph_runtime_map_test delete-unit-refusal-does-not-forward
     HLI_DD_VERSION 4.1.1
