@@ -331,7 +331,7 @@ fn append(path: &Path, line: &str) -> std::io::Result<()> {
 pub(crate) fn utc_timestamp(epoch_seconds: u64) -> String {
     let days = epoch_seconds / 86_400;
     let seconds_of_day = epoch_seconds % 86_400;
-    let (year, month, day) = civil_from_days(days as i64);
+    let (year, month, day) = civil_from_days(days);
     format!(
         "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
         seconds_of_day / 3_600,
@@ -341,10 +341,13 @@ pub(crate) fn utc_timestamp(epoch_seconds: u64) -> String {
 }
 
 // Howard Hinnant's public-domain civil-date conversion, with day zero set to
-// 1970-01-01. Keeping it integer-only makes the filename clock testable.
-fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
-    let z = days_since_epoch + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+// 1970-01-01. Keeping it integer-only makes the filename clock testable. His
+// pre-epoch era adjustment is dropped and the day count is unsigned: the only
+// caller divides a `u64` clock reading, so `z` can never be negative and a
+// branch for that case would be one no test could reach (ADR 0011).
+fn civil_from_days(days_since_epoch: u64) -> (i64, u32, u32) {
+    let z = days_since_epoch as i64 + 719_468;
+    let era = z / 146_097;
     let doe = z - era * 146_097;
     let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
     let year = yoe + era * 400;
