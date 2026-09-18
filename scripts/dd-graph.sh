@@ -159,9 +159,16 @@ verify_archive_manifest() {
     test -n "$extracted" || die 'archive does not contain graph.dump'
     test -n "$manifest" || die 'archive does not contain manifest.json'
     need_command jq
+    # The immutable release archive records both its producer's development
+    # version and the release tag.  The tag, rather than a rendered dev
+    # version such as `5.2.1.dev0+g…`, is the configured selection identity.
     jq -e --arg release "$GRAPH_RELEASE" --arg commit "$GRAPH_COMMIT" \
-        '.version == $release and .git_commit == $commit' "$manifest" >/dev/null \
+        '(.version == $release or .git_tag == $release) and .git_commit == $commit' "$manifest" >/dev/null \
         || die 'archive manifest does not match the recorded release and commit'
+    # `neo4j-admin database load neo4j --from-path` selects `neo4j.dump` by
+    # database name. The immutable archive deliberately calls the payload
+    # `graph.dump`, so normalize the disposable extracted copy only.
+    mv "$extracted" "$temporary/neo4j.dump"
     printf '%s\n' "$temporary"
     trap - RETURN
 }
