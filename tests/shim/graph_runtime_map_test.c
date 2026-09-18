@@ -116,6 +116,48 @@ static void scenario_renamed_delete_hli_old(void) {
                             "time_slice/global_quantities/beta_tor_norm");
 }
 
+static void scenario_historical_nested_operations(const char *caller_parent,
+                                                  const char *stored_parent,
+                                                  const char *caller_child,
+                                                  const char *stored_child) {
+    int operation_ctx = open_mismatched_occurrence("pulse_schedule", NULL);
+    int size = -1;
+    int child_ctx = -1;
+    void *read_data = NULL;
+    int read_size[] = {0};
+    double write_data[] = {12.5};
+    int write_size[] = {1};
+
+    CHECK_OK(al_begin_arraystruct_action(operation_ctx, caller_parent, "time", &size, &child_ctx));
+    CHECK(strcmp(string_from_stub("recording_stub_arraystruct_path"), stored_parent) == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_arraystruct_timebase"), "time") == 0);
+
+    CHECK_OK(al_read_data(child_ctx, caller_child, "/time", &read_data, IMAS_DOUBLE_DATA, 1,
+                          read_size));
+    CHECK(read_data != NULL);
+    CHECK(strcmp(string_from_stub("recording_stub_read_field"), stored_child) == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_read_timebase"), "/time") == 0);
+
+    CHECK_OK(al_write_data(child_ctx, caller_child, "/time", write_data, IMAS_DOUBLE_DATA, 1,
+                           write_size));
+    CHECK(strcmp(string_from_stub("recording_stub_write_field"), stored_child) == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_write_timebase"), "/time") == 0);
+
+    CHECK_OK(al_delete_data(child_ctx, caller_child));
+    CHECK(strcmp(string_from_stub("recording_stub_delete_path"), stored_child) == 0);
+    check_no_loss_entry(operation_ctx);
+}
+
+static void scenario_historical_nested_operations_hli_new(void) {
+    scenario_historical_nested_operations("ec/launcher", "ec/antenna", "steering_angle_pol",
+                                          "launching_angle_pol");
+}
+
+static void scenario_historical_nested_operations_hli_old(void) {
+    scenario_historical_nested_operations("ec/antenna", "ec/launcher", "launching_angle_pol",
+                                          "steering_angle_pol");
+}
+
 static int open_moved_parent_gap(int *operation_ctx_out) {
     int operation_ctx = open_mismatched_occurrence("moved_descendants", NULL);
     int size = -1;
@@ -842,6 +884,8 @@ static const shim_test_scenario SCENARIOS[] = {
     {"renamed-write-hli-old", scenario_renamed_write_hli_old},
     {"renamed-delete-hli-new", scenario_renamed_delete_hli_new},
     {"renamed-delete-hli-old", scenario_renamed_delete_hli_old},
+    {"historical-nested-operations-hli-new", scenario_historical_nested_operations_hli_new},
+    {"historical-nested-operations-hli-old", scenario_historical_nested_operations_hli_old},
     {"moved-parent-opens-nested-arraystruct", scenario_moved_parent_opens_nested_arraystruct},
     {"moved-parent-reads-nested-path-and-timebase",
      scenario_moved_parent_reads_nested_path_and_timebase},

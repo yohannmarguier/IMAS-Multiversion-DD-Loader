@@ -753,15 +753,23 @@ struct DirectRename {
     selector_stage: SelectorStage,
 }
 
+/// A spelling qualified by the lifecycle interval that established it. A path
+/// can reappear, so its text alone is not a semantic role.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EndpointRole {
+    path: String,
+    interval_start: ArtifactDdVersion,
+}
+
 fn add_endpoint_node(endpoint: &mut Vec<EndpointNode>, node: &GraphNode, state: &EndpointState) {
     if let EndpointState::Present { metadata, .. } = state {
         endpoint.push(endpoint_node(node, metadata));
     }
 }
 
-/// Identifies only a dated, direct predecessor declaration corroborated by
-/// the flattened successor stream.  The successor is a witness, never a
-/// substitute for the declaration's date or value semantics.
+/// Relates endpoint spellings by replaying a witness node's dated NBC history.
+/// The flattened successor stream corroborates an endpoint role but neither
+/// supplies its chronology nor turns the witness into an endpoint candidate.
 fn direct_renames(
     facts: &IdsGraphFacts,
     request: &MapRequest,
@@ -775,61 +783,79 @@ fn direct_renames(
         .collect();
     let mut candidates = Vec::new();
 
-    for newer in &facts.nodes {
-        for declaration in &newer.rename_declarations {
-            attempt
-                .check(AcquisitionStage::RuleConstruction)
-                .map_err(|expired| AcquisitionFailure::TimedOut {
-                    stage: expired.stage,
-                })?;
-            if !release_is_between(&declaration.release, earlier, later) {
-                continue;
-            }
-            let Some(previous) =
-                normalize_previous_name(&declaration.previous_name, &newer.path, &request.ids)
-            else {
-                continue;
-            };
-            let Some(older) = nodes.get(previous.as_str()) else {
-                continue;
-            };
-            if !facts.successors.iter().any(|successor| {
-                normalize_ids_path(&successor.from_path, &request.ids) == previous
-                    && normalize_ids_path(&successor.to_path, &request.ids) == newer.path
-            }) {
-                continue;
-            }
-            let EndpointState::Present {
-                metadata: older_metadata,
-                ..
-            } = replay_endpoint(facts, older, earlier)?
-            else {
-                continue;
-            };
-            if !matches!(replay_endpoint(facts, older, later)?, EndpointState::Absent) {
-                continue;
-            }
-            if !matches!(
+    for witness in &facts.nodes {
+        attempt
+            .check(AcquisitionStage::RuleConstruction)
+            .map_err(|expired| AcquisitionFailure::TimedOut {
+                stage: expired.stage,
+            })?;
+        if witness.rename_declarations.is_empty() {
+            continue;
+        }
+        if successor_cycle_involving(facts, &witness.path, &request.ids) {
+            continue;
+        }
+        let Some(older_path) = historical_path_at(facts, &nodes, witness, earlier, &request.ids)
+        else {
+            continue;
+        };
+        let Some(newer_path) = historical_path_at(facts, &nodes, witness, later, &request.ids)
+        else {
+            continue;
+        };
+        if !witnesses_endpoint_role(facts, &older_path, &witness.path, &request.ids)
+            || !witnesses_endpoint_role(facts, &newer_path, &witness.path, &request.ids)
+        {
+            continue;
+        }
+        let (Some(older), Some(newer)) = (
+            nodes.get(older_path.as_str()),
+            nodes.get(newer_path.as_str()),
+        ) else {
+            continue;
+        };
+        let EndpointState::Present {
+            metadata: older_metadata,
+            interval_start: older_interval_start,
+            ..
+        } = replay_endpoint(facts, older, earlier)?
+        else {
+            continue;
+        };
+        let EndpointState::Present {
+            metadata: newer_metadata,
+            interval_start: newer_interval_start,
+            ..
+        } = replay_endpoint(facts, newer, later)?
+        else {
+            continue;
+        };
+        if !matches!(replay_endpoint(facts, older, later)?, EndpointState::Absent)
+            || !matches!(
                 replay_endpoint(facts, newer, earlier)?,
                 EndpointState::Absent
-            ) {
-                continue;
-            }
-            let EndpointState::Present {
-                metadata: newer_metadata,
-                ..
-            } = replay_endpoint(facts, newer, later)?
-            else {
-                continue;
-            };
-            if !same_representation(&older_metadata, &newer_metadata) {
-                continue;
-            }
-            let moved_parent = older_metadata.kind == GraphNodeKind::Structure
-                && newer_metadata.kind == GraphNodeKind::Structure
-                && parent_path(&previous) != parent_path(&newer.path);
-            candidates.push((previous, newer.path.clone(), moved_parent));
+            )
+        {
+            continue;
         }
+        let older_role = EndpointRole {
+            path: older_path,
+            interval_start: older_interval_start,
+        };
+        let newer_role = EndpointRole {
+            path: newer_path,
+            interval_start: newer_interval_start,
+        };
+        if !is_distinct_role_change(&older_role, &newer_role) {
+            continue;
+        }
+        if !same_representation(&older_metadata, &newer_metadata) {
+            continue;
+        }
+        let moved_parent = older_metadata.kind == GraphNodeKind::Structure
+            && newer_metadata.kind == GraphNodeKind::Structure
+            && parent_path(&older_role.path) != parent_path(&newer_role.path);
+        candidates.push((older_role.path, newer_role.path, moved_parent));
     }
 
     candidates.sort();
@@ -877,21 +903,116 @@ fn direct_renames(
         .collect())
 }
 
+/// Replays one final node's declared history to a requested endpoint. The
+/// deepest node is substituted first, so an explicit child exception survives
+/// a simultaneous ancestor rename. Each declaration remains attached to its
+/// final declaring path while its replacement is applied to the working path.
+fn historical_path_at(
+    facts: &IdsGraphFacts,
+    nodes: &HashMap<&str, &GraphNode>,
+    witness: &GraphNode,
+    endpoint: &ArtifactDdVersion,
+    ids: &str,
+) -> Option<String> {
+    let mut path = witness.path.clone();
+    for ancestor_path in ancestor_paths(&witness.path) {
+        let Some(ancestor) = nodes.get(ancestor_path.as_str()) else {
+            continue;
+        };
+        if successor_cycle_involving(facts, &ancestor.path, ids) {
+            return None;
+        }
+        let Some(declaration) = declaration_after(&ancestor.rename_declarations, endpoint) else {
+            continue;
+        };
+        let previous = normalize_previous_name(&declaration.previous_name, &ancestor.path, ids)?;
+        if previous == ancestor.path {
+            return None;
+        }
+        let Some(suffix) = path
+            .strip_prefix(&ancestor.path)
+            .filter(|suffix| suffix.is_empty() || suffix.starts_with('/'))
+        else {
+            continue;
+        };
+        path = format!("{previous}{suffix}");
+    }
+
+    nodes.get(path.as_str())?;
+    Some(path)
+}
+
+fn ancestor_paths(path: &str) -> Vec<String> {
+    let segments: Vec<_> = path.split('/').collect();
+    (1..=segments.len())
+        .rev()
+        .map(|length| segments[..length].join("/"))
+        .collect()
+}
+
+/// Returns the first change strictly after the endpoint. Equal-date entries
+/// are deliberately ambiguous: a row order must not choose a semantic role.
+fn declaration_after<'a>(
+    declarations: &'a [GraphRename],
+    endpoint: &ArtifactDdVersion,
+) -> Option<&'a GraphRename> {
+    let mut ordered: Vec<_> = declarations.iter().collect();
+    ordered.sort_by_key(|declaration| numeric_release(&declaration.release));
+    if ordered.windows(2).any(|pair| {
+        pair[0].release == pair[1].release && pair[0].previous_name != pair[1].previous_name
+    }) {
+        return None;
+    }
+    ordered
+        .into_iter()
+        .find(|declaration| numeric_release(&declaration.release) > numeric_release(endpoint))
+}
+
+fn is_distinct_role_change(older: &EndpointRole, newer: &EndpointRole) -> bool {
+    older.path != newer.path && older.interval_start != newer.interval_start
+}
+
+fn successor_cycle_involving(facts: &IdsGraphFacts, witness_path: &str, ids: &str) -> bool {
+    let mut pending = vec![witness_path.to_string()];
+    let mut visited = HashSet::new();
+    while let Some(path) = pending.pop() {
+        if !visited.insert(path.clone()) {
+            continue;
+        }
+        for successor in facts
+            .successors
+            .iter()
+            .filter(|successor| normalize_ids_path(&successor.from_path, ids) == path)
+        {
+            let next = normalize_ids_path(&successor.to_path, ids);
+            if next == witness_path {
+                return true;
+            }
+            pending.push(next);
+        }
+    }
+    false
+}
+
+fn witnesses_endpoint_role(
+    facts: &IdsGraphFacts,
+    endpoint_path: &str,
+    witness_path: &str,
+    ids: &str,
+) -> bool {
+    endpoint_path == witness_path
+        || facts.successors.iter().any(|successor| {
+            normalize_ids_path(&successor.from_path, ids) == endpoint_path
+                && normalize_ids_path(&successor.to_path, ids) == witness_path
+        })
+}
+
 fn chronological_endpoints(request: &MapRequest) -> (&ArtifactDdVersion, &ArtifactDdVersion) {
     if numeric_release(&request.hli_dd) < numeric_release(&request.stored_dd) {
         (&request.hli_dd, &request.stored_dd)
     } else {
         (&request.stored_dd, &request.hli_dd)
     }
-}
-
-fn release_is_between(
-    release: &ArtifactDdVersion,
-    earlier: &ArtifactDdVersion,
-    later: &ArtifactDdVersion,
-) -> bool {
-    let release = numeric_release(release);
-    numeric_release(earlier) < release && release <= numeric_release(later)
 }
 
 fn normalize_previous_name(previous_name: &str, declaring_path: &str, ids: &str) -> Option<String> {

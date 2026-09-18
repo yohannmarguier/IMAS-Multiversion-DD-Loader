@@ -344,6 +344,14 @@ add_stub_test(delete-graph-runtime-map-renamed-hli-old
     graph_runtime_map_test renamed-delete-hli-old
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
+add_stub_test(graph-runtime-map-historical-nested-operations-hli-new
+    graph_runtime_map_test historical-nested-operations-hli-new
+    HLI_DD_VERSION 3.30.0
+    STAMP_VERSION 3.25.0)
+add_stub_test(graph-runtime-map-historical-nested-operations-hli-old
+    graph_runtime_map_test historical-nested-operations-hli-old
+    HLI_DD_VERSION 3.25.0
+    STAMP_VERSION 3.30.0)
 add_stub_test(arraystruct-path-graph-runtime-map-moved-parent-opens-nested
     graph_runtime_map_test moved-parent-opens-nested-arraystruct
     HLI_DD_VERSION 4.1.1
