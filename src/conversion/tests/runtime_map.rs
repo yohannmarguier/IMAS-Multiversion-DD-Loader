@@ -547,24 +547,24 @@ fn coexistence_facts() -> IdsGraphFacts {
 
     let mut predecessor = node(
         "time_slice/constraints/j_tor",
-        endpoint("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1),
-        endpoint("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1),
+        endpoint("3.39.0", GraphNodeKind::Structure, "STRUCTURE", 0),
+        endpoint("4.1.1", GraphNodeKind::Structure, "STRUCTURE", 0),
     );
     predecessor.endpoints.truncate(1);
     predecessor
         .endpoints
-        .push(endpoint("3.42.0", GraphNodeKind::Leaf, "FLT_1D", 1));
+        .push(endpoint("3.42.0", GraphNodeKind::Structure, "STRUCTURE", 0));
     predecessor.removed = vec![ArtifactDdVersion::new("4.0.0").expect("fixture release is valid")];
 
     let mut successor = node(
         "time_slice/constraints/j_phi",
-        endpoint("3.39.0", GraphNodeKind::Leaf, "FLT_1D", 1),
-        endpoint("4.1.1", GraphNodeKind::Leaf, "FLT_1D", 1),
+        endpoint("3.39.0", GraphNodeKind::Structure, "STRUCTURE", 0),
+        endpoint("4.1.1", GraphNodeKind::Structure, "STRUCTURE", 0),
     );
     successor.endpoints.remove(0);
     successor
         .endpoints
-        .push(endpoint("3.42.0", GraphNodeKind::Leaf, "FLT_1D", 1));
+        .push(endpoint("3.42.0", GraphNodeKind::Structure, "STRUCTURE", 0));
     successor.introduced =
         vec![ArtifactDdVersion::new("3.42.0").expect("fixture release is valid")];
     successor.rename_declarations.push(GraphRename {
@@ -2173,6 +2173,33 @@ fn acquisition_uses_successor_first_candidates_only_at_the_coexisting_endpoint()
             .expect("the successor must be claimed")
             .rel,
         Some(Rel::Renamed)
+    );
+}
+
+#[test]
+fn acquisition_extends_an_evidenced_coexisting_structure_to_its_descendants() {
+    let map = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(coexistence_facts()),
+    })
+    .acquire(&request_between("3.42.0", "4.1.1"))
+    .expect("the established structure coexistence must construct a map");
+
+    let explanation = map
+        .resolve("time_slice/constraints/j_phi/measured", Direction::Forward)
+        .expect("a descendant must inherit the structure candidate plan");
+    assert_eq!(explanation.rel, Some(Rel::Split));
+    let Outcome::Path { candidates, .. } = explanation.outcome else {
+        panic!("a coexisting structure descendant must resolve to a candidate plan");
+    };
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|candidate| (candidate.path.as_str(), candidate.precedence))
+            .collect::<Vec<_>>(),
+        vec![
+            ("time_slice/constraints/j_phi/measured", 1),
+            ("time_slice/constraints/j_tor/measured", 2),
+        ]
     );
 }
 

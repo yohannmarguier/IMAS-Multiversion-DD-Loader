@@ -325,6 +325,25 @@ add_stub_test(read-graph-runtime-map-coexistence-falls-back-to-predecessor
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.42.0
     ENV "RECORDING_STUB_READ_NOT_FOUND_FIELD=time_slice/constraints/j_phi")
+add_stub_test(arraystruct-graph-runtime-map-coexistence-keeps-opened-anchor
+    graph_runtime_map_test coexistence-arraystruct-keeps-the-opened-anchor
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.42.0
+    ENV "RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS=time_slice/constraints/j_phi")
+add_stub_test(arraystruct-graph-runtime-map-coexistence-opens-when-every-candidate-is-empty
+    graph_runtime_map_test coexistence-arraystruct-opens-when-every-candidate-is-empty
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.42.0
+    ENV "RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS=time_slice/constraints/j_phi,time_slice/constraints/j_tor")
+add_stub_test(arraystruct-graph-runtime-map-coexistence-write-mode-uses-primary-without-probing
+    graph_runtime_map_test coexistence-arraystruct-write-mode-uses-primary-without-probing
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.42.0
+    ENV "RECORDING_STUB_ARRAYSTRUCT_EMPTY_PATHS=time_slice/constraints/j_phi")
+add_stub_test(arraystruct-graph-runtime-map-coexistence-plugin-twin-keeps-primary-anchor
+    graph_runtime_map_test coexistence-arraystruct-plugin-twin-keeps-the-primary-anchor
+    HLI_DD_VERSION 4.1.1
+    STAMP_VERSION 3.42.0)
 add_stub_test(write-graph-runtime-map-coexistence-uses-primary-and-records-skipped-path
     graph_runtime_map_test coexistence-write-uses-primary-and-records-the-skipped-path
     HLI_DD_VERSION 4.1.1

@@ -27,7 +27,10 @@ impl GraphFactsSource for GraphTestSource {
     ) -> Result<IdsGraphFacts, GraphSourceError> {
         match ids {
             "equilibrium" => Ok(classified_equilibrium_scope()),
-            "coexisting_equilibrium" => Ok(coexisting_equilibrium_scope()),
+            "coexisting_equilibrium" => Ok(coexisting_equilibrium_scope(ids, GraphNodeKind::Leaf)),
+            "coexisting_arraystruct_equilibrium" => {
+                Ok(coexisting_equilibrium_scope(ids, GraphNodeKind::Structure))
+            }
             "moved_descendants" => Ok(moved_descendants_scope()),
             "pulse_schedule" => Ok(pulse_schedule_historical_scope()),
             // This source becomes unavailable after one completed scope. The
@@ -415,37 +418,20 @@ fn coexisting_rename_pair(
     ids: &str,
     predecessor_path: &str,
     successor_path: &str,
+    kind: GraphNodeKind,
 ) -> [GraphNode; 2] {
-    let mut predecessor = leaf(ids, predecessor_path);
+    let mut predecessor = node_of_kind(ids, predecessor_path, kind);
     predecessor.endpoints.truncate(1);
-    predecessor.endpoints.push(EndpointMetadata {
-        release: graph_release("3.42.0"),
-        kind: GraphNodeKind::Leaf,
-        data_type: "FLT_1D".to_string(),
-        ndim: 1,
-        unit: None,
-        timebase_path: Some("time".to_string()),
-        coordinate_paths: vec!["time".to_string()],
-        cocos_label_transformation: None,
-        cocos_transformation_expression: None,
-        cocos_label_source: None,
-    });
+    predecessor
+        .endpoints
+        .push(coexistence_endpoint("3.42.0", kind));
     predecessor.removed = vec![graph_release("4.0.0")];
 
-    let mut successor = leaf(ids, successor_path);
+    let mut successor = node_of_kind(ids, successor_path, kind);
     successor.endpoints.remove(0);
-    successor.endpoints.push(EndpointMetadata {
-        release: graph_release("3.42.0"),
-        kind: GraphNodeKind::Leaf,
-        data_type: "FLT_1D".to_string(),
-        ndim: 1,
-        unit: None,
-        timebase_path: Some("time".to_string()),
-        coordinate_paths: vec!["time".to_string()],
-        cocos_label_transformation: None,
-        cocos_transformation_expression: None,
-        cocos_label_source: None,
-    });
+    successor
+        .endpoints
+        .push(coexistence_endpoint("3.42.0", kind));
     successor.introduced = vec![graph_release("3.42.0")];
     successor.rename_declarations = vec![GraphRename {
         release: graph_release("3.42.0"),
@@ -457,14 +443,42 @@ fn coexisting_rename_pair(
     [predecessor, successor]
 }
 
-fn coexisting_equilibrium_scope() -> IdsGraphFacts {
-    let ids = "coexisting_equilibrium";
+fn node_of_kind(ids: &str, path: &str, kind: GraphNodeKind) -> GraphNode {
+    match kind {
+        GraphNodeKind::Structure => structure(ids, path),
+        GraphNodeKind::Leaf => leaf(ids, path),
+    }
+}
+
+fn coexistence_endpoint(release: &str, kind: GraphNodeKind) -> EndpointMetadata {
+    EndpointMetadata {
+        release: graph_release(release),
+        kind,
+        data_type: match kind {
+            GraphNodeKind::Structure => "STRUCTURE".to_string(),
+            GraphNodeKind::Leaf => "FLT_1D".to_string(),
+        },
+        ndim: match kind {
+            GraphNodeKind::Structure => 0,
+            GraphNodeKind::Leaf => 1,
+        },
+        unit: None,
+        timebase_path: Some("time".to_string()),
+        coordinate_paths: vec!["time".to_string()],
+        cocos_label_transformation: None,
+        cocos_transformation_expression: None,
+        cocos_label_source: None,
+    }
+}
+
+fn coexisting_equilibrium_scope(ids: &str, j_kind: GraphNodeKind) -> IdsGraphFacts {
     let j_predecessor = "time_slice/constraints/j_tor";
     let j_successor = "time_slice/constraints/j_phi";
     let b_predecessor = "time_slice/global_quantities/magnetic_axis/b_field_tor";
     let b_successor = "time_slice/global_quantities/magnetic_axis/b_field_phi";
-    let [j_tor, j_phi] = coexisting_rename_pair(ids, j_predecessor, j_successor);
-    let [b_field_tor, b_field_phi] = coexisting_rename_pair(ids, b_predecessor, b_successor);
+    let [j_tor, j_phi] = coexisting_rename_pair(ids, j_predecessor, j_successor, j_kind);
+    let [b_field_tor, b_field_phi] =
+        coexisting_rename_pair(ids, b_predecessor, b_successor, GraphNodeKind::Leaf);
     IdsGraphFacts {
         complete: true,
         versions: ["3.39.0", "3.42.0", "4.0.0", "4.1.1"]

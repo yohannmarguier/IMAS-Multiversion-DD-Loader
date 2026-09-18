@@ -27,6 +27,135 @@ static int open_coexisting_equilibrium(void) {
     return open_mismatched_occurrence("coexisting_equilibrium", NULL);
 }
 
+static int open_coexisting_arraystruct_equilibrium(int rwmode) {
+    int pulse_ctx = -1;
+    int operation_ctx = -1;
+    CHECK_OK(al_begin_dataentry_action("imas:hdf5?path=/tmp/pulse", 7, &pulse_ctx));
+    CHECK_OK(al_begin_global_action(pulse_ctx, "coexisting_arraystruct_equilibrium", "", rwmode,
+                                   &operation_ctx));
+    return operation_ctx;
+}
+
+static void scenario_coexistence_arraystruct_keeps_the_opened_anchor(void) {
+    int operation_ctx = open_coexisting_arraystruct_equilibrium(30 /* READ_OP */);
+    int size = -1;
+    int child_ctx = -1;
+    int opens_before = int_from_stub("recording_stub_arraystruct_call_count");
+
+    CHECK_OK(al_begin_arraystruct_action(operation_ctx, "time_slice/constraints/j_phi", "time",
+                                         &size, &child_ctx));
+    CHECK(int_from_stub("recording_stub_arraystruct_call_count") == opens_before + 2);
+    CHECK(strcmp(string_from_stub("recording_stub_arraystruct_path"),
+                 "time_slice/constraints/j_tor") == 0);
+
+    void *read_data = NULL;
+    int read_size[1] = {0};
+    int reads_before = int_from_stub("recording_stub_read_call_count");
+    CHECK_OK(al_read_data(child_ctx, "measured", "time", &read_data, IMAS_DOUBLE_DATA, 1,
+                          read_size));
+    CHECK(read_data != NULL);
+    CHECK(int_from_stub("recording_stub_read_call_count") == reads_before + 1);
+    CHECK(strcmp(string_from_stub("recording_stub_read_field"), "measured") == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_read_timebase"), "time") == 0);
+
+    double value = 42.0;
+    int write_size[1] = {1};
+    int writes_before = int_from_stub("recording_stub_write_call_count");
+    al_status_t write_status =
+        al_write_data(child_ctx, "measured", "time", &value, IMAS_DOUBLE_DATA, 1, write_size);
+    CHECK(write_status.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(write_status,
+                          "this candidate plan has no precedence-1 source for a write",
+                          "time_slice/constraints/j_phi/measured", "4.1.1", "3.42.0");
+    CHECK(int_from_stub("recording_stub_write_call_count") == writes_before);
+    check_loss_at(child_ctx, 0, "time_slice/constraints/j_phi/measured",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_WRITE);
+    check_loss_at(operation_ctx, 0, "time_slice/constraints/j_phi/measured",
+                  IMAS_MVDD_FIDELITY_UNMAPPABLE, IMAS_MVDD_LOSS_OPERATION_WRITE);
+
+    CHECK_OK(al_delete_data(child_ctx, "measured"));
+    CHECK(strcmp(string_from_stub("recording_stub_delete_path"), "measured") == 0);
+
+    read_data = NULL;
+    CHECK_OK(al_read_data(child_ctx, "/time_slice/constraints/j_phi/measured", "time",
+                          &read_data, IMAS_DOUBLE_DATA, 1, read_size));
+    CHECK(read_data != NULL);
+    CHECK(strcmp(string_from_stub("recording_stub_read_field"),
+                 "/time_slice/constraints/j_phi/measured") == 0);
+    CHECK(loss_count(child_ctx) == 1);
+    CHECK(loss_count(operation_ctx) == 1);
+
+    printf("graph_runtime_map_test coexistence-arraystruct-keeps-the-opened-anchor: a graph "
+           "candidate context fell through then filtered its relative descendants\n");
+}
+
+static void scenario_coexistence_arraystruct_opens_when_every_candidate_is_empty(void) {
+    int operation_ctx = open_coexisting_arraystruct_equilibrium(30 /* READ_OP */);
+    int size = -1;
+    int child_ctx = -1;
+    int opens_before = int_from_stub("recording_stub_arraystruct_call_count");
+
+    CHECK_OK(al_begin_arraystruct_action(operation_ctx, "time_slice/constraints/j_phi", "time",
+                                         &size, &child_ctx));
+    CHECK(int_from_stub("recording_stub_arraystruct_call_count") == opens_before + 2);
+    CHECK(strcmp(string_from_stub("recording_stub_arraystruct_path"),
+                 "time_slice/constraints/j_tor") == 0);
+    CHECK(size == 0);
+    check_no_loss_entry(child_ctx);
+    check_no_loss_entry(operation_ctx);
+
+    printf("graph_runtime_map_test coexistence-arraystruct-opens-when-every-candidate-is-empty: "
+           "an empty graph-derived subtree remained an empty successful context\n");
+}
+
+static void scenario_coexistence_arraystruct_write_mode_uses_primary_without_probing(void) {
+    int operation_ctx = open_coexisting_arraystruct_equilibrium(31 /* WRITE_OP */);
+    int size = -1;
+    int child_ctx = -1;
+    int opens_before = int_from_stub("recording_stub_arraystruct_call_count");
+
+    CHECK_OK(al_begin_arraystruct_action(operation_ctx, "time_slice/constraints/j_phi", "time",
+                                         &size, &child_ctx));
+    CHECK(int_from_stub("recording_stub_arraystruct_call_count") == opens_before + 1);
+    CHECK(strcmp(string_from_stub("recording_stub_arraystruct_path"),
+                 "time_slice/constraints/j_phi") == 0);
+    CHECK(size == 0);
+    check_no_loss_entry(child_ctx);
+    check_no_loss_entry(operation_ctx);
+
+    printf("graph_runtime_map_test coexistence-arraystruct-write-mode-uses-primary-without-"
+           "probing: a non-read graph context kept precedence one\n");
+}
+
+static void scenario_coexistence_arraystruct_plugin_twin_keeps_the_primary_anchor(void) {
+    int operation_ctx = open_coexisting_arraystruct_equilibrium(30 /* READ_OP */);
+    int size = -1;
+    int child_ctx = -1;
+    int calls_before = int_from_stub("recording_stub_plugin_call_count");
+
+    CHECK_OK(al_plugin_begin_arraystruct_action(operation_ctx, "time_slice/constraints/j_phi",
+                                                "time", &size, &child_ctx));
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == calls_before + 1);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_last_symbol"),
+                 "al_plugin_begin_arraystruct_action") == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"),
+                 "time_slice/constraints/j_phi") == 0);
+
+    void *read_data = NULL;
+    int read_size[1] = {0};
+    CHECK_OK(al_read_data(child_ctx, "measured", "time", &read_data, IMAS_DOUBLE_DATA, 1,
+                          read_size));
+    CHECK(read_data != NULL);
+    CHECK(strcmp(string_from_stub("recording_stub_read_field"), "measured") == 0);
+
+    CHECK_OK(al_plugin_end_action(child_ctx));
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_last_symbol"), "al_plugin_end_action") ==
+          0);
+
+    printf("graph_runtime_map_test coexistence-arraystruct-plugin-twin-keeps-the-primary-anchor: "
+           "the plugin open registered and cleaned up a graph-derived child context\n");
+}
+
 static void scenario_coexistence_read_falls_back_to_the_predecessor(void) {
     int operation_ctx = open_coexisting_equilibrium();
     void *read_data = NULL;
@@ -960,6 +1089,14 @@ static void scenario_missing_cocos_refuses_only_the_affected_operations(void) {
 }
 
 static const shim_test_scenario SCENARIOS[] = {
+    {"coexistence-arraystruct-keeps-the-opened-anchor",
+     scenario_coexistence_arraystruct_keeps_the_opened_anchor},
+    {"coexistence-arraystruct-opens-when-every-candidate-is-empty",
+     scenario_coexistence_arraystruct_opens_when_every_candidate_is_empty},
+    {"coexistence-arraystruct-write-mode-uses-primary-without-probing",
+     scenario_coexistence_arraystruct_write_mode_uses_primary_without_probing},
+    {"coexistence-arraystruct-plugin-twin-keeps-the-primary-anchor",
+     scenario_coexistence_arraystruct_plugin_twin_keeps_the_primary_anchor},
     {"coexistence-read-falls-back-to-the-predecessor",
      scenario_coexistence_read_falls_back_to_the_predecessor},
     {"coexistence-write-uses-primary-and-records-the-skipped-path",
