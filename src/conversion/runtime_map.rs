@@ -909,6 +909,19 @@ fn coexistence_plans(
                     precedence: 2,
                 },
             ];
+            // An evidenced coexistence of two structures supplies the
+            // candidate anchors for their nested contexts. Descendant rules
+            // still take precedence where the complete graph scope records
+            // a child-specific outcome, but otherwise the established
+            // structure relationship must remain available beneath the
+            // context that the arraystruct seam actually opened.
+            let selector_stage = if predecessor_at_start.kind == GraphNodeKind::Structure
+                && successor_at_end.kind == GraphNodeKind::Structure
+            {
+                SelectorStage::Subtree
+            } else {
+                SelectorStage::Exact
+            };
             let rule = if hli_count == 1 {
                 let left = if matches!(successor_hli, EndpointState::Present { .. }) {
                     successor.path.clone()
@@ -918,7 +931,7 @@ fn coexistence_plans(
                 TypedRule {
                     id: format!("coexistence-split:{predecessor_path}:{}", successor.path),
                     rel: Rel::Split,
-                    selector_stage: SelectorStage::Exact,
+                    selector_stage,
                     left: Some(left),
                     right: None,
                     froms,
@@ -934,7 +947,7 @@ fn coexistence_plans(
                 TypedRule {
                     id: format!("coexistence-merged:{predecessor_path}:{}", successor.path),
                     rel: Rel::Merged,
-                    selector_stage: SelectorStage::Exact,
+                    selector_stage,
                     left: None,
                     right: Some(right),
                     froms,
