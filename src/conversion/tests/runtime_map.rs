@@ -1,5 +1,7 @@
 use super::*;
-use crate::conversion::conversion_map::{Direction, Outcome, RefusalReason, Rel};
+use crate::conversion::conversion_map::{
+    Direction, Outcome, RefusalReason, Rel, TransformationDirection, ValueTransformation,
+};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -376,6 +378,7 @@ fn endpoint(release: &str, kind: GraphNodeKind, data_type: &str, ndim: u8) -> En
         coordinate_paths: Vec::new(),
         cocos_label_transformation: None,
         cocos_transformation_expression: None,
+        cocos_label_source: None,
     }
 }
 
@@ -978,4 +981,180 @@ fn acquisition_refuses_cocos_sensitive_values_without_a_proven_factor() {
         explanation.outcome,
         Outcome::Refusal(RefusalReason::Unmappable)
     );
+}
+
+#[test]
+fn acquisition_derives_one_psi_sign_flip_from_endpoint_conventions() {
+    let mut facts = complete_identity_scope();
+    facts.nodes[2].endpoints[0].cocos_label_transformation = Some("psi_like".to_string());
+    facts.nodes[2].endpoints[1].cocos_label_transformation = Some("psi_like".to_string());
+    facts.nodes[2].endpoints[0].cocos_label_source = Some(CocosLabelSource::InferredSignFlip);
+    facts.nodes[2].endpoints[1].cocos_label_source = Some(CocosLabelSource::InferredSignFlip);
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("the supported psi factor must construct a map");
+
+    for direction in [Direction::Forward, Direction::Reverse] {
+        let explanation = map
+            .resolve("time_slice/profiles_1d/rho_tor", direction)
+            .expect("the COCOS-labelled endpoint must be claimed");
+        assert!(matches!(
+            explanation.outcome,
+            Outcome::Path {
+                value_transformation: ValueTransformation::SignFlip {
+                    direction: TransformationDirection::ToHli,
+                    ..
+                },
+                ..
+            }
+        ));
+    }
+}
+
+#[test]
+fn acquisition_deduplicates_backfilled_and_raw_cocos_evidence_by_path() {
+    let mut facts = complete_identity_scope();
+    for endpoint in &mut facts.nodes[2].endpoints {
+        endpoint.cocos_label_transformation = Some("psi_like".to_string());
+        endpoint.cocos_label_source = Some(CocosLabelSource::InferredSignFlip);
+    }
+    facts.events.extend([
+        GraphEvent {
+            id: "rho_tor:cocos_label_transformation:4.0.0".to_string(),
+            path: "time_slice/profiles_1d/rho_tor".to_string(),
+            release: ArtifactDdVersion::new("4.0.0").expect("fixture release is valid"),
+            field: "cocos_label_transformation".to_string(),
+            kind: "metadata_changed".to_string(),
+            old_value: Some("psi".to_string()),
+            new_value: Some(String::new()),
+        },
+        GraphEvent {
+            id: "rho_tor:documentation:4.0.0".to_string(),
+            path: "time_slice/profiles_1d/rho_tor".to_string(),
+            release: ArtifactDdVersion::new("4.0.0").expect("fixture release is valid"),
+            field: "documentation".to_string(),
+            kind: "metadata_changed".to_string(),
+            old_value: Some("poloidal flux".to_string()),
+            new_value: Some("COCOS convention changed".to_string()),
+        },
+    ]);
+
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("corroborating raw history must not add a second factor");
+    let explanation = map
+        .resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+        .expect("the path remains covered by its one sign flip");
+    assert!(matches!(
+        explanation.outcome,
+        Outcome::Path {
+            value_transformation: ValueTransformation::SignFlip { .. },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn acquisition_refuses_a_conflicting_raw_cocos_label_replacement() {
+    let mut facts = complete_identity_scope();
+    for endpoint in &mut facts.nodes[2].endpoints {
+        endpoint.cocos_label_transformation = Some("psi_like".to_string());
+        endpoint.cocos_label_source = Some(CocosLabelSource::InferredSignFlip);
+    }
+    facts.events.push(GraphEvent {
+        id: "rho_tor:cocos_label_transformation:4.0.0".to_string(),
+        path: "time_slice/profiles_1d/rho_tor".to_string(),
+        release: ArtifactDdVersion::new("4.0.0").expect("fixture release is valid"),
+        field: "cocos_label_transformation".to_string(),
+        kind: "metadata_changed".to_string(),
+        old_value: Some("psi".to_string()),
+        new_value: Some("phi".to_string()),
+    });
+
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("a path-local scientific conflict must not reject other paths");
+    assert_eq!(
+        map.resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .expect("the conflicting endpoint remains explicitly covered")
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+}
+
+#[test]
+fn acquisition_ignores_cocos_evidence_outside_the_requested_endpoint_pair() {
+    let mut facts = complete_identity_scope();
+    facts.versions.push(version("5.0.0", Some("17")));
+    let mut future = endpoint("5.0.0", GraphNodeKind::Leaf, "FLT_1D", 1);
+    future.cocos_label_transformation = Some("psi_like".to_string());
+    future.cocos_label_source = Some(CocosLabelSource::InferredSignFlip);
+    facts.nodes[2].endpoints.push(future);
+
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("a later endpoint's COCOS evidence must not affect this pair");
+    assert!(matches!(
+        map.resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .expect("the requested pair remains independently exact")
+            .outcome,
+        Outcome::Path {
+            value_transformation: ValueTransformation::None,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn acquisition_refuses_unknown_cocos_evidence_without_hiding_independent_paths() {
+    let mutations: [fn(&mut IdsGraphFacts); 3] = [
+        |facts: &mut IdsGraphFacts| {
+            facts.nodes[2].endpoints[0].cocos_label_transformation =
+                Some("unknown_like".to_string());
+            facts.nodes[2].endpoints[1].cocos_label_transformation =
+                Some("unknown_like".to_string());
+            facts.nodes[2].endpoints[0].cocos_label_source = Some(CocosLabelSource::Xml);
+            facts.nodes[2].endpoints[1].cocos_label_source = Some(CocosLabelSource::Xml);
+        },
+        |facts: &mut IdsGraphFacts| {
+            facts.nodes[2].endpoints[0].cocos_label_transformation = Some("psi_like".to_string());
+            facts.nodes[2].endpoints[1].cocos_label_transformation = Some("psi_like".to_string());
+            facts.nodes[2].endpoints[0].cocos_label_source =
+                Some(CocosLabelSource::InferredExpression);
+            facts.nodes[2].endpoints[1].cocos_label_source =
+                Some(CocosLabelSource::InferredExpression);
+            facts.nodes[2].endpoints[0].cocos_transformation_expression =
+                Some("-psi_like / q".to_string());
+            facts.nodes[2].endpoints[1].cocos_transformation_expression =
+                Some("-psi_like / q".to_string());
+        },
+        |facts: &mut IdsGraphFacts| {
+            facts.nodes[2].endpoints[0].cocos_label_transformation = Some("psi_like".to_string());
+            facts.nodes[2].endpoints[1].cocos_label_transformation = Some("psi_like".to_string());
+            facts.nodes[2].endpoints[0].cocos_label_source = Some(CocosLabelSource::Xml);
+            facts.nodes[2].endpoints[1].cocos_label_source = Some(CocosLabelSource::Xml);
+            facts.versions[0].cocos = None;
+        },
+    ];
+    for mutate in mutations {
+        let mut facts = complete_identity_scope();
+        mutate(&mut facts);
+        let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+            .acquire(&request())
+            .expect("a local COCOS refusal must not reject the complete map");
+
+        let psi = map
+            .resolve("time_slice/profiles_1d/rho_tor", Direction::Forward)
+            .expect("the COCOS endpoint must be claimed");
+        assert_eq!(psi.outcome, Outcome::Refusal(RefusalReason::Unmappable));
+        assert!(matches!(
+            map.resolve("time_slice", Direction::Forward)
+                .expect("the independent structure must remain available")
+                .outcome,
+            Outcome::Path {
+                value_transformation: ValueTransformation::None,
+                ..
+            }
+        ));
+    }
 }

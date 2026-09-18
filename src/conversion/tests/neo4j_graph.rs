@@ -339,6 +339,43 @@ fn pinned_graph_returns_a_complete_equilibrium_scope() {
                 "ids_properties/version_put/data_dictionary".to_string(),
             ))
     }));
+    let psi = scope
+        .nodes
+        .iter()
+        .find(|row| {
+            row.get("path")
+                == Some(&GraphValue::String(
+                    "time_slice/profiles_1d/psi".to_string(),
+                ))
+        })
+        .expect("pinned graph exposes the psi COCOS evidence row");
+    assert_eq!(
+        psi.get("cocos_label_transformation"),
+        Some(&GraphValue::String("psi_like".to_string()))
+    );
+    assert_eq!(
+        psi.get("cocos_label_source"),
+        Some(&GraphValue::String("inferred_sign_flip".to_string()))
+    );
+    assert_eq!(
+        psi.get("cocos_transformation_expression"),
+        Some(&GraphValue::Null)
+    );
+    assert!(scope.versions.iter().any(|row| {
+        row.get("release") == Some(&GraphValue::String("3.39.0".to_string()))
+            && row.get("cocos") == Some(&GraphValue::String("11".to_string()))
+    }));
+    assert!(scope.versions.iter().any(|row| {
+        row.get("release") == Some(&GraphValue::String("4.1.1".to_string()))
+            && row.get("cocos") == Some(&GraphValue::String("17".to_string()))
+    }));
+    assert!(scope.events.iter().any(|row| {
+        row.get("path")
+            == Some(&GraphValue::String(
+                "time_slice/profiles_1d/psi".to_string(),
+            ))
+            && matches!(row.get("id"), Some(GraphValue::String(id)) if id.contains("cocos_label_transformation"))
+    }));
     assert!(
         !scope.events.is_empty(),
         "live history stream must not be elided"

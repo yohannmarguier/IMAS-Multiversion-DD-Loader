@@ -70,6 +70,12 @@ impl CocosConvention {
         }
         Ok(Self(value))
     }
+
+    /// The validated convention identifier, for comparisons at the map
+    /// construction boundary.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl fmt::Display for CocosConvention {

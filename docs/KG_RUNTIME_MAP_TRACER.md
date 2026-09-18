@@ -4,27 +4,29 @@ Issue #211 adds a graph-free, Rust-only tracer at
 `conversion::runtime_map`. `RuntimeMapAcquirer::acquire` accepts an IDS and
 exact stored/HLI DD endpoints, fetches one complete IDS-scoped fact set through
 its `GraphFactsSource`, and returns either the existing validated
-`ConversionMap` or an `AcquisitionFailure`. Nothing calls this interface from
-the occurrence seams yet: embedded-artifact selection and the public C ABI are
-unchanged.
+`ConversionMap` or an `AcquisitionFailure`. The private graph-stage C-ABI test
+instance calls it from occurrence opening; production embedded-artifact
+selection and the installed public C ABI remain unchanged.
 
 The controlled contract mirrors the selected graph streams: released versions
 with optional COCOS conventions; IDS node rows with exact endpoint metadata
 (including structures and metadata paths); versioned events; and directed
 successors. It validates all row references before handling evidence. The
-first tracer deliberately accepts only an event- and successor-free identity
-scope. It emits one exact explicit identity rule for every endpoint path whose
+tracer emits one exact explicit identity rule for every endpoint path whose
 metadata has no COCOS label or expression, uses the existing `Retyped` refusal
-for a representation difference, and makes a COCOS-labelled or
-expression-bearing path an explicit unmappable refusal until a supported factor
-is proven. A caller
+for a representation difference, and makes an unsupported COCOS-labelled or
+expression-bearing path an explicit unmappable refusal. A
+provenance-qualified `psi_like` or `dodpsi_like` leaf with exact endpoint COCOS
+conventions 11 and 17 instead uses the existing one-step sign flip; raw label
+history is not mistaken for a second transform. A caller
 path outside the acquired endpoint scope is left unresolved by the existing
 resolver rather than being claimed through a document-level identity default.
 
-Unprocessed event or successor evidence fails explicitly. A node missing one
-requested endpoint returns `UnresolvedEndpoint`; it does not become an absent
-counterpart. A source failure remains `Source`, distinct from construction,
-scope and evidence failures.
+Unknown semantic event or successor evidence fails explicitly. Raw COCOS-label
+and documentation events are corroborating history, not independently executed
+transforms. A node missing one requested endpoint returns `UnresolvedEndpoint`;
+it does not become an absent counterpart. A source failure remains `Source`,
+distinct from construction, scope and evidence failures.
 
 The focused verification is:
 
@@ -166,6 +168,8 @@ build-issue216 -j2`, and `ctest --test-dir build-issue216 --output-on-failure`
 (215 passing tests). The same change passed `cargo test --all-targets`,
 `cargo clippy --all-targets -- -D warnings`, and `cargo clippy --all-targets
 --features graph-test-source -- -D warnings`; the one ignored live-graph unit
-check still requires CI's pinned Neo4j service. This tracer deliberately
-serves only its controlled equilibrium identity scope, not a live graph or the
-unimplemented semantic mappings.
+check still requires CI's pinned Neo4j service. This tracer deliberately uses
+controlled graph facts rather than a live graph. Its equilibrium scope covers
+identity operations and the pinned graph's `profiles_1d/psi` COCOS evidence;
+production source cutover and remaining semantic mappings stay outside its
+scope.
