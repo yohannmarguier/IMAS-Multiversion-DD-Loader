@@ -1,0 +1,452 @@
+HLI dictionary   : 4.1.1 (both pulses read into the DD 4.1.1 type)
+column 1         : dd-4.1.1  stamp 4.1.1
+column 2         : dd-3.39.0  stamp 3.39.0
+time slice shown : 1
+column 1 read    : status 0, 0 path(s) skipped
+column 2 read    : status 1, 24 path(s) skipped
+
+legend: same  FLIP  DIFF  SHAPE  only4  only3  --
+
+PATH                                                             column 1         column 2  VERDICT
+====================================================================================================
+
+-- ids_properties ----------------------------------------------------------------------------------
+ids_properties/comment[1]                                 equilibrium DD 3.39.0 <-> DD 4.1.1 fixtu  equilibrium DD 3.39.0 <-> DD 4.1.1 fixtu  same
+ids_properties/name[1]                                    equilibrium_seed                          (not provided)                            only4
+ids_properties/homogeneous_time                                         1                1  same
+ids_properties/occurrence_type/name[1]                    reconstruction                            (not provided)                            only4
+ids_properties/occurrence_type/index                                    1                -  only4
+ids_properties/occurrence_type/description[1]             Equilibrium reconstruction                (not provided)                            only4
+ids_properties/provider[1]                                imas-python-fixtures                      imas-python-fixtures                      same
+ids_properties/creation_date[1]                           2024-01-01T00:00:00Z                      2024-01-01T00:00:00Z                      same
+ids_properties/version_put/data_dictionary[1]             4.1.1                                     3.39.0                                    DIFF
+ids_properties/version_put/access_layer[1]                5.7.2                                     5.7.2                                     same
+ids_properties/version_put/access_layer_language[1]       IMAS-Python 2.3.0                         IMAS-Python 2.3.0                         same
+ids_properties/provenance/node                            associated[1]                             associated[1]                             same
+ids_properties/provenance/node(1)/path[1]                 time_slice/profiles_1d                    time_slice/profiles_1d                    same
+ids_properties/plugins/node                               associated[1]                             associated[1]                             same
+
+-- vacuum_toroidal_field ---------------------------------------------------------------------------
+vacuum_toroidal_field/r0                                     6.200000E+00     6.200000E+00  same
+vacuum_toroidal_field/b0[2]                                  5.300000E+00     5.300000E+00  same
+
+-- grids_ggd  (top-level; deep generic-mesh space/grid_subset out of scope, see header comment) ----
+grids_ggd(1)/time                                            1.000000E+00     1.000000E+00  same
+grids_ggd(1)/grid(1)/identifier/name[1]                   SN                                        SN                                        same
+grids_ggd(1)/grid(1)/identifier/index                                   4                4  same
+grids_ggd(1)/grid(1)/identifier/description[1]            Single null                               Single null                               same
+grids_ggd(1)/grid(1)/path                                 (not provided)                            (not provided)                            --
+grids_ggd(1)/grid(1)/space                                associated[1]                             associated[1]                             same
+grids_ggd(1)/grid(1)/grid_subset                          associated[2]                             associated[2]                             same
+
+-- code --------------------------------------------------------------------------------------------
+code/name[1]                                              equilibrium_seed                          equilibrium_seed                          same
+code/description[1]                                       Fixture generator, not a solver           Fixture generator, not a solver           same
+code/commit[1]                                            0000000000000000000000000000000000000000  0000000000000000000000000000000000000000  same
+code/version[1]                                           1.0.0                                     1.0.0                                     same
+code/repository[1]                                        https://github.com/iterorganization/IMAS  https://github.com/iterorganization/IMAS  same
+code/parameters[1]                                        <parameters><fixture>equilibrium</fixtur  <parameters><fixture>equilibrium</fixtur  same
+code/output_flag[2]                                                     0                0  same
+code/library(1)/name[1]                                   imas-python                               imas-python                               same
+code/library(1)/description[1]                            Data access layer used to write this fix  Data access layer used to write this fix  same
+code/library(1)/commit[1]                                 1111111111111111111111111111111111111111  1111111111111111111111111111111111111111  same
+code/library(1)/version[1]                                2.3.0                                     2.3.0                                     same
+code/library(1)/repository[1]                             https://github.com/iterorganization/IMAS  https://github.com/iterorganization/IMAS  same
+code/library(1)/parameters[1]                             <parameters><backend>hdf5</backend></par  <parameters><backend>hdf5</backend></par  same
+
+-- time-base ---------------------------------------------------------------------------------------
+time[2]                                                      1.000000E+00     1.000000E+00  same
+time_slice/time                                              1.000000E+00     1.000000E+00  same
+
+-- global_quantities  (beta_tor_norm <- beta_normal, energy_mhd <- w_mhd fold) ---------------------
+global_quantities/ip                                        -1.500000E+07    -1.500000E+07  same
+global_quantities/beta_pol                                   6.500000E-01     6.500000E-01  same
+global_quantities/beta_tor                                   2.500000E-02     2.500000E-02  same
+global_quantities/beta_tor_norm                              1.800000E+00     1.800000E+00  same
+global_quantities/li_3                                       8.500000E-01     8.500000E-01  same
+global_quantities/volume                                     8.310000E+02     8.310000E+02  same
+global_quantities/area                                       2.190000E+01     2.190000E+01  same
+global_quantities/surface                                    6.830000E+02     6.830000E+02  same
+global_quantities/length_pol                                 2.430000E+01     2.430000E+01  same
+global_quantities/psi_axis                                   7.500000E-01     7.500000E-01  same
+global_quantities/psi_magnetic_axis                          7.500000E-01     7.500000E-01  same
+global_quantities/psi_boundary                              -3.250000E+00    -3.250000E+00  same
+global_quantities/rho_tor_boundary                           1.850000E+00     0.000000E+00  DIFF
+global_quantities/q_axis                                     9.500000E-01     9.500000E-01  same
+global_quantities/q_95                                       3.150000E+00     3.150000E+00  same
+global_quantities/energy_mhd                                 3.500000E+08     3.500000E+08  same
+global_quantities/psi_external_average                      -5.500000E-01    -5.500000E-01  same
+global_quantities/v_external                                -3.500000E-01    -3.500000E-01  same
+global_quantities/plasma_inductance                          1.350000E-05     1.350000E-05  same
+global_quantities/plasma_resistance                          4.500000E-09     4.500000E-09  same
+global_quantities/magnetic_axis/r                            6.350000E+00     6.350000E+00  same
+global_quantities/magnetic_axis/z                            5.500000E-01     5.500000E-01  same
+global_quantities/magnetic_axis/b_field_phi                  5.200000E+00                -  only4
+global_quantities/current_centre/r                           6.300000E+00     6.300000E+00  same
+global_quantities/current_centre/z                           5.000000E-01     5.000000E-01  same
+global_quantities/current_centre/velocity_z                  1.500000E-01     1.500000E-01  same
+global_quantities/q_min/value                                9.200000E-01     9.200000E-01  same
+global_quantities/q_min/rho_tor_norm                         1.500000E-01     1.500000E-01  same
+global_quantities/q_min/psi_norm                             2.250000E-02     0.000000E+00  DIFF
+global_quantities/q_min/psi                                  6.500000E-01     0.000000E+00  DIFF
+
+-- boundary  (closest_wall_point, dr_dz_zero_point, gap <- boundary_separatrix) --------------------
+boundary/type                                                           1                1  same
+boundary/outline/r[5]                                        8.300000E+00     8.300000E+00  same
+boundary/outline/z[5]                                        5.500000E-01     5.500000E-01  same
+boundary/psi_norm                                            9.950000E-01     9.950000E-01  same
+boundary/psi                                                -3.250000E+00    -3.250000E+00  same
+boundary/minor_radius                                        1.950000E+00     1.950000E+00  same
+boundary/elongation                                          1.700000E+00     1.700000E+00  same
+boundary/triangularity                                       4.500000E-01     4.500000E-01  same
+boundary/triangularity_upper                                 3.800000E-01     3.800000E-01  same
+boundary/triangularity_lower                                 5.200000E-01     5.200000E-01  same
+boundary/squareness_upper_inner                              1.100000E-01     1.100000E-01  same
+boundary/squareness_upper_outer                              1.200000E-01     1.200000E-01  same
+boundary/squareness_lower_inner                              1.300000E-01     1.300000E-01  same
+boundary/squareness_lower_outer                              1.400000E-01     1.400000E-01  same
+boundary/rho_tor                                             1.850000E+00     9.881313-324  DIFF
+boundary/phi                                                 1.220000E+02     0.000000E+00  DIFF
+boundary/phi_poloidal_current                                3.500000E+00     0.000000E+00  DIFF
+boundary/geometric_axis/r                                    6.300000E+00     6.300000E+00  same
+boundary/geometric_axis/z                                    5.000000E-01     5.000000E-01  same
+boundary/closest_wall_point/r                                8.050000E+00     8.050000E+00  same
+boundary/closest_wall_point/z                                7.500000E-01     7.500000E-01  same
+boundary/closest_wall_point/distance                         3.500000E-01     3.500000E-01  same
+boundary/dr_dz_zero_point/r                                  8.200000E+00     8.200000E+00  same
+boundary/dr_dz_zero_point/z                                  4.500000E-01     4.500000E-01  same
+boundary/gap(1)/name[1]                                   gap_outboard                              gap_outboard                              same
+boundary/gap(1)/description[1]                            Outboard midplane gap                     (not provided)                            only4
+boundary/gap(1)/r                                            8.150000E+00     8.150000E+00  same
+boundary/gap(1)/z                                            5.500000E-01     5.500000E-01  same
+boundary/gap(1)/angle                                        0.000000E+00     0.000000E+00  same
+boundary/gap(1)/value                                        2.500000E-01     2.500000E-01  same
+
+-- contour_tree  (no DD 3.39.0 source) -------------------------------------------------------------
+contour_tree/node(1)/critical_type                                      0                -  only4
+contour_tree/node(1)/r                                       6.350000E+00                -  only4
+contour_tree/node(1)/z                                       5.500000E-01                -  only4
+contour_tree/node(1)/psi                                     7.500000E-01                -  only4
+contour_tree/node(1)/levelset/r[3]                           6.000000E+00                -  only4
+contour_tree/node(1)/levelset/z[3]                           5.000000E-01                -  only4
+contour_tree/edges                                        associated[4]                             (not provided)                            only4
+
+-- profiles_1d  (j_phi <- j_tor; b_field_* <- b_* folds) -------------------------------------------
+profiles_1d/psi[4]                                          -2.500000E-01    -2.500000E-01  same
+profiles_1d/psi_norm[4]                                      2.500000E-01                -  only4
+profiles_1d/phi[4]                                           5.000000E-01     5.000000E-01  same
+profiles_1d/pressure[4]                                      9.000000E+04     9.000000E+04  same
+profiles_1d/f[4]                                             3.290000E+01     3.290000E+01  same
+profiles_1d/dpressure_dpsi[4]                                2.100000E+04     2.100000E+04  same
+profiles_1d/f_df_dpsi[4]                                     1.500000E+00     1.500000E+00  same
+profiles_1d/j_phi[4]                                        -1.000000E+06    -1.000000E+06  same
+profiles_1d/j_parallel[4]                                   -1.100000E+06    -1.100000E+06  same
+profiles_1d/q[4]                                             9.500000E-01     9.500000E-01  same
+profiles_1d/magnetic_shear[4]                                5.000000E-02     5.000000E-02  same
+profiles_1d/r_inboard[4]                                     6.300000E+00     6.300000E+00  same
+profiles_1d/r_outboard[4]                                    6.400000E+00     6.400000E+00  same
+profiles_1d/rho_tor[4]                                       4.625000E-01     4.625000E-01  same
+profiles_1d/rho_tor_norm[4]                                  2.500000E-01     2.500000E-01  same
+profiles_1d/dpsi_drho_tor[4]                                -3.500000E-01    -3.500000E-01  same
+profiles_1d/elongation[4]                                    1.200000E+00     1.200000E+00  same
+profiles_1d/triangularity_upper[4]                           2.000000E-02     2.000000E-02  same
+profiles_1d/triangularity_lower[4]                           3.000000E-02     3.000000E-02  same
+profiles_1d/squareness_upper_inner[4]                        1.000000E-02     1.000000E-02  same
+profiles_1d/squareness_upper_outer[4]                        2.000000E-02     2.000000E-02  same
+profiles_1d/squareness_lower_inner[4]                        3.000000E-02     3.000000E-02  same
+profiles_1d/squareness_lower_outer[4]                        4.000000E-02     4.000000E-02  same
+profiles_1d/volume[4]                                        0.000000E+00     0.000000E+00  same
+profiles_1d/rho_volume_norm[4]                               0.000000E+00     0.000000E+00  same
+profiles_1d/dvolume_dpsi[4]                                 -1.900000E+02    -1.900000E+02  same
+profiles_1d/dvolume_drho_tor[4]                              1.200000E+02     1.200000E+02  same
+profiles_1d/area[4]                                          0.000000E+00     0.000000E+00  same
+profiles_1d/darea_dpsi[4]                                   -4.900000E+00    -4.900000E+00  same
+profiles_1d/darea_drho_tor[4]                                3.200000E+00     3.200000E+00  same
+profiles_1d/surface[4]                                       0.000000E+00     0.000000E+00  same
+profiles_1d/trapped_fraction[4]                              0.000000E+00     0.000000E+00  same
+profiles_1d/gm1[4]                                           2.480000E-02     2.480000E-02  same
+profiles_1d/gm2[4]                                           2.600000E-02     2.600000E-02  same
+profiles_1d/gm3[4]                                           1.000000E+00     1.000000E+00  same
+profiles_1d/gm4[4]                                           3.600000E-02     3.600000E-02  same
+profiles_1d/gm5[4]                                           2.750000E+01     2.750000E+01  same
+profiles_1d/gm6[4]                                           3.800000E-02     3.800000E-02  same
+profiles_1d/gm7[4]                                           1.000000E+00     1.000000E+00  same
+profiles_1d/gm8[4]                                           6.350000E+00     6.350000E+00  same
+profiles_1d/gm9[4]                                           1.580000E-01     1.580000E-01  same
+profiles_1d/b_field_average[4]                               5.250000E+00     5.250000E+00  same
+profiles_1d/b_field_min[4]                                   4.150000E+00     4.150000E+00  same
+profiles_1d/b_field_max[4]                                   6.350000E+00     6.350000E+00  same
+profiles_1d/beta_pol[4]                                      5.000000E-02     5.000000E-02  same
+profiles_1d/mass_density[4]                                  3.400000E-07     3.400000E-07  same
+profiles_1d/geometric_axis/r[4]                              6.350000E+00     6.350000E+00  same
+profiles_1d/geometric_axis/z[4]                              5.500000E-01     5.500000E-01  same
+
+-- profiles_2d(1)  (j_phi <- j_tor, b_field_phi <- b_tor/b_field_tor) ------------------------------
+profiles_2d(1)/type/name[1]                               total                                     total                                     same
+profiles_2d(1)/type/index                                               0                0  same
+profiles_2d(1)/type/description[1]                        Total fields                              Total fields                              same
+profiles_2d(1)/grid_type/name[1]                          rectangular                               rectangular                               same
+profiles_2d(1)/grid_type/index                                          1                1  same
+profiles_2d(1)/grid_type/description[2]                   Cylindrical R,Z ala eqdsk (R=dim1, Z=dim  Cylindrical R,Z ala eqdsk (R=dim1, Z=dim  same
+profiles_2d(1)/grid/dim1[2]                                  4.000000E+00     4.000000E+00  same
+profiles_2d(1)/grid/dim2[3]                                 -1.000000E+00    -1.000000E+00  same
+profiles_2d(1)/grid/volume_element[2x3]                      5.500000E-01     5.500000E-01  same
+profiles_2d(1)/r[2x3]                                        4.000000E+00     4.000000E+00  same
+profiles_2d(1)/z[2x3]                                       -1.000000E+00    -1.000000E+00  same
+profiles_2d(1)/psi[2x3]                                     -3.000000E-01    -3.000000E-01  same
+profiles_2d(1)/theta[2x3]                                    1.000000E-01     1.000000E-01  same
+profiles_2d(1)/phi[2x3]                                      1.500000E+00     1.500000E+00  same
+profiles_2d(1)/j_phi[2x3]                                   -9.500000E+05    -9.500000E+05  same
+profiles_2d(1)/j_parallel[2x3]                              -1.050000E+06    -1.050000E+06  same
+profiles_2d(1)/b_field_r[2x3]                                3.100000E-01     3.100000E-01  same
+profiles_2d(1)/b_field_phi[2x3]                              3.100000E+00     3.100000E+00  same
+profiles_2d(1)/b_field_z[2x3]                                5.100000E-01     5.100000E-01  same
+
+-- coordinate_system  (g_ij dropped in DD 4.1.1; tensors carry it) ---------------------------------
+coordinate_system/grid_type/name[1]                       inverse_rhopolnorm_straight_field_line    inverse_rhopolnorm_straight_field_line    same
+coordinate_system/grid_type/index                                      21               21  same
+coordinate_system/grid_type/description[2]                Flux surface type with radial label sqrt  Flux surface type with radial label sqrt  same
+coordinate_system/grid/dim1[3]                               0.000000E+00     0.000000E+00  same
+coordinate_system/grid/dim2[4]                               0.000000E+00     0.000000E+00  same
+coordinate_system/grid/volume_element[3x4]                   4.500000E-01     4.500000E-01  same
+coordinate_system/r[3x4]                                     6.350000E+00     6.350000E+00  same
+coordinate_system/z[3x4]                                     5.500000E-01     5.500000E-01  same
+coordinate_system/jacobian[3x4]                              1.150000E+00     1.150000E+00  same
+coordinate_system/tensor_covariant[108 tot]                  1.050000E+00     1.050000E+00  same
+coordinate_system/tensor_contravariant[108 tot]              2.050000E+00     2.050000E+00  same
+
+-- ggd(1)  (j_phi <- j_tor, b_field_phi <- b_field_tor) --------------------------------------------
+ggd(1)/r(1)/grid_index                                                  1                1  same
+ggd(1)/r(1)/grid_subset_index                                           1                1  same
+ggd(1)/r(1)/values[4]                                        5.500000E+00     5.500000E+00  same
+ggd(1)/r(1)/coefficients[4x2]                                5.000000E+00     5.000000E+00  same
+ggd(1)/z(1)/grid_index                                                  1                1  same
+ggd(1)/z(1)/grid_subset_index                                           1                1  same
+ggd(1)/z(1)/values[4]                                       -5.000000E-01    -5.000000E-01  same
+ggd(1)/z(1)/coefficients[4x2]                                6.000000E+00     6.000000E+00  same
+ggd(1)/psi(1)/grid_index                                                1                1  same
+ggd(1)/psi(1)/grid_subset_index                                         1                1  same
+ggd(1)/psi(1)/values[4]                                     -3.500000E-01    -3.500000E-01  same
+ggd(1)/psi(1)/coefficients[4x2]                              7.000000E+00     7.000000E+00  same
+ggd(1)/phi(1)/grid_index                                                1                1  same
+ggd(1)/phi(1)/grid_subset_index                                         1                1  same
+ggd(1)/phi(1)/values[4]                                      1.350000E+00     1.350000E+00  same
+ggd(1)/phi(1)/coefficients[4x2]                              8.000000E+00     8.000000E+00  same
+ggd(1)/theta(1)/grid_index                                              1                1  same
+ggd(1)/theta(1)/grid_subset_index                                       1                1  same
+ggd(1)/theta(1)/values[4]                                    1.500000E-01     1.500000E-01  same
+ggd(1)/theta(1)/coefficients[4x2]                            9.000000E+00     9.000000E+00  same
+ggd(1)/j_phi(1)/grid_index                                              1                -  only4
+ggd(1)/j_phi(1)/grid_subset_index                                       1                -  only4
+ggd(1)/j_phi(1)/values[4]                                    9.600000E+05                -  only4
+ggd(1)/j_phi(1)/coefficients[4x2]                            1.000000E+01                -  only4
+ggd(1)/j_parallel(1)/grid_index                                         1                1  same
+ggd(1)/j_parallel(1)/grid_subset_index                                  1                1  same
+ggd(1)/j_parallel(1)/values[4]                               1.060000E+06     1.060000E+06  same
+ggd(1)/j_parallel(1)/coefficients[4x2]                       1.100000E+01     1.100000E+01  same
+ggd(1)/b_field_r(1)/grid_index                                          1                1  same
+ggd(1)/b_field_r(1)/grid_subset_index                                   1                1  same
+ggd(1)/b_field_r(1)/values[4]                                3.200000E-01     3.200000E-01  same
+ggd(1)/b_field_r(1)/coefficients[4x2]                        1.200000E+01     1.200000E+01  same
+ggd(1)/b_field_phi(1)/grid_index                                        1                -  only4
+ggd(1)/b_field_phi(1)/grid_subset_index                                 1                -  only4
+ggd(1)/b_field_phi(1)/values[4]                              5.150000E+00                -  only4
+ggd(1)/b_field_phi(1)/coefficients[4x2]                      1.400000E+01                -  only4
+ggd(1)/b_field_z(1)/grid_index                                          1                1  same
+ggd(1)/b_field_z(1)/grid_subset_index                                   1                1  same
+ggd(1)/b_field_z(1)/values[4]                                5.200000E-01     5.200000E-01  same
+ggd(1)/b_field_z(1)/coefficients[4x2]                        1.300000E+01     1.300000E+01  same
+
+-- convergence -------------------------------------------------------------------------------------
+convergence/iterations_n                                               42               42  same
+convergence/grad_shafranov_deviation_expression/name[1]   max_absolute_psi_residual_norm            max_absolute_psi_residual_norm            same
+convergence/grad_shafranov_deviation_expression/index                   6                6  same
+convergence/grad_shafranov_deviation_expression/descript  Maximum absolute difference over the pla  Maximum absolute difference over the pla  same
+convergence/grad_shafranov_deviation_value                   1.500000E-07     1.500000E-07  same
+convergence/result/name[1]                                converged                                 (not provided)                            only4
+convergence/result/index                                                1                0  DIFF
+convergence/result/description[1]                         Converged case with plasma                (not provided)                            only4
+
+-- constraints  (b_field_pol_probe <- bpol_probe, mse_polarization_angle, j_phi) -------------------
+constraints/b_field_tor_vacuum_r/measured                    3.286000E+01     3.286000E+01  same
+constraints/b_field_tor_vacuum_r/source[1]                equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/b_field_tor_vacuum_r/time_measurement            1.000000E+00     1.000000E+00  same
+constraints/b_field_tor_vacuum_r/exact                                  0                0  same
+constraints/b_field_tor_vacuum_r/weight                      1.000000E+00     1.000000E+00  same
+constraints/b_field_tor_vacuum_r/reconstructed               3.280000E+01     3.280000E+01  same
+constraints/b_field_tor_vacuum_r/chi_squared                 2.000000E-02     2.000000E-02  same
+constraints/b_field_pol_probe(1)/measured                    4.200000E-01     4.200000E-01  same
+constraints/b_field_pol_probe(1)/source[1]                equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/b_field_pol_probe(1)/time_measurement            1.000000E+00     1.000000E+00  same
+constraints/b_field_pol_probe(1)/exact                                  0                0  same
+constraints/b_field_pol_probe(1)/weight                      1.000000E+00     1.000000E+00  same
+constraints/b_field_pol_probe(1)/reconstructed               4.100000E-01     4.100000E-01  same
+constraints/b_field_pol_probe(1)/chi_squared                 2.000000E-02     2.000000E-02  same
+constraints/diamagnetic_flux/measured                        3.100000E-02     3.100000E-02  same
+constraints/diamagnetic_flux/source[1]                    equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/diamagnetic_flux/time_measurement                1.000000E+00     1.000000E+00  same
+constraints/diamagnetic_flux/exact                                      0                0  same
+constraints/diamagnetic_flux/weight                          1.000000E+00     1.000000E+00  same
+constraints/diamagnetic_flux/reconstructed                   3.000000E-02     3.000000E-02  same
+constraints/diamagnetic_flux/chi_squared                     2.000000E-02     2.000000E-02  same
+constraints/faraday_angle(1)/measured                        2.100000E-01     2.100000E-01  same
+constraints/faraday_angle(1)/source[1]                    equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/faraday_angle(1)/time_measurement                1.000000E+00     1.000000E+00  same
+constraints/faraday_angle(1)/exact                                      0                0  same
+constraints/faraday_angle(1)/weight                          1.000000E+00     1.000000E+00  same
+constraints/faraday_angle(1)/reconstructed                   2.000000E-01     2.000000E-01  same
+constraints/faraday_angle(1)/chi_squared                     2.000000E-02     2.000000E-02  same
+constraints/mse_polarization_angle(1)/measured               1.100000E-01     1.100000E-01  same
+constraints/mse_polarization_angle(1)/source[1]           equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/mse_polarization_angle(1)/time_measurement       1.000000E+00     1.000000E+00  same
+constraints/mse_polarization_angle(1)/exact                             0                0  same
+constraints/mse_polarization_angle(1)/weight                 1.000000E+00     1.000000E+00  same
+constraints/mse_polarization_angle(1)/reconstructed          1.000000E-01     1.000000E-01  same
+constraints/mse_polarization_angle(1)/chi_squared            2.000000E-02     2.000000E-02  same
+constraints/flux_loop(1)/measured                           -1.150000E+00    -1.150000E+00  same
+constraints/flux_loop(1)/source[1]                        equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/flux_loop(1)/time_measurement                    1.000000E+00     1.000000E+00  same
+constraints/flux_loop(1)/exact                                          0                0  same
+constraints/flux_loop(1)/weight                              1.000000E+00     1.000000E+00  same
+constraints/flux_loop(1)/reconstructed                      -1.140000E+00    -1.140000E+00  same
+constraints/flux_loop(1)/chi_squared                         2.000000E-02     2.000000E-02  same
+constraints/ip/measured                                     -1.510000E+07    -1.510000E+07  same
+constraints/ip/source[1]                                  equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/ip/time_measurement                              1.000000E+00     1.000000E+00  same
+constraints/ip/exact                                                    0                0  same
+constraints/ip/weight                                        1.000000E+00     1.000000E+00  same
+constraints/ip/reconstructed                                -1.505000E+07    -1.505000E+07  same
+constraints/ip/chi_squared                                   2.000000E-02     2.000000E-02  same
+constraints/iron_core_segment(1)/magnetization_r/measure     1.310000E+00     1.310000E+00  same
+constraints/iron_core_segment(1)/magnetization_r/source[  equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/iron_core_segment(1)/magnetization_r/time_me     1.000000E+00     1.000000E+00  same
+constraints/iron_core_segment(1)/magnetization_r/exact                  0                0  same
+constraints/iron_core_segment(1)/magnetization_r/weight      1.000000E+00     1.000000E+00  same
+constraints/iron_core_segment(1)/magnetization_r/reconst     1.300000E+00     1.300000E+00  same
+constraints/iron_core_segment(1)/magnetization_r/chi_squ     2.000000E-02     2.000000E-02  same
+constraints/iron_core_segment(1)/magnetization_z/measure     1.410000E+00     1.410000E+00  same
+constraints/iron_core_segment(1)/magnetization_z/source[  equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/iron_core_segment(1)/magnetization_z/time_me     1.000000E+00     1.000000E+00  same
+constraints/iron_core_segment(1)/magnetization_z/exact                  0                0  same
+constraints/iron_core_segment(1)/magnetization_z/weight      1.000000E+00     1.000000E+00  same
+constraints/iron_core_segment(1)/magnetization_z/reconst     1.400000E+00     1.400000E+00  same
+constraints/iron_core_segment(1)/magnetization_z/chi_squ     2.000000E-02     2.000000E-02  same
+constraints/n_e(1)/measured                                  8.100000E+19     8.100000E+19  same
+constraints/n_e(1)/position/r                                7.050000E+00     7.050000E+00  same
+constraints/n_e(1)/position/phi                              3.500000E-01     3.500000E-01  same
+constraints/n_e(1)/position/z                                4.500000E-01     4.500000E-01  same
+constraints/n_e(1)/position/rho_tor_norm                     3.000000E-01     3.000000E-01  same
+constraints/n_e(1)/position/psi                             -1.050000E+00    -1.050000E+00  same
+constraints/n_e(1)/source[1]                              equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/n_e(1)/time_measurement                          1.000000E+00     1.000000E+00  same
+constraints/n_e(1)/exact                                                0                0  same
+constraints/n_e(1)/weight                                    1.000000E+00     1.000000E+00  same
+constraints/n_e(1)/reconstructed                             8.000000E+19     8.000000E+19  same
+constraints/n_e(1)/chi_squared                               2.000000E-02     2.000000E-02  same
+constraints/n_e_line(1)/measured                             7.100000E+19     7.100000E+19  same
+constraints/n_e_line(1)/source[1]                         equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/n_e_line(1)/time_measurement                     1.000000E+00     1.000000E+00  same
+constraints/n_e_line(1)/exact                                           0                0  same
+constraints/n_e_line(1)/weight                               1.000000E+00     1.000000E+00  same
+constraints/n_e_line(1)/reconstructed                        7.000000E+19     7.000000E+19  same
+constraints/n_e_line(1)/chi_squared                          2.000000E-02     2.000000E-02  same
+constraints/pf_current(1)/measured                          -4.100000E+05    -4.100000E+05  same
+constraints/pf_current(1)/source[1]                       equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/pf_current(1)/time_measurement                   1.000000E+00     1.000000E+00  same
+constraints/pf_current(1)/exact                                         0                0  same
+constraints/pf_current(1)/weight                             1.000000E+00     1.000000E+00  same
+constraints/pf_current(1)/reconstructed                     -4.000000E+05    -4.000000E+05  same
+constraints/pf_current(1)/chi_squared                        2.000000E-02     2.000000E-02  same
+constraints/pf_passive_current(1)/measured                   2.100000E+04     2.100000E+04  same
+constraints/pf_passive_current(1)/source[1]               equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/pf_passive_current(1)/time_measurement           1.000000E+00     1.000000E+00  same
+constraints/pf_passive_current(1)/exact                                 0                0  same
+constraints/pf_passive_current(1)/weight                     1.000000E+00     1.000000E+00  same
+constraints/pf_passive_current(1)/reconstructed              2.000000E+04     2.000000E+04  same
+constraints/pf_passive_current(1)/chi_squared                2.000000E-02     2.000000E-02  same
+constraints/pressure(1)/measured                             8.100000E+04     8.100000E+04  same
+constraints/pressure(1)/position/r                           7.050000E+00     7.050000E+00  same
+constraints/pressure(1)/position/phi                         3.500000E-01     3.500000E-01  same
+constraints/pressure(1)/position/z                           4.500000E-01     4.500000E-01  same
+constraints/pressure(1)/position/rho_tor_norm                3.000000E-01     3.000000E-01  same
+constraints/pressure(1)/position/psi                        -1.050000E+00    -1.050000E+00  same
+constraints/pressure(1)/source[1]                         equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/pressure(1)/time_measurement                     1.000000E+00     1.000000E+00  same
+constraints/pressure(1)/exact                                           0                0  same
+constraints/pressure(1)/weight                               1.000000E+00     1.000000E+00  same
+constraints/pressure(1)/reconstructed                        8.000000E+04     8.000000E+04  same
+constraints/pressure(1)/chi_squared                          2.000000E-02     2.000000E-02  same
+constraints/pressure_rotational(1)/measured                  5.100000E+03     5.100000E+03  same
+constraints/pressure_rotational(1)/position/r                7.050000E+00     7.050000E+00  same
+constraints/pressure_rotational(1)/position/phi              3.500000E-01     3.500000E-01  same
+constraints/pressure_rotational(1)/position/z                4.500000E-01     4.500000E-01  same
+constraints/pressure_rotational(1)/position/rho_tor_norm     3.000000E-01     3.000000E-01  same
+constraints/pressure_rotational(1)/position/psi             -1.050000E+00    -1.050000E+00  same
+constraints/pressure_rotational(1)/source[1]              equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/pressure_rotational(1)/time_measurement          1.000000E+00     1.000000E+00  same
+constraints/pressure_rotational(1)/exact                                0                0  same
+constraints/pressure_rotational(1)/weight                    1.000000E+00     1.000000E+00  same
+constraints/pressure_rotational(1)/reconstructed             5.000000E+03     5.000000E+03  same
+constraints/pressure_rotational(1)/chi_squared               2.000000E-02     2.000000E-02  same
+constraints/q(1)/measured                                    1.210000E+00     1.210000E+00  same
+constraints/q(1)/position/r                                  7.050000E+00     7.050000E+00  same
+constraints/q(1)/position/phi                                3.500000E-01     3.500000E-01  same
+constraints/q(1)/position/z                                  4.500000E-01     4.500000E-01  same
+constraints/q(1)/position/rho_tor_norm                       3.000000E-01     3.000000E-01  same
+constraints/q(1)/position/psi                               -1.050000E+00    -1.050000E+00  same
+constraints/q(1)/source[1]                                equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/q(1)/time_measurement                            1.000000E+00     1.000000E+00  same
+constraints/q(1)/exact                                                  0                0  same
+constraints/q(1)/weight                                      1.000000E+00     1.000000E+00  same
+constraints/q(1)/reconstructed                               1.200000E+00     1.200000E+00  same
+constraints/q(1)/chi_squared                                 2.000000E-02     2.000000E-02  same
+constraints/j_phi(1)/measured                                9.100000E+05                -  only4
+constraints/j_phi(1)/position/r                              7.050000E+00                -  only4
+constraints/j_phi(1)/position/phi                            3.500000E-01                -  only4
+constraints/j_phi(1)/position/z                              4.500000E-01                -  only4
+constraints/j_phi(1)/position/rho_tor_norm                   3.000000E-01                -  only4
+constraints/j_phi(1)/position/psi                           -1.050000E+00                -  only4
+constraints/j_phi(1)/source[1]                            equilibrium_seed synthetic diagnostic     (not provided)                            only4
+constraints/j_phi(1)/time_measurement                        1.000000E+00                -  only4
+constraints/j_phi(1)/exact                                              0                -  only4
+constraints/j_phi(1)/weight                                  1.000000E+00                -  only4
+constraints/j_phi(1)/reconstructed                           9.000000E+05                -  only4
+constraints/j_phi(1)/chi_squared                             2.000000E-02                -  only4
+constraints/j_parallel(1)/measured                           8.100000E+05                -  only4
+constraints/j_parallel(1)/position/r                         7.050000E+00                -  only4
+constraints/j_parallel(1)/position/phi                       3.500000E-01                -  only4
+constraints/j_parallel(1)/position/z                         4.500000E-01                -  only4
+constraints/j_parallel(1)/position/rho_tor_norm              3.000000E-01                -  only4
+constraints/j_parallel(1)/position/psi                      -1.050000E+00                -  only4
+constraints/j_parallel(1)/source[1]                       equilibrium_seed synthetic diagnostic     (not provided)                            only4
+constraints/j_parallel(1)/time_measurement                   1.000000E+00                -  only4
+constraints/j_parallel(1)/exact                                         0                -  only4
+constraints/j_parallel(1)/weight                             1.000000E+00                -  only4
+constraints/j_parallel(1)/reconstructed                      8.000000E+05                -  only4
+constraints/j_parallel(1)/chi_squared                        2.000000E-02                -  only4
+constraints/x_point(1)/position_measured/r                   5.350000E+00     5.350000E+00  same
+constraints/x_point(1)/position_measured/z                  -3.350000E+00    -3.350000E+00  same
+constraints/x_point(1)/source[1]                          equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/x_point(1)/time_measurement                      1.000000E+00     1.000000E+00  same
+constraints/x_point(1)/exact                                            0                0  same
+constraints/x_point(1)/weight                                1.000000E+00     1.000000E+00  same
+constraints/x_point(1)/position_reconstructed/r              5.300000E+00     5.300000E+00  same
+constraints/x_point(1)/position_reconstructed/z             -3.300000E+00    -3.300000E+00  same
+constraints/x_point(1)/chi_squared_r                         5.000000E-02                -  only4
+constraints/x_point(1)/chi_squared_z                         6.000000E-02                -  only4
+constraints/strike_point(1)/position_measured/r              5.350000E+00     5.350000E+00  same
+constraints/strike_point(1)/position_measured/z             -3.350000E+00    -3.350000E+00  same
+constraints/strike_point(1)/source[1]                     equilibrium_seed synthetic diagnostic     equilibrium_seed synthetic diagnostic     same
+constraints/strike_point(1)/time_measurement                 1.000000E+00     1.000000E+00  same
+constraints/strike_point(1)/exact                                       0                0  same
+constraints/strike_point(1)/weight                           1.000000E+00     1.000000E+00  same
+constraints/strike_point(1)/position_reconstructed/r         5.300000E+00     5.300000E+00  same
+constraints/strike_point(1)/position_reconstructed/z        -3.300000E+00    -3.300000E+00  same
+constraints/strike_point(1)/chi_squared_r                    5.000000E-02                -  only4
+constraints/strike_point(1)/chi_squared_z                    6.000000E-02                -  only4
+constraints/chi_squared_reduced                              8.500000E-01     9.881313-324  DIFF
+constraints/freedom_degrees_n                                         120                0  DIFF
+constraints/constraints_n                                             145                0  DIFF
+
+====================================================================================================
+end of table
