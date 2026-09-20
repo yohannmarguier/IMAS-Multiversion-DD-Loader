@@ -148,6 +148,8 @@ and limitations".
   verifies both stored candidates disappear while unrelated data and the
   stamp survive. Older Core builds, including upstream 5.7.2, still delete
   the whole occurrence; ABI version compatibility does not guarantee the fix.
+  The pin also includes IMAS-Core #66's absolute HDF5 read fix, completing
+  issue #212's child-context absolute-read operation in both directions.
 - **`timebase` inherits the read path wholesale** (ADR 0016 decision 10) — it
   resolves independently of `field`, either one refusing refuses the write, and
   both feed the fidelity verdict. The named hazard — a write whose timebase

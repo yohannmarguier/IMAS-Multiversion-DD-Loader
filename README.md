@@ -501,6 +501,14 @@ is itself worth knowing when reading a green suite.
   the whole occurrence ([#139](https://github.com/yohannmarguier/IMAS-Multiversion-DD-Loader/issues/139)).
   The ABI compatibility check alone does not distinguish those builds; use
   the pinned fork or a Core carrying the same correction.
+- **Absolute HDF5 reads beneath an array-structure context require the
+  corrected Core.** The same pin includes the absolute-field fix
+  ([IMAS-Core #66](https://github.com/yohannmarguier/IMAS-Core/pull/66)).
+  The live coexistence oracle verifies that both Core directly and the shim
+  return the same seeded value for relative and absolute spellings in both
+  conversion directions. Older builds can report present data as an unset
+  scalar with a successful status
+  ([IMAS-Core #65](https://github.com/yohannmarguier/IMAS-Core/issues/65)).
 
 ## Layout
 

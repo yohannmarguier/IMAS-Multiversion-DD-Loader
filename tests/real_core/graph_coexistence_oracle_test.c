@@ -439,9 +439,8 @@ static void live_j_operations(int reverse) {
     void *data = &value;
     CHECK_OK(al_read_data(j, "reconstructed", "", &data, DOUBLE_DATA, 0, NULL));
     CHECK(value == 47.0);
-    /* Establish the pinned HDF5 backend's absolute-path limitation through
-     * Core directly, using the same stored context and its stored spelling.
-     * This is a baseline, not proof of successful absolute-path access. */
+    /* Establish the pinned HDF5 backend's absolute-path behavior through Core
+     * directly, using the same stored context and its stored spelling. */
     void *core = dlopen(REAL_CORE_LIBRARY_PATH, RTLD_NOW | RTLD_LOCAL);
     CHECK(core != NULL);
     typedef al_status_t (*core_read_fn)(int, const char *, const char *, void **, int, int, int *);
@@ -455,15 +454,15 @@ static void live_j_operations(int reverse) {
     value = EMPTY_DOUBLE;
     CHECK_OK(core_read(j, "/time_slice/constraints/j_phi/reconstructed", "", &data,
                        DOUBLE_DATA, 0, NULL));
-    CHECK(value == EMPTY_DOUBLE);
+    CHECK(value == 47.0);
     value = EMPTY_DOUBLE;
     CHECK_OK(al_read_data(j, reverse ? "/time_slice/constraints/j_tor/reconstructed"
                                      : "/time_slice/constraints/j_phi/reconstructed",
                           "", &data, DOUBLE_DATA, 0, NULL));
-    CHECK(value == EMPTY_DOUBLE);
+    CHECK(value == 47.0);
     CHECK(dlclose(core) == 0);
-    printf("pinned Core limitation: absolute read beneath a child returns EMPTY both "
-           "directly and through the live shim\n");
+    printf("absolute read beneath a child returns the seeded value both directly "
+           "and through the live shim\n");
     CHECK_OK(al_end_action(j));
     close_slice_context(slice, operation, pulse);
 

@@ -42,3 +42,11 @@ The original upstream 5.7.1 and 5.7.2 tags were restored in the fork without
 changing their objects or moving the source pin; the new pin reports
 `5.7.2.86`. Both CI dependency cache keys were advanced to discard builds
 configured without those tags. The runtime compatibility gate remains intact.
+
+## Follow-up — 2026-09-20
+
+The pin moved again to `3e5871a844c594491ab9e5365b63576f552bf50f`, which retains
+the delete correction and adds IMAS-Core #66's absolute HDF5 field-read
+correction. The issue #212 live coexistence oracle now requires direct-Core and
+shim-converted absolute reads beneath an array-structure context to return the
+same seeded value as the relative spelling in both conversion directions.

@@ -93,51 +93,48 @@ IMAS_MVDD_TEST_GRAPH_CONTAINER=<task-container> cargo test --release \
 | coordinates/units | Complete in-scope path relationships require presence at both endpoints; producer-labelled specs retain their identity. Missing/foreign/dangling evidence refuses locally. `dim_equivalent` alone never certifies factor one. |
 | scientific changes | Unsupported documentation, node type and identifier enum changes refuse. Unknown historical COCOS stays unknown. |
 
-## Executed verification (2026-09-18)
+## Executed verification (2026-09-18; R4 completed 2026-09-20)
 
 All commands used the repair worktree `/private/tmp/imas-mvdd-issue-212-repair`.
 The live service was `bolt://127.0.0.1:17688`, backed by the exact archive
 manifest `dc90975cb9fa0c7b08e9e4809640d01e41d927b4162200c13eec5076e030329b`
 and the Neo4j image pinned in `config/dd-graph-release.env`. Real Core was
-installed from the pinned fork commit
-`dae4abdd9428bd28f47063f8f575bdc8abd915f2`. Fortran was the unchanged pin
+installed initially from fork commit
+`dae4abdd9428bd28f47063f8f575bdc8abd915f2`, then rebuilt at
+`3e5871a844c594491ab9e5365b63576f552bf50f` for the completed R4 absolute-read
+verification. Fortran was the unchanged pin
 `cd6ea111948bbff7b07b36b39992c56b565dea9b` with DD 4.1.1.
 
 | Gate | Path/source and executed command | Result / limitation |
 | --- | --- | --- |
 | R1 | `cargo test --release pinned_graph_returns_complete_reference_scopes --lib -- --ignored --nocapture` | One test acquired and validated all six directional maps; supported and refused path assertions passed. |
 | R2–R3 | `cargo test runtime_map --lib --offline`; raw-response `neo4j_graph` tests feed the same acquirer/resolver | Malformed types/ranks, missing columns/pages, duplicate/conflicting records, ownership/cardinality, query failure, shuffled releases, addition anchors, coordinate membership and unsupported semantics covered. Controlled history tests retain removal/reappearance and exceptions. |
-| R4 | Live CTest build `/private/tmp/imas-mvdd-212-real-build`; `ctest --output-on-failure --no-tests=error -j2` with connection settings and 120-second bound | Recording stub, genuine Core, nested j candidates, both equilibrium directions and pulse_schedule reads/writes/deletes. HDF5 independently checks stored effects, stamps and unrelated data. Successful absolute reads beneath a child remain blocked by pinned Core; direct-Core comparison below reproduces the limitation. |
+| R4 | Live CTest build `/private/tmp/imas-mvdd-212-fixed-build`; `ctest --output-on-failure --no-tests=error -j2` with connection settings and 120-second bound | All 285 checks passed against Core `3e5871a`: recording stub, genuine Core, nested j candidates, both equilibrium directions and pulse_schedule reads/writes/deletes. HDF5 independently checks stored effects, stamps and unrelated data. Direct-Core and converted absolute reads beneath the child context both return the seeded value in both directions. |
 | R5 | `cargo test --release pinned_live_map_survives_graph_shutdown --lib -- --ignored --nocapture`, naming `imas-mvdd-212-live` | Passed: caller references released, retained map reused offline, uncached failure, explicit later retry after restart. Deterministic coordinator tests cover same-key sharing, deadlines, blocked worker, no late publication and registry independence. |
-| R6 | Installed `/private/tmp/imas-mvdd-212-live-build/graph-package`; `ctest --test-dir /private/tmp/imas-fortran-issue-230-debug -R '^al-fortran-test-shim-graph-runtime$' --output-on-failure --no-tests=error` | Fixture, loss-log cleanup and generated Fortran conversion passed (3 tests). Graph-required CI selects `live`; fast CI keeps controlled facts. Hosted CI itself has not run this unpushed branch. |
+| R6 | Installed `/private/tmp/imas-mvdd-212-fixed-build/graph-package`; `ctest --test-dir /private/tmp/imas-fortran-issue-212-fixed -R '^al-fortran-test-shim-graph-runtime$' --output-on-failure --no-tests=error` | Rebuilt against Core `3e5871a`; fixture, loss-log cleanup and generated Fortran conversion passed (3 tests). Graph-required CI selects `live`; fast CI keeps controlled facts. Hosted CI itself has not run this unpushed branch. |
 | R7 | Configuration and direct coordinator call above; nonzero script used in CI | Callable live path delivered. No benchmark claims or production cutover included. Native downstream blockers remain until the repair is landed/resolved. |
 | R8 | `cargo fmt --check`, `cargo clippy --all-targets --all-features --offline -- -D warnings`; controlled and live CMake suites; package checks; two-axis code review | Final counts and package results recorded below. Review corrections include metadata consistency, coordinate provenance, enum refusal and exact refusal text. |
 
 The graph is treated as trusted input; none of these checks compares its facts
 with XML inventories. Existing XML artifact mechanism coverage is retained.
 
-### Remaining R4 limitation: absolute reads beneath child contexts
+### Completed R4 absolute reads beneath child contexts
 
 The live coexistence oracle reads `reconstructed` beneath a `j_phi` stored
 context and obtains the seeded value 47 in both directions. Calling the
-same Core library directly through its `al_plugin_read_data` symbol also returns 47
-for that relative spelling, but returns `EMPTY_DOUBLE` for the stored absolute
-spelling `/time_slice/constraints/j_phi/reconstructed`. The converted absolute
-call reproduces that EMPTY result. Thus these checks establish the limitation,
-not successful absolute-path access. Recording-stub coverage separately proves
+same Core library directly through its `al_plugin_read_data` symbol returns 47
+for both that relative spelling and the stored absolute spelling
+`/time_slice/constraints/j_phi/reconstructed`. The converted absolute call also
+returns 47 in both directions. Recording-stub coverage separately proves
 absolute-path translation.
 The direct baseline uses the plugin twin to avoid Core's public wrapper
 reentering the shim through an interposable symbol on ELF platforms.
 
-In pinned Core `dae4abdd9428bd28f47063f8f575bdc8abd915f2`,
-`src/hdf5/hdf5_reader.cpp`, `HDF5Reader::read_ND_Data`, replaces every slash
-with `&` and unconditionally prepends the current array-structure context.
-It does not reset to the occurrence root for a leading slash. Owner: IMAS-Core
-HDF5 path handling; #212 retains this acceptance blocker until that behavior
-is corrected or the required operation contract is explicitly resolved.
-Changing child-context operation policy in the shim would exceed this repair's
-scope. Keep #212 open and retain #232/#233's blockers; a green limitation
-regression must not be represented as closing this gate.
+Core issue #65 fixed the HDF5 path handling in merge commit
+`3e5871a844c594491ab9e5365b63576f552bf50f`; `IMAS_CORE_REF` now pins that
+commit. The direct baseline remains part of the oracle so a future Core pin
+cannot silently reintroduce the backend defect while the converted assertion
+continues to verify the shim's absolute-path handling.
 
 Final suite results: controlled profile **309 checks**, live profile **285
 checks**. Initial runs exposed three controlled fixture/CI-guard failures and one
