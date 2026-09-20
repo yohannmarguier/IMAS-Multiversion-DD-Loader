@@ -287,13 +287,11 @@ if(DEFINED PINNED_FORTRAN_CORE_JOB OR DEFINED PINNED_CPP_CORE_JOB
     require_matching_line(fortran_hli_job
             "HLI_TOTAL_TESTS - HLI_DISABLED_TESTS"
             "retain the ordinary HLI enabled-test count assertion")
-    require_matching_line(fortran_hli_job "-DIMAS_MVDD_GRAPH_TEST_SOURCE=live"
-        "build the installed Fortran graph package with the live source")
     require_line(fortran_hli_job "- uses: ./.github/actions/setup-dd-graph"
-            "start the pinned graph before the graph-backed Fortran scenario")
-    require_line(fortran_hli_job
-            "run: cmake --build build-shim --target imas_mvdd_graph_test_package -j\"$(nproc)\""
-            "package the private graph-selected shim for the installed Fortran scenario")
+        "start the pinned graph before the graph-backed Fortran scenario")
+    require_matching_line(fortran_hli_job
+            "-DCMAKE_PREFIX_PATH=.*dist"
+            "use the installed production shim for the Fortran scenario")
     require_matching_line(fortran_hli_job
             "-DAL_SHIM_GRAPH_RUNTIME_SCENARIO=ON"
             "configure the graph-backed Fortran scenario explicitly")
@@ -304,6 +302,11 @@ if(DEFINED PINNED_FORTRAN_CORE_JOB OR DEFINED PINNED_CPP_CORE_JOB
             "test \"\\$graph_scenario_count\" -gt 0"
             "reject an empty graph-backed Fortran scenario selection")
     check_component_pinned_core_linkage(${PINNED_CPP_CORE_JOB} CPP workflow)
+    read_job(${PINNED_CPP_CORE_JOB} cpp_hli_job)
+    require_line(cpp_hli_job "- uses: ./.github/actions/setup-dd-graph"
+        "start the pinned graph before C++ cross-DD conformance scenarios")
+    require_line(cpp_hli_job "IMAS_MVDD_GRAPH_DEADLINE_SECONDS: 120"
+        "give the C++ HLI graph acquisition enough time for its fixture scope")
     check_component_pinned_core_linkage(${PINNED_MATLAB_CORE_JOB} MATLAB workflow)
     check_component_pinned_core_linkage(${PINNED_JAVA_CORE_JOB} JAVA workflow)
 
@@ -343,8 +346,11 @@ require_line(fast_job "build_type: [Debug, Release]"
     "build both CMake configurations")
 require_line(fast_job "run: cargo fmt --check" "check formatting")
 require_line(fast_job
-    "run: cargo clippy --all-targets --all-features -- -D warnings"
-    "reject clippy warnings")
+    "cargo clippy --all-targets -- -D warnings"
+    "lint the production graph source")
+require_line(fast_job
+    "cargo clippy --all-targets --features xml-fixture-source -- -D warnings"
+    "lint the private XML fixture path")
 require_line(fast_job "-DIMAS_MVDD_REAL_CORE_TESTS=OFF"
     "select the recording-stub test profile")
 require_line(graph_provisioning_job "- uses: ./.github/actions/setup-dd-graph"
@@ -389,7 +395,9 @@ endif()
 require_line(full_job "uses: actions/cache@v4"
     "cache the acquired IMAS-Core build")
 require_line(full_job "uses: ./.github/actions/setup-dd-graph"
-    "provision the pinned DD graph before graph-selected real-Core coverage")
+    "provision the pinned DD graph before production real-Core coverage")
+require_matching_line(full_job "-DIMAS_MVDD_GRAPH_TEST_SOURCE=live"
+    "point real-Core graph scenarios at the production artifact")
 require_line(full_job "- name: Test graph coexistence real-Core scenarios"
     "run the graph coexistence real-Core scenarios explicitly")
 require_line(full_job "expected=5"

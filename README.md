@@ -141,26 +141,20 @@ scenario selection fails those graph-required checks. The action exports
 `NEO4J_URI`, `NEO4J_USERNAME` and `NEO4J_PASSWORD`; they are job-local settings
 and credentials never enter Git or the job summary.
 
-The live graph-acquisition contract has a configurable whole-attempt deadline
-of five seconds by default. It covers connection, graph reads, validation,
-construction and publication; later stages receive the remaining time rather
-than restarting the budget. An internal caller uses
-`RuntimeMapAcquirer::with_deadline` to choose a different bound. The private
-`graph-live-source` test instance accepts `IMAS_MVDD_GRAPH_DEADLINE_SECONDS`;
-there is no public C-ABI deadline setting. When that source is selected, a first
-mismatched occurrence needs the selected graph and a complete map before it can
-open. A successful map is retained for the process lifetime, so later opens of
-the same IDS/version key reuse it without another graph request; updates
-therefore happen explicitly between HLI processes, not through a live refresh.
-The ordinary installed library remains XML-selected, and the private CI package
-defaults to controlled complete facts. Configure
-`-DIMAS_MVDD_GRAPH_TEST_SOURCE=live` to build its live-source variant and its
-installed `graph-package` with `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`
-and optional `NEO4J_DATABASE` supplied at execution. See
-[the live source contract](docs/KG_LIVE_SOURCE_CONTRACT.md) for reproducible
-checks and evidence, and [the runtime-map measurements](docs/KG_RUNTIME_MAP_MEASUREMENTS.md)
-for the bounded acquisition-cost observations; #233 owns the ordinary production
-source switch.
+The installed shim acquires every uncached mismatch from that graph. Its
+whole-attempt deadline is five seconds by default and covers connection, graph
+reads, validation, construction and publication; later stages receive the
+remaining time rather than restarting the budget. Set
+`IMAS_MVDD_GRAPH_DEADLINE_SECONDS` to an integer number of seconds when an
+integration environment needs a larger bound. A first mismatched occurrence
+needs the selected graph and a complete map before it can open. A successful
+map is retained for the process lifetime, so later opens of the same
+IDS/version key reuse it without another graph request; updates therefore
+happen explicitly between HLI processes, not through a live refresh. An
+unavailable or unsupported uncached pair refuses with the IDS and both DD
+versions; it never falls back to XML or passthrough. XML remains available only
+in private regression-fixture builds. See [the live source contract](docs/KG_LIVE_SOURCE_CONTRACT.md)
+and [the runtime-map measurements](docs/KG_RUNTIME_MAP_MEASUREMENTS.md).
 
 Between HLI runs, stop and later restart the same recorded pin without any
 release lookup or download:
@@ -383,8 +377,12 @@ tell you nothing.
 | `IMAS_MVDD_HLI_DD_VERSION` | the shim, at first open | Fallback for `imas_mvdd_set_hli_dd_version()` — the calling HLI's own DD version |
 | `IMAS_CORE_LIBRARY` | the shim, at first IMAS-Core call | Absolute path to the real IMAS-Core shared library, overriding the bare-soname search |
 | `IMAS_MVDD_LOSS_LOG_DIR` | the shim, at first loss | Existing directory for the loss log file; an empty value disables it |
+| `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD` | the shim, for an uncached DD mismatch | Connection details for the validated runtime-map graph |
+| `NEO4J_DATABASE` | the shim, for an uncached DD mismatch | Optional Neo4j database name; defaults to `neo4j` |
+| `IMAS_MVDD_GRAPH_DEADLINE_SECONDS` | the shim, for an uncached DD mismatch | Whole graph acquisition limit in seconds; defaults to `5` |
 
-These are the only three environment variables the shim itself reads.
+The graph lifecycle variables used by CI setup, such as `IMAS_MVDD_GRAPH_HOME`,
+are not read by the shim.
 
 ## Scope and limitations
 
@@ -425,12 +423,13 @@ is itself worth knowing when reading a green suite.
   this project's own C ABI, which is the ABI imas-Fortran consumes. imas-CPP is
   expected to fit the same client shape but has not been validated here;
   imas-Matlab and imas-Java have not been judged at all.
-- **Conversion coverage is one IDS and one version pair.** equilibrium
-  3.39.0 ⇄ 4.1.1, served from the single conversion-map artifact embedded in
-  `src/conversion/known_artifacts.rs` (`docs/3.39.0--4.1.1.xml`). Any other IDS, or any
-  other version pair, is forwarded unconverted — as is an occurrence whose
-  stamp matches the HLI or is absent
-  (`docs/adr/0007-unstamped-ids-occurrences-match-hli.md`).
+- **Conversion depends on the selected graph evidence.** The production shim
+  constructs a complete map for the exact IDS and version pair on the first
+  mismatch. An unsupported or unavailable pair refuses that open rather than
+  forwarding unconverted. Matching and unstamped occurrences retain the
+  established identity-forwarding behavior
+  (`docs/adr/0007-unstamped-ids-occurrences-match-hli.md`). XML remains a
+  private regression fixture, not a production fallback.
 - **The completeness proof's oracle is two inventories, not the DD.** The
   artifact is proven complete against `docs/inventory/equilibrium-{3.39.0,4.1.1}.txt`
   — the imas-dd path sets for those versions, which exclude the
@@ -524,7 +523,7 @@ cbindgen.toml           generated-header settings
 cmake/imas-mvdd-loaderConfig.cmake.in  find_package template, hand-authored
 src/lib.rs              the mirrored C ABI
 src/core/               runtime binding and dlopen/dlsym adapter
-src/conversion/         map resolution, path policy, outcomes, and embedded artifacts
+src/conversion/         graph-map acquisition, map resolution, path policy, and outcomes
 src/registry/           live conversion-context registry
 src/version/            DD versions, HLI latch, and occurrence stamp discovery
 src/interpose/          C-facing seam adapters, one module per seam family
@@ -666,16 +665,14 @@ on pull requests based on `develop` or `main` whose diff can affect the result,
 and on demand.
 
 The same Fortran job separately builds #230's opt-in
-`al-fortran-test-shim-graph-runtime` scenario against the build-tree-only
-graph-selected package, after starting the pinned graph. The scenario performs
+`al-fortran-test-shim-graph-runtime` scenario against the installed production
+package, after starting the pinned graph. The scenario performs
 generated HLI calls that write and read the supported `psi` COCOS conversion
 and observes the `coordinates_type` refusal through the HLI's partial-read
 surface. Its selected CTest set must be nonempty, and the job summary records
-the Fortran/Core pins, graph release and manifest digest. This package is
-install-shaped solely for this validation: the ordinary installed package and
-full Fortran suite remain XML-selected. A validated installed integration is
-not a universal deployment choice; selecting the graph source for normal
-installations remains #233's separate decision.
+the Fortran/Core pins, graph release and manifest digest. The ordinary
+installed package is graph-backed; XML is retained only for isolated mechanism
+regressions.
 
 The C++ job builds `yohannmarguier/IMAS-Cpp` at `IMAS_CPP_REF`, using the same
 `IMAS_CORE_REF` fork and DD 4.1.1. It enables the generated suite and examples,
@@ -767,8 +764,9 @@ conversion records fails rather than passing quietly.
 
 The HLI also acquires the IMAS-Core fork at the committed `IMAS_CORE_REF`, so
 it exercises the same library as the shim's full CI job. The Data Dictionary is
-pinned to 4.1.1 because the shim ships exactly one conversion-map artifact; a
-different DD version does not weaken the conversion test but dissolves it.
+pinned to 4.1.1 because the checked-in fixture and cross-DD scenario establish
+that conversion baseline; a different DD version does not weaken the conversion
+test but dissolves it.
 `docs/adr/0026-pin-imas-core-until-upstream-corrects-delete.md` records why
 Core is pinned instead of floated.
 

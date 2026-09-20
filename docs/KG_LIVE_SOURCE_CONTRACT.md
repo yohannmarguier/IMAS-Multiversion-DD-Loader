@@ -11,7 +11,8 @@ the caller's `AcquisitionAttempt`. `Neo4jScopeSource` retrieves and validates
 all streams, then `neo4j_facts` decodes them. `RuntimeMapAcquirer` alone
 reconstructs endpoint state and builds the existing `ConversionMap`.
 `RuntimeMapCoordinator` retains successful maps. No field operation queries
-Neo4j. Ordinary production builds still select XML (#233).
+Neo4j. The ordinary production build selects this source; XML is a private
+regression fixture only.
 
 | Raw projection | Fact and temporal meaning | Null/empty/error handling |
 | --- | --- | --- |
@@ -52,15 +53,13 @@ cmake -S . -B build-live -DCMAKE_BUILD_TYPE=Release \
 cmake --build build-live
 IMAS_MVDD_GRAPH_DEADLINE_SECONDS=120 ctest --test-dir build-live \
   --output-on-failure --no-tests=error
-cmake --build build-live --target imas_mvdd_graph_test_package
 ```
 
-The ordinary `stage` and installation still select XML; only `graph-stage`
-and `graph-package` select the requested private feature. The default private
-source is `controlled`. For the existing pinned Fortran command in the tracer,
-point `CMAKE_PREFIX_PATH` at this live `graph-package`, and export the same
-connection settings and explicit deadline when running CTest. A missing graph
-fails acquisition; there is no XML fallback.
+The ordinary `stage` and installation are graph-backed. The default private
+graph fixture remains `controlled`; it exists for cases the released service
+cannot express and never changes the installed source. The installed Fortran
+scenario uses the normal package with the same connection settings and explicit
+deadline. A missing graph fails acquisition; there is no XML fallback.
 
 The Rust entry for #232 is
 `RuntimeMapCoordinator::with_deadline(Neo4jFactsSource(Neo4jConfig { ... }), bound)`

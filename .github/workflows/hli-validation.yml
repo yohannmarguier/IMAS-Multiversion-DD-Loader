@@ -14,7 +14,8 @@ name: HLI validation
 # The HLIs, IMAS-Core and Data Dictionary are pinned so failures can be
 # investigated against fixed sources. MDSplus packages come from its stable
 # repository and their versions are recorded. The DD is pinned because the
-# shim ships one conversion-map artifact.
+# checked-in HLI fixtures and cross-DD scenario establish a fixed conversion
+# baseline; the installed shim acquires its map from the pinned graph.
 
 on:
   pull_request:
@@ -44,12 +45,9 @@ env:
   CARGO_C_VERSION: 0.10.15
   CARGO_TERM_COLOR: always
 
-  # Pinned, and the pin moves only when a new conversion-map artifact justifies
-  # it. src/known_artifacts.rs embeds one artifact, for equilibrium
-  # 3.39.0 <-> 4.1.1, and the HLI's committed fixtures are pulses written under
-  # exactly those two versions. Under a different DD version the cross-version
-  # test does not weaken, it stops meaning anything: no artifact serves the
-  # pair, so nothing registers and nothing converts.
+  # Pinned because this workflow's generated HLI and fixtures establish its
+  # conversion baseline. The installed shim acquires maps from the graph for
+  # exact mismatched endpoints rather than selecting an embedded artifact.
   HLI_DD_VERSION: 4.1.1
 
   # What the HLI suite is expected to register. These are assertions, not
@@ -198,16 +196,9 @@ jobs:
           set -euo pipefail
           cmake -S . -B build-shim \
             -DCMAKE_BUILD_TYPE=Release \
-            -DIMAS_MVDD_GRAPH_TEST_SOURCE=live \
             -DIMAS_MVDD_REAL_CORE_TESTS=OFF
           cmake --build build-shim
           cmake --install build-shim --prefix "$PWD/dist"
-
-      # This uses the installed-package shape without changing the ordinary
-      # installation above: graph-package is a build-tree-only prefix whose
-      # library has Cargo's internal graph-live-source feature enabled.
-      - name: Package the graph-selected shim for the Fortran scenario
-        run: cmake --build build-shim --target imas_mvdd_graph_test_package -j"$(nproc)"
 
       # The HLI acquires its run-time IMAS-Core here. Its repository and version
       # options are explicit so this build opens the same fork commit as ci.yml.
@@ -328,9 +319,8 @@ jobs:
           export USER="$PWD/testdb"
           ctest --output-on-failure --no-tests=error
 
-      # Keep the graph-selected scenario in a separate HLI build. The normal
-      # build above must keep consuming the ordinary installed XML-selected
-      # package and retain its complete passthrough suite and count assertion.
+      # Keep the conversion scenario in a separate HLI build while using the
+      # same installed production artifact as every downstream consumer.
       - name: Configure the graph-backed Fortran conversion scenario
         working-directory: hli
         run: |
@@ -343,7 +333,7 @@ jobs:
             -DCMAKE_CXX_STANDARD=17 \
             -DAL_USE_MULTIVERSION_SHIM=ON \
             -DAL_SHIM_GRAPH_RUNTIME_SCENARIO=ON \
-            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/build-shim/graph-package" \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/dist" \
             -DAL_CORE_GIT_REPOSITORY=https://github.com/yohannmarguier/IMAS-Core.git \
             -DAL_CORE_VERSION="${{ steps.imas_core_pin.outputs.commit }}" \
             -DDD_VERSION="${HLI_DD_VERSION}" \
@@ -396,8 +386,8 @@ jobs:
             echo "| Selected HLI scenarios | \`$graph_scenario_count\` |"
             echo
             echo "The pinned graph was started by the shared setup action. This"
-            echo "HLI scenario uses graph-live-source and acquires its map over Bolt; it"
-            echo "does not select a graph source in the shipped installation."
+            echo "The installed production shim acquires its map over Bolt; XML is"
+            echo "available only to private regression-fixture builds."
           } >> "$GITHUB_STEP_SUMMARY"
 
       # The drift verdict only reaches stderr (VersionDrift::record in
@@ -461,9 +451,12 @@ jobs:
       MDSPLUS_DIR: /usr/local/mdsplus
       LD_LIBRARY_PATH: /usr/local/mdsplus/lib
       CLASSPATH: /usr/local/mdsplus/java/classes/jTraverser.jar
+      IMAS_MVDD_GRAPH_DEADLINE_SECONDS: 120
     steps:
       - name: Check out the shim
         uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-dd-graph
 
       - uses: ./.github/actions/setup-toolchain
 

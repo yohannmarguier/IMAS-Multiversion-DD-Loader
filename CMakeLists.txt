@@ -250,11 +250,12 @@ message(STATUS "Found cargo-c: ${CARGO_C_VERSION_OUTPUT}")
 
 set(CARGO_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargo")
 set(IMAS_MVDD_STAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/stage")
-# The graph tracer uses the same crate and ABI, built once more with only an
-# internal source-selection feature. This stage is a test dependency, never
-# the installed shim or a runtime XML/graph selection option.
+# Fixture stages use the same crate and ABI with private compile-time sources.
+# Neither stage is installed or selectable by an operator at runtime.
 set(IMAS_MVDD_GRAPH_CARGO_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/graph-cargo")
 set(IMAS_MVDD_GRAPH_STAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/graph-stage")
+set(IMAS_MVDD_XML_FIXTURE_CARGO_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/xml-fixture-cargo")
+set(IMAS_MVDD_XML_FIXTURE_STAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/xml-fixture-stage")
 
 # Name the cargo profile explicitly: `cargo cinstall` defaults to release
 # whatever CMAKE_BUILD_TYPE says, so leaving it implicit silently ignores a
@@ -271,11 +272,11 @@ set(CARGO_COMMON_ARGS
     --package "${IMAS_MVDD_PACKAGE}"
     --profile "${CARGO_PROFILE}")
 
-set(IMAS_MVDD_GRAPH_TEST_SOURCE "controlled" CACHE STRING "Source for the private graph test/package instance (controlled or live)")
+set(IMAS_MVDD_GRAPH_TEST_SOURCE "controlled" CACHE STRING "Source for the private graph test instance (controlled or live)")
 set_property(CACHE IMAS_MVDD_GRAPH_TEST_SOURCE PROPERTY STRINGS controlled live)
-if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "live")
-    set(_graph_source_feature graph-live-source)
-elseif(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "controlled")
+if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "live" OR IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "controlled")
+    # The live matrix links the ordinary production stage directly. The
+    # private graph stage remains controlled facts for isolated fixtures.
     set(_graph_source_feature graph-test-source)
 else()
     message(FATAL_ERROR "IMAS_MVDD_GRAPH_TEST_SOURCE must be controlled or live")
@@ -286,10 +287,17 @@ set(CARGO_GRAPH_COMMON_ARGS
     --package "${IMAS_MVDD_PACKAGE}"
     --profile "${CARGO_PROFILE}"
     --features ${_graph_source_feature})
+set(CARGO_XML_FIXTURE_COMMON_ARGS
+    --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    --target-dir "${IMAS_MVDD_XML_FIXTURE_CARGO_TARGET_DIR}"
+    --package "${IMAS_MVDD_PACKAGE}"
+    --profile "${CARGO_PROFILE}"
+    --features xml-fixture-source)
 
 if(IMAS_MVDD_CARGO_OFFLINE)
     list(APPEND CARGO_COMMON_ARGS --offline)
     list(APPEND CARGO_GRAPH_COMMON_ARGS --offline)
+    list(APPEND CARGO_XML_FIXTURE_COMMON_ARGS --offline)
 endif()
 
 # Staging into the build tree gives the artefacts a predictable, install-shaped
@@ -302,6 +310,10 @@ set(CARGO_GRAPH_STAGE_ARGS
     --prefix "${IMAS_MVDD_GRAPH_STAGE_DIR}"
     --libdir "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib"
     --includedir "${IMAS_MVDD_GRAPH_STAGE_DIR}/include")
+set(CARGO_XML_FIXTURE_STAGE_ARGS
+    --prefix "${IMAS_MVDD_XML_FIXTURE_STAGE_DIR}"
+    --libdir "${IMAS_MVDD_XML_FIXTURE_STAGE_DIR}/lib"
+    --includedir "${IMAS_MVDD_XML_FIXTURE_STAGE_DIR}/include")
 
 # The shim opens IMAS-Core by bare soname. Give only the build-tree cdylib an
 # build-only search path to the acquired Core so tests and in-tree consumers
@@ -334,6 +346,18 @@ endif()
 list(APPEND IMAS_MVDD_GRAPH_CARGO_STAGE_COMMAND
     -- "${CARGO_EXECUTABLE}" cinstall ${CARGO_GRAPH_COMMON_ARGS} ${CARGO_GRAPH_STAGE_ARGS})
 
+set(IMAS_MVDD_XML_FIXTURE_CARGO_STAGE_COMMAND
+    "${CMAKE_COMMAND}" -E env --unset=MAKEFLAGS --unset=MFLAGS)
+if(IMAS_MVDD_REAL_CORE_TESTS)
+    list(APPEND IMAS_MVDD_XML_FIXTURE_CARGO_STAGE_COMMAND
+        "IMAS_CORE_BUILD_RPATH=$<TARGET_FILE_DIR:${IMAS_CORE_AL_TARGET}>")
+else()
+    list(APPEND IMAS_MVDD_XML_FIXTURE_CARGO_STAGE_COMMAND
+        --unset=IMAS_CORE_BUILD_RPATH)
+endif()
+list(APPEND IMAS_MVDD_XML_FIXTURE_CARGO_STAGE_COMMAND
+    -- "${CARGO_EXECUTABLE}" cinstall ${CARGO_XML_FIXTURE_COMMON_ARGS} ${CARGO_XML_FIXTURE_STAGE_ARGS})
+
 set(IMAS_MVDD_STAGED_INCLUDE_DIR "${IMAS_MVDD_STAGE_DIR}/include")
 set(IMAS_MVDD_STAGED_HEADER "${IMAS_MVDD_STAGED_INCLUDE_DIR}/${IMAS_MVDD_LIB_NAME}.h")
 set(IMAS_MVDD_STAGED_LIBRARY
@@ -343,11 +367,17 @@ set(IMAS_MVDD_GRAPH_STAGED_HEADER
     "${IMAS_MVDD_GRAPH_STAGED_INCLUDE_DIR}/${IMAS_MVDD_LIB_NAME}.h")
 set(IMAS_MVDD_GRAPH_STAGED_LIBRARY
     "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}${IMAS_MVDD_LIB_NAME}${CMAKE_SHARED_LIBRARY_SUFFIX}")
+set(IMAS_MVDD_XML_FIXTURE_STAGED_INCLUDE_DIR "${IMAS_MVDD_XML_FIXTURE_STAGE_DIR}/include")
+set(IMAS_MVDD_XML_FIXTURE_STAGED_HEADER
+    "${IMAS_MVDD_XML_FIXTURE_STAGED_INCLUDE_DIR}/${IMAS_MVDD_LIB_NAME}.h")
+set(IMAS_MVDD_XML_FIXTURE_STAGED_LIBRARY
+    "${IMAS_MVDD_XML_FIXTURE_STAGE_DIR}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}${IMAS_MVDD_LIB_NAME}${CMAKE_SHARED_LIBRARY_SUFFIX}")
 
 # The imported target below refuses a non-existent include directory at
 # generate time, so create it before the build has produced anything.
 file(MAKE_DIRECTORY "${IMAS_MVDD_STAGED_INCLUDE_DIR}")
 file(MAKE_DIRECTORY "${IMAS_MVDD_GRAPH_STAGED_INCLUDE_DIR}")
+file(MAKE_DIRECTORY "${IMAS_MVDD_XML_FIXTURE_STAGED_INCLUDE_DIR}")
 
 file(GLOB_RECURSE IMAS_MVDD_RUST_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.rs"
@@ -379,23 +409,65 @@ add_custom_command(
         "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
         "${CMAKE_CURRENT_SOURCE_DIR}/cbindgen.toml"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-    COMMENT "Building graph-selected ${IMAS_MVDD_LIB_NAME} C ABI test instance with cargo-c"
+    COMMENT "Building controlled-graph fixture ${IMAS_MVDD_LIB_NAME} C ABI test instance with cargo-c"
     VERBATIM)
 
 add_custom_target(imas_mvdd_graph_capi
     DEPENDS "${IMAS_MVDD_GRAPH_STAGED_LIBRARY}" "${IMAS_MVDD_GRAPH_STAGED_HEADER}")
 
-# Let in-tree consumers link this the way they would any CMake library.
-add_library(imas_mvdd_loader SHARED IMPORTED GLOBAL)
-add_library(imas-mvdd-loader::imas-mvdd-loader ALIAS imas_mvdd_loader)
-set_target_properties(imas_mvdd_loader PROPERTIES
+add_custom_command(
+    OUTPUT "${IMAS_MVDD_XML_FIXTURE_STAGED_LIBRARY}" "${IMAS_MVDD_XML_FIXTURE_STAGED_HEADER}"
+    COMMAND ${IMAS_MVDD_XML_FIXTURE_CARGO_STAGE_COMMAND}
+    DEPENDS
+        ${IMAS_MVDD_RUST_SOURCES}
+        "${CMAKE_CURRENT_SOURCE_DIR}/build.rs"
+        "${CMAKE_CURRENT_SOURCE_DIR}/IMAS_CORE_VERSION"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cbindgen.toml"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Building XML-fixture ${IMAS_MVDD_LIB_NAME} C ABI test instance with cargo-c"
+    VERBATIM)
+
+add_custom_target(imas_mvdd_xml_fixture_capi
+    DEPENDS "${IMAS_MVDD_XML_FIXTURE_STAGED_LIBRARY}" "${IMAS_MVDD_XML_FIXTURE_STAGED_HEADER}")
+add_dependencies(imas_mvdd_capi imas_mvdd_xml_fixture_capi)
+
+# The ordinary stage is the installed production artifact. Existing C seam
+# regressions deliberately link a private XML fixture stage, while graph-live
+# acceptance targets name this production target explicitly.
+add_library(imas_mvdd_loader_production SHARED IMPORTED GLOBAL)
+add_library(imas-mvdd-loader::imas-mvdd-loader ALIAS imas_mvdd_loader_production)
+set_target_properties(imas_mvdd_loader_production PROPERTIES
     IMPORTED_LOCATION "${IMAS_MVDD_STAGED_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${IMAS_MVDD_STAGED_INCLUDE_DIR}")
+
+add_library(imas_mvdd_loader SHARED IMPORTED GLOBAL)
+set_target_properties(imas_mvdd_loader PROPERTIES
+    IMPORTED_LOCATION "${IMAS_MVDD_XML_FIXTURE_STAGED_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${IMAS_MVDD_XML_FIXTURE_STAGED_INCLUDE_DIR}")
 
 add_library(imas_mvdd_loader_graph_test SHARED IMPORTED GLOBAL)
 set_target_properties(imas_mvdd_loader_graph_test PROPERTIES
     IMPORTED_LOCATION "${IMAS_MVDD_GRAPH_STAGED_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${IMAS_MVDD_GRAPH_STAGED_INCLUDE_DIR}")
+
+add_library(imas_mvdd_loader_xml_fixture SHARED IMPORTED GLOBAL)
+set_target_properties(imas_mvdd_loader_xml_fixture PROPERTIES
+    IMPORTED_LOCATION "${IMAS_MVDD_XML_FIXTURE_STAGED_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${IMAS_MVDD_XML_FIXTURE_STAGED_INCLUDE_DIR}")
+
+# All graph-labelled tests use this one selection. In the live matrix they
+# exercise the normal staged/installed artifact; controlled facts remain a
+# private graph-test fixture with no public source-selection surface.
+if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "live")
+    set(IMAS_MVDD_GRAPH_RUNTIME_LIBRARY imas_mvdd_loader_production)
+    set(IMAS_MVDD_GRAPH_RUNTIME_CAPI imas_mvdd_capi)
+    set(IMAS_MVDD_GRAPH_RUNTIME_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+else()
+    set(IMAS_MVDD_GRAPH_RUNTIME_LIBRARY imas_mvdd_loader_graph_test)
+    set(IMAS_MVDD_GRAPH_RUNTIME_CAPI imas_mvdd_graph_capi)
+    set(IMAS_MVDD_GRAPH_RUNTIME_RPATH "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib")
+endif()
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -481,62 +553,6 @@ write_basic_package_version_file(
     "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}ConfigVersion.cmake"
     VERSION "${PROJECT_VERSION}"
     COMPATIBILITY SameMajorVersion)
-
-# The graph-selected crate feature is test-only, but an installed HLI has to
-# discover it through the same package contract as any downstream consumer.
-# Keep that package under the build directory and behind an explicit target:
-# `cmake --install` continues to install the production XML-selected library.
-set(IMAS_MVDD_GRAPH_PACKAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/graph-package")
-set(IMAS_MVDD_GRAPH_PACKAGE_LIBRARY
-    "${IMAS_MVDD_GRAPH_PACKAGE_DIR}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}${IMAS_MVDD_LIB_NAME}${CMAKE_SHARED_LIBRARY_SUFFIX}")
-set(IMAS_MVDD_GRAPH_PACKAGE_HEADER
-    "${IMAS_MVDD_GRAPH_PACKAGE_DIR}/include/${IMAS_MVDD_LIB_NAME}.h")
-set(IMAS_MVDD_GRAPH_PACKAGE_CONFIG_DIR
-    "${IMAS_MVDD_GRAPH_PACKAGE_DIR}/${IMAS_MVDD_PACKAGE_CONFIG_DIR}")
-set(IMAS_MVDD_GRAPH_PACKAGE_CONFIG
-    "${IMAS_MVDD_GRAPH_PACKAGE_CONFIG_DIR}/${IMAS_MVDD_PACKAGE}Config.cmake")
-set(IMAS_MVDD_GRAPH_PACKAGE_VERSION
-    "${IMAS_MVDD_GRAPH_PACKAGE_CONFIG_DIR}/${IMAS_MVDD_PACKAGE}ConfigVersion.cmake")
-set(CARGO_GRAPH_PACKAGE_ARGS
-    --prefix "${IMAS_MVDD_GRAPH_PACKAGE_DIR}"
-    --libdir "${IMAS_MVDD_GRAPH_PACKAGE_DIR}/lib"
-    --includedir "${IMAS_MVDD_GRAPH_PACKAGE_DIR}/include")
-set(IMAS_MVDD_GRAPH_CARGO_PACKAGE_COMMAND
-    "${CMAKE_COMMAND}" -E env --unset=MAKEFLAGS --unset=MFLAGS --unset=IMAS_CORE_BUILD_RPATH
-    -- "${CARGO_EXECUTABLE}" cinstall ${CARGO_GRAPH_COMMON_ARGS} ${CARGO_GRAPH_PACKAGE_ARGS})
-
-add_custom_command(
-    OUTPUT
-        "${IMAS_MVDD_GRAPH_PACKAGE_LIBRARY}"
-        "${IMAS_MVDD_GRAPH_PACKAGE_HEADER}"
-        "${IMAS_MVDD_GRAPH_PACKAGE_CONFIG}"
-        "${IMAS_MVDD_GRAPH_PACKAGE_VERSION}"
-    COMMAND ${IMAS_MVDD_GRAPH_CARGO_PACKAGE_COMMAND}
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${IMAS_MVDD_GRAPH_PACKAGE_CONFIG_DIR}"
-    COMMAND "${CMAKE_COMMAND}" -E copy
-        "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}Config.cmake"
-        "${IMAS_MVDD_GRAPH_PACKAGE_CONFIG}"
-    COMMAND "${CMAKE_COMMAND}" -E copy
-        "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}ConfigVersion.cmake"
-        "${IMAS_MVDD_GRAPH_PACKAGE_VERSION}"
-    DEPENDS
-        ${IMAS_MVDD_RUST_SOURCES}
-        "${CMAKE_CURRENT_SOURCE_DIR}/build.rs"
-        "${CMAKE_CURRENT_SOURCE_DIR}/IMAS_CORE_VERSION"
-        "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-        "${CMAKE_CURRENT_SOURCE_DIR}/cbindgen.toml"
-        "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}Config.cmake"
-        "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}ConfigVersion.cmake"
-    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-    COMMENT "Packaging graph-selected ${IMAS_MVDD_LIB_NAME} for an installed HLI test"
-    VERBATIM)
-
-add_custom_target(imas_mvdd_graph_test_package
-    DEPENDS
-        "${IMAS_MVDD_GRAPH_PACKAGE_LIBRARY}"
-        "${IMAS_MVDD_GRAPH_PACKAGE_HEADER}"
-        "${IMAS_MVDD_GRAPH_PACKAGE_CONFIG}"
-        "${IMAS_MVDD_GRAPH_PACKAGE_VERSION}")
 
 install(FILES
         "${CMAKE_CURRENT_BINARY_DIR}/${IMAS_MVDD_PACKAGE}Config.cmake"

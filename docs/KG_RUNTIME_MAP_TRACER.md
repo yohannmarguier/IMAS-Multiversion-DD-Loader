@@ -4,9 +4,10 @@ Issue #211 adds a graph-free, Rust-only tracer at
 `conversion::runtime_map`. `RuntimeMapAcquirer::acquire` accepts an IDS and
 exact stored/HLI DD endpoints, fetches one complete IDS-scoped fact set through
 its `GraphFactsSource`, and returns either the existing validated
-`ConversionMap` or an `AcquisitionFailure`. The private graph-stage C-ABI test
-instance calls it from occurrence opening; production embedded-artifact
-selection and the installed public C ABI remain unchanged.
+`ConversionMap` or an `AcquisitionFailure`. Occurrence opening in the normal
+staged and installed ABI calls it for every uncached mismatch. The private
+graph-stage C-ABI instance remains controlled mechanism coverage; the private
+XML fixture build keeps regression assertions that need the old artifact.
 
 The controlled contract mirrors the selected graph streams: released versions
 with optional COCOS conventions; IDS node rows with exact endpoint metadata
@@ -108,9 +109,9 @@ matrix. Controlled facts below remain separate mechanism coverage.
 
 `RuntimeMapAcquirer::new` gives each `acquire` call one fresh five-second
 monotonic deadline. An internal caller that needs a different bound constructs
-the acquirer with `RuntimeMapAcquirer::with_deadline`; this tracer has no
-environment-variable or C-ABI deadline setting because graph-backed runtime
-source selection remains outside its scope. The duration covers source work,
+the acquirer with `RuntimeMapAcquirer::with_deadline`; the production occurrence
+adapter reads `IMAS_MVDD_GRAPH_DEADLINE_SECONDS` for that bound, while the C ABI
+adds no configuration export. The duration covers source work,
 scope validation, rule construction, `ConversionMap` validation and the final
 publication check. Any expiry becomes `AcquisitionFailure::TimedOut`, which is
 distinct from source, incomplete-scope, malformed-evidence and construction
@@ -159,12 +160,13 @@ it from replacing the newer retained result.
 
 ## Graph-selected C-ABI tracer (#216)
 
-The production staged and installed shim still selects only the embedded XML
-artifact. CMake additionally builds the same crate into a private
+At the #216 milestone, CMake additionally built the same crate into a private
 `graph-stage/` test instance with Cargo's internal `graph-test-source` feature;
 that instance selects a controlled complete graph-fact source through
-`RuntimeMapCoordinator`. There is no installed source-selection option, new C
-export, or second harness.
+`RuntimeMapCoordinator`. #233 made that coordinator the normal staged and
+installed source for every uncached mismatch. There is no installed
+source-selection option, new C export, or second harness; XML is now private
+fixture coverage only.
 
 `graph_runtime_map_test` links that private library and the existing recording
 stub. Its two identity scenarios open 4.1.1 → 3.39.0 and 3.39.0 → 4.1.1
@@ -177,9 +179,9 @@ acquires a ready map before `record_root`; on failure it forgets the cached
 mismatch before asking the matched call family to clean up the just-opened
 context.
 
-The retained XML mechanism scenarios keep their normal staged library and
-unchanged expectations. The broader opening-family/probe/concurrency matrix is
-#225, and production source cutover remains #233.
+The retained XML mechanism scenarios link their private fixture library and
+keep their expectations. The broader opening-family/probe/concurrency matrix
+is #225.
 
 Verified in the recording-stub profile with `cmake -S . -B build-issue216
 -DCMAKE_BUILD_TYPE=Debug -DIMAS_MVDD_REAL_CORE_TESTS=OFF`, `cmake --build
@@ -187,11 +189,11 @@ build-issue216 -j2`, and `ctest --test-dir build-issue216 --output-on-failure`
 (215 passing tests). The same change passed `cargo test --all-targets`,
 `cargo clippy --all-targets -- -D warnings`, and `cargo clippy --all-targets
 --features graph-test-source -- -D warnings`; the one ignored live-graph unit
-check still requires CI's pinned Neo4j service. This tracer deliberately uses
-controlled graph facts rather than a live graph; its equilibrium scope now
+check still requires CI's pinned Neo4j service. That first tracer deliberately
+used controlled graph facts rather than a live graph; its equilibrium scope now
 covers identity operations, direct renames, unit classifications, opening
-lifecycle, and the pinned graph's `profiles_1d/psi` COCOS evidence. Production
-source cutover and remaining semantic mappings stay outside its scope.
+lifecycle, and the pinned graph's `profiles_1d/psi` COCOS evidence. Remaining
+semantic mappings stayed outside that milestone's scope.
 
 ## Evidenced direct rename tracer (#217)
 
@@ -318,12 +320,11 @@ scientific classifiers/oracle remain for #229.
 ## Graph/fixture matrix registration (#226)
 
 The CTest source assignment is explicit rather than inferred from an XML
-expectation: every scenario executed by `graph_runtime_map_test` inherits the
-`graph-runtime-map` label from that target, while the retained mechanism suites
-continue to link the ordinary staged XML-selected shim and have no such label.
-The graph-labelled matrix is therefore selectable without copying the shared
-recording-stub harness or turning the installed shim into a runtime source
-switch.
+expectation: controlled graph-fixture scenarios executed by
+`graph_runtime_map_test` inherit the `graph-runtime-map` label, while the
+retained mechanism suites link a private XML fixture stage. The `live-graph`
+matrix links the ordinary staged production shim, so no test source selection
+becomes an installed runtime option.
 
 The `graph-abi` CI job provisions the committed graph snapshot, proves the
 live complete equilibrium scope at the Rust boundary, then builds the
@@ -341,13 +342,13 @@ oracle:
 | --- | --- | --- |
 | Read, primary-only write, delete fan-out and losses | `coexistence-*`, `renamed-*`, `psi-*`, and `unit-refusal-*` | XML retains its artifact candidate and NoSource scalar/array behavior. Graph excludes unsupported scientific paths and records graph candidate paths in write/delete losses. |
 | Nested stored anchors and historical paths | `moved-parent-*`, `historical-nested-operations-*`, and arraystruct coexistence cases | XML retains its `move-gap` inherited loss; graph `gap/r` is exact and deliberately has no loss. |
-| Plugin twins, reentry, passthrough and lifecycle | plugin-arraystruct coexistence, `reentrant-read-*`, `passthrough-*`, opening-family, failure-cleanup and retry cases | XML passthrough and mechanism suites remain unchanged; no source selection reaches the installed ABI. |
+| Plugin twins, reentry, passthrough and lifecycle | plugin-arraystruct coexistence, `reentrant-read-*`, `passthrough-*`, opening-family, failure-cleanup and retry cases | XML passthrough and mechanism suites remain private fixtures; the installed ABI has no source-selection knob. |
 | Evidence-specific candidates and transformations | coexistence fallback/order, direct renames, psi sign flips, unknown/compound/missing COCOS and unit/timebase refusals | Unproven aliases remain refusals; unresolved removal does not become graph absence. Declaration-only units are exact, while required or insufficient numerical evidence refuses. |
 
-This makes the final-cutover assignments mechanical: keep the ordinary staged
-target for XML fixtures, move only `graph-runtime-map` labelled scenarios when
-the production source changes, and preserve any documented expectation
-difference instead of silently changing an XML assertion.
+The completed cutover keeps XML scenarios on their private fixture target,
+uses the ordinary staged target for all live graph scenarios, and preserves
+documented expectation differences instead of silently changing an XML
+assertion.
 
 At registration, the Debug recording-stub profile selected and passed 50/50
 `graph-runtime-map` CTests. The pinned live graph was not started for that
@@ -413,22 +414,21 @@ That action restores or acquires only the immutable archive, then always loads
 a fresh task-owned database and query-smoke-checks it; a cache hit cannot skip
 startup, and a setup failure fails the job.
 
-The existing HLI configuration still consumes the ordinary installed
-XML-selected package and runs its full asserted suite. A second `build-graph`
-configuration enables only `AL_SHIM_GRAPH_RUNTIME_SCENARIO` and finds
-`build-shim/graph-package`, configured with `IMAS_MVDD_GRAPH_TEST_SOURCE=live`
-so its library uses `graph-live-source`.
+The existing HLI configuration consumes the ordinary installed graph-backed
+package and runs its full asserted suite. A second `build-graph` configuration
+enables only `AL_SHIM_GRAPH_RUNTIME_SCENARIO` and finds that same installed
+package.
 It builds the same pinned Core fork, verifies that checkout's commit, rejects
 an empty `al-fortran-test-shim-graph-runtime` selection, then executes that
 generated-HLI conversion scenario with the normal HDF5 backend. Its job summary
 records the Fortran and Core pins, selected graph release and manifest digest,
 and selected scenario count without reporting credentials.
 
-The generated Fortran scenario now acquires its map from live Neo4j; the
-same private source is selected in `graph-abi` and the installed-Core CI
-profile. Functional validation explicitly selects a 120-second deadline;
-the default remains five seconds. #233 still owns the production cutover. Formatting, isolated Rust tests and the
-ordinary XML package path remain graph-service-independent. One selected
+The generated Fortran scenario acquires its map from live Neo4j; the same
+ordinary production artifact is selected in `graph-abi` and the installed-Core
+CI profile. Functional validation explicitly selects a 120-second deadline;
+the default remains five seconds. XML fixture tests remain graph-service-
+independent. One selected
 snapshot applies for an HLI process; map acquisition has its shared configurable
 five-second whole-attempt deadline and successful maps are reused for that
 process lifetime. Operators start or update the selected snapshot explicitly

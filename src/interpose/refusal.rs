@@ -146,8 +146,13 @@ pub(super) fn live_conversion_record(ctx_id: c_int) -> Option<ConversionRecord> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversion::known_artifacts;
-    use crate::interpose::occurrence::load_artifact;
+
+    const FIXTURE: &str = r#"
+        <ids-map ids="equilibrium" format-version="1">
+          <side id="left" dd="3.39.0" cocos="11"/>
+          <side id="right" dd="4.1.1" cocos="17"/>
+        </ids-map>
+    "#;
 
     /// Issue #56 AC5: "Matching, unknown, unstamped, and conversion-disabled
     /// contexts bypass registry lookup and rule resolution." The
@@ -168,21 +173,23 @@ mod tests {
         let stored: crate::version::dd_version::DdVersion =
             "3.39.0".parse().expect("known release");
         let hli: crate::version::dd_version::DdVersion = "4.1.1".parse().expect("known release");
-        let artifact = known_artifacts::lookup("equilibrium", &stored, &hli)
-            .expect("the embedded equilibrium artifact serves this pair");
-        let direction = artifact.direction_to_stored;
-        assert!(REGISTRY.record_root(
-            RootRegistration {
-                ctx_id: CTX_ID,
-                resolved_path: String::new(),
-                pulse_ctx_id: CTX_ID,
-                dataobjectname: "equilibrium".to_string(),
-                key: MapCacheKey::new("equilibrium".to_string(), stored, hli),
-                direction_to_stored: direction,
-                opened_read_op: true,
-            },
-            std::sync::Arc::new(load_artifact(&artifact)),
-        ));
+        assert!(
+            REGISTRY.record_root(
+                RootRegistration {
+                    ctx_id: CTX_ID,
+                    resolved_path: String::new(),
+                    pulse_ctx_id: CTX_ID,
+                    dataobjectname: "equilibrium".to_string(),
+                    key: MapCacheKey::new("equilibrium".to_string(), stored, hli),
+                    direction_to_stored: crate::conversion::conversion_map::Direction::Reverse,
+                    opened_read_op: true,
+                },
+                std::sync::Arc::new(
+                    crate::conversion::conversion_map::ConversionMap::load(FIXTURE)
+                        .expect("fixture map must load"),
+                ),
+            )
+        );
 
         assert!(
             !crate::version::hli_version::conversion_is_possible(),

@@ -166,17 +166,16 @@ Source checks: [map resolution](../src/conversion/conversion_map.rs),
 [path narrowing and fidelity](../src/conversion/path_conversion.rs),
 [operation loops](../src/conversion/seam_policy.rs),
 [nested-read expectations](../tests/shim/nested_context_read_test.c),
-[XML declarations](3.39.0--4.1.1.xml), and ADRs 0004, 0006, 0008, 0012.
+[XML fixture declarations](3.39.0--4.1.1.xml), and ADRs 0004, 0006, 0008, 0012.
 
 ## Implementation details and specification follow-through
 
 The adapter needs a validated typed construction interface shared with XML
-loading; current private fields/XML-only loading do not permit a zero-edit
-integration. Acquisition must be fallible and obey the accepted deadline and
-cache policy; current creation executes under the registry mutex and retains
-Weak references. Do not place Neo4j work inside that existing closure.
-Delete safety needs exact endpoint structure/leaf information instead of its
-embedded equilibrium-only inventory. Unknown COCOS needs an honest type.
+fixture loading. Acquisition is fallible, bounded by one deadline, and retained
+by `RuntimeMapCoordinator` outside the registry mutex; Neo4j work must stay out
+of registry state management. Delete safety needs exact endpoint
+structure/leaf information rather than an equilibrium-only fixture inventory.
+Unknown COCOS needs an honest type.
 
 These are necessary construction/integration changes, not new read/write/delete
 policies. Driver, runtime, query batching, module layout and constructor type
@@ -194,10 +193,9 @@ production implementation or upstream KG change was made by this review.
 
 `ContextRegistry::record_root` accepts a ready `Arc<ConversionMap>` and only
 records context state. It neither constructs maps nor waits for or performs
-KG I/O. The current artifact adapter obtains its map through the existing
-weak-reference cache before calling `record_root`, so live roots and children
-continue to share the same map and the legacy map is released after its last
-record closes.
+KG I/O. `RuntimeMapCoordinator` acquires and retains successful maps by exact
+IDS/stored/HLI key before calling `record_root`, so live roots and children
+share the ready map without making the registry a cache owner.
 
 #216 supplies a complete or failed acquisition result to this same handoff:
 it must acquire before registry mutation, pass a successful ready map into

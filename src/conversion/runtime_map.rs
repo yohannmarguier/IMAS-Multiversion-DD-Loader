@@ -1,9 +1,9 @@
-//! Controlled graph-fact acquisition for the first runtime-map tracer.
+//! Validated graph-fact acquisition and coordination for runtime maps.
 //!
-//! This module is deliberately disconnected from occurrence opening.  It
-//! proves that a complete IDS scope can become the existing resolver's map
-//! without making graph transport or runtime source selection a production
-//! concern.
+//! Occurrence opening asks this module for one complete IDS scope at exact
+//! stored/HLI DD endpoints.  The returned map is either fully validated for
+//! publication or an explicit acquisition failure; source selection cannot
+//! silently fall back to a partial or embedded map.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use super::conversion_map::{
     TypedFromEntry, TypedRedefine, TypedRule, TypedSignFlip,
 };
 
-#[cfg(feature = "graph-test-source")]
+#[cfg(all(feature = "graph-test-source", not(feature = "xml-fixture-source")))]
 pub(crate) mod graph_test_source;
 mod neo4j_facts;
 pub(crate) mod neo4j_graph;
@@ -160,6 +160,10 @@ pub(crate) enum UnitChangeEvidence {
     /// Dimensions match, but value scale and offset remain unknown.
     DimensionallyCompatible,
     /// Evidence establishes a numerical scale or offset this shim cannot apply.
+    #[allow(
+        dead_code,
+        reason = "the pinned live producer cannot currently emit this controlled evidence"
+    )]
     RequiredScaleOrOffset,
 }
 
@@ -363,6 +367,10 @@ pub(crate) enum AcquisitionFailure {
         path: String,
         reason: String,
     },
+    #[allow(
+        dead_code,
+        reason = "kept distinct for the complete acquisition contract"
+    )]
     UnresolvedEndpoint {
         path: String,
         release: ArtifactDdVersion,
@@ -390,6 +398,10 @@ pub(crate) struct RuntimeMapAcquirer<S> {
 }
 
 impl<S> RuntimeMapAcquirer<S> {
+    #[allow(
+        dead_code,
+        reason = "the production adapter chooses an explicit deadline"
+    )]
     pub(crate) fn new(source: S) -> Self {
         Self::with_clock_and_observer(
             source,
@@ -426,6 +438,7 @@ impl<S> RuntimeMapAcquirer<S> {
 }
 
 impl<S: GraphFactsSource> RuntimeMapAcquirer<S> {
+    #[allow(dead_code, reason = "the coordinator owns production acquisition")]
     pub(crate) fn acquire(
         &self,
         request: &MapRequest,
@@ -1391,6 +1404,10 @@ impl<S> RuntimeMapCoordinator<S> {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "the production adapter chooses an explicit deadline"
+    )]
     pub(crate) fn new(source: S) -> Self {
         Self {
             acquirer: RuntimeMapAcquirer::new(source),
@@ -1399,6 +1416,7 @@ impl<S> RuntimeMapCoordinator<S> {
         }
     }
 
+    #[allow(dead_code, reason = "deterministic test-only clock injection")]
     pub(crate) fn with_clock_and_observer(
         source: S,
         deadline: Duration,
@@ -1414,6 +1432,7 @@ impl<S> RuntimeMapCoordinator<S> {
         }
     }
 
+    #[allow(dead_code, reason = "deterministic test-only observer injection")]
     pub(crate) fn with_observers(
         source: S,
         deadline: Duration,

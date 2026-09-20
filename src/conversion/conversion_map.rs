@@ -73,6 +73,7 @@ impl CocosConvention {
 
     /// The validated convention identifier, for comparisons at the map
     /// construction boundary.
+    #[cfg_attr(feature = "xml-fixture-source", allow(dead_code))]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
@@ -496,10 +497,7 @@ impl EndpointInventory {
     /// Adapts the legacy artifact's exact leaf lists. These lists are the
     /// existing compatibility input for delete classification; they are not a
     /// claim that the artifact-completeness proof exhausts its DD version.
-    #[cfg_attr(
-        any(feature = "graph-test-source", feature = "graph-live-source"),
-        allow(dead_code)
-    )]
+    #[cfg(feature = "xml-fixture-source")]
     pub(crate) fn complete_leaf_paths(paths: &str) -> Self {
         Self::complete(
             paths
@@ -1164,6 +1162,7 @@ impl ConversionMap {
     /// cache, thread stacks and temporary acquisition data, so callers must
     /// not present it as peak or process memory.
     #[cfg(test)]
+    #[cfg_attr(feature = "xml-fixture-source", allow(dead_code))]
     pub(crate) fn estimated_retained_bytes(&self) -> usize {
         fn string_bytes(value: &String) -> usize {
             value.capacity()

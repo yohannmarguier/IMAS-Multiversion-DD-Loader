@@ -1,12 +1,8 @@
-//! The one embedded conversion-map artifact this project loads directly
-//! (ADR 0004): equilibrium, DD 3.39.0 ⇄ 4.1.1. A future conversion-map
-//! generator (CONTEXT.md's "conversion-map generator") replaces this
-//! hardcoded lookup with something that covers every IDS and version pair;
-//! until then, an `(IDS name, stored DD version, HLI DD version)` triple this
-//! lookup does not recognise simply has no artifact available, and the shim
-//! treats it exactly like an unknown context: passthrough, no registration,
-//! no loss (ADR 0011 decision 1 — silence is earned by mechanism coverage,
-//! not by which DD-version pair is involved).
+//! Private XML regression fixtures for the former equilibrium 3.39.0 ⇄ 4.1.1
+//! artifact. Production occurrence opening acquires maps from the pinned
+//! graph; this lookup is compiled only into `xml-fixture-source` builds so
+//! existing interpreter and ABI mechanism fixtures retain their historical
+//! expectations without creating a runtime source-selection or fallback path.
 
 use crate::conversion::conversion_map::Direction;
 use crate::version::dd_version::DdVersion;

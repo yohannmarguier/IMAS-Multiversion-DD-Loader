@@ -43,8 +43,8 @@ jobs:
       - name: Record provisioning scope
         run: echo 'DD graph provisioning smoke check passed'
 
-  # The private live source consumes the pinned service. Fast retains the
-  # service-independent controlled-source ABI scenarios.
+  # The normal production artifact consumes the pinned service. Fast retains
+  # service-independent XML and controlled-graph fixture scenarios.
   graph-abi:
     name: Pinned DD graph C ABI matrix
     runs-on: ubuntu-latest
@@ -68,10 +68,10 @@ jobs:
             -DIMAS_MVDD_GRAPH_TEST_SOURCE=live \
             -DIMAS_MVDD_REAL_CORE_TESTS=OFF
 
-      - name: Build graph-selected C ABI test instance
+      - name: Build production C ABI test instance
         run: cmake --build build
 
-      - name: Test graph-selected C ABI matrix
+      - name: Test production C ABI matrix
         run: ctest --test-dir build -L live-graph --output-on-failure --no-tests=error
 
   fast:
@@ -93,7 +93,9 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          cargo clippy --all-targets --features xml-fixture-source -- -D warnings
 
       - name: Configure recording-stub profile
         run: |
@@ -131,8 +133,8 @@ jobs:
 
       - uses: ./.github/actions/setup-toolchain
 
-      # Issue #228's real-Core coexistence scenarios exercise the graph-selected
-      # ABI tracer. Provision the pinned graph in this job too, so their
+      # Issue #228's real-Core coexistence scenarios exercise the production
+      # ABI. Provision the pinned graph in this job too, so their
       # registration and execution cannot silently drift away from the graph
       # contract that supplies their complete scope.
       - name: Provision pinned DD graph for real-Core coexistence coverage
@@ -166,6 +168,7 @@ jobs:
       - name: Configure with real IMAS-Core
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DIMAS_MVDD_GRAPH_TEST_SOURCE=live \
             -DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON
 
       - name: Verify acquired IMAS-Core revision

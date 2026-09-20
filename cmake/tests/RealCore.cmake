@@ -160,9 +160,8 @@ add_real_core_test(equilibrium-read-conversion-disabled-is-unaffected
 add_real_core_test(equilibrium-read-copied-fixture-harness-reproves-renamed-read
     $<TARGET_FILE:equilibrium_read_test> copied-fixture-harness-reproves-renamed-read)
 
-# Issue #228 keeps the graph-selected source isolated from the production
-# library while exercising its 3.42.0 coexistence map through real Core and
-# the established copied-fixture/HDF5 oracle.
+# Controlled graph facts remain an isolated fixture, while the `live` matrix
+# drives the ordinary production artifact through the same real-Core oracle.
 add_executable(graph_coexistence_oracle_test
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/graph_coexistence_oracle_test.c")
 target_include_directories(graph_coexistence_oracle_test PRIVATE
@@ -172,15 +171,15 @@ target_compile_definitions(graph_coexistence_oracle_test PRIVATE
     "REAL_CORE_LIBRARY_PATH=\"$<TARGET_FILE:${IMAS_CORE_AL_TARGET}>\""
     "EQUILIBRIUM_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/imas-python-fixtures/fixtures\"")
 target_link_libraries(graph_coexistence_oracle_test PRIVATE
-    imas_mvdd_loader_graph_test
+    ${IMAS_MVDD_GRAPH_RUNTIME_LIBRARY}
     ${CMAKE_DL_LIBS}
     ${HDF5_C_LIBRARIES})
-add_dependencies(graph_coexistence_oracle_test imas_mvdd_graph_capi)
+add_dependencies(graph_coexistence_oracle_test ${IMAS_MVDD_GRAPH_RUNTIME_CAPI})
 if(IMAS_CORE_BUILT_FROM_SOURCE)
     add_dependencies(graph_coexistence_oracle_test ${IMAS_CORE_AL_TARGET})
 endif()
 set_target_properties(graph_coexistence_oracle_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib")
+    BUILD_RPATH "${IMAS_MVDD_GRAPH_RUNTIME_RPATH}")
 
 if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "controlled")
 add_real_core_test(read-coexistence-forward-selects-primary-then-falls-back
@@ -283,11 +282,11 @@ target_include_directories(graph_runtime_map_oracle_test PRIVATE
     ${_imas_core_include_dirs}
     ${HDF5_C_INCLUDE_DIRS})
 target_link_libraries(graph_runtime_map_oracle_test PRIVATE
-    imas_mvdd_loader_graph_test
+    ${IMAS_MVDD_GRAPH_RUNTIME_LIBRARY}
     ${HDF5_C_LIBRARIES})
-add_dependencies(graph_runtime_map_oracle_test imas_mvdd_graph_capi)
+add_dependencies(graph_runtime_map_oracle_test ${IMAS_MVDD_GRAPH_RUNTIME_CAPI})
 set_target_properties(graph_runtime_map_oracle_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib")
+    BUILD_RPATH "${IMAS_MVDD_GRAPH_RUNTIME_RPATH}")
 
 if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "live")
     target_compile_definitions(graph_runtime_map_oracle_test PRIVATE IMAS_MVDD_LIVE_GRAPH=1)
@@ -297,9 +296,9 @@ if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "live")
         target_compile_definitions(live_${family}_test PRIVATE
             "EQUILIBRIUM_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/imas-python-fixtures/fixtures\"")
         target_compile_definitions(live_${family}_test PRIVATE IMAS_MVDD_LIVE_GRAPH=1)
-        target_link_libraries(live_${family}_test PRIVATE imas_mvdd_loader_graph_test ${HDF5_C_LIBRARIES})
-        add_dependencies(live_${family}_test imas_mvdd_graph_capi)
-        set_target_properties(live_${family}_test PROPERTIES BUILD_RPATH "${IMAS_MVDD_GRAPH_STAGE_DIR}/lib")
+        target_link_libraries(live_${family}_test PRIVATE ${IMAS_MVDD_GRAPH_RUNTIME_LIBRARY} ${HDF5_C_LIBRARIES})
+        add_dependencies(live_${family}_test ${IMAS_MVDD_GRAPH_RUNTIME_CAPI})
+        set_target_properties(live_${family}_test PROPERTIES BUILD_RPATH "${IMAS_MVDD_GRAPH_RUNTIME_RPATH}")
     endforeach()
     foreach(direction IN ITEMS forward reverse)
         add_real_core_test(live-graph-core-${direction}-rename-read

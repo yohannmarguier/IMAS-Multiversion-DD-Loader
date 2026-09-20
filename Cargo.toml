@@ -22,12 +22,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # cargo-c enables this feature on every invocation and refuses to build without
 # it. Also usable to gate code that only makes sense behind the C ABI.
 capi = []
-# Builds a private C-ABI test instance whose occurrence adapter acquires maps
-# through the controlled graph-fact source. It is never enabled for staging or
+# Builds a private C-ABI fixture instance whose occurrence adapter acquires
+# maps through controlled graph facts. It is never enabled for staging or
 # installation of the production shim.
 graph-test-source = []
-# Private integration instance using the same live source as Rust acquisition.
-graph-live-source = []
+# Builds a private regression-fixture instance backed by the checked-in XML.
+# This is deliberately not a runtime source-selection option.
+xml-fixture-source = []
 
 # --- cargo-c configuration -------------------------------------------------
 # Drives header generation (cbindgen), soname/versioning and the .pc file.

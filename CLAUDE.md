@@ -54,8 +54,10 @@ paths used when they were written; use this map for current navigation.
 The shim mirrors IMAS-Core's public C ABI, binds IMAS-Core at runtime rather than
 linking it (ADR 0001), discovers the stored DD version from
 `ids_properties/version_put/data_dictionary` at every occurrence open, and
-translates read, write and delete paths *and values* across one hand-authored
-equilibrium 3.39.0 ⇄ 4.1.1 conversion-map artifact. All 37 linkable IMAS-Core C
+acquires complete conversion maps from the pinned local DD knowledge graph for
+each uncached mismatch. XML survives only in private regression fixtures; an
+unavailable or unsupported production pair refuses rather than passing through.
+All 37 linkable IMAS-Core C
 exports are forwarded; the 38th public header declaration,
 `al_plugin_begin_timerange_action`, is deliberately absent because it is
 unlinkable upstream, and `al_begin_array_struct_action` is not an IMAS-Core
@@ -73,7 +75,7 @@ and limitations".
 | Seam | Policy |
 |---|---|
 | `al_begin_dataentry_action` | registers its pulse in the context registry (ADR 0003) on success |
-| `al_begin_global_action` (+ `al_plugin_*` twin) | `seam_policy::decide_occurrence_registration` decides stored-version discovery and registration, while its sibling `decide_datapath_translation` decides the pre-forward translation from a cached mismatch; both occurrence-opening policy functions live in `src/conversion/seam_policy.rs`. A root conversion record is registered **only** when a present, valid stamp names a stored version that differs from the latched HLI version *and* has an embedded artifact to serve it (`src/conversion/known_artifacts.rs`). A matching or absent stamp registers nothing (ADR 0007); a malformed present stamp refuses and ends the just-opened context rather than leaking it (ADR 0009). `datapath` is translated only once a prior open of the same occurrence cached a mismatch. When the caller's `rwmode != READ_OP`, the stamp is read through a shim-owned `READ_OP` probe context of its own (ADR 0020) |
+| `al_begin_global_action` (+ `al_plugin_*` twin) | `seam_policy::decide_occurrence_registration` decides stored-version discovery and registration, while its sibling `decide_datapath_translation` decides the pre-forward translation from a cached mismatch; both occurrence-opening policy functions live in `src/conversion/seam_policy.rs`. A root conversion record is registered **only** when a present, valid mismatched stamp acquires a complete graph-derived map. Acquisition failure refuses and ends the just-opened context; matching or absent stamps register nothing (ADR 0007). `datapath` is translated only once a prior open of the same occurrence cached a mismatch. When the caller's `rwmode != READ_OP`, the stamp is read through a shim-owned `READ_OP` probe context of its own (ADR 0020) |
 | `al_begin_slice_action`, `al_begin_timerange_action` | same discovery/registration rule; no `datapath` argument, so only the discovery half applies |
 | `al_begin_arraystruct_action` (+ plugin twin) | resolves `path` and `timebase` before Core is called; on success registers the returned context as a child record inheriting the shared map, root identity, stored direction, and `opened_read_op`. A `renamed`/`moved` anchor translates to one stored spelling; a `merged`/`split` anchor whose candidates carry no value transformation is a candidate plan the seam itself decides how to use (issue #178, ADR 0025) — under `READ_OP` it tries each stored candidate against Core in declared precedence order, keeping the first that reports a populated array (or the last, if every candidate comes back empty, since a wholly empty subtree is not a refusal); any other access mode takes the declared primary without trying the rest, mirroring `al_write_data`'s own ambiguous-plan policy. Whichever candidate actually opens is remembered as the child's own `stored_path`, since a merged anchor has no single map-derivable stored spelling the way a renamed one does — a relative argument under it filters out any sibling candidate that does not lie beneath that fixed anchor rather than refusing the whole read. A refusal here retains an `UNMAPPABLE` read loss, closing the one gap left after write and delete refusals already did |
 | `al_read_data` / `al_plugin_read_data` | one shared `read_data_impl`: identity, `renamed`, `moved`, and `merged`/`split` candidate plans tried in declared precedence order, COCOS sign flip applied in place, three-way read-outcome classification (ADR 0012), every non-exact success retained in the root's loss log. A `dim == 0` candidate is classified through the EMPTY sentinel in the caller's own buffer rather than the data pointer, since a scalar read has no null-pointer channel; an exhausted scalar plan returns that sentinel where an array plan reports not-found. A shim-decided not-found — the artifact says the path has no stored source, so IMAS-Core is never called — leaves the caller's buffers as `Lowlevel::setDefaultValue` would: for `dim > 0` a null `*data` and every returned extent zeroed, for `dim == 0` the datatype's EMPTY sentinel written into the caller's own scalar, which is absence's only channel at rank zero |
@@ -92,17 +94,12 @@ and limitations".
   data-path seam ahead of the registry lock when conversion is impossible. The
   *matching* and *unknown* cases still cost the one lookup ADR 0003 budgets,
   since neither is knowable without asking.
-- **One artifact:** `docs/3.39.0--4.1.1.xml`, equilibrium 3.39.0 ⇄ 4.1.1,
-  hand-authored (ADR 0004). `moved` and `retyped` resolve; `retyped` refuses
-  unconditionally as `UnservableRetype` even where it declares itself *exact*,
-  because the shim cannot reshape an int array into an array of identifier
-  structures. The four `redefine` entries over
-  `constraints/{strike_point,x_point}/chi_squared_{r,z}` were removed after
-  review: those paths forward verbatim and the shim corrects no units.
-  Coverage floors are pinned in `cmake/tests/Common.cmake` (346 forward / 339
-  reverse supported, each split `by rule` + `by identity default`) and gated by
-  `tests/cmake/verify_artifact_coverage_floor.cmake` against real inventories
-  (ADR 0013) with near-boundary fixtures generated inside the script.
+- **Runtime graph maps:** every uncached mismatched occurrence acquires one
+  complete, validated IDS-scoped map from Neo4j at its exact stored/HLI DD
+  endpoints. Acquisition failures refuse and close the just-opened Core
+  context; there is no embedded-artifact or unknown-version passthrough in the
+  production library. `docs/3.39.0--4.1.1.xml` and its coverage floor remain
+  private XML-fixture regression coverage, selected only by the fixture build.
 - **Loss reaches the caller by a context log** (ADR 0012), drained without
   allocating through the shim-owned `imas_mvdd_context_loss_*` exports
   (`tests/abi/owned_exports.def`). A query on a child context resolves to its
@@ -233,8 +230,9 @@ and HDF5 for passthrough, plus `play_eq_two_dd-cross` for conversion. It runs on
 pull requests based on `develop`/`main` (fail-safe `paths-ignore`) and on
 `workflow_dispatch`. Three facts about it are easy to get wrong: it acquires
 the same IMAS-Core fork and committed `IMAS_CORE_REF` as the `full` CI job,
-`DD_VERSION` is **pinned to 4.1.1** because `src/known_artifacts.rs` embeds one
-artifact, and 20 of the HLI's `examples/` tests can *never* run in a shim build,
+`DD_VERSION` is **pinned to 4.1.1** because the checked-in HLI fixtures and
+cross-DD scenario establish that conversion baseline, and 20 of the HLI's
+`examples/` tests can *never* run in a shim build,
 so the workflow asserts the disabled count as well as the total. See
 `docs/adr/0026-pin-imas-core-until-upstream-corrects-delete.md` for why Core is
 pinned rather than floated.

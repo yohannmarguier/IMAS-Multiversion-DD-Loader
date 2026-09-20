@@ -23,15 +23,15 @@ the same commit.
   passthrough — this is the "unset" row in every matrix below.
 - **Stamp**: `ids_properties/version_put/data_dictionary` on an IDS occurrence.
   Read once, at occurrence-open time, to discover the *stored* DD version.
-- **Artifact**: one hand-authored conversion map. Exactly one exists today —
-  equilibrium, 3.39.0 ⇄ 4.1.1 (`docs/3.39.0--4.1.1.xml`). Its rule mix: 4
-  `identical`, 23 `left_only`, 13 `right_only`, 5 `renamed`, 3 `moved`, 13
-  `merged`, 1 `split`, 1 `retyped`.
+- **Runtime map**: a complete, validated `ConversionMap` acquired from Neo4j
+  for one IDS and exact stored/HLI DD endpoints. Successful maps are retained
+  process-wide by that key. The checked-in equilibrium XML map is a private
+  regression fixture, not an installed-runtime source.
 - **A registered conversion context** ("root record") exists only when the
-  stamp names a stored version that (a) differs from the HLI version and (b)
-  has an embedded artifact for that (IDS, stored, HLI) triple. This is the
-  only condition under which reads/writes/deletes on that occurrence are
-  translated or logged at all.
+  stamp names a stored version that differs from the HLI version and the
+  runtime graph returns a complete validated map for that `(IDS, stored, HLI)`
+  key. Failed acquisition refuses the open and closes the just-opened Core
+  context; it never falls back to unconverted forwarding.
 - **Fidelity**: `Exact`, `PotentiallyLossy`, `Lossy`, `Unmappable` (ADR 0008).
   Never surfaced through `al_status_t` on a successful call — only through the
   loss log (§7).
@@ -48,15 +48,13 @@ the same commit.
    mismatch" in the same process — the second `imas_mvdd_set_hli_dd_version`
    call with a *different* value is refused, not applied (ADR 0005). Two
    scenarios need two processes.
-2. **To exercise real conversion, use IDS `equilibrium` with stored/HLI
-   versions `3.39.0` and `4.1.1` (either direction).** Any other IDS, or any
-   other version pair, has no embedded artifact: the stamp is read, a
-   mismatch is *detected*, but `known_artifacts::lookup` returns `None`, no
-   root context is registered, and every subsequent read/write/delete on that
-   occurrence forwards completely unconverted — indistinguishable at the ABI
-   from a matching-version occurrence. **A version mismatch alone does not
-   imply conversion.** Don't write a test that asserts conversion happened
-   just because the stamps differ; assert it only for the one covered pair.
+2. **To exercise real conversion, provision the pinned graph and choose an
+   IDS/version pair its validated scope serves.** Supply `NEO4J_URI`,
+   `NEO4J_USERNAME`, and `NEO4J_PASSWORD` before opening the mismatch (see
+   `docs/KG_LIVE_SOURCE_CONTRACT.md`). The checked-in HLI scenario uses
+   `equilibrium` 3.39.0 ⇄ 4.1.1, but that is a tested baseline rather than an
+   installed allowlist. **A version mismatch alone does not imply success:** an
+   unavailable, incomplete, or invalid graph scope refuses the open.
 3. **The stamp is read once, at occurrence-open time** (`al_begin_global_action`,
    `al_begin_slice_action`, `al_begin_timerange_action`), not per-field. A test
    that wants a mismatched-occurrence scenario must have written that stamp
@@ -88,8 +86,8 @@ wrong too.
 |---|---|---|
 | Absent (no `version_put/data_dictionary` at all) | Nothing registered; occurrence presumed to match HLI (ADR 0007) | Open succeeds, forwarded exactly as issued |
 | Present, valid, equal to HLI version | Nothing registered | Open succeeds, forwarded exactly as issued |
-| Present, valid, differs from HLI version, **no embedded artifact** for that (IDS, stored, HLI) triple | Nothing registered, but the occurrence-cache remembers the mismatch (affects only a later `datapath` translation, §2.4) | Open succeeds; every later data seam on this occurrence forwards unconverted |
-| Present, valid, differs from HLI version, **artifact exists** | Root conversion context registered | Open succeeds; later data seams on this occurrence convert |
+| Present, valid, differs from HLI version, **graph acquisition fails** for that `(IDS, stored, HLI)` triple | Nothing registered; mismatch cache is cleared | **The open itself refuses** with `conversion map acquisition failed`, and the just-opened Core context is closed |
+| Present, valid, differs from HLI version, **complete graph map acquired** | Root conversion context registered | Open succeeds; later data seams convert |
 | Present but **malformed** (fails the grammar in ADR 0009: not a bare `MAJOR.MINOR.PATCH` from the known chain, and not exactly `MAJOR.MINOR.PATCH-N-gHASH`) | Nothing registered | **The open itself refuses**, and the context IMAS-Core just opened is closed again by the shim before returning to you. You get a refusal from the *open* seam, not from a later read/write. Test this by opening, not by reading. |
 
 A malformed stamp is not treated as absent — absence means "no stamp field";
@@ -105,8 +103,8 @@ reports it, and nothing is logged.
 
 When a root *is* registered:
 
-- `field` and `timebase` are each resolved independently against the
-  artifact. Either one resolving to a refusal (e.g. the one `retyped` rule —
+- `field` and `timebase` are each resolved independently against the acquired
+  map. Either one resolving to a refusal (e.g. a `retyped` rule —
   always refused, unconditionally, even where the artifact marks it `exact`,
   because the shim cannot reshape an int array into an identifier struct) or
   to "no source" (a `left_only`/`right_only` case with nothing on the other
@@ -353,6 +351,7 @@ conversion test most wants to name.
 
 | Reason string | Raised by |
 |---|---|
+| `conversion map acquisition failed` | occurrence-opening seam, when the graph cannot supply one complete validated map for the IDS and DD pair; the just-opened Core context is closed before the refusal returns |
 | `this path's container changed shape and cannot be served` | any seam, on the `retyped` rule — unconditional, even where the rule declares itself `exact` |
 | `this path's unit was redefined and cannot be converted` | any seam, on a unit-redefinition (`redefine`) rule. **Unreachable from the shipped artifact** and asserted to be so — its four `redefine` entries over `constraints/{strike_point,x_point}/chi_squared_{r,z}` were removed after review, so those paths now forward verbatim and the shim corrects no units. A test that hits this means a new artifact declared a `redefine` |
 | `this path has no safe conversion between DD versions` | any seam, on a declared-`unmappable` rule. **Unreachable from the shipped artifact** (ADR 0011) and asserted to be so — a test that hits it means a new artifact made it reachable |
@@ -506,16 +505,14 @@ so you don't chase a false negative:
   candidates the shim submits.
 - **A clean failure from a refused `put_slice`** against an unmodified HLI
   (§5) — expect a torn slice, not an atomic rollback.
-- **Any conversion effect on an occurrence whose (IDS, stored, HLI) triple has
-  no embedded artifact** — a genuine version mismatch with no artifact is
-  byte-for-byte indistinguishable from no mismatch at all, at every seam.
+- **The detailed cause of graph acquisition failure** — the open refusal names
+  the IDS and versions but deliberately does not expose credentials, transport
+  diagnostics, or partial graph facts through the ABI.
 - **`datapath` translation on a fresh occurrence's first open** (§2.4) — it
   only ever fires from the second open onward.
-- **Anything about `timebase` conversion beyond identity** — in the shipped
-  artifact `time` is untouched by any rule, so `timebase` resolution is
-  exercised only at `Fidelity::Exact`, identity-forward, in every scenario
-  above. The write path explicitly documents this as unproven territory for a
-  future artifact, not a guarantee that a non-identity `timebase` write is
+- **Anything about a graph-served `timebase` path not covered by the selected
+  scenario** — the graph map resolves `timebase` independently, but a green
+  field conversion is not evidence that an unrelated non-identity timebase is
   safe.
 - **Merged-rule loss beyond what's logged.** The shim never performs an
   auxiliary read to check whether a `merged` field's untried candidates
@@ -530,13 +527,11 @@ suite exercises, at minimum:
 1. HLI version unset → pure passthrough, no seam does version discovery at all.
 2. Occurrence stamp absent → forwards, presumed match, nothing logged.
 3. Occurrence stamp present and equal to HLI version → forwards, nothing logged.
-4. Occurrence stamp present, differs from HLI version, **no artifact for that
-   pair** → forwards unconverted, nothing logged (must not be conflated with
-   case 3, even though the observable behavior is identical).
-5. Occurrence stamp present, differs, **artifact present** (equilibrium
-   3.39.0⇄4.1.1) → per §4/§5/§6 above, per rule kind actually exercised
-   (`identical`, `renamed`, `moved`, `merged`, `split`, `retyped`,
-   `left_only`, `right_only`).
+4. Occurrence stamp present, differs from HLI version, **graph acquisition
+   fails** → the open refuses and closes its Core context; no later data seam
+   is reached.
+5. Occurrence stamp present, differs, **complete graph map acquired** → per
+   §4/§5/§6 above, exercising the rule kinds supported by that map.
 6. Occurrence stamp present but malformed → the **open** call refuses; no
    data seam is ever reached.
 7. For write specifically: a non-primary-source write, a no-stored-slot

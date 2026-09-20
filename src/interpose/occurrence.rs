@@ -16,18 +16,19 @@
 
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::Arc;
-#[cfg(any(feature = "graph-test-source", feature = "graph-live-source"))]
+#[cfg(not(feature = "xml-fixture-source"))]
 use std::sync::LazyLock;
 
 use crate::al_status_t;
 use crate::conversion::conversion_map::ConversionMap;
+#[cfg(feature = "xml-fixture-source")]
 use crate::conversion::known_artifacts;
 use crate::conversion::path_conversion::{self, ContextPathResolution};
-#[cfg(all(feature = "graph-test-source", not(feature = "graph-live-source")))]
+#[cfg(all(feature = "graph-test-source", not(feature = "xml-fixture-source")))]
 use crate::conversion::runtime_map::graph_test_source::GraphTestSource;
-#[cfg(feature = "graph-live-source")]
+#[cfg(not(any(feature = "graph-test-source", feature = "xml-fixture-source")))]
 use crate::conversion::runtime_map::neo4j_graph::{Neo4jConfig, Neo4jFactsSource};
-#[cfg(any(feature = "graph-test-source", feature = "graph-live-source"))]
+#[cfg(not(feature = "xml-fixture-source"))]
 use crate::conversion::runtime_map::{MapRequest, RuntimeMapCoordinator};
 use crate::conversion::seam_policy;
 use crate::core::core_binding::{READ_OP_ID, forward_status};
@@ -194,10 +195,10 @@ pub(crate) unsafe fn plugin_begin_global_action(
 /// also ended first, through `family`'s own end-action symbol, so a refusal
 /// here never leaks it. An absent stamp, or one that matches the HLI DD
 /// version, registers nothing (ADR 0007): the occurrence is presumed to
-/// match. A present, valid, *mismatched* stamp registers the root context,
-/// but only when an artifact actually covers this IDS and version pair (ADR
-/// 0011 decision 1) — otherwise this is treated exactly like an unknown
-/// context, passthrough with no record.
+/// match. A present, valid, *mismatched* stamp obtains a complete runtime map
+/// before registering the root context. An unavailable or unsupported pair
+/// refuses and closes that just-opened context; it never falls back to an
+/// untranslated occurrence.
 ///
 /// When the HLI DD version is unset, this is a plain forward with none of
 /// the above: no stamp read, no registry lookup, no rule resolution.
@@ -289,6 +290,7 @@ unsafe fn open_occurrence(
                 )
                 .and_then(|path| CString::new(path).ok());
             }
+            #[cfg(feature = "xml-fixture-source")]
             MapAcquisition::Unavailable => {}
             MapAcquisition::Failed => {
                 return OpenOccurrenceResult::Status(acquisition_refusal(ids_name, &hli, &stored));
@@ -453,6 +455,7 @@ fn apply_discovery_decision(
             let ids_name = ids_name_from(dataobjectname);
             let ready = match resolve_conversion_map(ids_name, &stored, hli) {
                 MapAcquisition::Ready(ready) => ready,
+                #[cfg(feature = "xml-fixture-source")]
                 MapAcquisition::Unavailable => {
                     apply_occurrence_cache_effect(pctx_id, dataobjectname, occurrence_cache);
                     return OpenOccurrenceResult::Status(status);
@@ -530,9 +533,11 @@ struct ReadyConversionMap {
 
 enum MapAcquisition {
     Ready(ReadyConversionMap),
-    #[allow(dead_code)] // Constructed only by the production artifact source.
+    /// Retained only by the private XML regression fixture so historical
+    /// fixture scenarios can assert their former passthrough contract.
+    #[cfg(feature = "xml-fixture-source")]
     Unavailable,
-    #[allow(dead_code)] // Constructed only by the graph-selected test instance.
+    #[cfg_attr(feature = "xml-fixture-source", allow(dead_code))]
     Failed,
 }
 
@@ -541,21 +546,18 @@ fn resolve_conversion_map(
     stored: &crate::version::dd_version::DdVersion,
     hli: &crate::version::dd_version::DdVersion,
 ) -> MapAcquisition {
-    #[cfg(not(any(feature = "graph-test-source", feature = "graph-live-source")))]
+    #[cfg(feature = "xml-fixture-source")]
     {
         match known_artifacts::lookup(ids, stored, hli) {
-            Some(artifact) => {
-                let key = map_cache_key(ids, stored, hli);
-                MapAcquisition::Ready(ReadyConversionMap {
-                    map: REGISTRY.get_or_create_map(key, || load_artifact(&artifact)),
-                    direction_to_stored: artifact.direction_to_stored,
-                })
-            }
+            Some(artifact) => MapAcquisition::Ready(ReadyConversionMap {
+                map: Arc::new(load_artifact(&artifact)),
+                direction_to_stored: artifact.direction_to_stored,
+            }),
             None => MapAcquisition::Unavailable,
         }
     }
 
-    #[cfg(any(feature = "graph-test-source", feature = "graph-live-source"))]
+    #[cfg(not(feature = "xml-fixture-source"))]
     {
         match (
             crate::conversion::conversion_map::ArtifactDdVersion::new(stored.to_string()),
@@ -580,14 +582,14 @@ fn resolve_conversion_map(
     }
 }
 
-#[cfg(all(feature = "graph-test-source", not(feature = "graph-live-source")))]
+#[cfg(all(feature = "graph-test-source", not(feature = "xml-fixture-source")))]
 fn acquire_graph_map(request: &MapRequest) -> Result<Arc<ConversionMap>, ()> {
     static COORDINATOR: LazyLock<RuntimeMapCoordinator<GraphTestSource>> =
         LazyLock::new(|| RuntimeMapCoordinator::new(GraphTestSource));
     COORDINATOR.acquire(request).map_err(|_| ())
 }
 
-#[cfg(feature = "graph-live-source")]
+#[cfg(not(any(feature = "graph-test-source", feature = "xml-fixture-source")))]
 fn acquire_graph_map(request: &MapRequest) -> Result<Arc<ConversionMap>, ()> {
     static COORDINATOR: LazyLock<Result<RuntimeMapCoordinator<Neo4jFactsSource>, ()>> =
         LazyLock::new(|| {
@@ -637,14 +639,9 @@ fn map_cache_key(
     MapCacheKey::new(ids.to_string(), stored.clone(), hli.clone())
 }
 
-/// Parses the one embedded conversion-map artifact `artifact` names. Used
-/// only as a legacy `get_or_create_map` cache-miss closure, so this runs at
-/// most once per `(IDS, stored, HLI)` key for as long as some record still
-/// references the resulting map.
-#[cfg_attr(
-    any(feature = "graph-test-source", feature = "graph-live-source"),
-    allow(dead_code)
-)]
+/// Parses the checked-in XML mechanism fixture. This private test source is
+/// never selected by the staged or installed production shim.
+#[cfg(feature = "xml-fixture-source")]
 pub(super) fn load_artifact(artifact: &known_artifacts::ArtifactMatch) -> ConversionMap {
     ConversionMap::load_with_endpoint_inventories(
         artifact.xml,

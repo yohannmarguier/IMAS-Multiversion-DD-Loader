@@ -39,11 +39,10 @@
 //! the parent record own the child's lifecycle, and the registry exposes no
 //! sibling enumeration or general ancestry-walking operation.
 //!
-//! The conversion-map cache is registry-owned and keyed by `(IDS name,
-//! stored DD version, HLI DD version)`: it hands out `Arc` clones of a
-//! shared `ConversionMap` and holds only a `Weak` reference itself, so a
-//! map stays alive exactly as long as some record references it and is
-//! dropped once none do — no explicit eviction needed.
+//! The runtime-map coordinator owns the process-lifetime cache, keyed by
+//! `(IDS name, stored DD version, HLI DD version)`. The registry receives a
+//! ready `Arc<ConversionMap>` only when it registers a live occurrence, and
+//! does not participate in acquisition, eviction, or cache ownership.
 //!
 //! The data-entry and global-action seams register roots (issue #53), and
 //! `al_begin_arraystruct_action` registers their live conversion-record
@@ -51,7 +50,7 @@
 //! resolve its field in the stored DD's spelling.
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex, Weak};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use crate::conversion::conversion_map::{ConversionMap, Direction, Fidelity};
 use crate::loss::{LossLog, LossOperation};
@@ -180,11 +179,6 @@ struct State {
     /// Losses are separate from cloned conversion snapshots so a child never
     /// accidentally owns a copied log. A root context owns exactly one log.
     loss_logs: HashMap<ContextId, LossLog>,
-    #[cfg_attr(
-        any(feature = "graph-test-source", feature = "graph-live-source"),
-        allow(dead_code)
-    )]
-    maps: HashMap<MapCacheKey, Weak<ConversionMap>>,
 }
 
 /// The single shim-owned catalogue of live mismatched contexts (CONTEXT.md's
@@ -463,33 +457,6 @@ impl ContextRegistry {
         let mut state = self.state.lock().unwrap();
         state.entries.remove(&ctx_id);
         state.loss_logs.remove(&ctx_id);
-    }
-
-    /// Returns the cached `Arc<ConversionMap>` for `key`, cloning a live
-    /// reference if one already exists, or calling `create` and caching the
-    /// result otherwise. A map already unreferenced by every record (its
-    /// cached `Weak` no longer upgrades) is treated as absent: `create` runs
-    /// again and its result replaces the stale cache entry.
-    ///
-    /// Exposed beyond `record_root` so a seam can translate a path (e.g.
-    /// `al_begin_global_action`'s `datapath`) against an already-known
-    /// mismatch before any context exists yet to record.
-    #[cfg_attr(
-        any(feature = "graph-test-source", feature = "graph-live-source"),
-        allow(dead_code)
-    )]
-    pub(crate) fn get_or_create_map(
-        &self,
-        key: MapCacheKey,
-        create: impl FnOnce() -> ConversionMap,
-    ) -> Arc<ConversionMap> {
-        let mut state = self.state.lock().unwrap();
-        if let Some(map) = state.maps.get(&key).and_then(Weak::upgrade) {
-            return map;
-        }
-        let map = Arc::new(create());
-        state.maps.insert(key, Arc::downgrade(&map));
-        map
     }
 }
 

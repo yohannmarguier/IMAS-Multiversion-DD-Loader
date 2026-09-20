@@ -1,5 +1,4 @@
 use super::*;
-use std::cell::Cell;
 use std::thread;
 
 const MINIMAL_ARTIFACT: &str = r#"
@@ -25,9 +24,8 @@ fn dummy_key() -> MapCacheKey {
     )
 }
 
-// dummy_key() pairs stored=3.39.0 with hli=4.1.1, which known_artifacts
-// resolves as Direction::Reverse (the HLI's own, right-side spelling
-// resolves to the stored, left-side spelling in reverse).
+// The fixture's left side is stored and its right side is HLI, so resolving
+// the HLI spelling to the stored spelling goes in reverse.
 const DUMMY_DIRECTION: Direction = Direction::Reverse;
 
 fn record_dummy_root(
@@ -60,7 +58,7 @@ fn an_unrecorded_context_has_no_conversion_record() {
 fn a_root_record_retains_its_path_pulse_id_map_and_root_identity() {
     let registry = ContextRegistry::new();
     let key = dummy_key();
-    let map = registry.get_or_create_map(key.clone(), dummy_map);
+    let map = Arc::new(dummy_map());
     assert!(registry.record_root(
         RootRegistration {
             ctx_id: 5,
@@ -291,7 +289,7 @@ fn a_read_uses_its_captured_root_after_its_child_id_is_reused() {
 fn a_child_record_retains_its_own_path_and_parent_id_and_shares_the_parents_map() {
     let registry = ContextRegistry::new();
     let key = dummy_key();
-    let map = registry.get_or_create_map(key.clone(), dummy_map);
+    let map = Arc::new(dummy_map());
     assert!(registry.record_root(
         RootRegistration {
             ctx_id: 5,
@@ -325,11 +323,9 @@ fn a_child_record_retains_its_own_path_and_parent_id_and_shares_the_parents_map(
         child.direction_to_stored, DUMMY_DIRECTION,
         "child inherits the parent's direction"
     );
+    let root = registry.lookup(5).expect("root remains live");
     assert!(
-        Arc::ptr_eq(
-            &child.map,
-            &registry.get_or_create_map(key, || panic!("map must be cached"))
-        ),
+        Arc::ptr_eq(&child.map, &root.map),
         "child must share the same map reference as its parent, not a copy"
     );
 }
@@ -551,94 +547,6 @@ fn matching_versions_remove_stale_records() {
     assert!(
         registry.lookup(5).is_none(),
         "matching versions need no record"
-    );
-}
-
-#[test]
-fn a_shared_map_survives_as_long_as_one_record_still_references_it() {
-    let registry = ContextRegistry::new();
-    let loads = Cell::new(0);
-    let key = dummy_key();
-    let ready_map = registry.get_or_create_map(key.clone(), || {
-        loads.set(loads.get() + 1);
-        dummy_map()
-    });
-
-    assert!(registry.record_root(
-        RootRegistration {
-            ctx_id: 5,
-            resolved_path: "a".to_string(),
-            pulse_ctx_id: 1,
-            dataobjectname: "equilibrium".to_string(),
-            key: key.clone(),
-            direction_to_stored: DUMMY_DIRECTION,
-            opened_read_op: true,
-        },
-        ready_map.clone()
-    ));
-    assert!(registry.record_root(
-        RootRegistration {
-            ctx_id: 6,
-            resolved_path: "b".to_string(),
-            pulse_ctx_id: 1,
-            dataobjectname: "equilibrium".to_string(),
-            key: key.clone(),
-            direction_to_stored: DUMMY_DIRECTION,
-            opened_read_op: true,
-        },
-        ready_map.clone()
-    ));
-
-    assert_eq!(loads.get(), 1, "the second record must hit the cache");
-    drop(ready_map);
-
-    registry.remove(5);
-    let survivor = registry.lookup(6).unwrap();
-    let map_after_one_removed = registry.get_or_create_map(key, || {
-        loads.set(loads.get() + 1);
-        dummy_map()
-    });
-    assert_eq!(
-        loads.get(),
-        1,
-        "the map must stay cached while record 6 still references it"
-    );
-    assert!(Arc::ptr_eq(&survivor.map, &map_after_one_removed));
-}
-
-#[test]
-fn a_shared_map_is_released_once_no_record_references_it() {
-    let registry = ContextRegistry::new();
-    let loads = Cell::new(0);
-    let key = dummy_key();
-    let ready_map = registry.get_or_create_map(key.clone(), || {
-        loads.set(loads.get() + 1);
-        dummy_map()
-    });
-
-    assert!(registry.record_root(
-        RootRegistration {
-            ctx_id: 5,
-            resolved_path: "a".to_string(),
-            pulse_ctx_id: 1,
-            dataobjectname: "equilibrium".to_string(),
-            key: key.clone(),
-            direction_to_stored: DUMMY_DIRECTION,
-            opened_read_op: true,
-        },
-        ready_map.clone()
-    ));
-    registry.remove(5);
-    drop(ready_map);
-
-    let _new_map = registry.get_or_create_map(key, || {
-        loads.set(loads.get() + 1);
-        dummy_map()
-    });
-    assert_eq!(
-        loads.get(),
-        2,
-        "with no record left referencing it, the map must be released and recreated"
     );
 }
 

@@ -63,7 +63,7 @@ flowchart TD
     end
 
     subgraph INTERPOSE["src/interpose/ — C-facing adaptation, one module per seam family"]
-        OCC["occurrence.rs<br/>opens, discovery, registration, map cache"]
+        OCC["occurrence.rs<br/>opens, discovery, registration, map acquisition"]
         RD["read.rs"]
         WR["write.rs"]
         DEL["delete.rs"]
@@ -75,13 +75,14 @@ flowchart TD
     subgraph POLICY["src/conversion/ — decisions, no global state, no IMAS-Core"]
         SEAM["seam_policy.rs<br/>run_read · run_write · run_delete<br/>decide_occurrence_registration"]
         PATHC["path_conversion.rs<br/>which stored path, at what fidelity"]
-        MAP["conversion_map.rs<br/>artifact parsing + rule resolution"]
-        ARTS["known_artifacts.rs"]
+        MAP["conversion_map.rs<br/>validated map + rule resolution"]
+        RUNTIME["runtime_map.rs<br/>Neo4j acquisition + coordinator"]
+        ARTS["known_artifacts.rs<br/>XML fixture only"]
         OUTCOME["read_outcome.rs"]
     end
 
     subgraph STATE["src/registry/ + src/version/ — process state"]
-        REG["context_registry.rs<br/>REGISTRY, loss logs, map cache"]
+        REG["context_registry.rs<br/>REGISTRY, loss logs, live contexts"]
         HLIV["hli_version.rs<br/>the ADR 0005 latch"]
         STAMP["version_stamp.rs · dd_version.rs"]
     end
@@ -757,9 +758,9 @@ stateDiagram-v2
     [*] --> Untracked : no entry at this context id
 
     Untracked --> PulseEntry : al_begin_dataentry_action
-    Untracked --> RootRecord : occurrence open whose stamp mismatches<br/>and has an embedded artifact
+    Untracked --> RootRecord : occurrence open whose stamp mismatches<br/>and graph acquisition validates a map
     Untracked --> ChildRecord : al_begin_arraystruct_action under a live record
-    Untracked --> Untracked : occurrence open with a matching, absent<br/>or unserved stamp — nothing registered
+    Untracked --> Untracked : occurrence open with a matching or absent<br/>stamp — nothing registered
 
     PulseEntry --> PulseEntry : caches each discovered occurrence version,<br/>keyed by dataobjectname
     RootRecord --> RootRecord : non-exact reads, writes and deletes append to this root's loss log

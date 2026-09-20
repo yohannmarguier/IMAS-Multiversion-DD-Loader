@@ -1,11 +1,8 @@
 pub mod conversion_map;
-#[cfg_attr(
-    any(feature = "graph-test-source", feature = "graph-live-source"),
-    allow(dead_code)
-)]
+#[cfg(feature = "xml-fixture-source")]
 pub(crate) mod known_artifacts;
 pub(crate) mod path_conversion;
 pub(crate) mod read_outcome;
-#[allow(dead_code)] // The tracer is intentionally not selected by production seams yet.
+#[cfg(not(feature = "xml-fixture-source"))]
 pub(crate) mod runtime_map;
 pub(crate) mod seam_policy;
