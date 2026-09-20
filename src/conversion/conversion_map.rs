@@ -1156,6 +1156,92 @@ pub struct ConversionMap {
 }
 
 impl ConversionMap {
+    /// Estimates bytes retained by this map's owned resolver data.
+    ///
+    /// The estimate counts the map's inline storage, vector/hash-table
+    /// capacities and the capacities of their owned strings. It deliberately
+    /// excludes allocator bookkeeping, the containing `Arc`, the coordinator
+    /// cache, thread stacks and temporary acquisition data, so callers must
+    /// not present it as peak or process memory.
+    #[cfg(test)]
+    pub(crate) fn estimated_retained_bytes(&self) -> usize {
+        fn string_bytes(value: &String) -> usize {
+            value.capacity()
+        }
+        fn selector_bytes(selector: &Selector) -> usize {
+            match selector {
+                Selector::Exact(path) | Selector::Subtree(path) | Selector::Glob(path) => {
+                    string_bytes(path)
+                }
+            }
+        }
+        fn side_bytes(side: &Side) -> usize {
+            string_bytes(&side.dd.0)
+                + side
+                    .cocos
+                    .as_ref()
+                    .map_or(0, |cocos| string_bytes(&cocos.0))
+        }
+        fn endpoint_bytes(endpoint: &EndpointInventory) -> usize {
+            endpoint.nodes.capacity() * std::mem::size_of::<EndpointNode>()
+                + endpoint
+                    .nodes
+                    .iter()
+                    .map(|node| string_bytes(&node.path))
+                    .sum::<usize>()
+        }
+
+        std::mem::size_of::<Self>()
+            + string_bytes(&self.ids)
+            + side_bytes(&self.left)
+            + side_bytes(&self.right)
+            + endpoint_bytes(&self.left_endpoint)
+            + endpoint_bytes(&self.right_endpoint)
+            + self.rules.capacity() * std::mem::size_of::<Rule>()
+            + self
+                .rules
+                .iter()
+                .map(|rule| {
+                    string_bytes(&rule.id)
+                        + rule.left.as_ref().map_or(0, selector_bytes)
+                        + rule.right.as_ref().map_or(0, selector_bytes)
+                        + rule.froms.capacity() * std::mem::size_of::<FromEntry>()
+                        + rule
+                            .froms
+                            .iter()
+                            .map(|from| selector_bytes(&from.selector))
+                            .sum::<usize>()
+                })
+                .sum::<usize>()
+            + self.left_sources.capacity() * std::mem::size_of::<SourceEntry>()
+            + self
+                .left_sources
+                .iter()
+                .map(|source| selector_bytes(&source.selector))
+                .sum::<usize>()
+            + self.right_sources.capacity() * std::mem::size_of::<SourceEntry>()
+            + self
+                .right_sources
+                .iter()
+                .map(|source| selector_bytes(&source.selector))
+                .sum::<usize>()
+            + self.redefines.capacity() * std::mem::size_of::<RedefineEntry>()
+            + self
+                .redefines
+                .iter()
+                .map(|redefine| selector_bytes(&redefine.selector))
+                .sum::<usize>()
+            + self.sign_flips.capacity()
+                * std::mem::size_of::<(String, (CocosConvention, CocosConvention))>()
+            + self
+                .sign_flips
+                .iter()
+                .map(|(path, (from, to))| {
+                    string_bytes(path) + string_bytes(&from.0) + string_bytes(&to.0)
+                })
+                .sum::<usize>()
+    }
+
     /// Parses a conversion-map artifact from its XML text.
     ///
     /// `<include>` and `<coverage>` elements are recognised and skipped

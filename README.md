@@ -158,7 +158,9 @@ defaults to controlled complete facts. Configure
 installed `graph-package` with `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`
 and optional `NEO4J_DATABASE` supplied at execution. See
 [the live source contract](docs/KG_LIVE_SOURCE_CONTRACT.md) for reproducible
-checks and evidence; #233 owns the ordinary production source switch.
+checks and evidence, and [the runtime-map measurements](docs/KG_RUNTIME_MAP_MEASUREMENTS.md)
+for the bounded acquisition-cost observations; #233 owns the ordinary production
+source switch.
 
 Between HLI runs, stop and later restart the same recorded pin without any
 release lookup or download:

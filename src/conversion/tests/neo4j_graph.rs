@@ -5,7 +5,7 @@ use crate::conversion::runtime_map::{
 use std::cell::RefCell;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 type Row = std::collections::BTreeMap<String, GraphValue>;
 type Reply = (std::collections::BTreeMap<String, GraphValue>, Vec<Row>);
@@ -495,6 +495,231 @@ fn pinned_graph_returns_complete_reference_scopes() {
             eprintln!("live complete acquisition succeeded: {ids} {stored} -> {hli}");
         }
     }
+}
+
+#[derive(Default)]
+struct StageTimeline {
+    started: Mutex<Option<Instant>>,
+    entries: Mutex<Vec<(AcquisitionStage, Duration)>>,
+}
+
+impl StageTimeline {
+    fn start(&self) {
+        *self
+            .started
+            .lock()
+            .expect("timeline start mutex is not poisoned") = Some(Instant::now());
+        self.entries
+            .lock()
+            .expect("timeline entries mutex is not poisoned")
+            .clear();
+    }
+
+    fn entries(&self) -> Vec<(AcquisitionStage, Duration)> {
+        self.entries
+            .lock()
+            .expect("timeline entries mutex is not poisoned")
+            .clone()
+    }
+}
+
+impl AttemptObserver for StageTimeline {
+    fn entered(&self, stage: AcquisitionStage) {
+        let started = self
+            .started
+            .lock()
+            .expect("timeline start mutex is not poisoned")
+            .expect("measurement starts before map acquisition");
+        self.entries
+            .lock()
+            .expect("timeline entries mutex is not poisoned")
+            .push((stage, started.elapsed()));
+    }
+}
+
+fn reference_measurement_pairs() -> [(&'static str, &'static str, &'static str, &'static str); 3] {
+    [
+        ("equilibrium-3.39.0-4.1.1", "equilibrium", "3.39.0", "4.1.1"),
+        ("equilibrium-3.42.0-4.1.1", "equilibrium", "3.42.0", "4.1.1"),
+        (
+            "pulse-schedule-3.25.0-3.30.0",
+            "pulse_schedule",
+            "3.25.0",
+            "3.30.0",
+        ),
+    ]
+}
+
+fn measurement_stage_name(stage: AcquisitionStage) -> &'static str {
+    match stage {
+        AcquisitionStage::Connection => "connection",
+        AcquisitionStage::Source => "source",
+        AcquisitionStage::Query => "query",
+        AcquisitionStage::Decoding => "decoding",
+        AcquisitionStage::ScopeValidation => "scope_validation",
+        AcquisitionStage::RuleConstruction => "rule_construction",
+        AcquisitionStage::MapValidation => "map_validation",
+        AcquisitionStage::Publication => "publication",
+    }
+}
+
+fn json_string(value: &str) -> String {
+    use std::fmt::Write;
+
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('\"');
+    for character in value.chars() {
+        match character {
+            '\"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\u{08}' => escaped.push_str("\\b"),
+            '\u{0c}' => escaped.push_str("\\f"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            control if control <= '\u{1f}' => write!(escaped, "\\u{:04x}", control as u32)
+                .expect("writing JSON escape to String cannot fail"),
+            character => escaped.push(character),
+        }
+    }
+    escaped.push('\"');
+    escaped
+}
+
+fn measurement_deadline() -> Duration {
+    match std::env::var("IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DEADLINE_SECONDS") {
+        Ok(value) => Duration::from_secs(
+            value
+                .parse()
+                .ok()
+                .filter(|seconds: &u64| *seconds > 0)
+                .expect("IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DEADLINE_SECONDS must be positive"),
+        ),
+        Err(_) => Duration::from_secs(5),
+    }
+}
+
+/// Emits one independently reproducible sample of the selected live pair.
+/// The accompanying script owns service restart and report conditions. This
+/// ignored test intentionally has no timing threshold: deterministic
+/// lifecycle tests establish correctness, while this records observations.
+#[test]
+#[ignore = "requires the pinned Neo4j graph and an explicit measurement output path"]
+fn measure_pinned_runtime_map_acquisition() {
+    use crate::conversion::conversion_map::Direction;
+    use crate::conversion::runtime_map::{MapRequest, RuntimeMapCoordinator};
+
+    let output = std::env::var("IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_OUTPUT")
+        .expect("set IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_OUTPUT to a new sample path");
+    let selected = std::env::var("IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_PAIR")
+        .unwrap_or_else(|_| "all".to_string());
+    let pairs: Vec<_> = reference_measurement_pairs()
+        .into_iter()
+        .filter(|(name, _, _, _)| selected == "all" || selected == *name)
+        .collect();
+    assert!(!pairs.is_empty(), "unknown measurement pair {selected}");
+
+    let timeline = Arc::new(StageTimeline::default());
+    let deadline = measurement_deadline();
+    let coordinator = RuntimeMapCoordinator::with_clock_and_observer(
+        Neo4jFactsSource(live_config()),
+        deadline,
+        Arc::new(crate::conversion::runtime_map::SystemClock::new()),
+        Arc::clone(&timeline) as Arc<dyn AttemptObserver>,
+    );
+    let mut records = Vec::new();
+    for (name, ids, first, second) in pairs {
+        for (stored, hli) in [(first, second), (second, first)] {
+            let request = MapRequest {
+                ids: ids.to_string(),
+                stored_dd: ArtifactDdVersion::new(stored).unwrap(),
+                hli_dd: ArtifactDdVersion::new(hli).unwrap(),
+            };
+            timeline.start();
+            let started = Instant::now();
+            let acquired = coordinator.acquire(&request);
+            let total = started.elapsed();
+            let entries = timeline.entries();
+            let (outcome, failure, retained, lookup_ns, cached_ns, retained_cache_hit) =
+                match acquired {
+                    Ok(map) => {
+                        let retained = Arc::downgrade(&map);
+                        drop(map);
+                        let map = coordinator.acquire(&request).unwrap();
+                        let retained_cache_hit = Arc::ptr_eq(
+                            &map,
+                            &retained.upgrade().expect(
+                                "coordinator retains a successful map after caller release",
+                            ),
+                        );
+                        let lookup_path = "ids_properties/homogeneous_time";
+                        let lookup_count = 20_000_u32;
+                        let lookup_started = Instant::now();
+                        for _ in 0..lookup_count {
+                            assert!(map.resolve(lookup_path, Direction::Forward).is_some());
+                        }
+                        let lookup_ns =
+                            lookup_started.elapsed().as_nanos() / u128::from(lookup_count);
+                        let cached_count = 20_000_u32;
+                        let cached_started = Instant::now();
+                        for _ in 0..cached_count {
+                            assert!(Arc::ptr_eq(&map, &coordinator.acquire(&request).unwrap()));
+                        }
+                        let cached_ns =
+                            cached_started.elapsed().as_nanos() / u128::from(cached_count);
+                        (
+                            "success",
+                            None,
+                            Some(map.estimated_retained_bytes()),
+                            Some(lookup_ns),
+                            Some(cached_ns),
+                            Some(retained_cache_hit),
+                        )
+                    }
+                    Err(error) => (
+                        "failure",
+                        Some(format!("{error:?}")),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
+                };
+            let stages = entries
+                .iter()
+                .map(|(stage, elapsed)| {
+                    format!(
+                        "{{\"stage\":{},\"elapsed_ns\":{}}}",
+                        json_string(measurement_stage_name(*stage)),
+                        elapsed.as_nanos()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            records.push(format!(
+                "{{\"pair\":{},\"ids\":{},\"stored_dd\":{},\"hli_dd\":{},\"deadline_seconds\":{},\"outcome\":{},\"failure\":{},\"total_ns\":{},\"publication_completed_ns\":{},\"retained_map_estimate_bytes\":{},\"resolver_lookup_ns_per_call\":{},\"cache_hit_ns_per_call\":{},\"retained_cache_hit_after_caller_release\":{},\"stages\":[{}]}}",
+                json_string(name),
+                json_string(ids),
+                json_string(stored),
+                json_string(hli),
+                deadline.as_secs(),
+                json_string(outcome),
+                failure.map_or_else(|| "null".to_string(), |value| json_string(&value)),
+                total.as_nanos(),
+                if outcome == "success" { total.as_nanos().to_string() } else { "null".to_string() },
+                retained.map_or_else(|| "null".to_string(), |value| value.to_string()),
+                lookup_ns.map_or_else(|| "null".to_string(), |value| value.to_string()),
+                cached_ns.map_or_else(|| "null".to_string(), |value| value.to_string()),
+                retained_cache_hit.map_or_else(|| "null".to_string(), |value| value.to_string()),
+                stages,
+            ));
+        }
+    }
+    std::fs::write(
+        &output,
+        format!("{{\"schema\":1,\"records\":[{}]}}\n", records.join(",")),
+    )
+    .unwrap_or_else(|error| panic!("write measurement output {output}: {error}"));
 }
 
 #[test]
