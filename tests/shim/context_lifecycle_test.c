@@ -36,7 +36,7 @@ static int open_time_slice(int operation_ctx) {
 
 static al_status_t read_data(int ctx_id, const char *field, const char *timebase, void **data) {
     int size[1] = {0};
-    return al_read_data(ctx_id, field, timebase, data, 52 /* DOUBLE_DATA */, 1, size);
+    return al_read_data(ctx_id, field, timebase, data, IMAS_DOUBLE_DATA, 1, size);
 }
 
 static void check_stub_field(const char *field) {

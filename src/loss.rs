@@ -99,3 +99,138 @@ impl LossLog {
         Some(read(&entry.dd_path, entry.fidelity, entry.operation))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{LossLog, LossOperation, fidelity_c_code, fidelity_file_word};
+    use crate::conversion::conversion_map::Fidelity;
+
+    #[test]
+    fn loss_operation_codes_and_file_words_match_the_literal_delivery_contract() {
+        for (operation, expected_code, expected_word) in [
+            (LossOperation::Read, 0, "read"),
+            (LossOperation::Write, 1, "write"),
+            (LossOperation::Delete, 2, "delete"),
+        ] {
+            assert_eq!(operation.c_code(), expected_code);
+            assert_eq!(operation.file_word(), expected_word);
+        }
+    }
+
+    #[test]
+    fn fidelity_codes_and_file_words_match_the_literal_delivery_contract() {
+        for (fidelity, expected_word) in [
+            (Fidelity::Exact, "EXACT"),
+            (Fidelity::PotentiallyLossy, "POTENTIALLY_LOSSY"),
+            (Fidelity::Lossy, "LOSSY"),
+            (Fidelity::Unmappable, "UNMAPPABLE"),
+        ] {
+            assert_eq!(fidelity_file_word(fidelity), expected_word);
+        }
+
+        for (fidelity, expected_code) in [
+            (Fidelity::PotentiallyLossy, 0),
+            (Fidelity::Lossy, 1),
+            (Fidelity::Unmappable, 2),
+        ] {
+            assert_eq!(fidelity_c_code(fidelity), expected_code);
+        }
+    }
+
+    #[test]
+    fn exact_operations_never_enter_an_empty_loss_log() {
+        let mut losses = LossLog::default();
+
+        for operation in [
+            LossOperation::Read,
+            LossOperation::Write,
+            LossOperation::Delete,
+        ] {
+            losses.retain(format!("exact/{operation:?}"), Fidelity::Exact, operation);
+        }
+
+        assert_eq!(losses.len(), 0);
+        assert_eq!(losses.with_at(0, |_, _, _| ()), None);
+    }
+
+    #[test]
+    fn non_exact_operations_retain_the_supplied_path_verdict_and_operation_in_order() {
+        let mut losses = LossLog::default();
+        let expected = [
+            (
+                "read/potential",
+                Fidelity::PotentiallyLossy,
+                LossOperation::Read,
+            ),
+            ("read/lossy", Fidelity::Lossy, LossOperation::Read),
+            ("read/unmappable", Fidelity::Unmappable, LossOperation::Read),
+            (
+                "write/potential",
+                Fidelity::PotentiallyLossy,
+                LossOperation::Write,
+            ),
+            ("write/lossy", Fidelity::Lossy, LossOperation::Write),
+            (
+                "write/unmappable",
+                Fidelity::Unmappable,
+                LossOperation::Write,
+            ),
+            (
+                "delete/potential",
+                Fidelity::PotentiallyLossy,
+                LossOperation::Delete,
+            ),
+            ("delete/lossy", Fidelity::Lossy, LossOperation::Delete),
+            (
+                "delete/unmappable",
+                Fidelity::Unmappable,
+                LossOperation::Delete,
+            ),
+        ];
+
+        for (path, fidelity, operation) in expected {
+            losses.retain(path.to_string(), fidelity, operation);
+        }
+
+        assert_eq!(losses.len(), expected.len());
+        for (index, expected_entry) in expected.iter().enumerate() {
+            assert_eq!(
+                losses.with_at(index, |path, fidelity, operation| {
+                    (path.to_string(), fidelity, operation)
+                }),
+                Some((
+                    expected_entry.0.to_string(),
+                    expected_entry.1,
+                    expected_entry.2,
+                ))
+            );
+        }
+        assert_eq!(losses.with_at(expected.len(), |_, _, _| ()), None);
+    }
+
+    #[test]
+    fn repeated_non_exact_entries_remain_individually_available_in_memory() {
+        let mut losses = LossLog::default();
+        for _ in 0..2 {
+            losses.retain(
+                "repeated/path".to_string(),
+                Fidelity::PotentiallyLossy,
+                LossOperation::Read,
+            );
+        }
+
+        assert_eq!(losses.len(), 2);
+        for index in 0..2 {
+            assert_eq!(
+                losses.with_at(index, |path, fidelity, operation| {
+                    (path.to_string(), fidelity, operation)
+                }),
+                Some((
+                    "repeated/path".to_string(),
+                    Fidelity::PotentiallyLossy,
+                    LossOperation::Read,
+                ))
+            );
+        }
+    }
+}

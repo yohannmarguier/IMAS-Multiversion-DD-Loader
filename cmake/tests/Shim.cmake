@@ -398,6 +398,11 @@ add_stub_test(read-path-reentrant-read-is-forwarded-unchanged
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1)
 
+add_stub_test(read-path-reentry-depth-gate-restores-conversion-after-nested-read
+    read_path_test reentry-depth-gate-restores-conversion-after-nested-read
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1)
+
 add_stub_test(read-path-reentrant-read-does-not-reapply-a-sign-flip
     read_path_test reentrant-read-does-not-reapply-a-sign-flip
     HLI_DD_VERSION 4.1.1
@@ -489,15 +494,23 @@ add_stub_test(loss-file-filename-collision-gains-a-numeric-suffix
     STAMP_VERSION 4.1.1
     ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-collision")
 
+# Issue #235: the production facts/effects boundary is observable only from a
+# fresh process. This scenario clears the optional destination so the shim
+# must use this isolated working directory, its clock and its process ID.
+add_stub_test(loss-file-default-destination-uses-the-process-clock-and-pid
+    read_path_test loss-file-default-destination-uses-the-process-clock-and-pid
+    HLI_DD_VERSION 3.39.0
+    STAMP_VERSION 4.1.1
+    UNSET_ENV IMAS_MVDD_LOSS_LOG_DIR
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-default-directory")
+
 # Issue #172: the optional delivery channel can be configured away, or fail
 # once without changing the successful ABI call or its in-memory loss record.
-file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-disabled")
 add_stub_test(read-path-loss-file-empty-directory-value-disables-delivery
     read_path_test loss-file-empty-directory-value-disables-delivery
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1
-    ENV "IMAS_MVDD_LOSS_LOG_DIR=")
-set_tests_properties(read-path-loss-file-empty-directory-value-disables-delivery PROPERTIES
+    ENV "IMAS_MVDD_LOSS_LOG_DIR="
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loss-file-disabled")
 
 add_stub_test(read-path-loss-file-missing-directory-reports-once-without-failing-reads
@@ -506,11 +519,11 @@ add_stub_test(read-path-loss-file-missing-directory-reports-once-without-failing
     STAMP_VERSION 4.1.1
     ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-missing")
 
-add_stub_test(read-path-loss-file-unwritable-directory-reports-once-without-failing-reads
-    read_path_test loss-file-unwritable-directory-reports-once-without-failing-reads
+add_stub_test(read-path-loss-file-file-destination-reports-once-without-failing-reads
+    read_path_test loss-file-file-destination-reports-once-without-failing-reads
     HLI_DD_VERSION 3.39.0
     STAMP_VERSION 4.1.1
-    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-unwritable")
+    ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-file-invalid-destination")
 
 add_stub_test(read-path-loss-file-append-failure-reports-once-without-failing-reads
     read_path_test loss-file-append-failure-reports-once-without-failing-reads
