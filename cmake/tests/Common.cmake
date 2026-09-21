@@ -45,6 +45,8 @@ add_test(NAME script-policy-guard-rejects-unpinned-scripts
 # graph, invokes Docker, or needs credentials.
 add_test(NAME dd-graph-setup
     COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/dd_graph_setup_test.sh")
+add_test(NAME runtime-map-measurement
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/measure_runtime_map_test.sh")
 
 # The recording stub is the fast profile's runtime dependency and remains
 # part of the full profile so the two complementary seam suites stay honest.

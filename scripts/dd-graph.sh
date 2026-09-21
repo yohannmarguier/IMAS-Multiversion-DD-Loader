@@ -9,6 +9,7 @@ set -euo pipefail
 readonly script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 readonly repo_root=$(cd "$script_dir/.." && pwd)
 readonly default_selection="$repo_root/config/dd-graph-release.env"
+readonly smoke_query="$repo_root/config/dd-graph-smoke.cypher"
 readonly state_root="${IMAS_MVDD_GRAPH_HOME:-${XDG_STATE_HOME:-$HOME/.local/state}/imas-mvdd-loader/dd-graph}"
 readonly selection_record="$state_root/selection.env"
 readonly bolt_port="${IMAS_MVDD_GRAPH_BOLT_PORT:-17687}"
@@ -28,11 +29,15 @@ Commands:
   update   select, acquire, verify, load, and start a replacement selection
   start    start the recorded task-owned service without network access
   stop     stop the recorded task-owned service without deleting it
-  query    verify the started service with a harmless Cypher query
+  query    verify service identity and required DD graph contents
   inspect  print the recorded immutable selection and service identity
+  verify-service  verify the actual service ownership and selected identity
 
 `--selection FILE` is accepted by select and update. Without it, select uses
 config/dd-graph-release.env and setup reuses an existing recorded selection.
+`--container NAME` explicitly selects an alternate service for start, stop,
+query or verify-service; its complete ownership and selection identity must
+still match the configured graph home before the command acts.
 EOF
 }
 
@@ -94,8 +99,12 @@ selection_id() {
     printf '%s' "${GRAPH_MANIFEST_DIGEST#sha256:}" | cut -c1-12
 }
 
+home_id() {
+    printf '%s' "$state_root" | shasum -a 256 | awk '{print substr($1, 1, 12)}'
+}
+
 container_name() {
-    printf 'imas-mvdd-dd-graph-%s' "$(selection_id)"
+    printf 'imas-mvdd-dd-graph-%s-%s' "$(home_id)" "$(selection_id)"
 }
 
 archive_path() {
@@ -184,6 +193,40 @@ ensure_free_database() {
     fi
 }
 
+service_label() {
+    local container=$1 label=$2
+    docker inspect --format "{{ index .Config.Labels \"$label\" }}" "$container"
+}
+
+validate_service_identity() {
+    local container=$1 actual
+    actual=$(service_label "$container" imas.mvdd.dd-graph)
+    test "$actual" = true \
+        || die "service $container is not an IMAS-MVDD DD graph; refusing to mutate it"
+    for label_and_expected in \
+        "imas.mvdd.dd-graph.owner=$(home_id)" \
+        "imas.mvdd.dd-graph.home=$state_root" \
+        "imas.mvdd.dd-graph.release=$GRAPH_RELEASE" \
+        "imas.mvdd.dd-graph.manifest=$GRAPH_MANIFEST_DIGEST" \
+        "imas.mvdd.dd-graph.archive=$GRAPH_ARCHIVE_DIGEST" \
+        "imas.mvdd.dd-graph.commit=$GRAPH_COMMIT" \
+        "imas.mvdd.dd-graph.neo4j-version=$GRAPH_NEO4J_VERSION" \
+        "imas.mvdd.dd-graph.neo4j-digest=$GRAPH_NEO4J_DIGEST"; do
+        local label=${label_and_expected%%=*}
+        local expected=${label_and_expected#*=}
+        actual=$(service_label "$container" "$label")
+        test "$actual" = "$expected" \
+            || die "service $container has $label=${actual:-<missing>}, expected $expected; refusing to adopt or mutate it"
+    done
+}
+
+ensure_bolt_port_available() {
+    local occupants
+    occupants=$(docker ps --quiet --filter "publish=$bolt_port")
+    test -z "$occupants" \
+        || die "host Bolt port $bolt_port is already published by another running container; choose IMAS_MVDD_GRAPH_BOLT_PORT"
+}
+
 load_and_start() {
     local archive data extracted container image
     archive=$(archive_path)
@@ -194,8 +237,10 @@ load_and_start() {
     need_command docker
     ensure_password
     if docker container inspect "$container" >/dev/null 2>&1; then
+        validate_service_identity "$container"
         die "task-owned service already exists: $container; use start, stop, or inspect"
     fi
+    ensure_bolt_port_available
     ensure_free_database "$data"
     mkdir -p "$data"
     extracted=$(verify_archive_manifest "$archive")
@@ -207,7 +252,14 @@ load_and_start() {
     rm -rf "$extracted"
     docker run --detach --name "$container" \
         --label "imas.mvdd.dd-graph=true" \
+        --label "imas.mvdd.dd-graph.owner=$(home_id)" \
         --label "imas.mvdd.dd-graph.home=$state_root" \
+        --label "imas.mvdd.dd-graph.release=$GRAPH_RELEASE" \
+        --label "imas.mvdd.dd-graph.manifest=$GRAPH_MANIFEST_DIGEST" \
+        --label "imas.mvdd.dd-graph.archive=$GRAPH_ARCHIVE_DIGEST" \
+        --label "imas.mvdd.dd-graph.commit=$GRAPH_COMMIT" \
+        --label "imas.mvdd.dd-graph.neo4j-version=$GRAPH_NEO4J_VERSION" \
+        --label "imas.mvdd.dd-graph.neo4j-digest=$GRAPH_NEO4J_DIGEST" \
         --env "NEO4J_AUTH=neo4j/$IMAS_MVDD_GRAPH_PASSWORD" \
         --publish "127.0.0.1:$bolt_port:7687" \
         --mount "type=bind,source=$data,target=/data" \
@@ -223,37 +275,66 @@ ensure_no_running_task_service() {
 }
 
 start() {
-    local container
+    local container=${1:-}
     require_recorded_selection
-    container=$(container_name)
+    test -n "$container" || container=$(container_name)
     need_command docker
     docker container inspect "$container" >/dev/null 2>&1 \
         || die "no task-owned service for recorded selection; run setup instead"
+    validate_service_identity "$container"
     docker start "$container" >/dev/null
     printf 'Started %s at bolt://127.0.0.1:%s\n' "$container" "$bolt_port"
 }
 
 stop() {
-    local container
+    local container=${1:-}
     require_recorded_selection
-    container=$(container_name)
+    test -n "$container" || container=$(container_name)
     need_command docker
     docker container inspect "$container" >/dev/null 2>&1 \
         || die "no task-owned service for recorded selection"
+    validate_service_identity "$container"
     docker stop "$container" >/dev/null
     printf 'Stopped %s; archive and database remain at %s\n' "$container" "$state_root"
 }
 
 query() {
-    local container
+    local container=${1:-} result status
     require_recorded_selection
     ensure_password
-    container=$(container_name)
+    test -n "$container" || container=$(container_name)
+    need_command docker
+    test -f "$smoke_query" || die "required DD graph smoke query is missing: $smoke_query"
+    docker container inspect "$container" >/dev/null 2>&1 \
+        || die "no task-owned service for recorded selection"
+    validate_service_identity "$container"
+    result=$(docker exec "$container" cypher-shell --format plain --non-interactive \
+        -u "${IMAS_MVDD_GRAPH_USERNAME:-neo4j}" \
+        -p "$IMAS_MVDD_GRAPH_PASSWORD" \
+        "$(<"$smoke_query")")
+    status=$(printf '%s\n' "$result" | tail -n 1 \
+        | awk -F', ' '{ gsub(/"|\r/, "", $1); print $1 }')
+    test "$status" = imas_mvdd_smoke_ok \
+        || die "selected service failed required DD graph content smoke (status: ${status:-empty result})"
+    printf '%s\n' "$result"
+}
+
+verify_service() {
+    local container=${1:-}
+    require_recorded_selection
+    test -n "$container" || container=$(container_name)
     need_command docker
     docker container inspect "$container" >/dev/null 2>&1 \
         || die "no task-owned service for recorded selection"
-    docker exec "$container" cypher-shell --non-interactive -u neo4j \
-        -p "$IMAS_MVDD_GRAPH_PASSWORD" 'RETURN count(*) AS node_count;'
+    validate_service_identity "$container"
+    printf 'service: %s\n' "$container"
+    printf 'owner: %s\n' "$(home_id)"
+    printf 'release: %s\n' "$GRAPH_RELEASE"
+    printf 'manifest: %s\n' "$GRAPH_MANIFEST_DIGEST"
+    printf 'archive: %s\n' "$GRAPH_ARCHIVE_DIGEST"
+    printf 'commit: %s\n' "$GRAPH_COMMIT"
+    printf 'neo4j-version: %s\n' "$GRAPH_NEO4J_VERSION"
+    printf 'neo4j-digest: %s\n' "$GRAPH_NEO4J_DIGEST"
 }
 
 inspect() {
@@ -263,21 +344,30 @@ inspect() {
     printf 'archive: %s\n' "$GRAPH_ARCHIVE_DIGEST"
     printf 'commit: %s\n' "$GRAPH_COMMIT"
     printf 'neo4j: %s\n' "$(image_ref)"
+    printf 'neo4j-version: %s\n' "$GRAPH_NEO4J_VERSION"
+    printf 'neo4j-digest: %s\n' "$GRAPH_NEO4J_DIGEST"
     printf 'archive path: %s\n' "$(archive_path)"
     printf 'database path: %s\n' "$(database_path)"
     printf 'service: %s\n' "$(container_name)"
+    printf 'owner: %s\n' "$(home_id)"
     printf 'bolt: bolt://127.0.0.1:%s\n' "$bolt_port"
 }
 
 main() {
     local command=${1:-}
     local chosen_selection=
+    local chosen_container=
     shift || true
     while test $# -gt 0; do
         case "$1" in
             --selection)
                 test $# -ge 2 || die '--selection needs a file'
                 chosen_selection=$2
+                shift 2
+                ;;
+            --container)
+                test $# -ge 2 || die '--container needs a name'
+                chosen_container=$2
                 shift 2
                 ;;
             -h|--help)
@@ -290,9 +380,11 @@ main() {
 
     case "$command" in
         select)
+            test -z "$chosen_container" || die 'select does not accept --container'
             record_selection "${chosen_selection:-$default_selection}"
             ;;
         setup)
+            test -z "$chosen_container" || die 'setup does not accept --container'
             test -z "$chosen_selection" || die 'setup does not accept --selection; use select or update first'
             test -f "$selection_record" || die 'no recorded selection; run select first'
             require_recorded_selection
@@ -302,6 +394,7 @@ main() {
         update)
             local staged
             test -n "$chosen_selection" || die 'update requires --selection FILE'
+            test -z "$chosen_container" || die 'update does not accept --container'
             ensure_no_running_task_service
             staged=$(stage_selection "$chosen_selection")
             load_selection "$staged"
@@ -312,19 +405,24 @@ main() {
             ;;
         start)
             test -z "$chosen_selection" || die 'start does not accept --selection'
-            start
+            start "$chosen_container"
             ;;
         stop)
             test -z "$chosen_selection" || die 'stop does not accept --selection'
-            stop
+            stop "$chosen_container"
             ;;
         query)
             test -z "$chosen_selection" || die 'query does not accept --selection'
-            query
+            query "$chosen_container"
             ;;
         inspect)
             test -z "$chosen_selection" || die 'inspect does not accept --selection'
+            test -z "$chosen_container" || die 'inspect does not accept --container'
             inspect
+            ;;
+        verify-service)
+            test -z "$chosen_selection" || die 'verify-service does not accept --selection'
+            verify_service "$chosen_container"
             ;;
         ''|-h|--help)
             usage

@@ -2,11 +2,56 @@
 set -euo pipefail
 
 printf '%s\n' "$*" >> "$TEST_DOCKER_LOG"
+mkdir -p "$TEST_DOCKER_STATE/containers"
+
+container_file() {
+    printf '%s/containers/%s' "$TEST_DOCKER_STATE" "$1"
+}
+
+argument_after() {
+    local wanted=$1
+    shift
+    while test $# -gt 0; do
+        if test "$1" = "$wanted"; then
+            test $# -ge 2
+            printf '%s\n' "$2"
+            return
+        fi
+        shift
+    done
+    return 1
+}
+
+label_value() {
+    local file=$1 key=$2
+    sed -n "s/^label:${key}=//p" "$file"
+}
+
 case "$1 ${2:-}" in
     'container inspect')
-        test -e "$TEST_DOCKER_STATE/container"
+        file=$(container_file "${3:?missing container name}")
+        test -f "$file"
+        ;;
+    'inspect --format')
+        format=${3:?missing inspect format}
+        name=${4:?missing container name}
+        file=$(container_file "$name")
+        test -f "$file"
+        key=$(printf '%s\n' "$format" | sed -n 's/.*Labels "\([^"]*\)".*/\1/p')
+        test -n "$key"
+        label_value "$file" "$key"
         ;;
     'ps --quiet')
+        filter=$(argument_after --filter "$@" || true)
+        for file in "$TEST_DOCKER_STATE"/containers/*; do
+            test -f "$file" || continue
+            test "$(sed -n 's/^running=//p' "$file")" = true || continue
+            case "$filter" in
+                label=*) grep -Fqx "label:${filter#label=}" "$file" && basename "$file" ;;
+                publish=*) grep -Eq "^publish=.*:${filter#publish=}:" "$file" && basename "$file" ;;
+                '') basename "$file" ;;
+            esac
+        done
         ;;
     pull\ *)
         ;;
@@ -14,15 +59,53 @@ case "$1 ${2:-}" in
         case " $* " in
             *' --detach '*)
                 test "${TEST_DOCKER_FAIL_START:-}" != yes || exit 79
-                touch "$TEST_DOCKER_STATE/container"
+                name=$(argument_after --name "$@")
+                file=$(container_file "$name")
+                test ! -e "$file" || exit 125
+                {
+                    printf 'running=true\n'
+                    while test $# -gt 0; do
+                        if test "$1" = --label; then
+                            printf 'label:%s\n' "$2"
+                            shift 2
+                        elif test "$1" = --publish; then
+                            printf 'publish=%s\n' "$2"
+                            shift 2
+                        else
+                            shift
+                        fi
+                    done
+                } > "$file"
                 ;;
         esac
         ;;
     start\ *|stop\ *)
-        test -e "$TEST_DOCKER_STATE/container"
+        name=${2:?missing container name}
+        file=$(container_file "$name")
+        test -f "$file"
+        if test "$1" = start; then
+            sed -i.bak 's/^running=.*/running=true/' "$file"
+        else
+            sed -i.bak 's/^running=.*/running=false/' "$file"
+        fi
+        rm -f "$file.bak"
+        test -z "${TEST_ORCHESTRATOR_LOG:-}" \
+            || printf 'docker %s %s\n' "$1" "$name" >> "$TEST_ORCHESTRATOR_LOG"
+        ;;
+    port\ *)
+        name=${2:?missing container name}
+        file=$(container_file "$name")
+        test -f "$file"
+        sed -n 's|^publish=\([^:]*:[0-9][0-9]*\):7687$|\1|p' "$file"
         ;;
     exec\ *)
-        printf 'node_count\n1\n'
+        if test -n "${TEST_DOCKER_QUERY_ERROR:-}"; then
+            exit 80
+        fi
+        test -z "${TEST_ORCHESTRATOR_LOG:-}" \
+            || printf 'docker exec %s\n' "$2" >> "$TEST_ORCHESTRATOR_LOG"
+        printf '%s\n' "${TEST_DOCKER_QUERY_RESULT:-smoke_status, release_count, stamp_count, change_count}" \
+            "${TEST_DOCKER_QUERY_VALUE:-imas_mvdd_smoke_ok, 1, 1, 42}"
         ;;
     *)
         printf 'unexpected fake docker invocation: %s\n' "$*" >&2

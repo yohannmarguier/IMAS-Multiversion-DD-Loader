@@ -113,9 +113,13 @@ $ scripts/dd-graph.sh query
 archive SHA-256 after ORAS has fetched it, checks the archive's release and
 commit manifest, then loads its `graph.dump` into a new data directory keyed
 by that manifest. It will fail rather than overwrite an existing database or
-container. The service name is `imas-mvdd-dd-graph-<manifest-prefix>` and Bolt
-is bound only to `127.0.0.1:17687` by default. Set
-`IMAS_MVDD_GRAPH_BOLT_PORT` before setup if that local port is occupied.
+container. Mutable service identity belongs to the configured graph home: the
+service name is `imas-mvdd-dd-graph-<home-prefix>-<manifest-prefix>`, and its
+owner, selection and Neo4j identities are labels that every start, stop, query,
+reuse or replacement validates before acting. Two graph homes may share a
+verified immutable archive, but never a service or database. Bolt is bound only
+to `127.0.0.1:17687` by default. A conflicting published port fails before the
+database is loaded; set `IMAS_MVDD_GRAPH_BOLT_PORT` to an unused port instead.
 
 The connection for the Rust graph adapter is therefore:
 
@@ -125,10 +129,24 @@ NEO4J_USERNAME=neo4j
 NEO4J_PASSWORD=$IMAS_MVDD_GRAPH_PASSWORD
 ```
 
-`query` runs `RETURN count(*)` through `cypher-shell`; its successful result is
-the clean-load check. Do not place the password in a selection file, shell
-history, or Git. It is supplied only through `IMAS_MVDD_GRAPH_PASSWORD` when a
-new service is created or queried.
+`query` first verifies that the actual service labels match the recorded
+selection, then applies the shared
+[`dd-graph-smoke.cypher`](config/dd-graph-smoke.cypher) contract: a required DD
+release, the equilibrium DD-version-stamp node and the `IMASNodeChange`
+ownership plus `IN_VERSION` edges used by runtime acquisition. An
+empty database, authentication-only response, incomplete schema or different
+selection cannot pass. `verify-service` performs only the label/ownership part
+and prints the verified non-secret identity; it deliberately does not warm
+graph contents. Do not place the password in a selection file, shell history,
+Git or a measurement report. It is supplied only through
+`IMAS_MVDD_GRAPH_PASSWORD` when a new service is created or queried.
+
+Services created before the home-qualified naming and provenance labels are
+legacy resources. The script neither adopts nor removes them. Inspect their
+mount, port and labels with Docker, stop/remove them explicitly if they are no
+longer needed, and run `setup` in the selected graph home to load a newly owned
+service. The immutable archive may be copied into that home's inspected
+`archive path` first; do not copy or reuse the legacy database directory.
 
 CI uses the same script through the reusable
 [`setup-dd-graph` action](.github/actions/setup-dd-graph/action.yml). It caches
@@ -182,6 +200,19 @@ separate archive/database/container identity for a new manifest; it does not
 delete or overwrite the preceding graph state, although it intentionally
 replaces the active selection record after the new service starts. No live refresh or HLI process
 cache invalidation exists: select or update only between HLI processes.
+
+For acquisition measurements, `scripts/measure-runtime-map.sh` resolves
+provenance from the selected graph home's actual labelled service. An explicit
+`IMAS_MVDD_MEASUREMENT_CONTAINER` is accepted only when every ownership and
+immutable-selection label matches. Each service-restarted direction gets its
+own stop/start and is the first graph-reading workload after a sleep-only
+readiness interval; the report does not claim that host OS, VM or disk caches
+were flushed. The JSON evidence records effective non-secret configuration,
+service and graph identities, code revision/dirty state, direction, run number,
+deadline and readiness policy. The configured `NEO4J_URI` must exactly match
+the selected container's published Bolt endpoint and cannot contain embedded
+credentials. Dirty-tree provenance records status and a SHA-256 of the patch,
+never the patch contents, so an unrelated local secret cannot enter evidence.
 
 ## Build, test, install
 
