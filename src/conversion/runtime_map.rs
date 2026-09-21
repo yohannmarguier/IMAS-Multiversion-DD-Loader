@@ -915,7 +915,10 @@ fn coexistence_plans(
             let sole_metadata = match sole_endpoint {
                 (EndpointState::Present { metadata, .. }, EndpointState::Absent)
                 | (EndpointState::Absent, EndpointState::Present { metadata, .. }) => metadata,
-                _ => unreachable!("one coexistence side has exactly one endpoint"),
+                // One observed path plus one unanchored path is incomplete
+                // evidence, not proof that the latter is absent. Leave both
+                // paths to their independently localized endpoint rules.
+                _ => continue,
             };
             let candidates_servable = !candidate_endpoints
                 .iter()

@@ -2270,6 +2270,52 @@ fn acquisition_uses_successor_first_candidates_only_at_the_coexisting_endpoint()
 }
 
 #[test]
+fn acquisition_localizes_present_and_unanchored_coexistence_without_panicking() {
+    let mut facts = coexistence_facts();
+    let predecessor = facts
+        .nodes
+        .iter_mut()
+        .find(|node| node.path == "time_slice/constraints/j_tor")
+        .expect("fixture has the predecessor");
+    predecessor.removed.clear();
+    let successor = facts
+        .nodes
+        .iter_mut()
+        .find(|node| node.path == "time_slice/constraints/j_phi")
+        .expect("fixture has the successor");
+    successor
+        .endpoints
+        .retain(|endpoint| endpoint.release.to_string() != "3.42.0");
+    successor.removed = vec![ArtifactDdVersion::new("4.0.0").unwrap()];
+    successor
+        .introduced
+        .push(ArtifactDdVersion::new("4.1.1").unwrap());
+
+    for request in [
+        request_between("3.42.0", "4.1.1"),
+        request_between("4.1.1", "3.42.0"),
+    ] {
+        let map = RuntimeMapAcquirer::new(ControlledSource {
+            result: Ok(facts.clone()),
+        })
+        .acquire(&request)
+        .expect("incomplete coexistence evidence must remain localized");
+        assert_eq!(
+            map.resolve("time_slice/constraints/j_phi", Direction::Forward)
+                .expect("the unanchored spelling remains explicitly claimed")
+                .outcome,
+            Outcome::Refusal(RefusalReason::Unmappable)
+        );
+        assert!(matches!(
+            map.resolve("time", Direction::Forward)
+                .expect("independent evidence remains usable")
+                .outcome,
+            Outcome::Path { .. }
+        ));
+    }
+}
+
+#[test]
 fn acquisition_extends_an_evidenced_coexisting_structure_to_its_descendants() {
     let mut facts = coexistence_facts();
     for parent in [
