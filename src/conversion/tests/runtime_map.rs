@@ -1211,6 +1211,21 @@ fn acquisition_returns_a_complete_identity_map_and_localized_retype_refusal() {
 }
 
 #[test]
+fn acquisition_withholds_leaf_certification_from_a_leaf_with_a_descendant() {
+    let mut facts = complete_identity_scope();
+    for endpoint in &mut facts.nodes[0].endpoints {
+        endpoint.kind = GraphNodeKind::Leaf;
+    }
+
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("contradictory hierarchy is localized to delete classification");
+
+    assert!(!map.delete_target_is_leaf(Direction::Forward, "time_slice"));
+    assert!(map.delete_target_is_leaf(Direction::Forward, "time_slice/profiles_1d/rho_tor"));
+}
+
+#[test]
 fn acquisition_classifies_unit_evidence_without_conflating_it_with_retypes() {
     let mut facts = complete_identity_scope();
     facts.nodes[2].endpoints = vec![
