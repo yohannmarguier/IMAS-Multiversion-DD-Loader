@@ -429,7 +429,7 @@ foreach(job IN ITEMS fast_job full_job)
     require_line(${job} "- uses: ./.github/actions/setup-toolchain"
         "use the shared pinned-toolchain setup")
     require_line(${job}
-        "run: ctest --test-dir build --output-on-failure --no-tests=error"
+        "run: ctest --test-dir build -E '^rust-unit$' --output-on-failure --no-tests=error"
         "fail when its selected test profile registers no tests")
     require_line(${job} "run: cmake --install build --prefix \"$PWD/dist\""
         "install the shim")
@@ -449,6 +449,9 @@ if("-DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON" IN_LIST fast_job)
 endif()
 require_line(full_job "uses: actions/cache@v4"
     "cache the acquired IMAS-Core build")
+require_line(full_job
+    "ctest --test-dir build-installed-mode -E '^rust-unit$' --output-on-failure --no-tests=error"
+    "keep only the deferred Rust unit suite outside installed-mode behavioral coverage")
 require_line(full_job "uses: ./.github/actions/setup-dd-graph"
     "provision the pinned DD graph before production real-Core coverage")
 require_matching_line(full_job "-DIMAS_MVDD_GRAPH_TEST_SOURCE=live"

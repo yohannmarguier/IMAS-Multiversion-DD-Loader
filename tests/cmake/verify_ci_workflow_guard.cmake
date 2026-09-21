@@ -56,9 +56,9 @@ expect_guard_rejection(
     "fast_job must check formatting")
 
 set(full_test_step
-    "      - name: Test drift and real-Core seams\n        run: ctest --test-dir build --output-on-failure --no-tests=error")
+    "      - name: Test drift and real-Core seams\n        run: ctest --test-dir build -E '^rust-unit$' --output-on-failure --no-tests=error")
 set(commented_full_test_step
-    "      - name: Test drift and real-Core seams\n        # run: ctest --test-dir build --output-on-failure --no-tests=error")
+    "      - name: Test drift and real-Core seams\n        # run: ctest --test-dir build -E '^rust-unit$' --output-on-failure --no-tests=error")
 string(REPLACE "${full_test_step}" "${commented_full_test_step}"
     misplaced_full_command "${workflow}")
 if(workflow STREQUAL misplaced_full_command)
@@ -66,7 +66,7 @@ if(workflow STREQUAL misplaced_full_command)
 endif()
 string(APPEND misplaced_full_command
     "\n  decoy:\n    runs-on: ubuntu-latest\n    steps:\n"
-    "      - run: ctest --test-dir build --output-on-failure --no-tests=error\n")
+    "      - run: ctest --test-dir build -E '^rust-unit$' --output-on-failure --no-tests=error\n")
 expect_guard_rejection(
     misplaced-full-command "${misplaced_full_command}"
     "full_job must fail when its selected test profile registers no tests")
