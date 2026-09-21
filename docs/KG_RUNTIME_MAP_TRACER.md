@@ -70,8 +70,8 @@ candidate live evidence and the explicitly unrun real-Core/HLI cases.
 
 ## Neo4j acquisition boundary (#212)
 
-`conversion::runtime_map::neo4j_graph` selects the Rust `neo4j` 0.2 Bolt
-driver for the pinned local service. `Neo4jScopeSource` fetches the exact
+`conversion::runtime_map::neo4j_graph` selects the async Rust `neo4rs` 0.8
+Bolt driver for the pinned local service. `Neo4jScopeSource` fetches the exact
 release catalogue and every IDS-scoped node, lifecycle, metadata,
 `IMASNodeChange`, and `RENAMED_TO` row using bound `ids`, `skip`, and `limit`
 parameters. Every stream is retrieved as count plus complete pages; it rejects

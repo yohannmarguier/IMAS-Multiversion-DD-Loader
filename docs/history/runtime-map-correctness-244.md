@@ -60,6 +60,10 @@ fan-out/failure aggregation. Live Neo4j, real Core and HLI combined validation
 remains the #246 integration stream's responsibility; this handoff does not
 declare parent #205 complete.
 
+The combined runtime revision handed to #246 is `fb71c01` on
+`feat/runtime-conversion-mapping-issue-244`; it contains all six behavioral
+repair commits. Later commits on that branch are handoff documentation only.
+
 ## Verification
 
 Executed in `/private/tmp/imas-mvdd-issue-244`:
@@ -67,6 +71,7 @@ Executed in `/private/tmp/imas-mvdd-issue-244`:
 - `cargo fmt --check`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets` — 303 passed, 3 ignored live-service tests
+- `NEO4J_URI=bolt://127.0.0.1:17688 NEO4J_USERNAME=neo4j NEO4J_PASSWORD=... NEO4J_DATABASE=neo4j cargo test --release pinned_graph_returns_complete_reference_scopes --lib -- --ignored --nocapture` — 1 passed, acquiring all six directional maps from the pinned Neo4j 2026 service
 - `cmake -S . -B /private/tmp/imas-mvdd-issue-244-build -DCMAKE_BUILD_TYPE=Debug -DIMAS_MVDD_REAL_CORE_TESTS=OFF` — 262 tests registered
 - `cmake --build /private/tmp/imas-mvdd-issue-244-build -j2`
 - `ctest --test-dir /private/tmp/imas-mvdd-issue-244-build --output-on-failure --no-tests=error -j2` — 262 passed, including 50 `graph-runtime-map` tests
@@ -78,6 +83,8 @@ remains loadable, but a leaf-labelled node with a descendant is not certified
 as a leaf delete. The shared C harness proves that unsafe case refuses before
 Core and that an unambiguous coexistence leaf still fans out.
 
-The three ignored Rust checks require the pinned live Neo4j service; the
-real-Core and HLI matrices were not executed here. Those live combined checks
-belong to #246 as specified by #244.
+The live graph completeness check was executed because a compatible pinned
+service was already running. The two other ignored checks (measurement output
+and graph-shutdown lifecycle), real-Core matrix and HLI matrices were not
+executed here. Those remaining combined checks belong to #246 as specified by
+#244.
