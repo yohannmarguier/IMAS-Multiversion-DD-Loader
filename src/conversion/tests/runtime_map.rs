@@ -2270,6 +2270,77 @@ fn acquisition_uses_successor_first_candidates_only_at_the_coexisting_endpoint()
 }
 
 #[test]
+fn coexistence_candidates_survive_when_the_declaration_predates_both_endpoints() {
+    let mut facts = coexistence_facts();
+    facts.versions.push(version("3.42.1", Some("11")));
+
+    for (stored, hli) in [("3.42.0", "4.1.1"), ("3.42.1", "4.1.1")] {
+        let map = RuntimeMapAcquirer::new(ControlledSource {
+            result: Ok(facts.clone()),
+        })
+        .acquire(&request_between(stored, hli))
+        .expect("unchanged endpoint roles keep the historical relation relevant");
+        let explanation = map
+            .resolve("time_slice/constraints/j_phi", Direction::Forward)
+            .expect("the coexisting spelling remains claimed");
+        let Outcome::Path { candidates, .. } = explanation.outcome else {
+            panic!("coexistence must remain a candidate plan");
+        };
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| (candidate.path.as_str(), candidate.precedence))
+                .collect::<Vec<_>>(),
+            vec![
+                ("time_slice/constraints/j_phi", 1),
+                ("time_slice/constraints/j_tor", 2),
+            ]
+        );
+    }
+
+    let reverse = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request_between("4.1.1", "3.42.1"))
+        .expect("the inverse request keeps both endpoint-valid aliases");
+    for (path, precedence) in [
+        ("time_slice/constraints/j_phi", 1),
+        ("time_slice/constraints/j_tor", 2),
+    ] {
+        let explanation = reverse.resolve(path, Direction::Forward).unwrap();
+        assert_eq!(explanation.rel, Some(Rel::Merged));
+        assert_eq!(explanation.precedence, Some(precedence));
+        assert!(matches!(
+            explanation.outcome,
+            Outcome::Path { ref resolved_path, .. }
+                if resolved_path == "time_slice/constraints/j_phi"
+        ));
+    }
+}
+
+#[test]
+fn an_older_declaration_does_not_cross_a_removal_and_reappearance_boundary() {
+    let mut facts = coexistence_facts();
+    let successor = facts
+        .nodes
+        .iter_mut()
+        .find(|node| node.path == "time_slice/constraints/j_phi")
+        .expect("fixture has the successor");
+    successor.removed = vec![ArtifactDdVersion::new("4.0.0").unwrap()];
+    successor
+        .introduced
+        .push(ArtifactDdVersion::new("4.1.1").unwrap());
+
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request_between("3.42.0", "4.1.1"))
+        .expect("the reappeared role remains a localized result");
+    assert_eq!(
+        map.resolve("time_slice/constraints/j_phi", Direction::Forward)
+            .expect("the reused spelling remains explicitly claimed")
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+}
+
+#[test]
 fn acquisition_localizes_present_and_unanchored_coexistence_without_panicking() {
     let mut facts = coexistence_facts();
     let predecessor = facts

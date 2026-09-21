@@ -841,9 +841,7 @@ fn coexistence_plans(
                 .map_err(|expired| AcquisitionFailure::TimedOut {
                     stage: expired.stage,
                 })?;
-            if numeric_release(&declaration.release) < numeric_release(earlier)
-                || numeric_release(&declaration.release) > numeric_release(later)
-            {
+            if numeric_release(&declaration.release) > numeric_release(later) {
                 continue;
             }
             let Some(predecessor_path) =
@@ -892,6 +890,26 @@ fn coexistence_plans(
             let successor_hli = replay_endpoint(facts, successor, &request.hli_dd)?;
             let predecessor_stored = replay_endpoint(facts, predecessor, &request.stored_dd)?;
             let successor_stored = replay_endpoint(facts, successor, &request.stored_dd)?;
+            if [
+                &predecessor_hli,
+                &successor_hli,
+                &predecessor_stored,
+                &successor_stored,
+            ]
+            .into_iter()
+            .any(|state| {
+                matches!(
+                    state,
+                    EndpointState::Present { interval_start, .. }
+                        if numeric_release(interval_start)
+                            > numeric_release(&declaration.release)
+                )
+            }) {
+                // A path that reappeared after the declaration has a new
+                // semantic role. Older correspondence evidence cannot make
+                // that role a candidate even when the spelling is reused.
+                continue;
+            }
             let hli_count = usize::from(matches!(predecessor_hli, EndpointState::Present { .. }))
                 + usize::from(matches!(successor_hli, EndpointState::Present { .. }));
             let stored_count =
