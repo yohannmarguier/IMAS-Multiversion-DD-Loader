@@ -2356,12 +2356,23 @@ mod tests {
         const ARTIFACT: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
         const LEFT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-3.39.0.txt");
         const RIGHT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-4.1.1.txt");
+        let leaf_inventory = |paths: &str| {
+            EndpointInventory::complete(
+                paths
+                    .lines()
+                    .map(|path| EndpointNode {
+                        path: path.to_string(),
+                        kind: EndpointNodeKind::Leaf,
+                    })
+                    .collect(),
+            )
+        };
         let mut record = reverse_record(ARTIFACT);
         record.map = Arc::new(
             ConversionMap::load_with_endpoint_inventories(
                 ARTIFACT,
-                EndpointInventory::complete_leaf_paths(LEFT_LEAVES),
-                EndpointInventory::complete_leaf_paths(RIGHT_LEAVES),
+                leaf_inventory(LEFT_LEAVES),
+                leaf_inventory(RIGHT_LEAVES),
             )
             .expect("the approved artifact and endpoint inventories must load"),
         );
