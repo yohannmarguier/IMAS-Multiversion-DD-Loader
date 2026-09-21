@@ -58,7 +58,7 @@ if(IMAS_CORE_BUILT_FROM_SOURCE)
     add_dependencies(real_core_test_plugin ${IMAS_CORE_AL_TARGET})
 endif()
 set_target_properties(real_core_forwarding_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 add_real_core_test(runtime-binding-real-core-forwarding
     $<TARGET_FILE:real_core_forwarding_test>)
@@ -77,7 +77,7 @@ target_link_libraries(equilibrium_read_test PRIVATE
     ${HDF5_C_LIBRARIES})
 add_dependencies(equilibrium_read_test imas_mvdd_capi)
 set_target_properties(equilibrium_read_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 # The HLI DD version latch is process-wide, so each scenario is its own
 # ctest process (mirrors version_discovery_test.c). Scenarios opening the
@@ -160,6 +160,64 @@ add_real_core_test(equilibrium-read-conversion-disabled-is-unaffected
 add_real_core_test(equilibrium-read-copied-fixture-harness-reproves-renamed-read
     $<TARGET_FILE:equilibrium_read_test> copied-fixture-harness-reproves-renamed-read)
 
+# Controlled graph facts remain an isolated fixture, while the `live` matrix
+# drives the ordinary production artifact through the same real-Core oracle.
+add_executable(graph_coexistence_oracle_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/graph_coexistence_oracle_test.c")
+target_include_directories(graph_coexistence_oracle_test PRIVATE
+    ${_imas_core_include_dirs}
+    ${HDF5_C_INCLUDE_DIRS})
+target_compile_definitions(graph_coexistence_oracle_test PRIVATE
+    "REAL_CORE_LIBRARY_PATH=\"$<TARGET_FILE:${IMAS_CORE_AL_TARGET}>\""
+    "EQUILIBRIUM_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/imas-python-fixtures/fixtures\"")
+target_link_libraries(graph_coexistence_oracle_test PRIVATE
+    ${IMAS_MVDD_GRAPH_RUNTIME_LIBRARY}
+    ${CMAKE_DL_LIBS}
+    ${HDF5_C_LIBRARIES})
+add_dependencies(graph_coexistence_oracle_test ${IMAS_MVDD_GRAPH_RUNTIME_CAPI})
+if(IMAS_CORE_BUILT_FROM_SOURCE)
+    add_dependencies(graph_coexistence_oracle_test ${IMAS_CORE_AL_TARGET})
+endif()
+set_target_properties(graph_coexistence_oracle_test PROPERTIES
+    BUILD_RPATH "${IMAS_MVDD_GRAPH_RUNTIME_RPATH}")
+
+if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "controlled")
+add_real_core_test(read-coexistence-forward-selects-primary-then-falls-back
+    $<TARGET_FILE:graph_coexistence_oracle_test>
+    read-coexistence-forward-selects-primary-then-falls-back)
+add_real_core_test(read-coexistence-forward-arraystruct-falls-back-between-j-candidates
+    $<TARGET_FILE:graph_coexistence_oracle_test>
+    read-coexistence-forward-arraystruct-falls-back-between-j-candidates)
+add_real_core_test(read-coexistence-reverse-selects-the-4.1-successor
+    $<TARGET_FILE:graph_coexistence_oracle_test>
+    read-coexistence-reverse-selects-the-4.1-successor)
+add_real_core_test(write-delete-coexistence-forward-is-primary-only-and-fans-out
+    $<TARGET_FILE:graph_coexistence_oracle_test>
+    write-delete-coexistence-forward-is-primary-only-and-fans-out)
+add_real_core_test(write-coexistence-reverse-non-primary-refuses
+    $<TARGET_FILE:graph_coexistence_oracle_test>
+    write-coexistence-reverse-non-primary-refuses)
+set_tests_properties(
+    read-coexistence-forward-selects-primary-then-falls-back
+    read-coexistence-reverse-selects-the-4.1-successor
+    write-delete-coexistence-forward-is-primary-only-and-fans-out
+    write-coexistence-reverse-non-primary-refuses
+    PROPERTIES
+    ENVIRONMENT "IMAS_MVDD_GRAPH_TEST_SCOPE=coexistence")
+set_tests_properties(read-coexistence-forward-arraystruct-falls-back-between-j-candidates
+    PROPERTIES
+    ENVIRONMENT "IMAS_MVDD_GRAPH_TEST_SCOPE=coexistence-arraystruct")
+
+else()
+    foreach(direction IN ITEMS forward reverse)
+        add_real_core_test(live-graph-core-coexistence-${direction}
+            $<TARGET_FILE:graph_coexistence_oracle_test> live-j-${direction})
+    endforeach()
+    add_real_core_test(live-graph-core-coexistence-nested
+        $<TARGET_FILE:graph_coexistence_oracle_test>
+        read-coexistence-forward-arraystruct-falls-back-between-j-candidates)
+endif()
+
 # --- Issue #133: on-disk oracle proof for the write and delete seams. Each
 # scenario mutates its own private copy of the fixture pair and reads the
 # result back with raw HDF5, never through the shim. No RESOURCE_LOCK is
@@ -183,7 +241,7 @@ target_link_libraries(write_delete_oracle_test PRIVATE
     ${HDF5_C_LIBRARIES})
 add_dependencies(write_delete_oracle_test imas_mvdd_capi)
 set_target_properties(write_delete_oracle_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 # The prefix names the seam each scenario drives -- `write-oracle-*` for
 # al_write_data, `delete-oracle-*` for al_delete_data -- so `ctest -R
@@ -213,5 +271,61 @@ foreach(scenario IN ITEMS
     endif()
     add_real_core_test("${scenario}" $<TARGET_FILE:write_delete_oracle_test> "${scenario}")
 endforeach()
+
+# Issue #229: the second IDS uses the graph-selected test source but the same
+# public C ABI and raw-HDF5 stored-effect oracle as the equilibrium scenarios.
+# Each case owns a fresh pulse because the HLI DD-version latch is process-wide
+# and writes/deletes are intentionally observable on disk.
+add_executable(graph_runtime_map_oracle_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/graph_runtime_map_oracle_test.c")
+target_include_directories(graph_runtime_map_oracle_test PRIVATE
+    ${_imas_core_include_dirs}
+    ${HDF5_C_INCLUDE_DIRS})
+target_link_libraries(graph_runtime_map_oracle_test PRIVATE
+    ${IMAS_MVDD_GRAPH_RUNTIME_LIBRARY}
+    ${HDF5_C_LIBRARIES})
+add_dependencies(graph_runtime_map_oracle_test ${IMAS_MVDD_GRAPH_RUNTIME_CAPI})
+set_target_properties(graph_runtime_map_oracle_test PROPERTIES
+    BUILD_RPATH "${IMAS_MVDD_GRAPH_RUNTIME_RPATH}")
+
+if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "live")
+    target_compile_definitions(graph_runtime_map_oracle_test PRIVATE IMAS_MVDD_LIVE_GRAPH=1)
+    foreach(family IN ITEMS equilibrium_read write_delete_oracle)
+        add_executable(live_${family}_test "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/${family}_test.c")
+        target_include_directories(live_${family}_test PRIVATE ${_imas_core_include_dirs} ${HDF5_C_INCLUDE_DIRS})
+        target_compile_definitions(live_${family}_test PRIVATE
+            "EQUILIBRIUM_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/imas-python-fixtures/fixtures\"")
+        target_compile_definitions(live_${family}_test PRIVATE IMAS_MVDD_LIVE_GRAPH=1)
+        target_link_libraries(live_${family}_test PRIVATE ${IMAS_MVDD_GRAPH_RUNTIME_LIBRARY} ${HDF5_C_LIBRARIES})
+        add_dependencies(live_${family}_test ${IMAS_MVDD_GRAPH_RUNTIME_CAPI})
+        set_target_properties(live_${family}_test PROPERTIES BUILD_RPATH "${IMAS_MVDD_GRAPH_RUNTIME_RPATH}")
+    endforeach()
+    foreach(direction IN ITEMS forward reverse)
+        add_real_core_test(live-graph-core-${direction}-rename-read
+            $<TARGET_FILE:live_equilibrium_read_test> ${direction}-reads-renamed-value-through-own-spelling
+            RESOURCE_LOCK equilibrium-fixture-dd-${direction})
+        foreach(scenario IN ITEMS lands-on-the-stored-spelling flips-the-sign-on-disk refusal-leaves-the-stamp-untouched)
+            add_real_core_test(live-graph-core-${direction}-${scenario}
+                $<TARGET_FILE:live_write_delete_oracle_test> write-oracle-${direction}-${scenario})
+        endforeach()
+    endforeach()
+endif()
+
+add_real_core_test(read-graph-pulse-schedule-forward
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-forward-read)
+add_real_core_test(read-graph-pulse-schedule-reverse
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-reverse-read)
+add_real_core_test(write-graph-pulse-schedule-forward
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-forward-write)
+add_real_core_test(write-graph-pulse-schedule-reverse
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-reverse-write)
+add_real_core_test(delete-graph-pulse-schedule-forward
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-forward-delete)
+add_real_core_test(delete-graph-pulse-schedule-reverse
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-reverse-delete)
+add_real_core_test(delete-graph-pulse-schedule-forward-structure
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-forward-structure-delete)
+add_real_core_test(delete-graph-pulse-schedule-reverse-structure
+    $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-reverse-structure-delete)
 
 imas_mvdd_end_real_core_tests()

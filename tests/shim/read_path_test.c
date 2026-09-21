@@ -163,44 +163,66 @@ static void scenario_loss_file_is_absent_without_loss(void) {
     printf("read_path_test loss-file-is-absent-without-loss: exact work opens no report\n");
 }
 
-/* Issue #171 AC: "a colliding name gains a numeric suffix". Predicts the
- * exact first-attempt filename the shim will pick (matching its own
- * `utc_timestamp` format and the running process's own pid) and pre-creates
- * it, empty, so the shim's own create-new attempt collides and it must move
- * to the `-1` suffix. This assumes the shim's own clock reads the same UTC
- * second as this predicted one, true except across a second boundary
- * crossed between here and the shim's first loss a few instructions later. */
+/* Match SystemTime's wall-clock source. Linux time() may return the previous
+ * second briefly after CLOCK_REALTIME has crossed a second boundary. */
+static time_t realtime_seconds(void) {
+    struct timespec now;
+    CHECK(clock_gettime(CLOCK_REALTIME, &now) == 0);
+    return now.tv_sec;
+}
+
+static void collision_path(char *path, size_t capacity, const char *directory,
+                           time_t instant, const char *suffix) {
+    struct tm utc;
+    CHECK(gmtime_r(&instant, &utc) != NULL);
+    char timestamp[32];
+    CHECK(strftime(timestamp, sizeof timestamp, "%Y-%m-%dT%H:%M:%SZ", &utc) > 0);
+    int length = snprintf(path, capacity, "%s/imas-mvdd-loss-%s-%d%s.txt", directory,
+                          timestamp, (int)getpid(), suffix);
+    CHECK(length >= 0 && (size_t)length < capacity);
+}
+
+/* Reserve every base filename in a bounded interval, so crossing a second
+ * boundary cannot turn the collision scenario into an ordinary creation.
+ * All placeholders must remain empty and exactly one -1 file must appear. */
 static void scenario_loss_file_filename_collision_gains_a_numeric_suffix(void) {
     clear_loss_log_directory();
     const char *directory = loss_log_directory();
 
-    time_t now = time(NULL);
-    CHECK(now != (time_t)-1);
-    struct tm utc;
-    CHECK(gmtime_r(&now, &utc) != NULL);
-    char timestamp[32];
-    CHECK(strftime(timestamp, sizeof timestamp, "%Y-%m-%dT%H:%M:%SZ", &utc) > 0);
-
+    time_t started = realtime_seconds();
+    time_t deadline = started + 60;
     char base_path[1024];
-    CHECK(snprintf(base_path, sizeof base_path, "%s/imas-mvdd-loss-%s-%d.txt", directory,
-                    timestamp, (int)getpid())
-          < (int)sizeof base_path);
-    int fd = open(base_path, O_CREAT | O_EXCL | O_WRONLY, 0600);
-    CHECK(fd >= 0);
-    CHECK(close(fd) == 0);
+    for (time_t instant = started; instant <= deadline; ++instant) {
+        collision_path(base_path, sizeof base_path, directory, instant, "");
+        int fd = open(base_path, O_CREAT | O_EXCL | O_WRONLY, 0600);
+        CHECK(fd >= 0);
+        CHECK(close(fd) == 0);
+    }
 
     int operation_ctx = open_mismatched_equilibrium();
     void *data = NULL;
     CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
 
-    struct stat placeholder_stat;
-    CHECK(stat(base_path, &placeholder_stat) == 0);
-    CHECK(placeholder_stat.st_size == 0);
-
+    time_t finished = realtime_seconds();
+    CHECK(finished >= started && finished <= deadline);
     char suffixed_path[1024];
-    CHECK(snprintf(suffixed_path, sizeof suffixed_path, "%s/imas-mvdd-loss-%s-%d-1.txt", directory,
-                    timestamp, (int)getpid())
-          < (int)sizeof suffixed_path);
+    int created = 0;
+    for (time_t instant = started; instant <= deadline; ++instant) {
+        struct stat info;
+        collision_path(base_path, sizeof base_path, directory, instant, "");
+        CHECK(stat(base_path, &info) == 0);
+        CHECK(info.st_size == 0);
+        collision_path(base_path, sizeof base_path, directory, instant, "-1");
+        if (stat(base_path, &info) == 0) {
+            CHECK(instant <= finished);
+            CHECK(info.st_size > 0);
+            CHECK(++created == 1);
+            strcpy(suffixed_path, base_path);
+        } else {
+            CHECK(errno == ENOENT);
+        }
+    }
+    CHECK(created == 1);
     FILE *file = fopen(suffixed_path, "rb");
     CHECK(file != NULL);
     CHECK(fseek(file, 0, SEEK_END) == 0);
@@ -248,16 +270,14 @@ static void scenario_loss_file_default_destination_uses_the_process_clock_and_pi
     const char *prefix = "imas-mvdd-loss-";
     CHECK(getenv("IMAS_MVDD_LOSS_LOG_DIR") == NULL);
     clear_loss_log_directory_in(".");
-    time_t started = time(NULL);
-    CHECK(started != (time_t)-1);
+    time_t started = realtime_seconds();
 
     int operation_ctx = open_mismatched_equilibrium();
     void *data = NULL;
     CHECK(read_data(operation_ctx, "time_slice/ggd/b_field_phi", "", &data).code == 0);
     CHECK(data != NULL);
 
-    time_t finished = time(NULL);
-    CHECK(finished != (time_t)-1);
+    time_t finished = realtime_seconds();
     CHECK(finished >= started);
     CHECK(finished - started <= 60);
 

@@ -6,6 +6,7 @@ add_test(NAME ci-workflow
     COMMAND "${CMAKE_COMMAND}"
         "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
         "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
+        "-DGRAPH_SETUP_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-dd-graph/action.yml"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ci_workflow.cmake")
 add_test(NAME hli-validation-workflow
     COMMAND "${CMAKE_COMMAND}"
@@ -20,6 +21,7 @@ add_test(NAME ci-workflow-guard-rejects-misplaced-commands
     COMMAND "${CMAKE_COMMAND}"
         "-DWORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
         "-DTOOLCHAIN_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-toolchain/action.yml"
+        "-DGRAPH_SETUP_ACTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/actions/setup-dd-graph/action.yml"
         "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ci_workflow.cmake"
         "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify_ci_workflow_guard.cmake")
@@ -54,6 +56,21 @@ add_test(NAME script-policy-guard-rejects-unpinned-scripts
         "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_script_policies.cmake"
         "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify_script_policy_guard.cmake")
+
+# Graph setup remains opt-in: this test drives the lifecycle through local
+# ORAS/Docker doubles in a temporary state directory. It never downloads a
+# graph, invokes Docker, or needs credentials.
+add_test(NAME dd-graph-setup
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/dd_graph_setup_test.sh")
+add_test(NAME runtime-map-measurement
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/measure_runtime_map_test.sh")
+add_test(NAME private-xml-fixture-package
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/private_xml_fixture_package_test.sh")
+add_test(NAME ctest-inventory-contract
+    COMMAND "${CMAKE_COMMAND}"
+        "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ctest_inventory.cmake"
+        "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify_ctest_inventory.cmake")
 
 # The recording stub is the fast profile's runtime dependency and remains
 # part of the full profile so the two complementary seam suites stay honest.
@@ -115,6 +132,15 @@ function(add_stub_test name executable)
 
     add_test(NAME "${name}" COMMAND ${executable} ${ARG_UNPARSED_ARGUMENTS})
     set_tests_properties("${name}" PROPERTIES ENVIRONMENT "${environment}")
+    # The executable selects the test map source.  Keep that assignment on the
+    # target so the shared harness can label every scenario without duplicating
+    # a source-specific wrapper around its environment contract.
+    if(TARGET "${executable}")
+        get_property(source_label TARGET "${executable}" PROPERTY IMAS_MVDD_CTEST_LABEL)
+        if(source_label)
+            set_property(TEST "${name}" APPEND PROPERTY LABELS "${source_label}")
+        endif()
+    endif()
     if(NOT DEFINED ARG_HLI_DD_VERSION)
         list(APPEND ARG_UNSET_ENV IMAS_MVDD_HLI_DD_VERSION)
     endif()

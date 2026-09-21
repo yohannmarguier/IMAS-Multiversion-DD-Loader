@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-foreach(required_variable WORKFLOW_FILE TOOLCHAIN_ACTION_FILE CHECK_SCRIPT
+foreach(required_variable WORKFLOW_FILE TOOLCHAIN_ACTION_FILE GRAPH_SETUP_ACTION_FILE CHECK_SCRIPT
         TEST_BINARY_DIR)
     if(NOT DEFINED ${required_variable})
         message(FATAL_ERROR "${required_variable} is required")
@@ -19,6 +19,7 @@ function(expect_guard_rejection fixture_name fixture_contents
         COMMAND "${CMAKE_COMMAND}"
             "-DWORKFLOW_FILE=${mutated_workflow}"
             "-DTOOLCHAIN_ACTION_FILE=${TOOLCHAIN_ACTION_FILE}"
+            "-DGRAPH_SETUP_ACTION_FILE=${GRAPH_SETUP_ACTION_FILE}"
             -P "${CHECK_SCRIPT}"
         RESULT_VARIABLE check_result
         OUTPUT_VARIABLE check_output
@@ -55,9 +56,9 @@ expect_guard_rejection(
     "fast_job must check formatting")
 
 set(full_test_step
-    "      - name: Test drift and real-Core seams\n        run: ctest --test-dir build --output-on-failure --no-tests=error")
+    "      - name: Test drift and real-Core seams\n        run: ctest --test-dir build -E '^rust-unit$' --output-on-failure --no-tests=error")
 set(commented_full_test_step
-    "      - name: Test drift and real-Core seams\n        # run: ctest --test-dir build --output-on-failure --no-tests=error")
+    "      - name: Test drift and real-Core seams\n        # run: ctest --test-dir build -E '^rust-unit$' --output-on-failure --no-tests=error")
 string(REPLACE "${full_test_step}" "${commented_full_test_step}"
     misplaced_full_command "${workflow}")
 if(workflow STREQUAL misplaced_full_command)
@@ -65,10 +66,58 @@ if(workflow STREQUAL misplaced_full_command)
 endif()
 string(APPEND misplaced_full_command
     "\n  decoy:\n    runs-on: ubuntu-latest\n    steps:\n"
-    "      - run: ctest --test-dir build --output-on-failure --no-tests=error\n")
+    "      - run: ctest --test-dir build -E '^rust-unit$' --output-on-failure --no-tests=error\n")
 expect_guard_rejection(
     misplaced-full-command "${misplaced_full_command}"
     "full_job must fail when its selected test profile registers no tests")
+
+string(REPLACE
+    "ctest --test-dir build -L live-graph --output-on-failure --no-tests=error"
+    "ctest --test-dir build -L live-graph-missing --output-on-failure --no-tests=error"
+    graph_abi_missing_selection "${workflow}")
+if(workflow STREQUAL graph_abi_missing_selection)
+    message(FATAL_ERROR "Could not replace the graph ABI CTest label")
+endif()
+expect_guard_rejection(
+    graph-abi-missing-selection "${graph_abi_missing_selection}"
+    "graph_abi_job must run the nonempty graph-selected C ABI matrix")
+
+string(REPLACE
+    "run: bash tests/scripts/check-live-acquisition.sh"
+    "# run: bash tests/scripts/check-live-acquisition.sh"
+    graph_abi_without_acquisition "${workflow}")
+if(workflow STREQUAL graph_abi_without_acquisition)
+    message(FATAL_ERROR "Could not comment out the graph ABI acquisition check")
+endif()
+expect_guard_rejection(
+    graph-abi-without-acquisition "${graph_abi_without_acquisition}"
+    "graph_abi_job must fail when live graph acquisition")
+
+string(REPLACE
+    "          ctest --test-dir build -R \"$pattern\" --output-on-failure --no-tests=error"
+    "          # ctest --test-dir build -R \"$pattern\" --output-on-failure --no-tests=error"
+    missing_coexistence_run "${workflow}")
+if(workflow STREQUAL missing_coexistence_run)
+    message(FATAL_ERROR "Could not comment out the graph coexistence test command")
+endif()
+string(APPEND missing_coexistence_run
+    "\n  decoy:\n    runs-on: ubuntu-latest\n    steps:\n"
+    "      - run: ctest --test-dir build -R \"$pattern\" --output-on-failure --no-tests=error\n")
+expect_guard_rejection(
+    missing-coexistence-run "${missing_coexistence_run}"
+    "full_job must execute the graph coexistence real-Core scenarios")
+
+# The installed-mode step's budget must also reach earlier cold scenarios.
+string(REPLACE
+    "      # Complete cold map acquisition needs the same budget as graph-abi.\n      IMAS_MVDD_GRAPH_DEADLINE_SECONDS: 120"
+    "      IMAS_MVDD_GRAPH_DEADLINE_SECONDS: 5"
+    short_full_deadline "${workflow}")
+if(workflow STREQUAL short_full_deadline)
+    message(FATAL_ERROR "Could not shorten the full job acquisition deadline")
+endif()
+expect_guard_rejection(
+    short-full-deadline "${short_full_deadline}"
+    "full_env must budget complete cold graph acquisition")
 
 string(REPLACE
     "ref=$(head -n1 \"$GITHUB_WORKSPACE/IMAS_CORE_REF\" | tr -d '[:space:]')"

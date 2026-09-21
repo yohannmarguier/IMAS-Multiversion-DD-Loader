@@ -4,6 +4,11 @@ Vocabulary for the boundary between an IMAS HLI and IMAS-Core. Fixes the terms s
 
 ## Language
 
+**knowledge graph (KG)**:
+The graph of IMAS Data Dictionary facts, including DD versions, paths and
+their changes, used as the authority for deriving conversions.
+_Avoid_: LG, KL — these refer to the same KG, not separate sources.
+
 **shim**:
 This project's library.
 _Avoid_: loader, middleware, wrapper, translator — pick this term and use it everywhere.
@@ -67,6 +72,16 @@ The future part of the project that derives chronological DD changes for every D
 **rule semantics**:
 The meaning of a conversion rule: whether it matches a DD path and what path or value transformation it requires. Only the shim executes rule semantics.
 
+**identity conversion**:
+A conversion between specified DD versions that requires neither a change of DD path nor a change of value representation. Identical path spelling alone does not establish identity conversion.
+
+**unresolved conversion**:
+A conversion whose required behavior cannot be established from the available DD evidence. It is distinct from an identity conversion and from an established absence of a counterpart in the other DD version.
+
+**established absence**:
+An evidence-backed absence of a counterpart for a DD path in the other DD version. Removal of a spelling and failure to find a replacement do not, by themselves, establish absence.
+_Avoid_: treating an unresolved conversion or a retrieval failure as missing data.
+
 **rule explanation**:
 Test information from the shim that identifies the rule selected for a requested DD path, its match kind, selector stage, precedence, path result, and value transformations. A `merged`/`split` rule's ambiguous direction (the side with more than one declared source) resolves to an ordered list of candidate paths — one per declared precedence, each with its own value transformation — instead of one path result, since only reading each can settle which one actually holds data (ADR 0006). The other direction still resolves to one path result and reports the matched source's own precedence.
 
@@ -87,7 +102,7 @@ The conversion outcome classification retained by the shim: **exact**, **potenti
 _Avoid_: using "lossy" without saying whether loss is potential or certain.
 
 **declared fidelity**:
-The fidelity a conversion rule states for each direction in the conversion-map artifact. It describes what a *read* through that rule costs, so a write derives its own verdict rather than adopting it.
+The fidelity a conversion rule states for each direction. It describes what a *read* through that rule costs, so a write derives its own verdict rather than adopting it.
 _Avoid_: treating it as operation-neutral, or as the fidelity verdict an operation actually earned.
 
 **best-effort write**:
@@ -161,7 +176,7 @@ _Avoid_: top-level context, base context — and do not use "parent" for this, w
 The context from which an arraystruct context was opened. The shim uses the relation to construct the child record, but it does not imply lifecycle ownership or a read-time hierarchy walk.
 
 **conversion-map cache**:
-The registry-owned set of conversion maps shared by mismatched context records. A map exists only while at least one record uses it.
+The collection of reusable conversion maps identified by IDS name, stored DD version and HLI DD version, shared by mismatched context records. Its retention policy determines whether a map outlives the last context using it.
 
 **seam policy**:
 The shim-side rule a seam applies, separate from the binding that carries it out: which arguments translate, which contexts refuse, what fidelity a read earned, and what the shim records afterwards. A seam policy decides; it never calls IMAS-Core, reads the latch, or writes the context registry — it receives what it needs as values and returns the effects for the C-facing layer to perform (ADR 0015).

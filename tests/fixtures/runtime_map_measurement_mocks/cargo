@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+test "${IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DIRECTION:-}" = forward \
+    || test "${IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DIRECTION:-}" = reverse
+printf 'acquire %s %s\n' "$IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_PAIR" \
+    "$IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DIRECTION" >> "$TEST_ORCHESTRATOR_LOG"
+
+case "$IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_PAIR" in
+    equilibrium-3.39.0-4.1.1)
+        ids=equilibrium first=3.39.0 second=4.1.1 ;;
+    equilibrium-3.42.0-4.1.1)
+        ids=equilibrium first=3.42.0 second=4.1.1 ;;
+    pulse-schedule-3.25.0-3.30.0)
+        ids=pulse_schedule first=3.25.0 second=3.30.0 ;;
+    *) exit 64 ;;
+esac
+if test "$IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DIRECTION" = forward; then
+    stored=$first hli=$second
+else
+    stored=$second hli=$first
+fi
+printf '{"schema":1,"records":[{"pair":"%s","ids":"%s","stored_dd":"%s","hli_dd":"%s","direction":"%s","deadline_seconds":%s,"outcome":"success","failure":null,"total_ns":1000000,"publication_completed_ns":1000000,"retained_map_estimate_bytes":1024,"resolver_lookup_ns_per_call":10,"cache_hit_ns_per_call":2,"retained_cache_hit_after_caller_release":true,"stages":[]}]}\n' \
+    "$IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_PAIR" "$ids" "$stored" "$hli" \
+    "$IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DIRECTION" \
+    "${IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DEADLINE_SECONDS:-5}" \
+    > "$IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_OUTPUT"

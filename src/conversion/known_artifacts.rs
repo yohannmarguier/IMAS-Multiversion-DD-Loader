@@ -1,23 +1,26 @@
-//! The one embedded conversion-map artifact this project loads directly
-//! (ADR 0004): equilibrium, DD 3.39.0 ⇄ 4.1.1. A future conversion-map
-//! generator (CONTEXT.md's "conversion-map generator") replaces this
-//! hardcoded lookup with something that covers every IDS and version pair;
-//! until then, an `(IDS name, stored DD version, HLI DD version)` triple this
-//! lookup does not recognise simply has no artifact available, and the shim
-//! treats it exactly like an unknown context: passthrough, no registration,
-//! no loss (ADR 0011 decision 1 — silence is earned by mechanism coverage,
-//! not by which DD-version pair is involved).
+//! Private XML regression fixtures for the former equilibrium 3.39.0 ⇄ 4.1.1
+//! artifact. Production occurrence opening acquires maps from the pinned
+//! graph; this lookup is compiled only into `xml-fixture-source` builds so
+//! existing interpreter and ABI mechanism fixtures retain their historical
+//! expectations without creating a runtime source-selection or fallback path.
 
 use crate::conversion::conversion_map::Direction;
 use crate::version::dd_version::DdVersion;
 
 const EQUILIBRIUM_ARTIFACT: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
+const EQUILIBRIUM_LEFT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-3.39.0.txt");
+const EQUILIBRIUM_RIGHT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-4.1.1.txt");
 
 /// The artifact serving one `(IDS, stored, HLI)` triple, plus the direction
 /// that resolves a path expressed in the HLI's own spelling to the stored
 /// spelling — the down-conversion direction every ADR 0002 seam needs.
 pub(crate) struct ArtifactMatch {
     pub(crate) xml: &'static str,
+    /// Complete exact leaf inventories for the XML artifact's two endpoints.
+    /// They preserve its existing converted-delete classification until KG
+    /// acquisition supplies equivalent endpoint metadata for every map.
+    pub(crate) left_leaves: &'static str,
+    pub(crate) right_leaves: &'static str,
     pub(crate) direction_to_stored: Direction,
 }
 
@@ -37,6 +40,8 @@ pub(crate) fn lookup(ids: &str, stored: &DdVersion, hli: &DdVersion) -> Option<A
         // in reverse.
         Some(ArtifactMatch {
             xml: EQUILIBRIUM_ARTIFACT,
+            left_leaves: EQUILIBRIUM_LEFT_LEAVES,
+            right_leaves: EQUILIBRIUM_RIGHT_LEAVES,
             direction_to_stored: Direction::Reverse,
         })
     } else if stored == &v4_1_1 && hli == &v3_39_0 {
@@ -45,6 +50,8 @@ pub(crate) fn lookup(ids: &str, stored: &DdVersion, hli: &DdVersion) -> Option<A
         // forward.
         Some(ArtifactMatch {
             xml: EQUILIBRIUM_ARTIFACT,
+            left_leaves: EQUILIBRIUM_LEFT_LEAVES,
+            right_leaves: EQUILIBRIUM_RIGHT_LEAVES,
             direction_to_stored: Direction::Forward,
         })
     } else {

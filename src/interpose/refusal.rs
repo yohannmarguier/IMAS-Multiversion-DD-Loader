@@ -156,28 +156,36 @@ fn conversion_record_if_enabled(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversion::known_artifacts;
-    use crate::interpose::occurrence::load_artifact;
     use std::ffi::CString;
+
+    const FIXTURE: &str = r#"
+        <ids-map ids="equilibrium" format-version="1">
+          <side id="left" dd="3.39.0" cocos="11"/>
+          <side id="right" dd="4.1.1" cocos="17"/>
+        </ids-map>
+    "#;
 
     fn register_equilibrium_root(ctx_id: c_int, resolved_path: &str) -> ConversionRecord {
         let stored: crate::version::dd_version::DdVersion =
             "3.39.0".parse().expect("known release");
         let hli: crate::version::dd_version::DdVersion = "4.1.1".parse().expect("known release");
-        let artifact = known_artifacts::lookup("equilibrium", &stored, &hli)
-            .expect("the embedded equilibrium artifact serves this pair");
-        assert!(REGISTRY.record_root(
-            RootRegistration {
-                ctx_id,
-                resolved_path: resolved_path.to_string(),
-                pulse_ctx_id: ctx_id,
-                dataobjectname: "equilibrium".to_string(),
-                key: MapCacheKey::new("equilibrium".to_string(), stored, hli),
-                direction_to_stored: artifact.direction_to_stored,
-                opened_read_op: true,
-            },
-            || load_artifact(&artifact),
-        ));
+        assert!(
+            REGISTRY.record_root(
+                RootRegistration {
+                    ctx_id,
+                    resolved_path: resolved_path.to_string(),
+                    pulse_ctx_id: ctx_id,
+                    dataobjectname: "equilibrium".to_string(),
+                    key: MapCacheKey::new("equilibrium".to_string(), stored, hli),
+                    direction_to_stored: crate::conversion::conversion_map::Direction::Reverse,
+                    opened_read_op: true,
+                },
+                std::sync::Arc::new(
+                    crate::conversion::conversion_map::ConversionMap::load(FIXTURE)
+                        .expect("fixture map must load"),
+                ),
+            )
+        );
         REGISTRY
             .lookup(ctx_id)
             .expect("the root just registered must be live")

@@ -237,7 +237,24 @@ static void check_write_lands_on_the_stored_spelling(const char *hli_version,
     CHECK(stored[FIXTURE_SLICES] == 7.5);
     CHECK(!dataset_exists_on_disk(equilibrium_file, hli_dataset));
     check_stamp_still_reads(fixture_version);
-
+#ifdef IMAS_MVDD_LIVE_GRAPH
+    double unrelated[FIXTURE_SLICE_CAPACITY], after[FIXTURE_SLICE_CAPACITY];
+    int unrelated_count = read_double_slices_from_disk(equilibrium_file, IP_DATASET,
+                                                       unrelated, FIXTURE_SLICE_CAPACITY);
+    pulse_ctx = open_copied_fixture_pulse();
+    int operation = -1;
+    CHECK_OK(al_begin_global_action(pulse_ctx, "equilibrium", "", WRITE_OP, &operation));
+    char field[256];
+    CHECK(snprintf(field, sizeof field, "time_slice/%s", hli_field) > 0);
+    CHECK_OK(al_delete_data(operation, field));
+    CHECK_OK(al_end_action(operation));
+    close_fixture_pulse(pulse_ctx);
+    CHECK(!dataset_exists_on_disk(equilibrium_file, stored_dataset));
+    CHECK(read_double_slices_from_disk(equilibrium_file, IP_DATASET, after,
+                                       FIXTURE_SLICE_CAPACITY) == unrelated_count);
+    for (int index = 0; index < unrelated_count; ++index) CHECK(unrelated[index] == after[index]);
+    check_stamp_still_reads(fixture_version);
+#endif
     remove_fixture_pair();
 }
 
@@ -263,8 +280,57 @@ static void scenario_write_reverse_lands_on_the_stored_spelling(void) {
 /* time_slice/global_quantities/ip spells identically in both DD versions and
  * carries the COCOS 11-to-17 sign flip. The path therefore proves nothing; the
  * value is the whole claim, and it is only visible off the disk. */
+#ifdef IMAS_MVDD_LIVE_GRAPH
+static void check_live_psi(const char *hli_version, const char *fixture_version) {
+    copy_fixture_pair(fixture_version);
+    CHECK_OK(imas_mvdd_set_hli_dd_version(hli_version));
+    int pulse = open_copied_fixture_pulse();
+    int operation = -1, slice = -1, count = 1;
+    CHECK_OK(al_begin_slice_action(pulse, "equilibrium", WRITE_OP, APPENDED_SLICE_TIME,
+                                   UNDEFINED_INTERP, &operation));
+    CHECK_OK(al_begin_arraystruct_action(operation, "time_slice", "", &count, &slice));
+    double input[2] = {7.5, -3.25};
+    int shape[1] = {2};
+    CHECK_OK(al_write_data(slice, "profiles_1d/psi", "", input, DOUBLE_DATA, 1, shape));
+    CHECK(input[0] == 7.5 && input[1] == -3.25);
+    CHECK_OK(al_end_action(slice));
+    CHECK_OK(al_end_action(operation));
+    close_fixture_pulse(pulse);
+
+    char path[1024];
+    equilibrium_file_path(path, sizeof path);
+    hid_t file = H5Fopen(path, H5F_ACC_RDONLY, H5P_DEFAULT);
+    CHECK(file >= 0);
+    hid_t dataset = H5Dopen2(file, "/equilibrium/time_slice[]&profiles_1d&psi", H5P_DEFAULT);
+    CHECK(dataset >= 0);
+    hid_t space = H5Dget_space(dataset);
+    CHECK(space >= 0);
+    hssize_t points = H5Sget_simple_extent_npoints(space);
+    CHECK(points == 12);
+    double stored[12];
+    CHECK(H5Dread(dataset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, stored) >= 0);
+    int written = 0;
+    for (int index = 0; index < 12; ++index) {
+        CHECK(stored[index] != 7.5);
+        if (stored[index] == -7.5) {
+            CHECK(index + 1 < 12 && stored[index + 1] == 3.25);
+            ++written;
+        }
+    }
+    CHECK(written == 1);
+    CHECK(H5Sclose(space) >= 0);
+    CHECK(H5Dclose(dataset) >= 0);
+    CHECK(H5Fclose(file) >= 0);
+    check_stamp_still_reads(fixture_version);
+    remove_fixture_pair();
+}
+#endif
+
 static void check_write_flips_the_sign_on_disk(const char *hli_version,
                                               const char *fixture_version) {
+#ifdef IMAS_MVDD_LIVE_GRAPH
+    check_live_psi(hli_version, fixture_version);
+#else
     copy_fixture_pair(fixture_version);
     CHECK_OK(imas_mvdd_set_hli_dd_version(hli_version));
     int pulse_ctx = open_copied_fixture_pulse();
@@ -281,18 +347,19 @@ static void check_write_flips_the_sign_on_disk(const char *hli_version,
     check_stamp_still_reads(fixture_version);
 
     remove_fixture_pair();
+#endif
 }
 
 static void scenario_write_forward_flips_the_sign_on_disk(void) {
     check_write_flips_the_sign_on_disk("4.1.1", "3.39.0");
     printf("write_delete_oracle_test write-oracle-forward-flips-the-sign-on-disk: a 4.1.1 write of "
-           "ip=7.5 reached the 3.39.0 fixture as -7.5\n");
+           "the supported sign transformation reached the 3.39.0 fixture\n");
 }
 
 static void scenario_write_reverse_flips_the_sign_on_disk(void) {
     check_write_flips_the_sign_on_disk("3.39.0", "4.1.1");
     printf("write_delete_oracle_test write-oracle-reverse-flips-the-sign-on-disk: a 3.39.0 write of "
-           "ip=7.5 reached the 4.1.1 fixture as -7.5\n");
+           "the supported sign transformation reached the 4.1.1 fixture\n");
 }
 
 /* --- claim 4: the precedence-2 candidate is left as it was --------------- */

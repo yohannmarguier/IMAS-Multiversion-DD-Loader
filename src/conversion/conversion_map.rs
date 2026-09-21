@@ -33,7 +33,9 @@ use roxmltree::Document;
 pub struct ArtifactDdVersion(String);
 
 impl ArtifactDdVersion {
-    fn parse(value: &str) -> Result<Self, LoadError> {
+    /// Validates a released DD version for a map endpoint.
+    pub fn new(value: impl Into<String>) -> Result<Self, LoadError> {
+        let value = value.into();
         let mut components = value.split('.');
         let valid = (0..3).all(|_| {
             components.next().is_some_and(|component| {
@@ -43,9 +45,9 @@ impl ArtifactDdVersion {
             })
         }) && components.next().is_none();
         if !valid {
-            return Err(LoadError::InvalidArtifactDdVersion(value.to_string()));
+            return Err(LoadError::InvalidArtifactDdVersion(value));
         }
-        Ok(Self(value.to_string()))
+        Ok(Self(value))
     }
 }
 
@@ -60,11 +62,20 @@ impl fmt::Display for ArtifactDdVersion {
 pub struct CocosConvention(String);
 
 impl CocosConvention {
-    fn parse(value: &str) -> Result<Self, LoadError> {
+    /// Validates a known COCOS convention identifier.
+    pub fn new(value: impl Into<String>) -> Result<Self, LoadError> {
+        let value = value.into();
         if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Err(LoadError::InvalidCocosConvention(value.to_string()));
+            return Err(LoadError::InvalidCocosConvention(value));
         }
-        Ok(Self(value.to_string()))
+        Ok(Self(value))
+    }
+
+    /// The validated convention identifier, for comparisons at the map
+    /// construction boundary.
+    #[cfg_attr(feature = "xml-fixture-source", allow(dead_code))]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -74,11 +85,13 @@ impl fmt::Display for CocosConvention {
     }
 }
 
-/// One side of a conversion-map artifact: a DD version and its COCOS convention.
+/// One side of a conversion map: a DD version and, where established, its
+/// COCOS convention. `None` records genuinely unknown endpoint metadata; it
+/// is not a convention with a factor of zero or one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Side {
     pub dd: ArtifactDdVersion,
-    pub cocos: CocosConvention,
+    pub cocos: Option<CocosConvention>,
 }
 
 /// Which side of the map a resolution request travels from.
@@ -139,8 +152,8 @@ struct SelectorMatch {
     /// glob matches by the length of the path being converted, which let an
     /// unrelated glob rule "win" over a more specific rule purely because
     /// the input happened to be long. `Exact` and `Glob` matches never need
-    /// this field compared: `ConversionMap::load` rejects any artifact where
-    /// two `Exact` or two `Glob` selectors could both claim the same path.
+    /// this field compared: map validation rejects any input where two
+    /// `Exact` or two `Glob` selectors could both claim the same path.
     specificity: usize,
     /// The unmatched remainder of the path past a `Subtree` anchor —
     /// starting with `/`, or empty when the path equals the anchor itself.
@@ -360,9 +373,15 @@ impl ValueTransformation {
     }
 }
 
-/// One `<rule>` element's `rel` attribute.
+/// One path-level relation, whether decoded from an XML `<rule>` or supplied
+/// through validated typed construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rel {
+    /// A path independently established to have the same spelling and value
+    /// representation at both map endpoints. Typed graph acquisition uses an
+    /// explicit identity rule so the document-level default cannot claim a
+    /// caller path outside the acquired endpoint scope.
+    Identical,
     Renamed,
     Merged,
     Moved,
@@ -381,7 +400,7 @@ pub enum Rel {
     Split,
     /// A path present only on the artifact's left side.
     ///
-    /// Only its *forward* fidelity is ever consulted. `ConversionMap::load`
+    /// Only its *forward* fidelity is ever consulted. Validated assembly
     /// indexes a `LeftOnly` rule into `left_sources` alone — it has no right
     /// path to index — so a reverse resolve can never select it. That is not
     /// a gap: reverse means the right side supplied the path, and this rule
@@ -406,7 +425,7 @@ pub struct FromEntry {
 }
 
 /// One path-level conversion rule. Field population depends on `rel`:
-/// `Renamed`/`Moved`/`Retyped` carry both `left` and `right`; `LeftOnly`
+/// `Identical`/`Renamed`/`Moved`/`Retyped` carry both `left` and `right`; `LeftOnly`
 /// carries only `left`; `RightOnly` carries only `right`; `Merged` carries
 /// `right` plus left-side `froms`; `Split` carries `left` plus right-side
 /// `froms`.
@@ -417,6 +436,131 @@ pub struct Rule {
     left: Option<Selector>,
     right: Option<Selector>,
     pub froms: Vec<FromEntry>,
+    pub fidelity_forward: Fidelity,
+    pub fidelity_reverse: Fidelity,
+}
+
+/// The DD hierarchy classification of one exact endpoint path. A complete
+/// endpoint inventory may certify only `Leaf` paths for converted deletes;
+/// every `Structure`, absent, or incomplete entry remains unsafe to delete
+/// unless the established trivial-subtree rule permits it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndpointNodeKind {
+    Leaf,
+    Structure,
+}
+
+/// One exact path and its DD hierarchy classification at a map endpoint.
+/// A KG acquisition adapter derives these facts from the selected endpoint's
+/// datatype and hierarchy evidence; it must not copy a convenience `is_leaf`
+/// flag without validating that evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndpointNode {
+    pub path: String,
+    pub kind: EndpointNodeKind,
+}
+
+/// Endpoint hierarchy evidence for one side of a conversion map.
+///
+/// A KG acquisition adapter calls [`Self::complete`] only after it has
+/// retrieved and validated all endpoint datatype/hierarchy facts needed to
+/// classify deletes. Incomplete evidence is retained so callers can still
+/// resolve independently established conversions, but it never certifies a
+/// converted delete target as a leaf. This classification assertion is not an
+/// independent proof that an upstream DD inventory itself is complete.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EndpointInventory {
+    complete: bool,
+    nodes: Vec<EndpointNode>,
+}
+
+impl EndpointInventory {
+    /// Marks validated endpoint datatype/hierarchy evidence as sufficient for
+    /// leaf-delete classification. Future graph acquisition must call this
+    /// only after its complete endpoint result passes its own validation.
+    pub fn complete(nodes: Vec<EndpointNode>) -> Self {
+        Self {
+            complete: true,
+            nodes,
+        }
+    }
+
+    /// Retains partial endpoint evidence without allowing it to certify a
+    /// converted delete target as a leaf.
+    pub fn incomplete(nodes: Vec<EndpointNode>) -> Self {
+        Self {
+            complete: false,
+            nodes,
+        }
+    }
+
+    /// Adapts the legacy artifact's exact leaf lists. These lists are the
+    /// existing compatibility input for delete classification; they are not a
+    /// claim that the artifact-completeness proof exhausts its DD version.
+    #[cfg(feature = "xml-fixture-source")]
+    pub(crate) fn complete_leaf_paths(paths: &str) -> Self {
+        Self::complete(
+            paths
+                .lines()
+                .map(|path| EndpointNode {
+                    path: path.to_string(),
+                    kind: EndpointNodeKind::Leaf,
+                })
+                .collect(),
+        )
+    }
+}
+
+/// A complete map description supplied by a non-XML source such as the KG.
+/// It deliberately uses the resolver's validated rule shapes while retaining
+/// endpoint metadata that XML historically required to be known. Typed input
+/// additionally expresses a scoped explicit identity rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypedConversionMap {
+    pub ids: String,
+    pub left: Option<Side>,
+    pub right: Option<Side>,
+    pub left_endpoint: EndpointInventory,
+    pub right_endpoint: EndpointInventory,
+    pub default_identical: bool,
+    pub rules: Vec<TypedRule>,
+    pub sign_flips: Vec<TypedSignFlip>,
+    pub redefines: Vec<TypedRedefine>,
+}
+
+/// One typed path-level rule before validated assembly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypedRule {
+    pub id: String,
+    pub rel: Rel,
+    pub selector_stage: SelectorStage,
+    pub left: Option<String>,
+    pub right: Option<String>,
+    pub froms: Vec<TypedFromEntry>,
+    pub fidelity_forward: Fidelity,
+    pub fidelity_reverse: Fidelity,
+}
+
+/// One ordered source or destination of a typed merged/split rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypedFromEntry {
+    pub path: String,
+    pub precedence: u32,
+}
+
+/// A known, established COCOS sign change for one right-side path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypedSignFlip {
+    pub path: String,
+    pub from_cocos: CocosConvention,
+    pub to_cocos: CocosConvention,
+}
+
+/// A typed unit redefinition, which remains an explicit refusal under the
+/// existing interpreter's supported transformation scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypedRedefine {
+    pub glob: String,
     pub fidelity_forward: Fidelity,
     pub fidelity_reverse: Fidelity,
 }
@@ -550,7 +694,7 @@ pub enum CompletenessViolation {
     },
 }
 
-/// A conversion-map artifact failed to load because its rule data is
+/// A conversion-map input failed validation because its rule data is
 /// structurally unusable — malformed XML, a missing required attribute, an
 /// unrecognised enum value, or a rule shape that contradicts its own `rel`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -598,6 +742,14 @@ pub enum LoadError {
         reason: String,
     },
     DuplicateFlipPath(String),
+    DuplicateEndpointPath {
+        side: &'static str,
+        path: String,
+    },
+    InvalidEndpointPath {
+        side: &'static str,
+        path: String,
+    },
     InvalidArtifactDdVersion(String),
     InvalidCocosConvention(String),
     MissingSide(&'static str),
@@ -655,7 +807,16 @@ impl fmt::Display for LoadError {
                 )
             }
             LoadError::DuplicateFlipPath(path) => {
-                write!(f, "path `{path}` appears in more than one <flip>")
+                write!(
+                    f,
+                    "path `{path}` appears in more than one sign-flip transformation"
+                )
+            }
+            LoadError::DuplicateEndpointPath { side, path } => {
+                write!(f, "duplicate endpoint path on the {side} side: `{path}`")
+            }
+            LoadError::InvalidEndpointPath { side, path } => {
+                write!(f, "invalid endpoint path on the {side} side: `{path}`")
             }
             LoadError::InvalidArtifactDdVersion(value) => {
                 write!(f, "invalid artifact DD version `{value}`")
@@ -663,7 +824,7 @@ impl fmt::Display for LoadError {
             LoadError::InvalidCocosConvention(value) => {
                 write!(f, "invalid COCOS convention `{value}`")
             }
-            LoadError::MissingSide(id) => write!(f, "missing required <side id=\"{id}\"/>"),
+            LoadError::MissingSide(id) => write!(f, "missing required `{id}` map side"),
         }
     }
 }
@@ -674,7 +835,7 @@ impl std::error::Error for LoadError {}
 /// requested path before that rule can claim it, and the index of the owning
 /// rule in [`ConversionMap::rules`]. `precedence` is `Some` only when this
 /// entry comes from a `merged`/`split` rule's `<from>` child (the source
-/// role that carries more than one candidate) — a `Renamed`/`Moved`/
+/// role that carries more than one candidate) — an `Identical`/`Renamed`/`Moved`/
 /// `Retyped`/`LeftOnly`/`RightOnly` selector, and a `merged` rule's single
 /// `right` or a `split` rule's single `left`, have no declared precedence.
 #[derive(Debug, Clone)]
@@ -765,6 +926,212 @@ fn reject_ambiguous_redefines(redefines: &[RedefineEntry]) -> Result<(), LoadErr
     Ok(())
 }
 
+fn build_source_indexes(rules: &[Rule]) -> Result<(Vec<SourceEntry>, Vec<SourceEntry>), LoadError> {
+    let mut left_sources = Vec::new();
+    let mut right_sources = Vec::new();
+    for (rule_index, rule) in rules.iter().enumerate() {
+        let missing = |reason: &str| LoadError::InvalidRuleShape {
+            rule_id: rule.id.clone(),
+            reason: reason.to_string(),
+        };
+        let left = || {
+            rule.left
+                .clone()
+                .ok_or_else(|| missing("requires `left` only"))
+        };
+        let right = || {
+            rule.right
+                .clone()
+                .ok_or_else(|| missing("requires `right` only"))
+        };
+        match rule.rel {
+            Rel::Identical | Rel::Renamed | Rel::Moved | Rel::Retyped => {
+                left_sources.push(SourceEntry {
+                    selector: left()?,
+                    rule_index,
+                    precedence: None,
+                });
+                right_sources.push(SourceEntry {
+                    selector: right()?,
+                    rule_index,
+                    precedence: None,
+                });
+            }
+            Rel::LeftOnly => left_sources.push(SourceEntry {
+                selector: left()?,
+                rule_index,
+                precedence: None,
+            }),
+            Rel::RightOnly => right_sources.push(SourceEntry {
+                selector: right()?,
+                rule_index,
+                precedence: None,
+            }),
+            Rel::Merged => {
+                for from in &rule.froms {
+                    left_sources.push(SourceEntry {
+                        selector: from.selector.clone(),
+                        rule_index,
+                        precedence: Some(from.precedence),
+                    });
+                }
+                right_sources.push(SourceEntry {
+                    selector: right()?,
+                    rule_index,
+                    precedence: None,
+                });
+            }
+            Rel::Split => {
+                left_sources.push(SourceEntry {
+                    selector: left()?,
+                    rule_index,
+                    precedence: None,
+                });
+                for from in &rule.froms {
+                    right_sources.push(SourceEntry {
+                        selector: from.selector.clone(),
+                        rule_index,
+                        precedence: Some(from.precedence),
+                    });
+                }
+            }
+        }
+    }
+    Ok((left_sources, right_sources))
+}
+
+fn rule_from_typed(typed: TypedRule) -> Result<Rule, LoadError> {
+    let shape_error = |reason: &str| LoadError::InvalidRuleShape {
+        rule_id: typed.id.clone(),
+        reason: reason.to_string(),
+    };
+    let left = typed
+        .left
+        .map(|path| Selector::new(typed.selector_stage, path));
+    let right = typed
+        .right
+        .map(|path| Selector::new(typed.selector_stage, path));
+    let mut seen_precedence = HashSet::new();
+    let froms: Vec<FromEntry> = typed
+        .froms
+        .into_iter()
+        .map(|from| {
+            if !seen_precedence.insert(from.precedence) {
+                return Err(LoadError::DuplicatePrecedence {
+                    rule_id: typed.id.clone(),
+                    precedence: from.precedence,
+                });
+            }
+            Ok(FromEntry {
+                selector: Selector::new(typed.selector_stage, from.path),
+                precedence: from.precedence,
+            })
+        })
+        .collect::<Result<_, _>>()?;
+
+    match typed.rel {
+        Rel::Identical | Rel::Renamed | Rel::Moved | Rel::Retyped => {
+            let (Some(left), Some(right)) = (&left, &right) else {
+                return Err(shape_error("requires both `left` and `right`"));
+            };
+            if !froms.is_empty() {
+                return Err(shape_error("must not carry <from> children"));
+            }
+            if typed.selector_stage == SelectorStage::Glob
+                && wildcard_count(left.pattern()) != wildcard_count(right.pattern())
+            {
+                return Err(shape_error(
+                    "glob `left` and `right` must carry the same number of `*` wildcards",
+                ));
+            }
+        }
+        Rel::LeftOnly => {
+            if left.is_none() || right.is_some() {
+                return Err(shape_error("requires `left` only"));
+            }
+            if !froms.is_empty() {
+                return Err(shape_error("must not carry <from> children"));
+            }
+        }
+        Rel::RightOnly => {
+            if right.is_none() || left.is_some() {
+                return Err(shape_error("requires `right` only"));
+            }
+            if !froms.is_empty() {
+                return Err(shape_error("must not carry <from> children"));
+            }
+        }
+        Rel::Merged => {
+            let Some(right) = &right else {
+                return Err(shape_error(
+                    "requires `right` only, plus left-side <from> entries",
+                ));
+            };
+            if left.is_some() {
+                return Err(shape_error(
+                    "requires `right` only, plus left-side <from> entries",
+                ));
+            }
+            if froms.is_empty() {
+                return Err(shape_error("requires at least one <from left=\"...\"/>"));
+            }
+            if typed.selector_stage == SelectorStage::Glob {
+                validate_glob_candidate_wildcards(&typed.id, right, &froms, "right", "left")?;
+            }
+        }
+        Rel::Split => {
+            let Some(left) = &left else {
+                return Err(shape_error(
+                    "requires `left` only, plus right-side <from> entries",
+                ));
+            };
+            if right.is_some() {
+                return Err(shape_error(
+                    "requires `left` only, plus right-side <from> entries",
+                ));
+            }
+            if froms.is_empty() {
+                return Err(shape_error("requires at least one <from right=\"...\"/>"));
+            }
+            if typed.selector_stage == SelectorStage::Glob {
+                validate_glob_candidate_wildcards(&typed.id, left, &froms, "left", "right")?;
+            }
+        }
+    }
+
+    Ok(Rule {
+        id: typed.id,
+        rel: typed.rel,
+        left,
+        right,
+        froms,
+        fidelity_forward: typed.fidelity_forward,
+        fidelity_reverse: typed.fidelity_reverse,
+    })
+}
+
+fn validate_endpoint_inventory(
+    side: &'static str,
+    inventory: EndpointInventory,
+) -> Result<EndpointInventory, LoadError> {
+    let mut paths = HashSet::new();
+    for node in &inventory.nodes {
+        if node.path.is_empty() || node.path.split('/').any(str::is_empty) {
+            return Err(LoadError::InvalidEndpointPath {
+                side,
+                path: node.path.clone(),
+            });
+        }
+        if !paths.insert(node.path.as_str()) {
+            return Err(LoadError::DuplicateEndpointPath {
+                side,
+                path: node.path.clone(),
+            });
+        }
+    }
+    Ok(inventory)
+}
+
 /// A loaded conversion-map artifact for one adjacent DD-version step
 /// (CONTEXT.md's "conversion-map artifact").
 #[derive(Debug, Clone)]
@@ -773,6 +1140,8 @@ pub struct ConversionMap {
     pub left: Side,
     pub right: Side,
     pub default_identical: bool,
+    left_endpoint: EndpointInventory,
+    right_endpoint: EndpointInventory,
     rules: Vec<Rule>,
     sign_flips: HashMap<String, (CocosConvention, CocosConvention)>,
     redefines: Vec<RedefineEntry>,
@@ -785,6 +1154,93 @@ pub struct ConversionMap {
 }
 
 impl ConversionMap {
+    /// Estimates bytes retained by this map's owned resolver data.
+    ///
+    /// The estimate counts the map's inline storage, vector/hash-table
+    /// capacities and the capacities of their owned strings. It deliberately
+    /// excludes allocator bookkeeping, the containing `Arc`, the coordinator
+    /// cache, thread stacks and temporary acquisition data, so callers must
+    /// not present it as peak or process memory.
+    #[cfg(test)]
+    #[cfg_attr(feature = "xml-fixture-source", allow(dead_code))]
+    pub(crate) fn estimated_retained_bytes(&self) -> usize {
+        fn string_bytes(value: &String) -> usize {
+            value.capacity()
+        }
+        fn selector_bytes(selector: &Selector) -> usize {
+            match selector {
+                Selector::Exact(path) | Selector::Subtree(path) | Selector::Glob(path) => {
+                    string_bytes(path)
+                }
+            }
+        }
+        fn side_bytes(side: &Side) -> usize {
+            string_bytes(&side.dd.0)
+                + side
+                    .cocos
+                    .as_ref()
+                    .map_or(0, |cocos| string_bytes(&cocos.0))
+        }
+        fn endpoint_bytes(endpoint: &EndpointInventory) -> usize {
+            endpoint.nodes.capacity() * std::mem::size_of::<EndpointNode>()
+                + endpoint
+                    .nodes
+                    .iter()
+                    .map(|node| string_bytes(&node.path))
+                    .sum::<usize>()
+        }
+
+        std::mem::size_of::<Self>()
+            + string_bytes(&self.ids)
+            + side_bytes(&self.left)
+            + side_bytes(&self.right)
+            + endpoint_bytes(&self.left_endpoint)
+            + endpoint_bytes(&self.right_endpoint)
+            + self.rules.capacity() * std::mem::size_of::<Rule>()
+            + self
+                .rules
+                .iter()
+                .map(|rule| {
+                    string_bytes(&rule.id)
+                        + rule.left.as_ref().map_or(0, selector_bytes)
+                        + rule.right.as_ref().map_or(0, selector_bytes)
+                        + rule.froms.capacity() * std::mem::size_of::<FromEntry>()
+                        + rule
+                            .froms
+                            .iter()
+                            .map(|from| selector_bytes(&from.selector))
+                            .sum::<usize>()
+                })
+                .sum::<usize>()
+            + self.left_sources.capacity() * std::mem::size_of::<SourceEntry>()
+            + self
+                .left_sources
+                .iter()
+                .map(|source| selector_bytes(&source.selector))
+                .sum::<usize>()
+            + self.right_sources.capacity() * std::mem::size_of::<SourceEntry>()
+            + self
+                .right_sources
+                .iter()
+                .map(|source| selector_bytes(&source.selector))
+                .sum::<usize>()
+            + self.redefines.capacity() * std::mem::size_of::<RedefineEntry>()
+            + self
+                .redefines
+                .iter()
+                .map(|redefine| selector_bytes(&redefine.selector))
+                .sum::<usize>()
+            + self.sign_flips.capacity()
+                * std::mem::size_of::<(String, (CocosConvention, CocosConvention))>()
+            + self
+                .sign_flips
+                .iter()
+                .map(|(path, (from, to))| {
+                    string_bytes(path) + string_bytes(&from.0) + string_bytes(&to.0)
+                })
+                .sum::<usize>()
+    }
+
     /// Parses a conversion-map artifact from its XML text.
     ///
     /// `<include>` and `<coverage>` elements are recognised and skipped
@@ -792,6 +1248,22 @@ impl ConversionMap {
     /// does not carry (the future conversion-map generator's concern) or are
     /// generated records that must never affect resolution.
     pub fn load(xml: &str) -> Result<Self, LoadError> {
+        Self::load_with_endpoint_inventories(
+            xml,
+            EndpointInventory::default(),
+            EndpointInventory::default(),
+        )
+    }
+
+    /// Parses an XML artifact while attaching endpoint inventory evidence from
+    /// its caller. XML has no endpoint-hierarchy schema; the legacy artifact
+    /// loader supplies its checked-in inventories here, while a future KG
+    /// adapter uses [`Self::from_typed`] directly.
+    pub(crate) fn load_with_endpoint_inventories(
+        xml: &str,
+        left_endpoint: EndpointInventory,
+        right_endpoint: EndpointInventory,
+    ) -> Result<Self, LoadError> {
         let doc = Document::parse(xml).map_err(|e| LoadError::Xml(e.to_string()))?;
         let root = doc.root_element();
 
@@ -800,18 +1272,20 @@ impl ConversionMap {
         let mut left: Option<Side> = None;
         let mut right: Option<Side> = None;
         let mut default_identical = false;
-        let mut rules: Vec<Rule> = Vec::new();
-        let mut sign_flips: HashMap<String, (CocosConvention, CocosConvention)> = HashMap::new();
-        let mut redefines: Vec<RedefineEntry> = Vec::new();
-        let mut seen_rule_ids: HashSet<String> = HashSet::new();
+        let mut rules = Vec::new();
+        let mut sign_flips = Vec::new();
+        let mut redefines = Vec::new();
 
         for child in root.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
                 "side" => {
                     let id = required_attr(&child, "side", "id")?;
-                    let dd = ArtifactDdVersion::parse(required_attr(&child, "side", "dd")?)?;
-                    let cocos = CocosConvention::parse(required_attr(&child, "side", "cocos")?)?;
-                    let side = Side { dd, cocos };
+                    let dd = ArtifactDdVersion::new(required_attr(&child, "side", "dd")?)?;
+                    let cocos = CocosConvention::new(required_attr(&child, "side", "cocos")?)?;
+                    let side = Side {
+                        dd,
+                        cocos: Some(cocos),
+                    };
                     match id {
                         "left" => left = Some(side),
                         "right" => right = Some(side),
@@ -843,11 +1317,7 @@ impl ConversionMap {
                         if rule_node.tag_name().name() != "rule" {
                             continue;
                         }
-                        let rule = parse_rule(&rule_node)?;
-                        if !seen_rule_ids.insert(rule.id.clone()) {
-                            return Err(LoadError::DuplicateRuleId(rule.id));
-                        }
-                        rules.push(rule);
+                        rules.push(parse_rule(&rule_node)?);
                     }
                 }
                 "transforms" => {
@@ -861,90 +1331,91 @@ impl ConversionMap {
             }
         }
 
-        let left = left.ok_or(LoadError::MissingSide("left"))?;
-        let right = right.ok_or(LoadError::MissingSide("right"))?;
+        Self::from_typed(TypedConversionMap {
+            ids,
+            left,
+            right,
+            left_endpoint,
+            right_endpoint,
+            default_identical,
+            rules,
+            sign_flips,
+            redefines,
+        })
+    }
 
-        let mut left_sources: Vec<SourceEntry> = Vec::new();
-        let mut right_sources: Vec<SourceEntry> = Vec::new();
-        for (rule_index, rule) in rules.iter().enumerate() {
-            match rule.rel {
-                Rel::Renamed | Rel::Moved | Rel::Retyped => {
-                    left_sources.push(SourceEntry {
-                        selector: rule.left.clone().expect("both paths required for this rel"),
-                        rule_index,
-                        precedence: None,
-                    });
-                    right_sources.push(SourceEntry {
-                        selector: rule
-                            .right
-                            .clone()
-                            .expect("both paths required for this rel"),
-                        rule_index,
-                        precedence: None,
-                    });
-                }
-                Rel::LeftOnly => {
-                    left_sources.push(SourceEntry {
-                        selector: rule.left.clone().expect("left_only rule has a left path"),
-                        rule_index,
-                        precedence: None,
-                    });
-                }
-                Rel::RightOnly => {
-                    right_sources.push(SourceEntry {
-                        selector: rule
-                            .right
-                            .clone()
-                            .expect("right_only rule has a right path"),
-                        rule_index,
-                        precedence: None,
-                    });
-                }
-                Rel::Merged => {
-                    for from in &rule.froms {
-                        left_sources.push(SourceEntry {
-                            selector: from.selector.clone(),
-                            rule_index,
-                            precedence: Some(from.precedence),
-                        });
-                    }
-                    right_sources.push(SourceEntry {
-                        selector: rule.right.clone().expect("merged rule has a right path"),
-                        rule_index,
-                        precedence: None,
-                    });
-                }
-                Rel::Split => {
-                    left_sources.push(SourceEntry {
-                        selector: rule.left.clone().expect("split rule has a left path"),
-                        rule_index,
-                        precedence: None,
-                    });
-                    for from in &rule.froms {
-                        right_sources.push(SourceEntry {
-                            selector: from.selector.clone(),
-                            rule_index,
-                            precedence: Some(from.precedence),
-                        });
-                    }
-                }
+    /// Validates a typed map description and assembles the same resolver
+    /// indexes used by XML-loaded artifacts.
+    pub fn from_typed(typed: TypedConversionMap) -> Result<Self, LoadError> {
+        let left = typed.left.ok_or(LoadError::MissingSide("left"))?;
+        let right = typed.right.ok_or(LoadError::MissingSide("right"))?;
+        let left_endpoint = validate_endpoint_inventory("left", typed.left_endpoint)?;
+        let right_endpoint = validate_endpoint_inventory("right", typed.right_endpoint)?;
+        let mut seen_rule_ids = HashSet::new();
+        let mut rules = Vec::with_capacity(typed.rules.len());
+        for typed_rule in typed.rules {
+            if !seen_rule_ids.insert(typed_rule.id.clone()) {
+                return Err(LoadError::DuplicateRuleId(typed_rule.id));
+            }
+            rules.push(rule_from_typed(typed_rule)?);
+        }
+
+        let mut sign_flips = HashMap::new();
+        for flip in typed.sign_flips {
+            if sign_flips
+                .insert(flip.path.clone(), (flip.from_cocos, flip.to_cocos))
+                .is_some()
+            {
+                return Err(LoadError::DuplicateFlipPath(flip.path));
             }
         }
+        let redefines: Vec<RedefineEntry> = typed
+            .redefines
+            .into_iter()
+            .map(|entry| RedefineEntry {
+                selector: Selector::new(SelectorStage::Glob, entry.glob),
+                fidelity_forward: entry.fidelity_forward,
+                fidelity_reverse: entry.fidelity_reverse,
+            })
+            .collect();
+        let (left_sources, right_sources) = build_source_indexes(&rules)?;
         reject_ambiguous_sources("left", &left_sources)?;
         reject_ambiguous_sources("right", &right_sources)?;
         reject_ambiguous_redefines(&redefines)?;
 
-        Ok(ConversionMap {
-            ids,
+        Ok(Self {
+            ids: typed.ids,
             left,
             right,
-            default_identical,
+            default_identical: typed.default_identical,
+            left_endpoint,
+            right_endpoint,
             rules,
             sign_flips,
             redefines,
             left_sources,
             right_sources,
         })
+    }
+
+    /// Whether exact, complete endpoint evidence certifies `path` as a leaf
+    /// on the HLI-facing side of this conversion. This is deliberately a
+    /// safety classification only: it does not select rules or candidates.
+    pub(crate) fn delete_target_is_leaf(&self, direction: Direction, path: &str) -> bool {
+        let endpoint = match direction {
+            Direction::Forward => &self.left_endpoint,
+            Direction::Reverse => &self.right_endpoint,
+        };
+        endpoint.complete
+            && endpoint
+                .nodes
+                .iter()
+                .any(|node| node.kind == EndpointNodeKind::Leaf && node.path == path)
+            && !endpoint.nodes.iter().any(|node| {
+                node.path
+                    .strip_prefix(path)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+            })
     }
 
     /// Resolves `path`, supplied in the DD spelling named by `direction`'s
@@ -969,7 +1440,7 @@ impl ConversionMap {
             }
 
             return match rule.rel {
-                Rel::Renamed | Rel::Moved => {
+                Rel::Identical | Rel::Renamed | Rel::Moved => {
                     Some(self.resolve_single_path(rule, path, direction, &found))
                 }
                 Rel::Merged => Some(self.resolve_merged(rule, path, direction, &found)),
@@ -1027,7 +1498,7 @@ impl ConversionMap {
     }
 
     /// The stored-side location(s) `rule` declares for `direction`'s source
-    /// role. `Renamed`/`Moved`/`Retyped` each declare exactly one;
+    /// role. `Identical`/`Renamed`/`Moved`/`Retyped` each declare exactly one;
     /// `Merged`/`Split` declare one or several depending on which side is
     /// ambiguous in this direction (the `froms` side); `LeftOnly`/
     /// `RightOnly` declare none at all, because there is no stored
@@ -1035,18 +1506,22 @@ impl ConversionMap {
     /// an escaping rule.
     fn rule_targets(rule: &Rule, direction: Direction) -> Vec<&str> {
         match (rule.rel, direction) {
-            (Rel::Renamed | Rel::Moved | Rel::Retyped, Direction::Forward) => vec![
-                rule.right
-                    .as_ref()
-                    .expect("renamed, moved or retyped rule always carries both paths")
-                    .pattern(),
-            ],
-            (Rel::Renamed | Rel::Moved | Rel::Retyped, Direction::Reverse) => vec![
-                rule.left
-                    .as_ref()
-                    .expect("renamed, moved or retyped rule always carries both paths")
-                    .pattern(),
-            ],
+            (Rel::Identical | Rel::Renamed | Rel::Moved | Rel::Retyped, Direction::Forward) => {
+                vec![
+                    rule.right
+                        .as_ref()
+                        .expect("two-sided rule always carries both paths")
+                        .pattern(),
+                ]
+            }
+            (Rel::Identical | Rel::Renamed | Rel::Moved | Rel::Retyped, Direction::Reverse) => {
+                vec![
+                    rule.left
+                        .as_ref()
+                        .expect("two-sided rule always carries both paths")
+                        .pattern(),
+                ]
+            }
             (Rel::LeftOnly, _) | (Rel::RightOnly, _) => Vec::new(),
             (Rel::Merged, Direction::Forward) => {
                 vec![
@@ -1119,7 +1594,8 @@ impl ConversionMap {
         }
     }
 
-    /// Resolves a `renamed` or `moved` rule's single path on the other side.
+    /// Resolves an identity, `renamed` or `moved` rule's single path on the
+    /// other side.
     fn resolve_single_path(
         &self,
         rule: &Rule,
@@ -1133,7 +1609,7 @@ impl ConversionMap {
         };
         let target = target
             .as_ref()
-            .expect("renamed or moved rule always carries both paths");
+            .expect("identity, renamed or moved rule always carries both paths");
         let resolved_path = target.render(&found.suffix, &found.captures);
         let right_side_path = match direction {
             Direction::Forward => resolved_path.clone(),
@@ -1756,26 +2232,15 @@ fn parse_froms(
     rule_id: &str,
     rule_node: &roxmltree::Node,
     side_attr: &str,
-    stage: SelectorStage,
-) -> Result<Vec<FromEntry>, LoadError> {
+) -> Result<Vec<TypedFromEntry>, LoadError> {
     let mut froms = Vec::new();
-    let mut seen_precedence: HashSet<u32> = HashSet::new();
     for from_node in rule_node
         .children()
         .filter(|n| n.is_element() && n.tag_name().name() == "from")
     {
         let path = required_attr(&from_node, "from", side_attr)?.to_string();
         let precedence = parse_precedence(rule_id, &from_node)?;
-        if !seen_precedence.insert(precedence) {
-            return Err(LoadError::DuplicatePrecedence {
-                rule_id: rule_id.to_string(),
-                precedence,
-            });
-        }
-        froms.push(FromEntry {
-            selector: Selector::new(stage, path),
-            precedence,
-        });
+        froms.push(TypedFromEntry { path, precedence });
     }
     Ok(froms)
 }
@@ -1802,110 +2267,23 @@ fn validate_glob_candidate_wildcards(
     Ok(())
 }
 
-fn parse_rule(node: &roxmltree::Node) -> Result<Rule, LoadError> {
+fn parse_rule(node: &roxmltree::Node) -> Result<TypedRule, LoadError> {
     let id = required_attr(node, "rule", "id")?.to_string();
     let rel = parse_rel(node)?;
     let stage = parse_selector_stage(&id, node)?;
-    let left = node
-        .attribute("left")
-        .map(|value| Selector::new(stage, value.to_string()));
-    let right = node
-        .attribute("right")
-        .map(|value| Selector::new(stage, value.to_string()));
+    let left = node.attribute("left").map(str::to_string);
+    let right = node.attribute("right").map(str::to_string);
     let (fidelity_forward, fidelity_reverse) = parse_fidelity(&id, node)?;
-
-    let shape_error = |reason: &str| LoadError::InvalidRuleShape {
-        rule_id: id.clone(),
-        reason: reason.to_string(),
+    let from_side = match rel {
+        Rel::Split | Rel::RightOnly => "right",
+        _ => "left",
     };
+    let froms = parse_froms(&id, node, from_side)?;
 
-    let froms = match rel {
-        Rel::Renamed | Rel::Moved | Rel::Retyped => {
-            if left.is_none() || right.is_none() {
-                return Err(shape_error("requires both `left` and `right`"));
-            }
-            if stage == SelectorStage::Glob {
-                let left_wildcards = wildcard_count(left.as_ref().unwrap().pattern());
-                let right_wildcards = wildcard_count(right.as_ref().unwrap().pattern());
-                if left_wildcards != right_wildcards {
-                    return Err(shape_error(
-                        "glob `left` and `right` must carry the same number of `*` wildcards",
-                    ));
-                }
-            }
-            let froms = parse_froms(&id, node, "left", stage)?;
-            if !froms.is_empty() {
-                return Err(shape_error("must not carry <from> children"));
-            }
-            froms
-        }
-        Rel::LeftOnly => {
-            if left.is_none() || right.is_some() {
-                return Err(shape_error("requires `left` only"));
-            }
-            let froms = parse_froms(&id, node, "left", stage)?;
-            if !froms.is_empty() {
-                return Err(shape_error("must not carry <from> children"));
-            }
-            froms
-        }
-        Rel::RightOnly => {
-            if right.is_none() || left.is_some() {
-                return Err(shape_error("requires `right` only"));
-            }
-            let froms = parse_froms(&id, node, "right", stage)?;
-            if !froms.is_empty() {
-                return Err(shape_error("must not carry <from> children"));
-            }
-            froms
-        }
-        Rel::Merged => {
-            if right.is_none() || left.is_some() {
-                return Err(shape_error(
-                    "requires `right` only, plus left-side <from> entries",
-                ));
-            }
-            let froms = parse_froms(&id, node, "left", stage)?;
-            if froms.is_empty() {
-                return Err(shape_error("requires at least one <from left=\"...\"/>"));
-            }
-            if stage == SelectorStage::Glob {
-                validate_glob_candidate_wildcards(
-                    &id,
-                    right.as_ref().unwrap(),
-                    &froms,
-                    "right",
-                    "left",
-                )?;
-            }
-            froms
-        }
-        Rel::Split => {
-            if left.is_none() || right.is_some() {
-                return Err(shape_error(
-                    "requires `left` only, plus right-side <from> entries",
-                ));
-            }
-            let froms = parse_froms(&id, node, "right", stage)?;
-            if froms.is_empty() {
-                return Err(shape_error("requires at least one <from right=\"...\"/>"));
-            }
-            if stage == SelectorStage::Glob {
-                validate_glob_candidate_wildcards(
-                    &id,
-                    left.as_ref().unwrap(),
-                    &froms,
-                    "left",
-                    "right",
-                )?;
-            }
-            froms
-        }
-    };
-
-    Ok(Rule {
+    Ok(TypedRule {
         id,
         rel,
+        selector_stage: stage,
         left,
         right,
         froms,
@@ -1916,25 +2294,23 @@ fn parse_rule(node: &roxmltree::Node) -> Result<Rule, LoadError> {
 
 fn parse_transforms(
     node: &roxmltree::Node,
-    sign_flips: &mut HashMap<String, (CocosConvention, CocosConvention)>,
-    redefines: &mut Vec<RedefineEntry>,
+    sign_flips: &mut Vec<TypedSignFlip>,
+    redefines: &mut Vec<TypedRedefine>,
 ) -> Result<(), LoadError> {
     for child in node.children().filter(|n| n.is_element()) {
         match child.tag_name().name() {
             "cocos" => {
-                let from_cocos = CocosConvention::parse(required_attr(&child, "cocos", "from")?)?;
-                let to_cocos = CocosConvention::parse(required_attr(&child, "cocos", "to")?)?;
+                let from_cocos = CocosConvention::new(required_attr(&child, "cocos", "from")?)?;
+                let to_cocos = CocosConvention::new(required_attr(&child, "cocos", "to")?)?;
                 for flip_node in child
                     .children()
                     .filter(|n| n.is_element() && n.tag_name().name() == "flip")
                 {
-                    let path = required_attr(&flip_node, "flip", "path")?.to_string();
-                    if sign_flips
-                        .insert(path.clone(), (from_cocos.clone(), to_cocos.clone()))
-                        .is_some()
-                    {
-                        return Err(LoadError::DuplicateFlipPath(path));
-                    }
+                    sign_flips.push(TypedSignFlip {
+                        path: required_attr(&flip_node, "flip", "path")?.to_string(),
+                        from_cocos: from_cocos.clone(),
+                        to_cocos: to_cocos.clone(),
+                    });
                 }
             }
             "redefine" => {
@@ -1950,8 +2326,8 @@ fn parse_transforms(
                     })?;
                 let fidelity_forward = parse_fidelity_value(&fidelity_node, "forward")?;
                 let fidelity_reverse = parse_fidelity_value(&fidelity_node, "reverse")?;
-                redefines.push(RedefineEntry {
-                    selector: Selector::new(SelectorStage::Glob, pattern),
+                redefines.push(TypedRedefine {
+                    glob: pattern,
                     fidelity_forward,
                     fidelity_reverse,
                 });

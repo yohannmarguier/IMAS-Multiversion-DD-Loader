@@ -284,6 +284,7 @@ static inline void check_loss_at(int ctx_id, int index, const char *expected_pat
 #include <dlfcn.h>
 
 typedef const char *(*shim_test_string_accessor_fn)(void);
+typedef const char *(*shim_test_string_at_accessor_fn)(int);
 typedef int (*shim_test_int_accessor_fn)(void);
 typedef double (*shim_test_double_accessor_fn)(void);
 typedef double (*shim_test_double_at_accessor_fn)(int);
@@ -312,6 +313,10 @@ static inline void *stub_symbol_or_die(const char *symbol_name) {
 
 static inline const char *string_from_stub(const char *symbol_name) {
     return ((shim_test_string_accessor_fn)stub_symbol_or_die(symbol_name))();
+}
+
+static inline const char *string_at_from_stub(const char *symbol_name, int index) {
+    return ((shim_test_string_at_accessor_fn)stub_symbol_or_die(symbol_name))(index);
 }
 
 static inline int int_from_stub(const char *symbol_name) {

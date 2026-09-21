@@ -31,13 +31,23 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 | `support/` | `shim_test_support.h` — the one shared C harness: `CHECK`/`CHECK_OK`/`CHECK_REFUSAL_MESSAGE`, IMAS-Core's four data-type codes, the recording stub's two data-event kinds, the loss-log helpers (`loss_count`, `check_no_loss_entry`, `check_loss_at`, `check_no_write_lossy_verdict`), `open_recording_stub` plus the `{string,int,double,double_at,pointer}_from_stub` accessors, `open_mismatched_occurrence`, and the `{name, function}` scenario table `RUN_NAMED_SCENARIO` dispatches `argv[1]` through. Include this instead of writing a prologue. |
 | `stub/` | `recording_stub.c` — a fake `libal` exporting the whole runtime-bound surface and recording what it received, including snapshots of write payloads whose shim-owned buffers are freed on return, so assertions are made on what crossed the boundary rather than inferred from a data round trip. ~23 `RECORDING_STUB_*` env knobs drive fixtures and failures (stamp version, not-found, sign-flip values, per-seam `*_FAIL` knobs, filled-paths CSV, reentrant reads and writes). |
 | `shim/` | 11 C suites driving the public ABI against that stub, one ctest test per scenario. |
-| `real_core/` | 4 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core and the checked-in equilibrium HDF5 fixture pair. |
+| `real_core/` | 6 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core, the checked-in equilibrium HDF5 fixture pair, and isolated graph-selected `pulse_schedule` and coexistence oracles. |
 | `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 4 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
 | `cmake/` | `cmake -P` checks of the build/CI configuration itself, each with a guard-the-guard companion that proves it rejects what it claims. |
 | `coverage/` | Compact shell fixtures for the local Rust decision-coverage and mutation audits. |
 | `scripts/` | Install/packaging shell checks. **CI-only — not in ctest.** |
 | `package/` | A downstream `find_package()` consumer project, used by `scripts/check-installed-package.sh`. |
 | `fixtures/` | The reduced conversion-map artifact for the coverage-floor gate, plus compact LCOV/scope and cargo-mutants report fixtures for the Rust audits. |
+
+`dd-graph-setup` is the exception to the `scripts/` row: it drives a clean
+temporary setup, load/start, query, stop and offline restart through local
+ORAS/Docker doubles. It proves the command sequence and immutable archive
+verification without Docker, ORAS, credentials, or a downloaded graph. It also
+proves home-qualified ownership, label mismatch refusal, port-conflict safety
+and the required-content smoke outcomes. `runtime-map-measurement` drives the
+measurement command through a recording Docker/Cargo orchestrator, proving
+actual selected-service provenance and one restart per cold direction without
+a live graph or timing thresholds.
 
 ## Groups, in rough dependency order
 
@@ -308,6 +318,27 @@ The real-Core `reverse-delete-fan-out-reaches-disk` scenario proves that a
 write-mode fan-out removes both stored candidate datasets with the pinned
 Core, while preserving the occurrence, unrelated values and its DD stamp.
 This rejects both a silent no-op and the old whole-occurrence delete (#139).
+
+### `read-graph-pulse-schedule-*` / `write-graph-pulse-schedule-*` / `delete-graph-pulse-schedule-*` — 2 + 2 + 4, `real-core` · `real_core/graph_runtime_map_oracle_test.c`
+
+The second-IDS stored-effect oracle for the graph-selected test instance. Each
+process creates a private `pulse_schedule` HDF5 pulse, stamps it as 3.25.0 or
+3.30.0, and uses raw HDF5 only after the public C ABI operation to inspect the
+stored result. The two directions prove the historical
+`antenna`/`launcher` and angle-child mappings for reads and writes. The delete
+group covers both exact leaves and their mapped trivial parent structures while
+checking the DD-version stamp and unrelated data survive.
+
+### `read-coexistence-*` / `write-coexistence-*` / `write-delete-coexistence-*` — 3 + 1 + 1, `real-core` · `real_core/graph_coexistence_oracle_test.c`
+
+Issue #228's genuine-data oracle selects and falls back between coexisting
+3.42.0 stored candidates in both `b_field_tor`/`b_field_phi` and the complete
+`j_tor`/`j_phi` arraystruct subtree. It also proves a reverse 3.42.0 read
+selects the stored 4.1.1 successor, a forward write changes only the declared
+primary while retaining a loss for the untouched secondary, and a delete fans
+out to both candidates without touching the DD stamp or unrelated data. The
+reverse non-primary source refuses before Core is called. Each scenario uses a
+private HDF5 fixture copy and a graph-selected test source.
 
 ### `runtime-binding-real-core-forwarding` — 1, `real-core` · `real_core/real_core_forwarding_test.c`
 

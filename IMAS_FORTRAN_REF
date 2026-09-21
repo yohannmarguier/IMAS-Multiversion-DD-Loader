@@ -1,4 +1,4 @@
-d9931fdda05c9ed672eba735ad9f2ecb8003bc9e
+cd6ea111948bbff7b07b36b39992c56b565dea9b
 
 The commit of the IMAS-Fortran HLI that .github/workflows/hli-validation.yml
 builds against the installed shim. First line only is the value, the way
@@ -11,10 +11,11 @@ to this file in the same pull request, so a failure that arrives without one is
 the shim's or upstream IMAS-Core's. See
 docs/adr/0022-hli-validation-floats-core-and-pins-the-dd.md.
 
-Repository: https://github.com/yohannmarguier/IMAS-Fortran (branch develop as
-of this commit). The repository name lives in the workflow rather than here,
-because it is not the part that moves. Upstream IMAS-Fortran carries no
-AL_USE_MULTIVERSION_SHIM option, so the fork is not a convenience.
+Repository: https://github.com/yohannmarguier/IMAS-Fortran (branch
+feat/runtime-conversion-mapping-issue-230 as of this commit). The repository
+name lives in the workflow rather than here, because it is not the part that
+moves. Upstream IMAS-Fortran carries no AL_USE_MULTIVERSION_SHIM option, so the
+fork is not a convenience.
 
 To move the pin: check that the fork commit still builds with
 AL_USE_MULTIVERSION_SHIM=ON and DD_VERSION=4.1.1, then update the first line.

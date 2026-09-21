@@ -16,11 +16,20 @@
 
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::sync::Arc;
+#[cfg(not(feature = "xml-fixture-source"))]
+use std::sync::LazyLock;
 
 use crate::al_status_t;
 use crate::conversion::conversion_map::ConversionMap;
+#[cfg(feature = "xml-fixture-source")]
 use crate::conversion::known_artifacts;
 use crate::conversion::path_conversion::{self, ContextPathResolution};
+#[cfg(all(feature = "graph-test-source", not(feature = "xml-fixture-source")))]
+use crate::conversion::runtime_map::graph_test_source::GraphTestSource;
+#[cfg(not(any(feature = "graph-test-source", feature = "xml-fixture-source")))]
+use crate::conversion::runtime_map::neo4j_graph::{Neo4jConfig, Neo4jFactsSource};
+#[cfg(not(feature = "xml-fixture-source"))]
+use crate::conversion::runtime_map::{MapRequest, RuntimeMapCoordinator};
 use crate::conversion::seam_policy;
 use crate::core::core_binding::{READ_OP_ID, forward_status};
 use crate::registry::context_registry::{MapCacheKey, REGISTRY, RootRegistration};
@@ -186,10 +195,10 @@ pub(crate) unsafe fn plugin_begin_global_action(
 /// also ended first, through `family`'s own end-action symbol, so a refusal
 /// here never leaks it. An absent stamp, or one that matches the HLI DD
 /// version, registers nothing (ADR 0007): the occurrence is presumed to
-/// match. A present, valid, *mismatched* stamp registers the root context,
-/// but only when an artifact actually covers this IDS and version pair (ADR
-/// 0011 decision 1) — otherwise this is treated exactly like an unknown
-/// context, passthrough with no record.
+/// match. A present, valid, *mismatched* stamp obtains a complete runtime map
+/// before registering the root context. An unavailable or unsupported pair
+/// refuses and closes that just-opened context; it never falls back to an
+/// untranslated occurrence.
 ///
 /// When the HLI DD version is unset, this is a plain forward with none of
 /// the above: no stamp read, no registry lookup, no rule resolution.
@@ -271,12 +280,22 @@ unsafe fn open_occurrence(
         && let Some(raw_path) = datapath
             .and_then(c_str_or_none)
             .filter(|path| !path.is_empty())
-        && let Some(artifact) = known_artifacts::lookup(ids_name, &stored, &hli)
     {
-        let map = resolve_conversion_map(ids_name, &stored, &hli, &artifact);
-        translated_datapath =
-            seam_policy::decide_datapath_translation(&map, artifact.direction_to_stored, raw_path)
+        match resolve_conversion_map(ids_name, &stored, &hli) {
+            MapAcquisition::Ready(map) => {
+                translated_datapath = seam_policy::decide_datapath_translation(
+                    &map.map,
+                    map.direction_to_stored,
+                    raw_path,
+                )
                 .and_then(|path| CString::new(path).ok());
+            }
+            #[cfg(feature = "xml-fixture-source")]
+            MapAcquisition::Unavailable => {}
+            MapAcquisition::Failed => {
+                return OpenOccurrenceResult::Status(acquisition_refusal(ids_name, &hli, &stored));
+            }
+        }
     }
     let effective_datapath = datapath.map(|original| {
         translated_datapath
@@ -400,7 +419,8 @@ fn discover_stamp(ctx_id: c_int) -> version_stamp::StampOutcome {
 /// successful occurrence open. A malformed stamp clears the occurrence cache
 /// and asks the wrapper to end its just-opened context through its matching
 /// ABI family; an absent or matching stamp clears the cache; a mismatch
-/// records its stored version and, when covered by an artifact, the root.
+/// records its stored version only after the selected source returns a ready
+/// map, and clears that cache before refusing failed acquisition.
 fn apply_discovery_decision(
     pctx_id: c_int,
     dataobjectname: &str,
@@ -428,15 +448,32 @@ fn apply_discovery_decision(
             apply_occurrence_cache_effect(pctx_id, dataobjectname, occurrence_cache);
             OpenOccurrenceResult::Status(status)
         }
-        seam_policy::DiscoveryDecision::RegisterRoot {
+        seam_policy::DiscoveryDecision::RegisterMismatch {
             stored,
-            artifact,
             occurrence_cache,
         } => {
-            apply_occurrence_cache_effect(pctx_id, dataobjectname, occurrence_cache);
             let ids_name = ids_name_from(dataobjectname);
+            let ready = match resolve_conversion_map(ids_name, &stored, hli) {
+                MapAcquisition::Ready(ready) => ready,
+                #[cfg(feature = "xml-fixture-source")]
+                MapAcquisition::Unavailable => {
+                    apply_occurrence_cache_effect(pctx_id, dataobjectname, occurrence_cache);
+                    return OpenOccurrenceResult::Status(status);
+                }
+                MapAcquisition::Failed => {
+                    apply_occurrence_cache_effect(
+                        pctx_id,
+                        dataobjectname,
+                        seam_policy::OccurrenceCacheEffect::Forget,
+                    );
+                    return OpenOccurrenceResult::RefuseAndEnd {
+                        opened_ctx_id,
+                        status: acquisition_refusal(ids_name, hli, &stored),
+                    };
+                }
+            };
+            apply_occurrence_cache_effect(pctx_id, dataobjectname, occurrence_cache);
             let key = map_cache_key(ids_name, &stored, hli);
-            let direction = artifact.direction_to_stored;
             // A global/slice/time-range action opens the whole IDS
             // occurrence, not one field: the record's resolved path is the
             // occurrence's own root, empty because a relative read resolves
@@ -448,10 +485,10 @@ fn apply_discovery_decision(
                     pulse_ctx_id: pctx_id,
                     dataobjectname: dataobjectname.to_string(),
                     key,
-                    direction_to_stored: direction,
+                    direction_to_stored: ready.direction_to_stored,
                     opened_read_op,
                 },
-                || load_artifact(&artifact),
+                ready.map,
             );
             OpenOccurrenceResult::Status(status)
         }
@@ -489,14 +526,106 @@ fn ids_name_from(dataobjectname: &str) -> &str {
 /// a global action needs the same map before its forward call, whereas root
 /// registration happens only after a successful occurrence open. Keeping the
 /// cache lookup separate also preserves `record_root`'s focused registry API.
+struct ReadyConversionMap {
+    map: Arc<ConversionMap>,
+    direction_to_stored: crate::conversion::conversion_map::Direction,
+}
+
+enum MapAcquisition {
+    Ready(ReadyConversionMap),
+    /// Retained only by the private XML regression fixture so historical
+    /// fixture scenarios can assert their former passthrough contract.
+    #[cfg(feature = "xml-fixture-source")]
+    Unavailable,
+    #[cfg_attr(feature = "xml-fixture-source", allow(dead_code))]
+    Failed,
+}
+
 fn resolve_conversion_map(
     ids: &str,
     stored: &crate::version::dd_version::DdVersion,
     hli: &crate::version::dd_version::DdVersion,
-    artifact: &known_artifacts::ArtifactMatch,
-) -> Arc<ConversionMap> {
-    let key = map_cache_key(ids, stored, hli);
-    REGISTRY.get_or_create_map(key, || load_artifact(artifact))
+) -> MapAcquisition {
+    #[cfg(feature = "xml-fixture-source")]
+    {
+        match known_artifacts::lookup(ids, stored, hli) {
+            Some(artifact) => MapAcquisition::Ready(ReadyConversionMap {
+                map: Arc::new(load_artifact(&artifact)),
+                direction_to_stored: artifact.direction_to_stored,
+            }),
+            None => MapAcquisition::Unavailable,
+        }
+    }
+
+    #[cfg(not(feature = "xml-fixture-source"))]
+    {
+        match (
+            crate::conversion::conversion_map::ArtifactDdVersion::new(stored.to_string()),
+            crate::conversion::conversion_map::ArtifactDdVersion::new(hli.to_string()),
+        ) {
+            (Ok(stored_dd), Ok(hli_dd)) => {
+                let request = MapRequest {
+                    ids: ids.to_string(),
+                    stored_dd,
+                    hli_dd,
+                };
+                match acquire_graph_map(&request) {
+                    Ok(map) => MapAcquisition::Ready(ReadyConversionMap {
+                        map,
+                        direction_to_stored: crate::conversion::conversion_map::Direction::Forward,
+                    }),
+                    Err(_) => MapAcquisition::Failed,
+                }
+            }
+            _ => MapAcquisition::Failed,
+        }
+    }
+}
+
+#[cfg(all(feature = "graph-test-source", not(feature = "xml-fixture-source")))]
+fn acquire_graph_map(request: &MapRequest) -> Result<Arc<ConversionMap>, ()> {
+    static COORDINATOR: LazyLock<RuntimeMapCoordinator<GraphTestSource>> =
+        LazyLock::new(|| RuntimeMapCoordinator::new(GraphTestSource));
+    COORDINATOR.acquire(request).map_err(|_| ())
+}
+
+#[cfg(not(any(feature = "graph-test-source", feature = "xml-fixture-source")))]
+fn acquire_graph_map(request: &MapRequest) -> Result<Arc<ConversionMap>, ()> {
+    static COORDINATOR: LazyLock<Result<RuntimeMapCoordinator<Neo4jFactsSource>, ()>> =
+        LazyLock::new(|| {
+            let config = Neo4jConfig {
+                uri: std::env::var("NEO4J_URI").map_err(|_| ())?,
+                username: std::env::var("NEO4J_USERNAME").map_err(|_| ())?,
+                password: std::env::var("NEO4J_PASSWORD").map_err(|_| ())?,
+                database: std::env::var("NEO4J_DATABASE").unwrap_or_else(|_| "neo4j".into()),
+                page_size: 256,
+                connection_timeout: std::time::Duration::from_secs(5),
+            };
+            let deadline = match std::env::var("IMAS_MVDD_GRAPH_DEADLINE_SECONDS") {
+                Ok(value) => std::time::Duration::from_secs(value.parse().map_err(|_| ())?),
+                Err(std::env::VarError::NotPresent) => {
+                    crate::conversion::runtime_map::DEFAULT_ACQUISITION_DEADLINE
+                }
+                Err(_) => return Err(()),
+            };
+            Ok(RuntimeMapCoordinator::with_deadline(
+                Neo4jFactsSource(config),
+                deadline,
+            ))
+        });
+    COORDINATOR
+        .as_ref()
+        .map_err(|_| ())?
+        .acquire(request)
+        .map_err(|_| ())
+}
+
+fn acquisition_refusal(
+    ids: &str,
+    hli: &crate::version::dd_version::DdVersion,
+    stored: &crate::version::dd_version::DdVersion,
+) -> al_status_t {
+    crate::path_conversion_refusal("conversion map acquisition failed", ids, hli, stored)
 }
 
 /// The `(IDS name, stored DD version, HLI DD version)` cache key both the
@@ -510,12 +639,20 @@ fn map_cache_key(
     MapCacheKey::new(ids.to_string(), stored.clone(), hli.clone())
 }
 
-/// Parses the one embedded conversion-map artifact `artifact` names. Used
-/// only as a `get_or_create_map`/`record_root` cache-miss closure, so this
-/// runs at most once per `(IDS, stored, HLI)` key for as long as some record
-/// still references the resulting map.
+/// Parses the checked-in XML mechanism fixture. This private test source is
+/// never selected by the staged or installed production shim.
+#[cfg(feature = "xml-fixture-source")]
 pub(super) fn load_artifact(artifact: &known_artifacts::ArtifactMatch) -> ConversionMap {
-    ConversionMap::load(artifact.xml).expect("embedded artifact must parse")
+    ConversionMap::load_with_endpoint_inventories(
+        artifact.xml,
+        crate::conversion::conversion_map::EndpointInventory::complete_leaf_paths(
+            artifact.left_leaves,
+        ),
+        crate::conversion::conversion_map::EndpointInventory::complete_leaf_paths(
+            artifact.right_leaves,
+        ),
+    )
+    .expect("embedded artifact and its endpoint inventories must parse")
 }
 
 /// Forwards to IMAS-Core's real `al_begin_slice_action`, resolving

@@ -49,7 +49,6 @@ use crate::al_status_t;
 use crate::conversion::conversion_map::{
     ConversionMap, Direction, Fidelity, TransformationDirection, ValueTransformation,
 };
-use crate::conversion::known_artifacts::{self, ArtifactMatch};
 use crate::conversion::path_conversion::{
     self, DeletePath, ReadPath, TranslatedReadPath, WritePath,
 };
@@ -70,12 +69,10 @@ pub(crate) enum OccurrenceCacheEffect {
 /// decides which ADR-0007/0009/0011 branch applies; it never touches the
 /// registry or chooses an ABI end-action symbol itself.
 pub(crate) enum DiscoveryDecision {
-    /// The stored DD version differs from the HLI's and an embedded artifact
-    /// can serve the IDS/version pair. The adapter records both the known
-    /// mismatch and the root conversion context.
-    RegisterRoot {
+    /// The stored DD version differs from the HLI's. The adapter selects its
+    /// map source before recording either occurrence-cache state or a root.
+    RegisterMismatch {
         stored: DdVersion,
-        artifact: ArtifactMatch,
         occurrence_cache: OccurrenceCacheEffect,
     },
     /// No root conversion context is warranted. A mismatching `stored` value
@@ -99,7 +96,7 @@ pub(crate) enum DiscoveryDecision {
 /// returns the effect, while the adapter owns raw pointers, Core calls and
 /// process-global state.
 pub(crate) fn decide_occurrence_registration(
-    ids_name: &str,
+    _ids_name: &str,
     hli: &DdVersion,
     read_stamp: impl FnOnce() -> StampOutcome,
 ) -> DiscoveryDecision {
@@ -114,15 +111,9 @@ pub(crate) fn decide_occurrence_registration(
         StampOutcome::Stored(stored) if stored == *hli => DiscoveryDecision::RegisterNothing {
             occurrence_cache: OccurrenceCacheEffect::Forget,
         },
-        StampOutcome::Stored(stored) => match known_artifacts::lookup(ids_name, &stored, hli) {
-            Some(artifact) => DiscoveryDecision::RegisterRoot {
-                occurrence_cache: OccurrenceCacheEffect::RememberMismatch(stored.clone()),
-                stored,
-                artifact,
-            },
-            None => DiscoveryDecision::RegisterNothing {
-                occurrence_cache: OccurrenceCacheEffect::RememberMismatch(stored),
-            },
+        StampOutcome::Stored(stored) => DiscoveryDecision::RegisterMismatch {
+            occurrence_cache: OccurrenceCacheEffect::RememberMismatch(stored.clone()),
+            stored,
         },
     }
 }
@@ -396,9 +387,9 @@ fn write_argument_path<'a>(
 }
 
 /// Applies a write-side transformation to a copy the policy owns. Rank-zero
-/// Scalar sentinels are returned before this function runs. A sentinel inside
-/// an array remains a value and therefore is transformed with its neighbours,
-/// matching the scope of IMAS-Core's own shape gate (ADR 0018).
+/// scalar sentinels are returned before this function runs; an array can mix
+/// measurements and unset elements, so its EMPTY sentinels also remain
+/// unchanged while neighbouring measurements transform.
 ///
 /// This is the one place that reads [`TransformationDirection`]. The resolver
 /// inverts the map's read-direction transformation before it reaches this
@@ -417,7 +408,18 @@ fn copy_value_transformation(
             Err("this value transformation was not inverted for the write direction")
         }
         ValueTransformation::SignFlip { .. } => match source {
-            SourceView::Double(values) => Ok(Some(values.iter().map(|value| -*value).collect())),
+            SourceView::Double(values) => Ok(Some(
+                values
+                    .iter()
+                    .map(|value| {
+                        if *value == EMPTY_DOUBLE {
+                            *value
+                        } else {
+                            -*value
+                        }
+                    })
+                    .collect(),
+            )),
             SourceView::UnsetScalar => {
                 debug_assert!(
                     false,
@@ -935,7 +937,7 @@ mod tests {
             "the fixture must declare a flip, or this proves nothing"
         );
 
-        let values = [1.0f64, -2.0];
+        let values = [1.0f64, -2.0, EMPTY_DOUBLE];
         assert_eq!(
             copy_value_transformation(&value_transformation, SourceView::Double(&values)),
             Err("this value transformation was not inverted for the write direction")
@@ -948,9 +950,9 @@ mod tests {
             .expect("a flip between differing conventions inverts");
         assert_eq!(
             copy_value_transformation(&inverted, SourceView::Double(&values)),
-            Ok(Some(vec![-1.0, 2.0]))
+            Ok(Some(vec![-1.0, 2.0, EMPTY_DOUBLE]))
         );
-        assert_eq!(values, [1.0f64, -2.0]);
+        assert_eq!(values, [1.0f64, -2.0, EMPTY_DOUBLE]);
     }
 
     /// A real [`ValueTransformation::SignFlip`], obtained by loading a tiny
@@ -1035,16 +1037,16 @@ mod tests {
             decide_occurrence_registration("core_profiles", &version("4.1.1"), || {
                 StampOutcome::Stored(version("3.39.0"))
             }),
-            DiscoveryDecision::RegisterNothing {
-                occurrence_cache: OccurrenceCacheEffect::RememberMismatch(stored)
+            DiscoveryDecision::RegisterMismatch {
+                occurrence_cache: OccurrenceCacheEffect::RememberMismatch(stored),
+                ..
             } if stored == version("3.39.0")
         ));
         assert!(matches!(
             discover(StampOutcome::Stored(version("3.39.0"))),
-            DiscoveryDecision::RegisterRoot {
+            DiscoveryDecision::RegisterMismatch {
                 stored,
                 occurrence_cache: OccurrenceCacheEffect::RememberMismatch(cache_stored),
-                ..
             } if stored == version("3.39.0") && cache_stored == version("3.39.0")
         ));
     }

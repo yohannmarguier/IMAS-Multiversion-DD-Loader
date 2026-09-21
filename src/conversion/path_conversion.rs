@@ -21,7 +21,7 @@
 use std::ffi::{CStr, CString, c_char};
 
 use crate::conversion::conversion_map::{
-    Direction, Fidelity, Outcome, RefusalReason, Rel, ValueTransformation,
+    Fidelity, Outcome, RefusalReason, Rel, ValueTransformation,
 };
 use crate::registry::context_registry::ConversionRecord;
 
@@ -460,7 +460,9 @@ fn delete_check_refusal(
         DeleteCheck::EscapingSubtree => subject
             .candidate()
             .is_some_and(|candidate| {
-                !is_equilibrium_leaf(record, &candidate.dd_path)
+                !record
+                    .map
+                    .delete_target_is_leaf(record.direction_to_stored, &candidate.dd_path)
                     && !record.map.subtree_delete_is_trivial(
                         &candidate.dd_path,
                         &candidate.stored_dd_path,
@@ -973,26 +975,6 @@ fn caller_dd_path(record: &ConversionRecord, raw: *const c_char) -> String {
         .unwrap_or_else(|| record.resolved_path.clone())
 }
 
-/// `al_delete_data` gives the shim a path string but no datatype or other
-/// marker distinguishing an IDS leaf from a container. The one embedded
-/// equilibrium artifact is shipped with its real DD leaf inventories, so the
-/// leaf-only delete policy can answer that question before IMAS-Core is
-/// called. This is a safety classification only, not conversion-rule
-/// selection; ADR 0013 decision 6 records the narrow exception to the
-/// inventories' proof role. A future generated artifact must carry the
-/// equivalent inventory before this seam can serve it; today it cannot be a
-/// live conversion map.
-fn is_equilibrium_leaf(record: &ConversionRecord, hli_path: &str) -> bool {
-    const LEFT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-3.39.0.txt");
-    const RIGHT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-4.1.1.txt");
-
-    let inventory = match record.direction_to_stored {
-        Direction::Forward => LEFT_LEAVES,
-        Direction::Reverse => RIGHT_LEAVES,
-    };
-    inventory.lines().any(|leaf| leaf == hli_path)
-}
-
 /// Distinguishes a conditional merged/split conversion from an unconditional
 /// lossy conversion only where a read exposes the verdict to the caller. The
 /// conversion map retains its literal `lossy` declaration; ADR 0008 assigns
@@ -1089,7 +1071,10 @@ fn refusal_reason_message(reason: RefusalReason) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversion::conversion_map::{ConversionMap, Direction, TransformationDirection};
+    use crate::conversion::conversion_map::{
+        ArtifactDdVersion, ConversionMap, Direction, EndpointInventory, EndpointNode,
+        EndpointNodeKind, TransformationDirection, TypedConversionMap, TypedRule,
+    };
     use std::sync::Arc;
 
     /// Builds the resolver seam directly. Path resolution has no registry
@@ -1127,6 +1112,26 @@ mod tests {
             opened_read_op: true,
             stored_version: "3.39.0".parse().expect("known release"),
             hli_version: "4.1.1".parse().expect("known release"),
+            parent_id: None,
+        }
+    }
+
+    fn record_from_typed_map(
+        map: ConversionMap,
+        direction_to_stored: Direction,
+    ) -> ConversionRecord {
+        ConversionRecord {
+            resolved_path: String::new(),
+            stored_path: String::new(),
+            pulse_ctx_id: 0,
+            dataobjectname: String::new(),
+            pulse_uri: String::new(),
+            map: Arc::new(map),
+            root_id: 0,
+            direction_to_stored,
+            opened_read_op: true,
+            stored_version: "4.1.1".parse().expect("known release"),
+            hli_version: "3.39.0".parse().expect("known release"),
             parent_id: None,
         }
     }
@@ -1911,6 +1916,132 @@ mod tests {
     }
 
     #[test]
+    fn delete_classification_uses_the_typed_maps_hli_endpoint_for_each_direction() {
+        let side = |dd: &str| crate::conversion::conversion_map::Side {
+            dd: ArtifactDdVersion::new(dd).expect("fixture DD version is valid"),
+            cocos: None,
+        };
+        let typed_map = TypedConversionMap {
+            ids: "pulse_schedule".to_string(),
+            left: Some(side("3.39.0")),
+            right: Some(side("4.1.1")),
+            left_endpoint: EndpointInventory::complete(vec![
+                EndpointNode {
+                    path: "old_leaf".to_string(),
+                    kind: EndpointNodeKind::Leaf,
+                },
+                EndpointNode {
+                    path: "incomplete_root".to_string(),
+                    kind: EndpointNodeKind::Structure,
+                },
+                EndpointNode {
+                    path: "incomplete_root/escaping".to_string(),
+                    kind: EndpointNodeKind::Leaf,
+                },
+                EndpointNode {
+                    path: "elsewhere/escaping".to_string(),
+                    kind: EndpointNodeKind::Leaf,
+                },
+            ]),
+            right_endpoint: EndpointInventory::complete(vec![
+                EndpointNode {
+                    path: "new_leaf".to_string(),
+                    kind: EndpointNodeKind::Leaf,
+                },
+                EndpointNode {
+                    path: "new_structure".to_string(),
+                    kind: EndpointNodeKind::Structure,
+                },
+                EndpointNode {
+                    path: "new_structure/escaping".to_string(),
+                    kind: EndpointNodeKind::Leaf,
+                },
+                EndpointNode {
+                    path: "other_incomplete/escaping".to_string(),
+                    kind: EndpointNodeKind::Leaf,
+                },
+            ]),
+            default_identical: true,
+            rules: vec![
+                TypedRule {
+                    id: "renamed-delete-target".to_string(),
+                    rel: Rel::Renamed,
+                    selector_stage: crate::conversion::conversion_map::SelectorStage::Exact,
+                    left: Some("old_leaf".to_string()),
+                    right: Some("new_leaf".to_string()),
+                    froms: Vec::new(),
+                    fidelity_forward: Fidelity::Exact,
+                    fidelity_reverse: Fidelity::Exact,
+                },
+                TypedRule {
+                    id: "structure-child-escapes".to_string(),
+                    rel: Rel::Moved,
+                    selector_stage: crate::conversion::conversion_map::SelectorStage::Exact,
+                    left: Some("elsewhere/escaping".to_string()),
+                    right: Some("new_structure/escaping".to_string()),
+                    froms: Vec::new(),
+                    fidelity_forward: Fidelity::Exact,
+                    fidelity_reverse: Fidelity::Exact,
+                },
+                TypedRule {
+                    id: "incomplete-root-child-escapes".to_string(),
+                    rel: Rel::Moved,
+                    selector_stage: crate::conversion::conversion_map::SelectorStage::Exact,
+                    left: Some("incomplete_root/escaping".to_string()),
+                    right: Some("other_incomplete/escaping".to_string()),
+                    froms: Vec::new(),
+                    fidelity_forward: Fidelity::Exact,
+                    fidelity_reverse: Fidelity::Exact,
+                },
+            ],
+            sign_flips: Vec::new(),
+            redefines: Vec::new(),
+        };
+        let map =
+            ConversionMap::from_typed(typed_map.clone()).expect("typed endpoint metadata is valid");
+
+        let forward = record_from_typed_map(map.clone(), Direction::Forward);
+        let old_leaf = CString::new("old_leaf").expect("no interior NUL");
+        assert!(matches!(
+            narrow_delete_path(
+                &forward,
+                old_leaf.as_ptr(),
+                resolve(&forward, old_leaf.as_ptr()),
+            ),
+            DeletePath::Translated(_)
+        ));
+
+        assert_delete_refusal(
+            &forward,
+            "incomplete_root",
+            "this subtree delete would leave data at a stored path outside the requested subtree",
+        );
+
+        let mut incomplete_typed_map = typed_map;
+        incomplete_typed_map.left_endpoint = EndpointInventory::incomplete(vec![EndpointNode {
+            path: "incomplete_root".to_string(),
+            kind: EndpointNodeKind::Leaf,
+        }]);
+        let incomplete = record_from_typed_map(
+            ConversionMap::from_typed(incomplete_typed_map)
+                .expect("incomplete metadata remains a valid map input"),
+            Direction::Forward,
+        );
+        assert_delete_refusal(
+            &incomplete,
+            "incomplete_root",
+            "this subtree delete would leave data at a stored path outside the requested subtree",
+        );
+
+        let reverse = record_from_typed_map(map, Direction::Reverse);
+        assert_delete_refusal(
+            &reverse,
+            "new_structure",
+            "this subtree delete would leave data at a stored path outside the requested subtree",
+        );
+    }
+
+    #[test]
     fn a_one_source_merged_rule_remains_a_plan_at_every_narrowing() {
         const ARTIFACT: &str = r#"
             <ids-map ids="equilibrium" format-version="1">
@@ -2223,18 +2354,43 @@ mod tests {
     #[test]
     fn equilibrium_delete_distinguishes_safe_leaves_structures_and_escaping_subtrees() {
         const ARTIFACT: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
-        let record = reverse_record(ARTIFACT);
+        const LEFT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-3.39.0.txt");
+        const RIGHT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-4.1.1.txt");
+        let leaf_inventory = |paths: &str| {
+            EndpointInventory::complete(
+                paths
+                    .lines()
+                    .map(|path| EndpointNode {
+                        path: path.to_string(),
+                        kind: EndpointNodeKind::Leaf,
+                    })
+                    .collect(),
+            )
+        };
+        let mut record = reverse_record(ARTIFACT);
+        record.map = Arc::new(
+            ConversionMap::load_with_endpoint_inventories(
+                ARTIFACT,
+                leaf_inventory(LEFT_LEAVES),
+                leaf_inventory(RIGHT_LEAVES),
+            )
+            .expect("the approved artifact and endpoint inventories must load"),
+        );
         let leaf =
             CString::new("time_slice/global_quantities/beta_tor_norm").expect("no interior NUL");
         let moved_leaf = CString::new("time_slice/boundary/gap/r").expect("no interior NUL");
         let trivial_structure = CString::new("time_slice/constraints").expect("no interior NUL");
         let escaping_structure = CString::new("time_slice/boundary").expect("no interior NUL");
         assert!(
-            is_equilibrium_leaf(&record, "time_slice/boundary/gap/r"),
+            record
+                .map
+                .delete_target_is_leaf(record.direction_to_stored, "time_slice/boundary/gap/r"),
             "the DD4 gap coordinate is a leaf, so delete safety must not treat it as a subtree"
         );
         assert!(
-            !is_equilibrium_leaf(&record, "time_slice/boundary/gap"),
+            !record
+                .map
+                .delete_target_is_leaf(record.direction_to_stored, "time_slice/boundary/gap"),
             "the DD4 gap container must still be subject to subtree safety"
         );
         for (raw, expected) in [

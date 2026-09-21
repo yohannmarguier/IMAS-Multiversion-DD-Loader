@@ -1,12 +1,14 @@
-dae4abdd9428bd28f47063f8f575bdc8abd915f2
+3e5871a844c594491ab9e5365b63576f552bf50f
 
 # The IMAS-Core repository belongs in CMakeLists.txt: its location is stable;
 # this file records only the moving revision CI and download-mode builds use.
 #
 # This fork pin includes the path-aware HDF5 delete fix (IMAS-Core #63/#64),
-# resolving the whole-occurrence deletion covered by shim issue #139. Return
-# to an upstream release once it carries that fix. The fork must retain the
-# original upstream version tags: Core derives its runtime version from them.
+# resolving the whole-occurrence deletion covered by shim issue #139, and the
+# absolute HDF5 read fix (IMAS-Core #65/#66) required by shim issue #212.
+# Return to an upstream release once it carries both fixes. The fork must
+# retain the original upstream version tags: Core derives its runtime version
+# from them.
 #
 # To move the pin, replace only the first line with a verified 40-hex commit,
 # then run the real-Core suite. That intentionally changes CI's cache key so it

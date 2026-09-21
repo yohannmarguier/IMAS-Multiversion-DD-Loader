@@ -63,7 +63,7 @@ flowchart TD
     end
 
     subgraph INTERPOSE["src/interpose/ — C-facing adaptation, one module per seam family"]
-        OCC["occurrence.rs<br/>opens, discovery, registration, map cache"]
+        OCC["occurrence.rs<br/>opens, discovery, registration, map acquisition"]
         RD["read.rs"]
         WR["write.rs"]
         DEL["delete.rs"]
@@ -75,13 +75,14 @@ flowchart TD
     subgraph POLICY["src/conversion/ — decisions, no global state, no IMAS-Core"]
         SEAM["seam_policy.rs<br/>run_read · run_write · run_delete<br/>decide_occurrence_registration"]
         PATHC["path_conversion.rs<br/>which stored path, at what fidelity"]
-        MAP["conversion_map.rs<br/>artifact parsing + rule resolution"]
-        ARTS["known_artifacts.rs"]
+        MAP["conversion_map.rs<br/>validated map + rule resolution"]
+        RUNTIME["runtime_map.rs<br/>Neo4j acquisition + coordinator"]
+        ARTS["known_artifacts.rs<br/>XML fixture only"]
         OUTCOME["read_outcome.rs"]
     end
 
     subgraph STATE["src/registry/ + src/version/ — process state"]
-        REG["context_registry.rs<br/>REGISTRY, loss logs, map cache"]
+        REG["context_registry.rs<br/>REGISTRY, loss logs, live contexts"]
         HLIV["hli_version.rs<br/>the ADR 0005 latch"]
         STAMP["version_stamp.rs · dd_version.rs"]
     end
@@ -299,12 +300,13 @@ classDiagram
         +Side right
         +Vec~Rule~ rules
         +load(xml) ConversionMap
+        +from_typed(input) ConversionMap
         +resolve(path, direction) RuleExplanation
         +check_completeness(...)
     }
     class Side {
         +ArtifactDdVersion dd
-        +CocosConvention cocos
+        +Option~CocosConvention~ cocos
     }
     class Rule {
         +String id
@@ -578,14 +580,20 @@ sequenceDiagram
             else stamp absent, or equal to the HLI version (ADR 0007)
                 POL-->>OCC: RegisterNothing
                 OCC-->>HLI: status unchanged — passthrough from here on
-            else different version, no embedded artifact
-                POL-->>OCC: RegisterNothing + remember the mismatch
-                OCC->>REG: remember_mismatched_occurrence(...)
-                OCC-->>HLI: status unchanged
-            else different version an artifact serves
-                POL-->>OCC: RegisterRoot(stored, artifact)
-                OCC->>REG: get_or_create_map(MapCacheKey), then record_root(...)
-                OCC-->>HLI: status — this context now converts
+            else different version
+                POL-->>OCC: RegisterMismatch(stored)
+                OCC->>OCC: acquire a complete selected-source map
+                alt production source has no artifact
+                    OCC->>REG: remember_mismatched_occurrence(...)
+                    OCC-->>HLI: status unchanged
+                else acquisition fails
+                    OCC->>REG: forget_occurrence_version(...)
+                    OCC->>CORE: al_end_action(octx_id)
+                    OCC-->>HLI: refusal naming IDS and both DD versions
+                else complete map acquired
+                    OCC->>REG: remember_mismatched_occurrence(...), then record_root(...)
+                    OCC-->>HLI: status — this context now converts
+                end
             end
         end
     end
@@ -750,9 +758,9 @@ stateDiagram-v2
     [*] --> Untracked : no entry at this context id
 
     Untracked --> PulseEntry : al_begin_dataentry_action
-    Untracked --> RootRecord : occurrence open whose stamp mismatches<br/>and has an embedded artifact
+    Untracked --> RootRecord : occurrence open whose stamp mismatches<br/>and graph acquisition validates a map
     Untracked --> ChildRecord : al_begin_arraystruct_action under a live record
-    Untracked --> Untracked : occurrence open with a matching, absent<br/>or unserved stamp — nothing registered
+    Untracked --> Untracked : occurrence open with a matching or absent<br/>stamp — nothing registered
 
     PulseEntry --> PulseEntry : caches each discovered occurrence version,<br/>keyed by dataobjectname
     RootRecord --> RootRecord : non-exact reads, writes and deletes append to this root's loss log

@@ -17,6 +17,7 @@ IMAS-Core (libal)             ← stores the IDS under DD version W
 
 **Jump to:** [Status](#status) · [Toolchain](#toolchain) ·
 [Build, test, install](#build-test-install) ·
+[Pinned DD-only graph](#pinned-dd-only-graph) ·
 [Using it with an HLI](#using-it-with-an-hli) ·
 [Scope and limitations](#scope-and-limitations) · [Layout](#layout) ·
 [Installed layout](#installed-layout-and-consuming-the-package) ·
@@ -79,6 +80,140 @@ test, install](#build-test-install).
 
 CMake fails at configure time with the module names above if either tool is
 missing, so a wrong environment is caught immediately rather than mid-build.
+
+## Pinned DD-only graph
+
+Runtime conversion-map work uses one explicitly selected local Neo4j graph.
+This setup is separate from ordinary builds: `cargo`, cargo-c, and CMake never
+download a graph or start a service. It uses Docker plus
+[ORAS](https://oras.land/) on the operator's `PATH`; ORAS fetches the published
+OCI artifact and Docker runs the pinned Neo4j image.
+
+The checked-in [selection](config/dd-graph-release.env) records the currently
+supported DD-only release (`v5.3.0`), its OCI manifest digest, archive digest,
+producer commit, and Neo4j `2026.01.4-community` image digest. It contains no
+credential or graph data. The default state directory is
+`$XDG_STATE_HOME/imas-mvdd-loader/dd-graph` (or
+`~/.local/state/imas-mvdd-loader/dd-graph`); set `IMAS_MVDD_GRAPH_HOME` to a
+private task-owned directory to use a different location. The script creates
+that directory with private permissions and never writes it inside the repo.
+
+Choose a password outside Git and perform the initial setup:
+
+```console
+$ export IMAS_MVDD_GRAPH_HOME="$HOME/.local/state/imas-mvdd-loader/dd-graph"
+$ export IMAS_MVDD_GRAPH_PASSWORD='choose-a-local-secret'
+$ scripts/dd-graph.sh select
+$ scripts/dd-graph.sh inspect
+$ scripts/dd-graph.sh setup
+$ scripts/dd-graph.sh query
+```
+
+`setup` downloads the immutable manifest selected by digest, verifies the
+archive SHA-256 after ORAS has fetched it, checks the archive's release and
+commit manifest, then loads its `graph.dump` into a new data directory keyed
+by that manifest. It will fail rather than overwrite an existing database or
+container. Mutable service identity belongs to the configured graph home: the
+service name is `imas-mvdd-dd-graph-<home-prefix>-<manifest-prefix>`, and its
+owner, selection and Neo4j identities are labels that every start, stop, query,
+reuse or replacement validates before acting. Two graph homes may share a
+verified immutable archive, but never a service or database. Bolt is bound only
+to `127.0.0.1:17687` by default. A conflicting published port fails before the
+database is loaded; set `IMAS_MVDD_GRAPH_BOLT_PORT` to an unused port instead.
+
+The connection for the Rust graph adapter is therefore:
+
+```console
+NEO4J_URI=bolt://127.0.0.1:17687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=$IMAS_MVDD_GRAPH_PASSWORD
+```
+
+`query` first verifies that the actual service labels match the recorded
+selection, then applies the shared
+[`dd-graph-smoke.cypher`](config/dd-graph-smoke.cypher) contract: a required DD
+release, the equilibrium DD-version-stamp node and the `IMASNodeChange`
+ownership plus `IN_VERSION` edges used by runtime acquisition. An
+empty database, authentication-only response, incomplete schema or different
+selection cannot pass. `verify-service` performs only the label/ownership part
+and prints the verified non-secret identity; it deliberately does not warm
+graph contents. Do not place the password in a selection file, shell history,
+Git or a measurement report. It is supplied only through
+`IMAS_MVDD_GRAPH_PASSWORD` when a new service is created or queried.
+
+Services created before the home-qualified naming and provenance labels are
+legacy resources. The script neither adopts nor removes them. Inspect their
+mount, port and labels with Docker, stop/remove them explicitly if they are no
+longer needed, and run `setup` in the selected graph home to load a newly owned
+service. The immutable archive may be copied into that home's inspected
+`archive path` first; do not copy or reuse the legacy database directory.
+
+CI uses the same script through the reusable
+[`setup-dd-graph` action](.github/actions/setup-dd-graph/action.yml). It caches
+only the verified archive under its immutable archive digest; a fresh CI job
+always loads a new task-owned database and starts Neo4j before its query smoke
+check. The `graph-abi` job then acquires its required complete live scope, and
+the Fortran and C++ HLI jobs start the same selected graph before their
+installed production scenarios. A setup/acquisition failure or a missing,
+disabled, empty or unexpectedly changed scenario selection fails those
+graph-required checks. The action exports
+`NEO4J_URI`, `NEO4J_USERNAME` and `NEO4J_PASSWORD`; they are job-local settings
+and credentials never enter Git or the job summary.
+
+The installed shim acquires every uncached mismatch from that graph. Its
+whole-attempt deadline is five seconds by default and covers connection, graph
+reads, validation, construction and publication; later stages receive the
+remaining time rather than restarting the budget. Set
+`IMAS_MVDD_GRAPH_DEADLINE_SECONDS` to an integer number of seconds when an
+integration environment needs a larger bound. A first mismatched occurrence
+needs the selected graph and a complete map before it can open. A successful
+map is retained for the process lifetime, so later opens of the same
+IDS/version key reuse it without another graph request; updates therefore
+happen explicitly between HLI processes, not through a live refresh. An
+unavailable or unsupported uncached pair refuses with the IDS and both DD
+versions; it never falls back to XML or passthrough. XML remains available only
+in private regression-fixture builds. See [the live source contract](docs/KG_LIVE_SOURCE_CONTRACT.md)
+and [the runtime-map measurements](docs/KG_RUNTIME_MAP_MEASUREMENTS.md).
+
+Between HLI runs, stop and later restart the same recorded pin without any
+release lookup or download:
+
+```console
+$ scripts/dd-graph.sh stop
+$ scripts/dd-graph.sh start
+$ scripts/dd-graph.sh query
+```
+
+To update, create a new selection file outside the repository containing all
+nine `GRAPH_*` variables in `config/dd-graph-release.env`, with the release's
+manifest digest, archive digest, producer commit, and a compatible immutable
+Neo4j image digest. Inspect those identities before selecting them. Stop the
+current task-owned service, then run:
+
+```console
+$ scripts/dd-graph.sh update --selection /private/path/to/new-release.env
+$ scripts/dd-graph.sh inspect
+$ scripts/dd-graph.sh query
+```
+
+`update` refuses while this task's graph service is running and creates a
+separate archive/database/container identity for a new manifest; it does not
+delete or overwrite the preceding graph state, although it intentionally
+replaces the active selection record after the new service starts. No live refresh or HLI process
+cache invalidation exists: select or update only between HLI processes.
+
+For acquisition measurements, `scripts/measure-runtime-map.sh` resolves
+provenance from the selected graph home's actual labelled service. An explicit
+`IMAS_MVDD_MEASUREMENT_CONTAINER` is accepted only when every ownership and
+immutable-selection label matches. Each service-restarted direction gets its
+own stop/start and is the first graph-reading workload after a sleep-only
+readiness interval; the report does not claim that host OS, VM or disk caches
+were flushed. The JSON evidence records effective non-secret configuration,
+service and graph identities, code revision/dirty state, direction, run number,
+deadline and readiness policy. The configured `NEO4J_URI` must exactly match
+the selected container's published Bolt endpoint and cannot contain embedded
+credentials. Dirty-tree provenance records status and a SHA-256 of the patch,
+never the patch contents, so an unrelated local secret cannot enter evidence.
 
 ## Build, test, install
 
@@ -274,8 +409,12 @@ tell you nothing.
 | `IMAS_MVDD_HLI_DD_VERSION` | the shim, at first open | Fallback for `imas_mvdd_set_hli_dd_version()` — the calling HLI's own DD version |
 | `IMAS_CORE_LIBRARY` | the shim, at first IMAS-Core call | Absolute path to the real IMAS-Core shared library, overriding the bare-soname search |
 | `IMAS_MVDD_LOSS_LOG_DIR` | the shim, at first loss | Existing directory for the loss log file; an empty value disables it |
+| `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD` | the shim, for an uncached DD mismatch | Connection details for the validated runtime-map graph |
+| `NEO4J_DATABASE` | the shim, for an uncached DD mismatch | Optional Neo4j database name; defaults to `neo4j` |
+| `IMAS_MVDD_GRAPH_DEADLINE_SECONDS` | the shim, for an uncached DD mismatch | Whole graph acquisition limit in seconds; defaults to `5` |
 
-These are the only three environment variables the shim itself reads.
+The graph lifecycle variables used by CI setup, such as `IMAS_MVDD_GRAPH_HOME`,
+are not read by the shim.
 
 ## Scope and limitations
 
@@ -316,12 +455,13 @@ is itself worth knowing when reading a green suite.
   this project's own C ABI, which is the ABI imas-Fortran consumes. imas-CPP is
   expected to fit the same client shape but has not been validated here;
   imas-Matlab and imas-Java have not been judged at all.
-- **Conversion coverage is one IDS and one version pair.** equilibrium
-  3.39.0 ⇄ 4.1.1, served from the single conversion-map artifact embedded in
-  `src/conversion/known_artifacts.rs` (`docs/3.39.0--4.1.1.xml`). Any other IDS, or any
-  other version pair, is forwarded unconverted — as is an occurrence whose
-  stamp matches the HLI or is absent
-  (`docs/adr/0007-unstamped-ids-occurrences-match-hli.md`).
+- **Conversion depends on the selected graph evidence.** The production shim
+  constructs a complete map for the exact IDS and version pair on the first
+  mismatch. An unsupported or unavailable pair refuses that open rather than
+  forwarding unconverted. Matching and unstamped occurrences retain the
+  established identity-forwarding behavior
+  (`docs/adr/0007-unstamped-ids-occurrences-match-hli.md`). XML remains a
+  private regression fixture, not a production fallback.
 - **The completeness proof's oracle is two inventories, not the DD.** The
   artifact is proven complete against `docs/inventory/equilibrium-{3.39.0,4.1.1}.txt`
   — the imas-dd path sets for those versions, which exclude the
@@ -394,6 +534,14 @@ is itself worth knowing when reading a green suite.
   the whole occurrence ([#139](https://github.com/yohannmarguier/IMAS-Multiversion-DD-Loader/issues/139)).
   The ABI compatibility check alone does not distinguish those builds; use
   the pinned fork or a Core carrying the same correction.
+- **Absolute HDF5 reads beneath an array-structure context require the
+  corrected Core.** The same pin includes the absolute-field fix
+  ([IMAS-Core #66](https://github.com/yohannmarguier/IMAS-Core/pull/66)).
+  The live coexistence oracle verifies that both Core directly and the shim
+  return the same seeded value for relative and absolute spellings in both
+  conversion directions. Older builds can report present data as an unset
+  scalar with a successful status
+  ([IMAS-Core #65](https://github.com/yohannmarguier/IMAS-Core/issues/65)).
 
 ## Layout
 
@@ -407,21 +555,24 @@ cbindgen.toml           generated-header settings
 cmake/imas-mvdd-loaderConfig.cmake.in  find_package template, hand-authored
 src/lib.rs              the mirrored C ABI
 src/core/               runtime binding and dlopen/dlsym adapter
-src/conversion/         map resolution, path policy, outcomes, and embedded artifacts
+src/conversion/         graph-map acquisition, map resolution, path policy, and outcomes
 src/registry/           live conversion-context registry
 src/version/            DD versions, HLI latch, and occurrence stamp discovery
 src/interpose/          C-facing seam adapters, one module per seam family
 tests/abi/              generated-header smoke test and ABI manifests
 tests/shim/             recording-stub seam tests
 tests/real_core/        HDF5 and real-IMAS-Core checks and plugin fixture
+tests/hli/              focused installed-HLI production probes owned here
 tests/package/          installed-package consumer fixture
 tests/support/          shared C test harness
 tests/cmake/            CMake-script checks
 tests/coverage/         local Rust line-coverage and mutation-audit fixtures
-tests/scripts/          install and package checks
+tests/scripts/          install/package checks plus the hermetic DD-graph setup lifecycle check
 tests/stub/             recording stub standing in for IMAS-Core
 tests/fixtures/         conversion-map and Rust audit fixtures
 scripts/iter-env.sh     ITER cluster module loads
+scripts/dd-graph.sh     opt-in pinned DD-only graph selection and lifecycle
+config/dd-graph-release.env  immutable released DD-only graph selection
 docs/                   reference material — read the inventory before designing anything
 ```
 
@@ -542,7 +693,10 @@ dependency. The `fast` job runs fmt, clippy, both CMake build configurations,
 all recording-stub seams, install, and both installed-package consumers. The
 `full` job runs for pull requests and `main` pushes; it downloads and caches the
 pinned IMAS-Core build, then runs the ABI drift and real-Core seam suites before
-performing the same install and consumer checks. Every CTest invocation uses
+performing the same install and consumer checks. Its live profile requires the
+three `live-graph-core-coexistence-*` scenarios; a separate controlled profile
+runs all five deterministic coexistence fixtures. Both selections are checked
+by exact enabled test name before execution. Every CTest invocation uses
 `--no-tests=error`; both jobs stay pinned to the cluster's Rust and cargo-c
 module versions.
 
@@ -552,9 +706,23 @@ Both jobs above call the C ABI directly, with arguments a test author chose.
 `.github/workflows/hli-validation.yml` runs real Fortran, C++, MATLAB and Java
 HLIs through the installed shim. Its Fortran job builds the IMAS-Fortran fork pinned in
 `IMAS_FORTRAN_REF` with `AL_USE_MULTIVERSION_SHIM=ON` and
-`find_package(imas-mvdd-loader CONFIG)`, and runs that HLI's own suite. It runs
+`find_package(imas-mvdd-loader CONFIG)`. The complete historical HLI suite runs
+unchanged against a private XML-fixture package assembled only inside the job;
+the normally installed package remains graph-backed. It runs
 on pull requests based on `develop` or `main` whose diff can affect the result,
 and on demand.
+
+The same Fortran job separately builds #230's opt-in
+`al-fortran-test-shim-graph-runtime` scenario against the installed production
+package, after starting the pinned graph. Its exact five-test production set
+also includes version-unset, equal-stamp, absent-stamp and malformed-stamp
+cases, proving those paths remain service-independent. The conversion scenario performs
+generated HLI calls that write and read the supported `psi` COCOS conversion
+and observes the `coordinates_type` refusal through the HLI's partial-read
+surface. Its selected CTest set must contain exactly those enabled names, and the job summary records
+the Fortran/Core pins, graph release and manifest digest. The ordinary
+installed package is graph-backed; XML is retained only for isolated mechanism
+regressions.
 
 The C++ job builds `yohannmarguier/IMAS-Cpp` at `IMAS_CPP_REF`, using the same
 `IMAS_CORE_REF` fork and DD 4.1.1. It enables the generated suite and examples,
@@ -562,7 +730,16 @@ checks that the HLI links the shim and that each test selects the acquired Core,
 and requires 65 enabled tests: the generated suite, 21 examples, two
 generator refusal-policy tests, and the 41 registered here by the fork's
 Tier-1 shim conformance suite. It runs CTest serially because examples share
-pulses. Plugins are disabled.
+pulses. Those 65 legacy assertions use the same private XML-fixture package as
+Fortran. A second exact production selection overrides that package with the
+normal graph-backed library and runs the four service-independent cases.
+A dedicated round-trip probe reads the renamed `beta_tor_norm`, then appends
+and reads back that field and the COCOS-transformed `profiles_1d/psi`, using
+separate cross-DD and same-DD control pulses. The legacy `psi_axis` split
+assertion stays in the XML suite because the graph does not justify it.
+A dedicated public-C++-HLI probe then removes the
+graph password in a fresh process and requires an acquisition refusal naming
+`equilibrium`, stored DD 3.40.0 and HLI DD 4.1.1. Plugins are disabled.
 
 Unlike the Fortran job, C++ needs MDSplus: at the pinned commit its generated
 `cpp-TestSuite` implements only that backend and disables itself without it.
@@ -578,10 +755,10 @@ conformance suite (`tests/shim/`), which registers only under
 thirteen of them contract assertions that stay red while the shim disagrees
 rather than being inverted, quarantined or softened to match observed
 behaviour. It is a DD 4.1.1 HLI reading and writing a checked-in DD 3.39.0
-pulse through the shim, compared against the same HLI reading the DD 4.1.1
-pulse of the same equilibrium. That makes this the one HLI job asserting on
-what conversion actually returns, rather than only that the HLI builds, links
-and runs. It covers one direction: the reverse needs a second `al-cpp` built
+pulse through the private XML-fixture shim, compared against the same HLI
+reading the DD 4.1.1 pulse of the same equilibrium. The separate production
+selection is what asserts the graph-derived result. It covers one direction:
+the reverse needs a second `al-cpp` built
 against DD 3.39.0, which this job does not produce.
 
 Five of those thirteen — the stamp-state scenarios — register only when
@@ -646,8 +823,9 @@ conversion records fails rather than passing quietly.
 
 The HLI also acquires the IMAS-Core fork at the committed `IMAS_CORE_REF`, so
 it exercises the same library as the shim's full CI job. The Data Dictionary is
-pinned to 4.1.1 because the shim ships exactly one conversion-map artifact; a
-different DD version does not weaken the conversion test but dissolves it.
+pinned to 4.1.1 because the checked-in fixture and cross-DD scenario establish
+that conversion baseline; a different DD version does not weaken the conversion
+test but dissolves it.
 `docs/adr/0026-pin-imas-core-until-upstream-corrects-delete.md` records why
 Core is pinned instead of floated.
 
