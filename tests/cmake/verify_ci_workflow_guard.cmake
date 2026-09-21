@@ -107,6 +107,18 @@ expect_guard_rejection(
     missing-coexistence-run "${missing_coexistence_run}"
     "full_job must execute the graph coexistence real-Core scenarios")
 
+# The installed-mode step's budget must also reach earlier cold scenarios.
+string(REPLACE
+    "      # Complete cold map acquisition needs the same budget as graph-abi.\n      IMAS_MVDD_GRAPH_DEADLINE_SECONDS: 120"
+    "      IMAS_MVDD_GRAPH_DEADLINE_SECONDS: 5"
+    short_full_deadline "${workflow}")
+if(workflow STREQUAL short_full_deadline)
+    message(FATAL_ERROR "Could not shorten the full job acquisition deadline")
+endif()
+expect_guard_rejection(
+    short-full-deadline "${short_full_deadline}"
+    "full_env must budget complete cold graph acquisition")
+
 string(REPLACE
     "ref=$(head -n1 \"$GITHUB_WORKSPACE/IMAS_CORE_REF\" | tr -d '[:space:]')"
     "ref=690f5392a58e4c73131d6b723c72105e9fbdcc9f"

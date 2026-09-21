@@ -24,7 +24,7 @@ target_compile_definitions(runtime_binding_test PRIVATE
     "INCOMPATIBLE_CORE_VERSION=\"${IMAS_CORE_INCOMPATIBLE_VERSION}\"")
 add_dependencies(runtime_binding_test imas_mvdd_capi recording_stub)
 set_target_properties(runtime_binding_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 add_stub_test(runtime-binding-success runtime_binding_test success)
 
@@ -87,7 +87,7 @@ target_compile_definitions(hli_dd_version_test PRIVATE
     "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
 add_dependencies(hli_dd_version_test imas_mvdd_capi recording_stub)
 set_target_properties(hli_dd_version_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 # These setter-only scenarios never open a context and deliberately need no
 # recording stub, so an ambient latch variable is inert; keep them
@@ -139,7 +139,7 @@ target_compile_definitions(version_discovery_test PRIVATE
     "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
 add_dependencies(version_discovery_test imas_mvdd_capi recording_stub)
 set_target_properties(version_discovery_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 add_stub_test(version-discovery-dataentry-success-forwards-uri-and-mode version_discovery_test dataentry-success-forwards-uri-and-mode)
 
@@ -286,7 +286,7 @@ target_compile_definitions(read_path_test PRIVATE
     "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
 add_dependencies(read_path_test imas_mvdd_capi recording_stub)
 set_target_properties(read_path_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 add_stub_test(read-path-translates-field-and-timebase-independently
     read_path_test translates-field-and-timebase-independently
@@ -798,7 +798,7 @@ target_compile_definitions(write_delete_conversion_test PRIVATE
     "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
 add_dependencies(write_delete_conversion_test imas_mvdd_capi recording_stub)
 set_target_properties(write_delete_conversion_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 # One executable drives three ABI seams -- al_write_data, al_plugin_write_data
 # and al_delete_data -- so a ctest name in this suite has to say which one its
@@ -933,7 +933,7 @@ target_compile_definitions(reentry_guard_test PRIVATE
     "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
 add_dependencies(reentry_guard_test imas_mvdd_capi recording_stub)
 set_target_properties(reentry_guard_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 function(add_reentry_guard_test name scenario)
     add_stub_test("${name}" reentry_guard_test "${scenario}"
@@ -962,7 +962,7 @@ target_compile_definitions(arraystruct_path_test PRIVATE
     "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
 add_dependencies(arraystruct_path_test imas_mvdd_capi recording_stub)
 set_target_properties(arraystruct_path_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 add_stub_test(arraystruct-path-translates-renamed-container-and-timebase
     arraystruct_path_test translates-renamed-container-and-timebase
@@ -1031,7 +1031,7 @@ target_compile_definitions(nested_context_read_test PRIVATE
     "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
 add_dependencies(nested_context_read_test imas_mvdd_capi recording_stub)
 set_target_properties(nested_context_read_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 add_stub_test(nested-context-read-relative-field-and-timebase-resolve-through-renamed-child
     nested_context_read_test relative-field-and-timebase-resolve-through-renamed-child
@@ -1084,7 +1084,7 @@ target_compile_definitions(context_lifecycle_test PRIVATE
     "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
 add_dependencies(context_lifecycle_test imas_mvdd_capi recording_stub)
 set_target_properties(context_lifecycle_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 add_stub_test(context-lifecycle-ending-child-removes-only-its-own-record
     context_lifecycle_test ending-child-removes-only-its-own-record
@@ -1129,7 +1129,7 @@ target_compile_definitions(plugin_reentry_policy_test PRIVATE
     "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
 add_dependencies(plugin_reentry_policy_test imas_mvdd_capi recording_stub)
 set_target_properties(plugin_reentry_policy_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 add_stub_test(plugin-reentry-policy-plugin-global-hli-unset-is-plain-forward
     plugin_reentry_policy_test plugin-global-hli-unset-is-plain-forward)
@@ -1256,7 +1256,7 @@ target_compile_definitions(scoped_passthrough_test PRIVATE
     "EXPECTED_AL_VERSION=\"${IMAS_CORE_VERSION}\"")
 add_dependencies(scoped_passthrough_test imas_mvdd_capi recording_stub)
 set_target_properties(scoped_passthrough_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 function(add_scoped_passthrough_test name scenario)
     add_stub_test("${name}" scoped_passthrough_test "${scenario}"

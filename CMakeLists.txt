@@ -435,6 +435,9 @@ add_dependencies(imas_mvdd_capi imas_mvdd_xml_fixture_capi)
 # The ordinary stage is the installed production artifact. Existing C seam
 # regressions deliberately link a private XML fixture stage, while graph-live
 # acceptance targets name this production target explicitly.
+# Fixture executables must also derive their BUILD_RPATH from their linked
+# target: these libraries share an ELF SONAME, so a production-stage path
+# placed first would silently select the production shim on Linux.
 add_library(imas_mvdd_loader_production SHARED IMPORTED GLOBAL)
 add_library(imas-mvdd-loader::imas-mvdd-loader ALIAS imas_mvdd_loader_production)
 set_target_properties(imas_mvdd_loader_production PROPERTIES

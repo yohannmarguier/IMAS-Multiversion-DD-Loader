@@ -150,6 +150,9 @@ jobs:
   full:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    env:
+      # Complete cold map acquisition needs the same budget as graph-abi.
+      IMAS_MVDD_GRAPH_DEADLINE_SECONDS: 120
 
     steps:
       - uses: actions/checkout@v4
@@ -273,8 +276,6 @@ jobs:
             --output-on-failure --no-tests=error
 
       - name: Configure, build and test installed IMAS-Core lookup
-        env:
-          IMAS_MVDD_GRAPH_DEADLINE_SECONDS: 120
         run: |
           cmake -S . -B build-installed-mode -DCMAKE_BUILD_TYPE=Release \
             -DIMAS_MVDD_GRAPH_TEST_SOURCE=live \

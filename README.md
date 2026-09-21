@@ -732,8 +732,12 @@ generator refusal-policy tests, and the 41 registered here by the fork's
 Tier-1 shim conformance suite. It runs CTest serially because examples share
 pulses. Those 65 legacy assertions use the same private XML-fixture package as
 Fortran. A second exact production selection overrides that package with the
-normal graph-backed library and runs a COCOS round trip plus the four
-service-independent cases. A dedicated public-C++-HLI probe then removes the
+normal graph-backed library and runs the four service-independent cases.
+A dedicated round-trip probe reads the renamed `beta_tor_norm`, then appends
+and reads back that field and the COCOS-transformed `profiles_1d/psi`, using
+separate cross-DD and same-DD control pulses. The legacy `psi_axis` split
+assertion stays in the XML suite because the graph does not justify it.
+A dedicated public-C++-HLI probe then removes the
 graph password in a fresh process and requires an acquisition refusal naming
 `equilibrium`, stored DD 3.40.0 and HLI DD 4.1.1. Plugins are disabled.
 

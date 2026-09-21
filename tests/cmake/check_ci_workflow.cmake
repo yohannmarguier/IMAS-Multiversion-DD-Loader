@@ -330,7 +330,6 @@ if(DEFINED PINNED_FORTRAN_CORE_JOB OR DEFINED PINNED_CPP_CORE_JOB
             "-DCMAKE_PREFIX_PATH=.*dist-xml-fixture"
             "configure the complete C++ suite against the private XML fixture")
     foreach(required_cpp_production_scenario IN ITEMS
-            cpp-test-shim-roundtrip-cross-dd
             cpp-test-shim-version-unset
             cpp-test-shim-stamp-equal
             cpp-test-shim-stamp-absent
@@ -340,6 +339,12 @@ if(DEFINED PINNED_FORTRAN_CORE_JOB OR DEFINED PINNED_CPP_CORE_JOB
     endforeach()
     require_matching_line(cpp_hli_job "check_ctest_inventory\.cmake"
         "reject missing, disabled or extra production C++ selections")
+    require_matching_line(cpp_hli_job "cpp_graph_roundtrip\.cpp"
+        "compile the graph-supported C++ round-trip probe")
+    require_line(cpp_hli_job "./cpp-graph-roundtrip \"$roundtrip_root/cross\" cross"
+        "run the graph-supported cross-DD round trip")
+    require_line(cpp_hli_job "./cpp-graph-roundtrip \"$roundtrip_root/same\" same"
+        "run the same-DD round-trip control")
     require_matching_line(cpp_hli_job "cpp_graph_acquisition_refusal\.cpp"
         "compile the dedicated production C++ acquisition-refusal probe")
     require_matching_line(cpp_hli_job "--unset=NEO4J_PASSWORD"
@@ -383,6 +388,14 @@ read_job(full full_job)
 read_job(graph-provisioning graph_provisioning_job)
 read_job(graph-abi graph_abi_job)
 read_top_level_mapping(env workflow_env)
+
+# A step-local override on installed lookup does not reach earlier cold
+# real-Core scenarios. Require the budget in the full job's own environment.
+read_raw_block(workflow_lines "  " full "jobs:" "missing full job" full_raw_lines)
+read_raw_block(full_raw_lines "    " env "" "full job needs a graph acquisition budget" full_env_raw)
+flatten_block(full_env_raw full_env)
+require_line(full_env "IMAS_MVDD_GRAPH_DEADLINE_SECONDS: 120"
+    "budget complete cold graph acquisition for every real-Core step")
 
 require_line(fast_job "build_type: [Debug, Release]"
     "build both CMake configurations")

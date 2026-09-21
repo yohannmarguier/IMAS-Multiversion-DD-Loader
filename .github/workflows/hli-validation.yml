@@ -709,6 +709,22 @@ jobs:
           export USER="$PWD/testdb"
           ctest --output-on-failure --no-tests=error --parallel 1
 
+      - name: Build the graph-supported C++ round-trip probe
+        working-directory: hli-cpp/build
+        run: |
+          set -euo pipefail
+          g++-14 -std=c++17 \
+            -I "$GITHUB_WORKSPACE/hli-cpp/src" \
+            -I "$GITHUB_WORKSPACE/hli-cpp/build/src" \
+            -I "$GITHUB_WORKSPACE/hli-cpp/build/_deps/al-core-src/include" \
+            -I "$GITHUB_WORKSPACE/hli-cpp/build/_deps/al-core-build/include" \
+            "$GITHUB_WORKSPACE/tests/hli/cpp_graph_roundtrip.cpp" \
+            -L "$GITHUB_WORKSPACE/hli-cpp/build" \
+            -Wl,-rpath,"$GITHUB_WORKSPACE/hli-cpp/build" \
+            -Wl,--defsym,DD_VER_4_1_1=0 \
+            -lal-cpp-4.1.1 $(pkg-config --cflags --libs blitz) -pthread \
+            -o cpp-graph-roundtrip
+
       # Reuse the pinned HLI binary but replace its private fixture shim at
       # runtime with the normal installed artifact. LD_LIBRARY_PATH precedes
       # the build RUNPATH on Linux; the ldd assertion makes that assignment an
@@ -723,7 +739,6 @@ jobs:
           grep -F "$production_library/libimas_mvdd_loader.so" cpp-production-linkage.txt
 
           required=(
-            cpp-test-shim-roundtrip-cross-dd
             cpp-test-shim-version-unset
             cpp-test-shim-stamp-equal
             cpp-test-shim-stamp-absent
@@ -740,6 +755,19 @@ jobs:
           mkdir -p "$PWD/testdb-production"
           export USER="$PWD/testdb-production"
           ctest -R "$pattern" --output-on-failure --no-tests=error --parallel 1
+
+          # The legacy round-trip requires the XML-only psi_axis split.
+          # Assert graph-supported rename and COCOS values through the same
+          # HLI, retaining both a cross-DD append and a same-DD control.
+          core=$(find "$PWD/_deps/al-core-build" -type f -name 'libal.so*' -print -quit)
+          test -n "$core"
+          export IMAS_CORE_LIBRARY="$core"
+          export IMAS_MVDD_HLI_DD_VERSION="$HLI_DD_VERSION"
+          roundtrip_root=$(mktemp -d "$RUNNER_TEMP/cpp-graph-roundtrip.XXXXXX")
+          cp -R "$GITHUB_WORKSPACE/imas-python-fixtures/fixtures/dd-3.39.0" "$roundtrip_root/cross"
+          cp -R "$GITHUB_WORKSPACE/imas-python-fixtures/fixtures/dd-4.1.1" "$roundtrip_root/same"
+          ./cpp-graph-roundtrip "$roundtrip_root/cross" cross
+          ./cpp-graph-roundtrip "$roundtrip_root/same" same
 
           graph_release=$(sed -n 's/^GRAPH_RELEASE=//p' "$GITHUB_WORKSPACE/config/dd-graph-release.env")
           graph_manifest=$(sed -n 's/^GRAPH_MANIFEST_DIGEST=//p' "$GITHUB_WORKSPACE/config/dd-graph-release.env")
@@ -763,6 +791,7 @@ jobs:
             -I "$GITHUB_WORKSPACE/hli-cpp/src" \
             -I "$GITHUB_WORKSPACE/hli-cpp/build/src" \
             -I "$GITHUB_WORKSPACE/hli-cpp/build/_deps/al-core-src/include" \
+            -I "$GITHUB_WORKSPACE/hli-cpp/build/_deps/al-core-build/include" \
             "$GITHUB_WORKSPACE/tests/hli/cpp_graph_acquisition_refusal.cpp" \
             -L "$GITHUB_WORKSPACE/hli-cpp/build" \
             -Wl,-rpath,"$GITHUB_WORKSPACE/hli-cpp/build" \

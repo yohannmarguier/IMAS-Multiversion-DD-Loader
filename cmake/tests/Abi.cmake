@@ -6,7 +6,7 @@ add_executable(abi_smoke "${CMAKE_CURRENT_SOURCE_DIR}/tests/abi/abi_smoke.c")
 target_link_libraries(abi_smoke PRIVATE imas_mvdd_loader)
 add_dependencies(abi_smoke imas_mvdd_capi)
 set_target_properties(abi_smoke PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 if(IMAS_MVDD_REAL_CORE_TESTS)
     # This shared-name smoke test exists in both profiles, so it is deliberately

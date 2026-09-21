@@ -58,7 +58,7 @@ if(IMAS_CORE_BUILT_FROM_SOURCE)
     add_dependencies(real_core_test_plugin ${IMAS_CORE_AL_TARGET})
 endif()
 set_target_properties(real_core_forwarding_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 add_real_core_test(runtime-binding-real-core-forwarding
     $<TARGET_FILE:real_core_forwarding_test>)
@@ -77,7 +77,7 @@ target_link_libraries(equilibrium_read_test PRIVATE
     ${HDF5_C_LIBRARIES})
 add_dependencies(equilibrium_read_test imas_mvdd_capi)
 set_target_properties(equilibrium_read_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 # The HLI DD version latch is process-wide, so each scenario is its own
 # ctest process (mirrors version_discovery_test.c). Scenarios opening the
@@ -241,7 +241,7 @@ target_link_libraries(write_delete_oracle_test PRIVATE
     ${HDF5_C_LIBRARIES})
 add_dependencies(write_delete_oracle_test imas_mvdd_capi)
 set_target_properties(write_delete_oracle_test PROPERTIES
-    BUILD_RPATH "${IMAS_MVDD_STAGE_DIR}/lib")
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
 
 # The prefix names the seam each scenario drives -- `write-oracle-*` for
 # al_write_data, `delete-oracle-*` for al_delete_data -- so `ctest -R
