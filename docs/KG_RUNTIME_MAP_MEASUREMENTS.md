@@ -15,14 +15,14 @@ The companion [`KG_RUNTIME_MAP_MEASUREMENTS.json`](KG_RUNTIME_MAP_MEASUREMENTS.j
 | neo4j_version | `2026.01.4-community` |
 | neo4j_digest | `sha256:657e0b601f09da7ef1bd51eebfe3758c3123eb362249767d8476500c95ea810e` |
 | service | `imas-mvdd-dd-graph-bd621bb0990c-dc90975cb9fa` |
-| code_commit | `da3dc9e8e717f67a01706af6f520b3f5e97f88ec` |
+| code_commit | `923aa5bf482df0bf4760ff4b5654fca7e4a1931b` |
 | code_dirty | `false` |
 | rust | `rustc 1.97.1 (8bab26f4f 2026-07-14)` |
 | machine | `Darwin arm64` |
 | warm | running service preflighted by the required DD-content query; startup excluded; OS/VM caches not flushed |
 | service-restarted | stopped and restarted before every directional observation; sleep-only readiness (no Cypher probe); startup excluded; OS/VM caches not flushed |
 
-The unchanged default is **5 seconds** per complete attempt. An observation is successful only when the Rust coordinator returns a complete validated map before that deadline; the harness preserves failures rather than retrying, extending an individual attempt, or converting a partial map into success.
+The unchanged production default is **5 seconds** per complete attempt. An observation is successful only when the Rust coordinator returns a complete validated map before that deadline; the harness preserves failures rather than retrying, extending an individual attempt, or converting a partial map into success.
 
 ## Median observations
 
@@ -30,18 +30,18 @@ Each row aggregates `1` independent samples of one map key. Retained bytes are a
 
 | Condition | Pair | Direction | Stored → HLI | Outcome | Total ms | Retained estimate KiB | Resolver ns/call | Cache-hit ns/call | Failure |
 | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |
-| service-restarted | equilibrium-3.39.0-4.1.1 | forward | 3.39.0 → 4.1.1 | failure | 5000.72 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
-| service-restarted | equilibrium-3.39.0-4.1.1 | reverse | 4.1.1 → 3.39.0 | failure | 5000.34 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
-| service-restarted | equilibrium-3.42.0-4.1.1 | forward | 3.42.0 → 4.1.1 | failure | 5001.35 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
-| service-restarted | equilibrium-3.42.0-4.1.1 | reverse | 4.1.1 → 3.42.0 | failure | 5000.4 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
-| service-restarted | pulse-schedule-3.25.0-3.30.0 | forward | 3.25.0 → 3.30.0 | success | 3921.56 | 430.46 | 2276 | 54 |  |
-| service-restarted | pulse-schedule-3.25.0-3.30.0 | reverse | 3.30.0 → 3.25.0 | success | 3921.53 | 430.44 | 2274 | 55 |  |
-| warm | equilibrium-3.39.0-4.1.1 | forward | 3.39.0 → 4.1.1 | failure | 5000.99 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
-| warm | equilibrium-3.39.0-4.1.1 | reverse | 4.1.1 → 3.39.0 | failure | 5000.33 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
-| warm | equilibrium-3.42.0-4.1.1 | forward | 3.42.0 → 4.1.1 | failure | 5000.65 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
-| warm | equilibrium-3.42.0-4.1.1 | reverse | 4.1.1 → 3.42.0 | failure | 5001.31 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
-| warm | pulse-schedule-3.25.0-3.30.0 | forward | 3.25.0 → 3.30.0 | success | 2590.85 | 430.46 | 2354 | 58 |  |
-| warm | pulse-schedule-3.25.0-3.30.0 | reverse | 3.30.0 → 3.25.0 | success | 2378.75 | 430.44 | 2361 | 56 |  |
+| service-restarted | equilibrium-3.39.0-4.1.1 | forward | 3.39.0 → 4.1.1 | failure | 5001.62 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
+| service-restarted | equilibrium-3.39.0-4.1.1 | reverse | 4.1.1 → 3.39.0 | failure | 5000.9 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
+| service-restarted | equilibrium-3.42.0-4.1.1 | forward | 3.42.0 → 4.1.1 | failure | 5001.1 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
+| service-restarted | equilibrium-3.42.0-4.1.1 | reverse | 4.1.1 → 3.42.0 | failure | 5000.79 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
+| service-restarted | pulse-schedule-3.25.0-3.30.0 | forward | 3.25.0 → 3.30.0 | success | 4002.92 | 430.46 | 2272 | 55 |  |
+| service-restarted | pulse-schedule-3.25.0-3.30.0 | reverse | 3.30.0 → 3.25.0 | success | 4196.47 | 430.44 | 2317 | 58 |  |
+| warm | equilibrium-3.39.0-4.1.1 | forward | 3.39.0 → 4.1.1 | failure | 5000.68 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
+| warm | equilibrium-3.39.0-4.1.1 | reverse | 4.1.1 → 3.39.0 | failure | 5000.39 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
+| warm | equilibrium-3.42.0-4.1.1 | forward | 3.42.0 → 4.1.1 | failure | 5000.84 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
+| warm | equilibrium-3.42.0-4.1.1 | reverse | 4.1.1 → 3.42.0 | failure | 5000.55 | n/a | n/a | n/a | TimedOut { stage: RuleConstruction } |
+| warm | pulse-schedule-3.25.0-3.30.0 | forward | 3.25.0 → 3.30.0 | success | 2334.2 | 430.46 | 2326 | 70 |  |
+| warm | pulse-schedule-3.25.0-3.30.0 | reverse | 3.30.0 → 3.25.0 | success | 2303.84 | 430.44 | 2356 | 55 |  |
 
 ## Stage samples
 
