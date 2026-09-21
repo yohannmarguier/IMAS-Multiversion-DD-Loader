@@ -7,13 +7,10 @@
 //! module is a lineage limit: it is only a page size and every page is counted.
 
 use std::collections::{BTreeMap, HashSet};
-use std::sync::mpsc;
+use std::sync::Mutex;
 use std::time::Duration;
 
-use neo4j::driver::auth::AuthToken;
-use neo4j::driver::{ConnectionConfig, Driver, DriverConfig, RoutingControl};
-use neo4j::transaction::TransactionTimeout;
-use neo4j::{ValueReceive, ValueSend};
+use neo4rs::{BoltList, BoltNull, BoltType, ConfigBuilder, Graph};
 
 use super::{AcquisitionAttempt, AcquisitionStage, AttemptExpired, GraphSourceError};
 use crate::conversion::conversion_map::{ArtifactDdVersion, CocosConvention};
@@ -46,7 +43,7 @@ pub(crate) struct BoundQuery {
     pub timeout: Duration,
 }
 
-/// Small seam around the selected synchronous Bolt driver.  Tests use it to
+/// Small seam around the selected Bolt driver.  Tests use it to
 /// return shuffled, malformed and short pages without a live service.
 pub(crate) trait CypherExecutor {
     fn execute(
@@ -67,13 +64,12 @@ pub(crate) struct Neo4jConfig {
     pub connection_timeout: Duration,
 }
 
-/// The official Bolt driver has bounded TCP connection/acquisition settings,
-/// a server-side transaction timeout, and fully consumes each result stream.
-/// Connection and query bounds consume the same caller-owned attempt rather
-/// than starting a per-operation timer.
+/// One current-thread async runtime owns the Bolt I/O. Tokio cancellation
+/// drops the in-progress connection future at the remaining attempt deadline,
+/// so no detached worker or blocked socket can survive a timed-out query.
 pub(crate) struct BoltExecutor {
-    driver: std::sync::Arc<Driver>,
-    database: std::sync::Arc<String>,
+    driver: Mutex<Option<Graph>>,
+    runtime: tokio::runtime::Runtime,
 }
 
 impl BoltExecutor {
@@ -84,24 +80,34 @@ impl BoltExecutor {
         let remaining = attempt
             .enter(AcquisitionStage::Connection)
             .map_err(attempt_error)?;
-        let connection: ConnectionConfig = config
-            .uri
-            .parse()
-            .map_err(|error| GraphSourceError(format!("invalid Neo4j URI: {error}")))?;
         let connection_timeout = config.connection_timeout.min(remaining);
-        let driver_config = DriverConfig::new()
-            .with_auth(std::sync::Arc::new(AuthToken::new_basic_auth(
-                &config.username,
-                &config.password,
-            )))
-            .with_connection_timeout(connection_timeout)
-            .with_connection_acquisition_timeout(connection_timeout);
+        let driver_config = ConfigBuilder::default()
+            .uri(&config.uri)
+            .user(&config.username)
+            .password(&config.password)
+            .db(config.database.as_str())
+            .fetch_size(config.page_size)
+            .max_connections(1)
+            .build()
+            .map_err(|error| GraphSourceError(format!("invalid Neo4j configuration: {error}")))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| GraphSourceError(format!("cannot start Neo4j runtime: {error}")))?;
+        let driver = runtime
+            .block_on(async {
+                tokio::time::timeout(connection_timeout, Graph::connect(driver_config)).await
+            })
+            .map_err(|_| {
+                GraphSourceError("Neo4j connection exceeded the acquisition deadline".to_string())
+            })?
+            .map_err(|error| GraphSourceError(format!("Neo4j connection failed: {error}")))?;
         attempt
             .check(AcquisitionStage::Connection)
             .map_err(attempt_error)?;
         Ok(Self {
-            driver: std::sync::Arc::new(Driver::new(connection, driver_config)),
-            database: std::sync::Arc::new(config.database.clone()),
+            driver: Mutex::new(Some(driver)),
+            runtime,
         })
     }
 }
@@ -112,81 +118,78 @@ impl CypherExecutor for BoltExecutor {
         query: BoundQuery,
     ) -> Result<Vec<BTreeMap<String, GraphValue>>, GraphSourceError> {
         let deadline = query.timeout;
-        let driver = std::sync::Arc::clone(&self.driver);
-        let database = std::sync::Arc::clone(&self.database);
-        let (sender, receiver) = mpsc::sync_channel(1);
-        std::thread::spawn(move || {
-            let _ = sender.send(run_bolt_query(driver, database, query));
-        });
-        receive_before_deadline(receiver, deadline)
+        let mut driver = self
+            .driver
+            .lock()
+            .expect("Neo4j driver mutex is not poisoned");
+        let graph = driver
+            .as_ref()
+            .ok_or_else(|| GraphSourceError("Neo4j executor was cancelled".to_string()))?;
+        match self
+            .runtime
+            .block_on(async { tokio::time::timeout(deadline, run_bolt_query(graph, query)).await })
+        {
+            Ok(result) => result,
+            Err(_) => {
+                // Dropping the sole graph/pool owner closes the connection
+                // whose read future was just cancelled.
+                driver.take();
+                Err(GraphSourceError(
+                    "Neo4j query exceeded the acquisition deadline".to_string(),
+                ))
+            }
+        }
     }
 }
 
-fn receive_before_deadline<T>(
-    receiver: mpsc::Receiver<Result<T, GraphSourceError>>,
-    deadline: Duration,
-) -> Result<T, GraphSourceError> {
-    receiver
-        .recv_timeout(deadline)
-        .map_err(|error| match error {
-            mpsc::RecvTimeoutError::Timeout => {
-                GraphSourceError("Neo4j query exceeded the acquisition deadline".to_string())
-            }
-            mpsc::RecvTimeoutError::Disconnected => {
-                GraphSourceError("Neo4j query worker ended without a result".to_string())
-            }
-        })?
-}
-
-fn run_bolt_query(
-    driver: std::sync::Arc<Driver>,
-    database: std::sync::Arc<String>,
+async fn run_bolt_query(
+    graph: &Graph,
     query: BoundQuery,
 ) -> Result<Vec<BTreeMap<String, GraphValue>>, GraphSourceError> {
-    let timeout = i64::try_from(query.timeout.as_millis())
-        .ok()
-        .and_then(TransactionTimeout::from_millis)
-        .ok_or_else(|| GraphSourceError("query has no remaining time".to_string()))?;
-    let parameters = query
-        .parameters
-        .into_iter()
-        .map(|(key, value)| (key, to_bolt(value)))
-        .collect::<std::collections::HashMap<_, _>>();
-    driver
-        .execute_query(query.text)
-        .with_database(database)
-        .with_routing_control(RoutingControl::Read)
-        .with_parameters(parameters)
-        .with_transaction_timeout(timeout)
-        .run()
-        .map_err(|error| GraphSourceError(format!("Neo4j query failed: {error}")))?
-        .records
-        .into_iter()
-        .map(|record| {
-            record
-                .entries()
-                .map(|(key, value)| Ok((key.to_string(), from_bolt(value)?)))
-                .collect::<Result<BTreeMap<_, _>, GraphSourceError>>()
-        })
-        .collect()
+    let mut cypher = neo4rs::query(query.text);
+    for (key, value) in query.parameters {
+        cypher = cypher.param(&key, to_bolt(value));
+    }
+    let mut stream = graph
+        .execute(cypher)
+        .await
+        .map_err(|error| GraphSourceError(format!("Neo4j query failed: {error}")))?;
+    let mut rows = Vec::new();
+    while let Some(row) = stream
+        .next()
+        .await
+        .map_err(|error| GraphSourceError(format!("Neo4j result failed: {error}")))?
+    {
+        let values = row
+            .to_strict::<BTreeMap<String, BoltType>>()
+            .map_err(|error| GraphSourceError(format!("Neo4j returned an invalid row: {error}")))?
+            .into_iter()
+            .map(|(key, value)| Ok((key, from_bolt(value)?)))
+            .collect::<Result<BTreeMap<_, _>, GraphSourceError>>()?;
+        rows.push(values);
+    }
+    Ok(rows)
 }
 
-fn to_bolt(value: GraphValue) -> ValueSend {
+fn to_bolt(value: GraphValue) -> BoltType {
     match value {
-        GraphValue::Null => ValueSend::Null,
-        GraphValue::Integer(value) => ValueSend::Integer(value),
-        GraphValue::String(value) => ValueSend::String(value),
-        GraphValue::List(values) => ValueSend::List(values.into_iter().map(to_bolt).collect()),
+        GraphValue::Null => BoltType::Null(BoltNull),
+        GraphValue::Integer(value) => BoltType::Integer(value.into()),
+        GraphValue::String(value) => BoltType::String(value.into()),
+        GraphValue::List(values) => BoltType::List(BoltList::from(
+            values.into_iter().map(to_bolt).collect::<Vec<_>>(),
+        )),
     }
 }
 
-fn from_bolt(value: &ValueReceive) -> Result<GraphValue, GraphSourceError> {
+fn from_bolt(value: BoltType) -> Result<GraphValue, GraphSourceError> {
     match value {
-        ValueReceive::Null => Ok(GraphValue::Null),
-        ValueReceive::Integer(value) => Ok(GraphValue::Integer(*value)),
-        ValueReceive::String(value) => Ok(GraphValue::String(value.clone())),
-        ValueReceive::List(values) => values
-            .iter()
+        BoltType::Null(_) => Ok(GraphValue::Null),
+        BoltType::Integer(value) => Ok(GraphValue::Integer(value.value)),
+        BoltType::String(value) => Ok(GraphValue::String(value.value)),
+        BoltType::List(values) => values
+            .value
+            .into_iter()
             .map(from_bolt)
             .collect::<Result<Vec<_>, _>>()
             .map(GraphValue::List),

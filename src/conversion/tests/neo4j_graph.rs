@@ -3,8 +3,11 @@ use crate::conversion::runtime_map::{
     AcquisitionAttempt, AcquisitionClock, AcquisitionStage, AttemptObserver,
 };
 use std::cell::RefCell;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
 
 type Row = std::collections::BTreeMap<String, GraphValue>;
@@ -311,23 +314,112 @@ fn a_blocked_transport_receives_the_attempt_remainder_and_times_out_after_return
     );
 }
 
-#[test]
-fn caller_returns_at_its_deadline_while_a_blocked_driver_worker_cannot_publish_later() {
-    let (result_sender, result_receiver) = mpsc::sync_channel(1);
-    let (release_sender, release_receiver) = mpsc::sync_channel(1);
-    let worker = std::thread::spawn(move || {
-        release_receiver
-            .recv()
-            .expect("test releases the blocked worker");
-        let _ = result_sender.send(Ok(()));
-    });
+fn receive_bolt_message(socket: &mut TcpStream) -> Vec<u8> {
+    let mut result = Vec::new();
+    loop {
+        let mut length = [0_u8; 2];
+        socket.read_exact(&mut length).unwrap();
+        let length = usize::from(u16::from_be_bytes(length));
+        if length == 0 {
+            return result;
+        }
+        let start = result.len();
+        result.resize(start + length, 0);
+        socket.read_exact(&mut result[start..]).unwrap();
+    }
+}
 
-    assert!(matches!(
-        receive_before_deadline(result_receiver, Duration::ZERO),
-        Err(GraphSourceError(message)) if message == "Neo4j query exceeded the acquisition deadline"
-    ));
-    release_sender.send(()).expect("worker is still waiting");
-    worker.join().expect("released worker exits normally");
+fn send_bolt_success(socket: &mut TcpStream) {
+    let mut success = vec![0xb1, 0x70, 0xa1, 0x86];
+    success.extend_from_slice(b"server");
+    success.push(0x8b);
+    success.extend_from_slice(b"Neo4j/4.4.0");
+    socket
+        .write_all(&(success.len() as u16).to_be_bytes())
+        .unwrap();
+    socket.write_all(&success).unwrap();
+    socket.write_all(&[0, 0]).unwrap();
+}
+
+#[test]
+fn timed_out_bolt_queries_close_the_socket_and_leave_no_blocked_worker() {
+    for _ in 0..3 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let uri = format!("bolt://{}", listener.local_addr().unwrap());
+        let (blocked_sender, blocked_receiver) = mpsc::sync_channel(1);
+        let (inspect_sender, inspect_receiver) = mpsc::sync_channel(1);
+        let peer = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut handshake = [0_u8; 20];
+            socket.read_exact(&mut handshake).unwrap();
+            socket.write_all(&[0, 0, 1, 4]).unwrap();
+            let hello = receive_bolt_message(&mut socket);
+            assert_eq!(hello.get(1), Some(&0x01));
+            send_bolt_success(&mut socket);
+            let request = receive_bolt_message(&mut socket);
+            assert!(matches!(request.get(1), Some(0x10) | Some(0x11)));
+            blocked_sender.send(()).unwrap();
+            inspect_receiver.recv().unwrap();
+
+            socket
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .unwrap();
+            let mut buffer = [0_u8; 256];
+            loop {
+                match socket.read(&mut buffer) {
+                    Ok(0) => return true,
+                    Ok(_) => continue,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        return false;
+                    }
+                    Err(_) => return true,
+                }
+            }
+        });
+        let attempt = AcquisitionAttempt::new(
+            Duration::from_secs(1),
+            Arc::new(crate::conversion::runtime_map::SystemClock::new()),
+            Arc::new(NoopObserver),
+        );
+        let executor = BoltExecutor::connect(
+            &Neo4jConfig {
+                uri,
+                username: "probe".to_string(),
+                password: "probe".to_string(),
+                database: "neo4j".to_string(),
+                page_size: 1,
+                connection_timeout: Duration::from_millis(50),
+            },
+            &attempt,
+        )
+        .unwrap();
+        let started = Instant::now();
+        assert!(matches!(
+            executor.execute(BoundQuery {
+                text: "RETURN 1 AS count",
+                parameters: std::collections::BTreeMap::new(),
+                timeout: Duration::from_millis(50),
+            }),
+            Err(GraphSourceError(message))
+                if message == "Neo4j query exceeded the acquisition deadline"
+        ));
+        assert!(started.elapsed() < Duration::from_millis(500));
+        blocked_receiver.recv().unwrap();
+        drop(executor);
+        inspect_sender.send(()).unwrap();
+        assert!(
+            peer.join().expect("the fake Bolt peer must finish"),
+            "timed-out Bolt work kept its socket open"
+        );
+    }
 }
 
 #[test]
