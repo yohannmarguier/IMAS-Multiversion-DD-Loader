@@ -161,8 +161,7 @@ static inline int is_loss_log_name(const char *name) {
            && strcmp(name + length - 4, ".txt") == 0;
 }
 
-static inline void clear_loss_log_directory(void) {
-    const char *directory = loss_log_directory();
+static inline void clear_loss_log_directory_in(const char *directory) {
     (void)mkdir(directory, 0700);
     DIR *dir = opendir(directory);
     CHECK(dir != NULL);
@@ -175,6 +174,10 @@ static inline void clear_loss_log_directory(void) {
         }
     }
     CHECK(closedir(dir) == 0);
+}
+
+static inline void clear_loss_log_directory(void) {
+    clear_loss_log_directory_in(loss_log_directory());
 }
 
 static inline char *single_loss_log_path_or_null_in(const char *directory) {
@@ -200,8 +203,8 @@ static inline char *single_loss_log_path_or_null(void) {
     return single_loss_log_path_or_null_in(loss_log_directory());
 }
 
-static inline char *read_loss_log(void) {
-    char *path = single_loss_log_path_or_null();
+static inline char *read_loss_log_in(const char *directory) {
+    char *path = single_loss_log_path_or_null_in(directory);
     CHECK(path != NULL);
     FILE *file = fopen(path, "rb");
     CHECK(file != NULL);
@@ -217,6 +220,8 @@ static inline char *read_loss_log(void) {
     free(path);
     return contents;
 }
+
+static inline char *read_loss_log(void) { return read_loss_log_in(loss_log_directory()); }
 
 /* The loss log a caller drains through the shim's four owned exports
  * (ADR 0012). These four helpers were copied into five suites — `loss_count`

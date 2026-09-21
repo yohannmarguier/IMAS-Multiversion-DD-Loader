@@ -20,6 +20,7 @@ env:
   # this project deploys against rather than whatever is newest.
   RUST_VERSION: 1.88.0
   CARGO_C_VERSION: 0.10.15
+  CARGO_LLVM_COV_VERSION: 0.9.1
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -73,6 +74,28 @@ jobs:
 
       - name: Test production C ABI matrix
         run: ctest --test-dir build -L live-graph --output-on-failure --no-tests=error
+
+  rust-line-coverage:
+    # This is separate from the Debug/Release CMake matrix: it measures Rust
+    # decisions once, while those jobs retain ABI and packaging coverage.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-toolchain
+      - name: Install the pinned coverage tool
+        run: |
+          rustup component add llvm-tools-preview --toolchain "$RUST_VERSION"
+          cargo install cargo-llvm-cov --version "$CARGO_LLVM_COV_VERSION" --locked
+      - name: Enforce scoped Rust line coverage
+        run: bash scripts/audit-rust-line-coverage.sh
+      # A failed threshold is exactly when the report is useful.
+      - name: Upload scoped line-coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-line-coverage-lcov
+          path: target/rust-line-coverage.lcov
+          if-no-files-found: warn
 
   fast:
     runs-on: ubuntu-latest

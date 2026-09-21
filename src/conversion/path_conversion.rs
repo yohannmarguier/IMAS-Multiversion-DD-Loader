@@ -750,11 +750,11 @@ pub(crate) fn narrow_write_path(
         return WritePath::Forward;
     }
     let caller = caller_dd_path(record, raw);
-    // The primary is the one stored slot a write may change, so it is also the
-    // candidate the role-specific checks judge. A plan that declares none
-    // still runs every resolution-level check first.
+    // Only a plan needs a primary picked out of several declared candidates:
+    // the precedence-1 one is the single stored slot a write may change. Every
+    // other shape names its own subject, and a plan declaring no precedence-1
+    // source still runs every resolution-level check first.
     let primary = match &resolved {
-        Resolved::Single(candidate) => Some(candidate),
         Resolved::Plan(candidates) => candidates
             .iter()
             .find(|candidate| candidate.precedence == Some(1)),
@@ -823,6 +823,8 @@ fn write_subject<'a>(
             requested_precedence: *requested_precedence,
             shape: CheckShape::SharedRefusal(reason),
         },
+        // A single candidate is its own write primary, so it needs nothing
+        // chosen for it the way a plan's candidates do.
         Resolved::Single(candidate) => CheckSubject {
             dd_path: &candidate.dd_path,
             requested_precedence: candidate.requested_precedence,
@@ -839,9 +841,9 @@ fn write_subject<'a>(
     Some(subject)
 }
 
-/// The refusal a shape naming no stored source earns. Reached only if a future
-/// shape escapes [`WRITE_CHECKS`]: reporting the list's own no-stored-slot
-/// verdict refuses safely rather than writing a path no check has judged.
+/// The refusal a shape naming no stored source earns. Today `Resolved::Refusal` cannot reach it:
+/// [`write_subject`] maps it to `CheckShape::SharedRefusal`, then [`WRITE_CHECKS`] returns its reason.
+/// A new resolution shape or changed write check must revisit this routing before relying on the fallback.
 fn write_shape_refusal(resolved: &Resolved, caller: String) -> WritePath {
     let (reason, dd_path) = match resolved {
         Resolved::Refusal {
@@ -954,8 +956,8 @@ fn delete_subjects<'a>(resolved: &'a Resolved, caller: &'a str) -> Vec<CheckSubj
     }
 }
 
-/// The refusal a shape naming no stored source earns, for the same reason
-/// [`write_shape_refusal`] exists.
+/// The refusal a shape naming no stored source earns, for the same reason [`write_shape_refusal`] exists.
+/// Today `Resolved::Refusal` cannot reach it: [`delete_subjects`] maps it to `CheckShape::SharedRefusal`, then [`DELETE_CHECKS`] returns its reason; a new resolution shape or changed delete check must revisit this routing.
 fn delete_shape_refusal(resolved: &Resolved, caller: String) -> DeletePath {
     let (reason, dd_path) = match resolved {
         Resolved::Refusal {
@@ -1134,6 +1136,85 @@ mod tests {
         }
     }
 
+    #[test]
+    fn context_narrowing_accepts_only_transformation_free_resolved_paths() {
+        const ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <default rel="identical"/>
+              <transforms>
+                <cocos from="11" to="17"><flip path="flipped"/></cocos>
+              </transforms>
+            </ids-map>
+        "#;
+        let map = ConversionMap::load(ARTIFACT).expect("fixture artifact must load");
+        let transformation = match map
+            .resolve("flipped", Direction::Forward)
+            .expect("the identity default resolves the transformed path")
+            .outcome
+        {
+            Outcome::Path {
+                value_transformation,
+                ..
+            } => value_transformation,
+            other => panic!("expected a concrete transformed path, got {other:?}"),
+        };
+        let candidate = |path: &str, value_transformation| Candidate {
+            path: CString::new(path).expect("fixture paths contain no NUL"),
+            stored_dd_path: path.to_string(),
+            dd_path: path.to_string(),
+            fidelity: Fidelity::Exact,
+            value_transformation,
+            precedence: Some(1),
+            requested_precedence: Some(1),
+        };
+
+        match narrow_context_path(Resolved::Single(candidate(
+            "stored/plain",
+            ValueTransformation::None,
+        ))) {
+            ContextPathResolution::Translated {
+                path,
+                stored_dd_path,
+            } => {
+                assert_eq!(
+                    path.to_str().expect("fixture paths are UTF-8"),
+                    "stored/plain"
+                );
+                assert_eq!(stored_dd_path, "stored/plain");
+            }
+            _ => panic!("a transformation-free single path must open a context"),
+        }
+        assert!(matches!(
+            narrow_context_path(Resolved::Single(candidate("stored/flipped", transformation.clone()))),
+            ContextPathResolution::Refusal(ref reason)
+                if reason == "this path needs a value transformation, which only a data read can apply"
+        ));
+
+        match narrow_context_path(Resolved::Plan(vec![
+            candidate("stored/first", ValueTransformation::None),
+            candidate("stored/second", ValueTransformation::None),
+        ])) {
+            ContextPathResolution::Candidates(candidates) => {
+                let paths: Vec<_> = candidates
+                    .iter()
+                    .map(|candidate| candidate.path.to_str().expect("fixture paths are UTF-8"))
+                    .collect();
+                assert_eq!(paths, ["stored/first", "stored/second"]);
+            }
+            _ => panic!("a transformation-free plan must retain its candidate order"),
+        }
+        assert!(matches!(
+            narrow_context_path(Resolved::Plan(vec![
+                candidate("stored/first", ValueTransformation::None),
+                candidate("stored/flipped", transformation),
+            ])),
+            ContextPathResolution::Refusal(ref reason)
+                if reason == "this path needs a value transformation, which only a data read can apply"
+        ));
+    }
+
     /// Only the one stored slot a write may change carries a transformation
     /// pointing at stored data. The others are named in the loss log and never
     /// written, so inverting them would be work whose only reachable effect is
@@ -1191,6 +1272,152 @@ mod tests {
             Some(TransformationDirection::ToHli),
             "a candidate that is never written keeps the transformation the map declared"
         );
+    }
+
+    #[test]
+    fn a_single_equilibrium_write_candidate_resolves_to_its_stored_spelling() {
+        const ARTIFACT: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
+        let record = reverse_record(ARTIFACT);
+        let field =
+            CString::new("time_slice/global_quantities/beta_tor_norm").expect("no interior NUL");
+
+        match narrow_write_path(
+            &record,
+            field.as_ptr(),
+            ArgumentRole::Field,
+            resolve(&record, field.as_ptr()),
+        ) {
+            WritePath::Translated { path, .. } => assert_eq!(
+                path.to_str().expect("fixture paths are UTF-8"),
+                "time_slice/global_quantities/beta_normal"
+            ),
+            WritePath::Forward | WritePath::Candidates(_) | WritePath::Refusal { .. } => {
+                panic!("one safe equilibrium source must narrow to its stored spelling")
+            }
+        }
+    }
+
+    #[test]
+    fn a_single_candidate_preserves_its_noninvertible_write_refusal() {
+        const ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <default rel="identical"/>
+              <transforms>
+                <cocos from="11" to="17"><flip path="flipped"/></cocos>
+              </transforms>
+            </ids-map>
+        "#;
+        let record = record(ARTIFACT, "");
+        let map_transformation = match record
+            .map
+            .resolve("flipped", Direction::Forward)
+            .expect("the fixture resolves its transformed path")
+            .outcome
+        {
+            Outcome::Path {
+                value_transformation: ValueTransformation::SignFlip { from_cocos, .. },
+                ..
+            } => from_cocos,
+            other => panic!("expected a sign flip from the fixture, got {other:?}"),
+        };
+        let field = CString::new("flipped").expect("no interior NUL");
+        // Supported artifacts normalize this malformed same-COCOS flip to
+        // `None`, so resolving an artifact cannot reach the defensive
+        // refusal. Constructing the already-resolved candidate keeps the
+        // regression at the narrowing seam where that refusal is promised.
+        let candidate = Candidate {
+            path: CString::new("stored/flipped").expect("no interior NUL"),
+            stored_dd_path: "stored/flipped".to_string(),
+            dd_path: "flipped".to_string(),
+            fidelity: Fidelity::Exact,
+            value_transformation: ValueTransformation::SignFlip {
+                from_cocos: map_transformation.clone(),
+                to_cocos: map_transformation,
+                direction: TransformationDirection::ToHli,
+            },
+            precedence: None,
+            requested_precedence: None,
+        };
+
+        assert!(matches!(
+            narrow_write_path(
+                &record,
+                field.as_ptr(),
+                ArgumentRole::Field,
+                Resolved::Single(candidate),
+            ),
+            WritePath::Refusal { ref reason, ref dd_path }
+                if reason == "this path needs a value transformation that cannot be inverted for a write"
+                    && dd_path == "flipped"
+        ));
+    }
+
+    #[test]
+    fn a_write_plan_without_a_primary_source_refuses_before_it_can_name_candidates() {
+        const ARTIFACT: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
+        let record = reverse_record(ARTIFACT);
+        let field = CString::new("hli/folded").expect("no interior NUL");
+        let secondary = Candidate {
+            path: CString::new("stored/secondary").expect("no interior NUL"),
+            stored_dd_path: "stored/secondary".to_string(),
+            dd_path: "hli/folded".to_string(),
+            fidelity: Fidelity::Exact,
+            value_transformation: ValueTransformation::None,
+            precedence: Some(2),
+            requested_precedence: Some(1),
+        };
+
+        assert!(matches!(
+            narrow_write_path(
+                &record,
+                field.as_ptr(),
+                ArgumentRole::Field,
+                Resolved::Plan(vec![secondary]),
+            ),
+            WritePath::Refusal { ref reason, ref dd_path }
+                if reason == "this candidate plan has no precedence-1 source for a write"
+                    && dd_path == "hli/folded"
+        ));
+    }
+
+    #[test]
+    fn a_relative_write_plan_keeps_each_candidates_full_stored_metadata() {
+        const ARTIFACT: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
+        let mut record = reverse_record(ARTIFACT);
+        record.resolved_path = "time_slice/profiles_2d".to_string();
+        record.stored_path = "time_slice/profiles_2d".to_string();
+        let field = CString::new("b_field_phi").expect("no interior NUL");
+
+        match narrow_write_path(
+            &record,
+            field.as_ptr(),
+            ArgumentRole::Field,
+            resolve(&record, field.as_ptr()),
+        ) {
+            WritePath::Candidates(candidates) => {
+                let metadata: Vec<_> = candidates
+                    .iter()
+                    .map(|candidate| {
+                        (
+                            candidate.path.to_str().expect("fixture paths are UTF-8"),
+                            candidate.stored_dd_path.as_str(),
+                            candidate.precedence,
+                        )
+                    })
+                    .collect();
+                assert_eq!(
+                    metadata,
+                    [
+                        ("b_field_phi", "time_slice/profiles_2d/b_field_phi", 1,),
+                        ("b_field_tor", "time_slice/profiles_2d/b_field_tor", 2,),
+                        ("b_tor", "time_slice/profiles_2d/b_tor", 3),
+                    ]
+                );
+            }
+            _ => panic!("a merged relative field must preserve its write candidate plan"),
+        }
     }
 
     /// User story 47: "As an HLI reading through a known version mismatch, I
@@ -1975,5 +2202,203 @@ mod tests {
             ),
             _ => panic!("neither candidate lies beneath this context's fixed anchor"),
         }
+    }
+
+    #[test]
+    fn an_absolute_read_under_a_fixed_merged_anchor_keeps_every_candidate() {
+        const ARTIFACT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="fold-anchor" rel="merged" right="group_a" subtree="yes">
+                  <from left="group_a" precedence="1"/>
+                  <from left="group_b" precedence="2"/>
+                  <fidelity forward="lossy" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        let mut child = reverse_record(ARTIFACT);
+        child.resolved_path = "group_a".to_string();
+        child.stored_path = "group_b".to_string();
+        let leaf = CString::new("/group_a/leaf").expect("no interior NUL");
+
+        match resolve(&child, leaf.as_ptr()) {
+            Resolved::Plan(candidates) => {
+                let paths: Vec<_> = candidates
+                    .iter()
+                    .map(|candidate| candidate.path.to_str().expect("fixture paths are UTF-8"))
+                    .collect();
+                let stored: Vec<_> = candidates
+                    .iter()
+                    .map(|candidate| candidate.stored_dd_path.as_str())
+                    .collect();
+                assert_eq!(paths, ["/group_a/leaf", "/group_b/leaf"]);
+                assert_eq!(stored, ["group_a/leaf", "group_b/leaf"]);
+            }
+            _ => panic!("an absolute argument ignores a child's fixed stored anchor"),
+        }
+    }
+
+    #[test]
+    fn equilibrium_candidate_reads_preserve_declared_paths_and_fidelity() {
+        const ARTIFACT: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
+        let merged_record = reverse_record(ARTIFACT);
+        let merged = CString::new("time_slice/profiles_2d/b_field_phi").expect("no interior NUL");
+        let split_record = record(ARTIFACT, "");
+        let split = CString::new("time_slice/global_quantities/psi_axis").expect("no interior NUL");
+
+        for (record, raw, expected) in [
+            (
+                &merged_record,
+                &merged,
+                vec![
+                    "time_slice/profiles_2d/b_field_phi",
+                    "time_slice/profiles_2d/b_field_tor",
+                    "time_slice/profiles_2d/b_tor",
+                ],
+            ),
+            (
+                &split_record,
+                &split,
+                vec![
+                    "time_slice/global_quantities/psi_axis",
+                    "time_slice/global_quantities/psi_magnetic_axis",
+                ],
+            ),
+        ] {
+            match narrow_read_path(resolve(record, raw.as_ptr())) {
+                ReadPath::Translated(paths) => {
+                    let actual: Vec<_> = paths
+                        .paths
+                        .iter()
+                        .map(|path| path.path.to_str().expect("fixture paths are UTF-8"))
+                        .collect();
+                    assert_eq!(actual, expected);
+                    assert!(
+                        paths
+                            .paths
+                            .iter()
+                            .all(|path| path.fidelity == Fidelity::Exact)
+                    );
+                }
+                _ => panic!("the approved artifact supplies an ordered candidate read plan"),
+            }
+        }
+    }
+
+    #[test]
+    fn merged_and_split_lossy_reads_are_potentially_lossy() {
+        const MERGED: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="fold" rel="merged" right="stored">
+                  <from left="hli" precedence="1"/>
+                  <from left="legacy" precedence="2"/>
+                  <fidelity forward="lossy" reverse="exact"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+        const SPLIT: &str = r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="3.39.0" cocos="11"/>
+              <side id="right" dd="4.1.1" cocos="17"/>
+              <rules>
+                <rule id="split" rel="split" left="stored">
+                  <from right="hli" precedence="1"/>
+                  <from right="legacy" precedence="2"/>
+                  <fidelity forward="exact" reverse="lossy"/>
+                </rule>
+              </rules>
+            </ids-map>
+        "#;
+
+        for (record, raw) in [(record(MERGED, ""), "hli"), (reverse_record(SPLIT), "hli")] {
+            let raw = CString::new(raw).expect("fixture paths contain no NUL");
+            match narrow_read_path(resolve(&record, raw.as_ptr())) {
+                ReadPath::Translated(paths) => assert!(
+                    paths
+                        .paths
+                        .iter()
+                        .all(|path| path.fidelity == Fidelity::PotentiallyLossy),
+                    "a lossy merged or split resolution must retain an unverified loss verdict"
+                ),
+                _ => panic!("a lossy merged or split rule must resolve to a candidate read plan"),
+            }
+        }
+    }
+
+    #[test]
+    fn equilibrium_write_and_delete_preserve_shape_refusals() {
+        const ARTIFACT: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
+        let record = reverse_record(ARTIFACT);
+        let retyped =
+            CString::new("grids_ggd/grid/space/coordinates_type").expect("no interior NUL");
+        let expected_reason = "this path's container changed shape and cannot be served";
+        assert!(matches!(
+            narrow_write_path(&record, retyped.as_ptr(), ArgumentRole::Field, resolve(&record, retyped.as_ptr())),
+            WritePath::Refusal { ref reason, ref dd_path }
+                if reason == expected_reason && dd_path == "grids_ggd/grid/space/coordinates_type"
+        ));
+        assert!(matches!(
+            narrow_delete_path(&record, retyped.as_ptr(), resolve(&record, retyped.as_ptr())),
+            DeletePath::Refusal { ref reason, ref dd_path }
+                if reason == expected_reason && dd_path == "grids_ggd/grid/space/coordinates_type"
+        ));
+    }
+
+    #[test]
+    fn equilibrium_delete_distinguishes_safe_leaves_structures_and_escaping_subtrees() {
+        const ARTIFACT: &str = include_str!("../../docs/3.39.0--4.1.1.xml");
+        const LEFT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-3.39.0.txt");
+        const RIGHT_LEAVES: &str = include_str!("../../docs/inventory/equilibrium-4.1.1.txt");
+        let mut record = reverse_record(ARTIFACT);
+        record.map = Arc::new(
+            ConversionMap::load_with_endpoint_inventories(
+                ARTIFACT,
+                EndpointInventory::complete_leaf_paths(LEFT_LEAVES),
+                EndpointInventory::complete_leaf_paths(RIGHT_LEAVES),
+            )
+            .expect("the approved artifact and endpoint inventories must load"),
+        );
+        let leaf =
+            CString::new("time_slice/global_quantities/beta_tor_norm").expect("no interior NUL");
+        let moved_leaf = CString::new("time_slice/boundary/gap/r").expect("no interior NUL");
+        let trivial_structure = CString::new("time_slice/constraints").expect("no interior NUL");
+        let escaping_structure = CString::new("time_slice/boundary").expect("no interior NUL");
+        assert!(
+            record
+                .map
+                .delete_target_is_leaf(record.direction_to_stored, "time_slice/boundary/gap/r"),
+            "the DD4 gap coordinate is a leaf, so delete safety must not treat it as a subtree"
+        );
+        assert!(
+            !record
+                .map
+                .delete_target_is_leaf(record.direction_to_stored, "time_slice/boundary/gap"),
+            "the DD4 gap container must still be subject to subtree safety"
+        );
+        for (raw, expected) in [
+            (&leaf, "time_slice/global_quantities/beta_normal"),
+            (&moved_leaf, "time_slice/boundary_separatrix/gap/r"),
+            (&trivial_structure, "time_slice/constraints"),
+        ] {
+            match narrow_delete_path(&record, raw.as_ptr(), resolve(&record, raw.as_ptr())) {
+                DeletePath::Translated(path) => {
+                    assert_eq!(path.to_str().expect("fixture paths are UTF-8"), expected)
+                }
+                _ => panic!("the approved artifact supplies a safe delete target"),
+            }
+        }
+        assert!(matches!(
+            narrow_delete_path(&record, escaping_structure.as_ptr(), resolve(&record, escaping_structure.as_ptr())),
+            DeletePath::Refusal { ref reason, ref dd_path }
+                if reason == "this subtree delete would leave data at a stored path outside the requested subtree"
+                    && dd_path == "time_slice/boundary"
+        ));
     }
 }

@@ -9,7 +9,11 @@ Current source ownership is `src/core/`, `src/conversion/`, `src/loss.rs`,
 `src/loss_file.rs`, `src/registry/`, and `src/version/`; C ABI adaptation lives
 under `src/interpose/`. `src/loss_file.rs` owns the append-only process loss-log
 file and its written-key set; it receives copied occurrence facts and never
-holds a registry lock during filesystem I/O.
+holds a registry lock during filesystem I/O. `src/artifact_validation.rs` owns
+the artifact coverage calculation and the ADR 0013 completeness proof, leaving
+`src/bin/validate_equilibrium_coverage.rs` a thin command-line and report
+adapter over it (issue #192); the user-facing command and its report shape are
+unchanged.
 
 The read, write and delete **loops** live in `src/conversion/seam_policy.rs`,
 not in the interposition layer: `run_read`, `run_write`, `run_delete`, the
@@ -169,13 +173,13 @@ and limitations".
   input to *which context the stamp is read through*, and nothing more. This is
   sound only while scope stays append-only, so a write-mode open inherits a
   mismatch and never creates one.
-- **Test-suite debt:** seven bare `52`-for-`DOUBLE_DATA` literals remain in
-  `tests/shim/nested_context_read_test.c` (six) and
-  `tests/shim/arraystruct_path_test.c` (one) although `tests/README.md` already
-  mandates the `IMAS_*_DATA` macros — the grep shape is a small integer in an
-  `al_read_data` datatype argument, e.g. `&data, 52,`. A half-finished migration
-  whose earlier passes each claimed to be complete; verify by grep before
-  claiming it again.
+- **The `IMAS_*_DATA` migration is finished** — no datatype ordinal is left in
+  `tests/`, commented or bare, and `tests/stub/recording_stub.c` names its own
+  `RECORDING_STUB_DOUBLE_DATA` since the stub-only profile has no `al_const.h`.
+  Earlier passes each claimed to be complete while ten bare literals and
+  thirty-seven commented ones survived, so verify by grep — a small integer in
+  an `al_read_data` datatype argument, e.g. `&data, 52,` — before claiming it
+  again.
 
 ### History
 
@@ -212,7 +216,23 @@ $ cmake --build build
 $ ctest --test-dir build --output-on-failure       # rust-unit + abi-smoke + tracer (stub and real IMAS-Core)
 $ cmake --install build --prefix /path/to/prefix
 $ cargo fmt && cargo clippy --all-targets          # lint, no CMake wrapper
+$ bash scripts/audit-rust-line-coverage.sh         # scoped line coverage, blocking in CI
+$ bash scripts/audit-rust-mutation.sh              # scoped mutation audit, manual workflow
 ```
+
+**The Rust test-quality audits (issue #189) sit outside the CMake graph.**
+`coverage/` holds the checked-in measurement scope
+(`rust-line-coverage-scope.json`), the mutation audit configuration and its
+disposition list, so two developers cannot score different files.
+`scripts/audit-rust-*.sh` run the audits; `scripts/check-rust-*.py` are the
+policy authorities that score them and own the floors. `tests/coverage/` holds
+their fixture-driven CTest checks (`rust-line-coverage-audit-fixtures`,
+`rust-mutation-audit-fixtures`) and `tests/cmake/check_rust_audit_workflows.cmake`
+asserts the workflows themselves cannot lose the gate. `docs/rust-line-coverage-audit.md`
+and `docs/rust-mutation-audit.md` carry scope, formulas, thresholds, commands
+and exclusion rules; `docs/mutation-audits/` keeps the per-slice baselines.
+Ordinary CI blocks on the line-coverage audit; the full mutation audit is
+`workflow_dispatch`-only.
 
 CI (`.github/workflows/ci.yml`) has a fast recording-stub job for fmt, clippy,
 both CMake configurations, install and downstream consumption, plus a full job

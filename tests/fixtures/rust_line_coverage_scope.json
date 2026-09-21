@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "tool": {"cargo_llvm_cov_version": "0.9.1", "minimum_rust_version": "1.88"},
+  "minimums": {"aggregate_percent": 90, "group_percent": 80},
+  "groups": [
+    {"name": "conversion", "sources": [{"path": "src/conversion.rs"}]},
+    {"name": "dd-version", "sources": [{"path": "src/version.rs"}]},
+    {"name": "context-registry", "sources": [{"path": "src/registry.rs"}]},
+    {"name": "loss", "sources": [{"path": "src/loss.rs"}]},
+    {"name": "artifact-validation", "sources": [{"path": "src/bin/validate.rs"}]},
+    {"name": "deterministic-runtime-binding-policy", "sources": [{"path": "src/core/policy.rs"}]}
+  ],
+  "exclusions": [
+    {"path": "src/interpose/read.rs", "reason": "raw-pointer result adaptation"}
+  ]
+}

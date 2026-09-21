@@ -329,6 +329,18 @@ fn typed_maps_preserve_unknown_endpoint_cocos_without_inventing_a_transform() {
     );
 }
 
+fn map_with(left_dd: &str, right_dd: &str, body: &str) -> String {
+    format!(
+        r#"
+            <ids-map ids="equilibrium" format-version="1">
+              <side id="left" dd="{left_dd}" cocos="11"/>
+              <side id="right" dd="{right_dd}" cocos="17"/>
+              {body}
+            </ids-map>
+        "#
+    )
+}
+
 #[test]
 fn rejects_malformed_xml() {
     let err = ConversionMap::load("<not-xml").unwrap_err();
@@ -427,6 +439,10 @@ fn rejects_renamed_rules_with_the_same_source_path() {
             pattern: "a".to_string(),
         }
     );
+    assert_eq!(
+        err.to_string(),
+        "duplicate exact source selector on the left side: `a`"
+    );
 }
 
 #[test]
@@ -472,6 +488,22 @@ fn rejects_invalid_cocos_convention() {
 }
 
 #[test]
+fn parser_accepts_nonoverlapping_glob_selectors() {
+    let xml = map_with(
+        "3.39.0",
+        "4.1.1",
+        r#"
+          <rules>
+            <rule id="first" rel="left_only" left="a/*/c" glob="yes"><fidelity forward="lossy" reverse="unmappable"/></rule>
+            <rule id="second" rel="left_only" left="d/b/*" glob="yes"><fidelity forward="lossy" reverse="unmappable"/></rule>
+          </rules>
+        "#,
+    );
+
+    ConversionMap::load(&xml).expect("nonoverlapping globs must not conflict");
+}
+
+#[test]
 fn rejects_invalid_artifact_dd_version() {
     let xml = r#"
             <ids-map ids="equilibrium" format-version="1">
@@ -481,6 +513,314 @@ fn rejects_invalid_artifact_dd_version() {
         "#;
     let err = ConversionMap::load(xml).unwrap_err();
     assert_eq!(err, LoadError::InvalidArtifactDdVersion("3.39".to_string()));
+}
+
+#[test]
+fn artifact_dd_versions_preserve_each_valid_released_display() {
+    for version in ["0.0.0", "3.0.0", "3.39.0", "10.20.30"] {
+        let xml = map_with(version, "4.1.1", "");
+        let map = ConversionMap::load(&xml).expect("released artifact DD version must load");
+        assert_eq!(map.left.dd.to_string(), version);
+    }
+}
+
+#[test]
+fn artifact_dd_versions_reject_each_invalid_component_shape_with_its_input() {
+    for version in [
+        "",
+        ".39.0",
+        "3..0",
+        "3.39.",
+        "three.39.0",
+        "3.39.x",
+        "03.39.0",
+        "3.039.0",
+        "3.39.00",
+        "3.39",
+        "3.39.0.1",
+        "3.39.0-dev",
+    ] {
+        let xml = map_with(version, "4.1.1", "");
+        let error = ConversionMap::load(&xml).expect_err("invalid artifact DD version must fail");
+        assert_eq!(
+            error,
+            LoadError::InvalidArtifactDdVersion(version.to_string())
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("invalid artifact DD version `{version}`")
+        );
+    }
+}
+
+#[test]
+fn every_rule_shape_reports_its_own_missing_or_forbidden_component() {
+    struct Case {
+        id: &'static str,
+        rel: &'static str,
+        attributes: &'static str,
+        children: &'static str,
+        reason: &'static str,
+    }
+
+    let cases = [
+        Case {
+            id: "renamed-without-left",
+            rel: "renamed",
+            attributes: "right=\"b\"",
+            children: "",
+            reason: "requires both `left` and `right`",
+        },
+        Case {
+            id: "renamed-without-right",
+            rel: "renamed",
+            attributes: "left=\"a\"",
+            children: "",
+            reason: "requires both `left` and `right`",
+        },
+        Case {
+            id: "renamed-with-from",
+            rel: "renamed",
+            attributes: "left=\"a\" right=\"b\"",
+            children: "<from left=\"a\" precedence=\"1\"/>",
+            reason: "must not carry <from> children",
+        },
+        Case {
+            id: "moved-without-left",
+            rel: "moved",
+            attributes: "right=\"b\"",
+            children: "",
+            reason: "requires both `left` and `right`",
+        },
+        Case {
+            id: "moved-without-right",
+            rel: "moved",
+            attributes: "left=\"a\"",
+            children: "",
+            reason: "requires both `left` and `right`",
+        },
+        Case {
+            id: "moved-with-from",
+            rel: "moved",
+            attributes: "left=\"a\" right=\"b\"",
+            children: "<from left=\"a\" precedence=\"1\"/>",
+            reason: "must not carry <from> children",
+        },
+        Case {
+            id: "retyped-without-left",
+            rel: "retyped",
+            attributes: "right=\"b\"",
+            children: "",
+            reason: "requires both `left` and `right`",
+        },
+        Case {
+            id: "retyped-without-right",
+            rel: "retyped",
+            attributes: "left=\"a\"",
+            children: "",
+            reason: "requires both `left` and `right`",
+        },
+        Case {
+            id: "retyped-with-from",
+            rel: "retyped",
+            attributes: "left=\"a\" right=\"b\"",
+            children: "<from left=\"a\" precedence=\"1\"/>",
+            reason: "must not carry <from> children",
+        },
+        Case {
+            id: "left-only-without-left",
+            rel: "left_only",
+            attributes: "",
+            children: "",
+            reason: "requires `left` only",
+        },
+        Case {
+            id: "left-only-with-right",
+            rel: "left_only",
+            attributes: "left=\"a\" right=\"b\"",
+            children: "",
+            reason: "requires `left` only",
+        },
+        Case {
+            id: "right-only-without-right",
+            rel: "right_only",
+            attributes: "",
+            children: "",
+            reason: "requires `right` only",
+        },
+        Case {
+            id: "right-only-with-left",
+            rel: "right_only",
+            attributes: "left=\"a\" right=\"b\"",
+            children: "",
+            reason: "requires `right` only",
+        },
+        Case {
+            id: "merged-without-right",
+            rel: "merged",
+            attributes: "",
+            children: "<from left=\"a\" precedence=\"1\"/>",
+            reason: "requires `right` only, plus left-side <from> entries",
+        },
+        Case {
+            id: "merged-with-left",
+            rel: "merged",
+            attributes: "left=\"a\" right=\"b\"",
+            children: "<from left=\"a\" precedence=\"1\"/>",
+            reason: "requires `right` only, plus left-side <from> entries",
+        },
+        Case {
+            id: "split-without-left",
+            rel: "split",
+            attributes: "",
+            children: "<from right=\"b\" precedence=\"1\"/>",
+            reason: "requires `left` only, plus right-side <from> entries",
+        },
+        Case {
+            id: "split-with-right",
+            rel: "split",
+            attributes: "left=\"a\" right=\"b\"",
+            children: "<from right=\"b\" precedence=\"1\"/>",
+            reason: "requires `left` only, plus right-side <from> entries",
+        },
+    ];
+
+    for case in cases {
+        let rule = format!(
+            r#"<rules><rule id="{}" rel="{}" {}>{}<fidelity forward="exact" reverse="exact"/></rule></rules>"#,
+            case.id, case.rel, case.attributes, case.children
+        );
+        let xml = map_with("3.39.0", "4.1.1", &rule);
+        assert_eq!(
+            ConversionMap::load(&xml).expect_err("invalid rule shape must fail"),
+            LoadError::InvalidRuleShape {
+                rule_id: case.id.to_string(),
+                reason: case.reason.to_string(),
+            },
+            "{} must identify its own rule-shape violation",
+            case.id,
+        );
+    }
+}
+
+#[test]
+fn transform_children_ignore_text_comments_and_unrelated_elements_without_hiding_relevant_entries()
+{
+    let xml = map_with(
+        "3.39.0",
+        "4.1.1",
+        r#"
+          <default rel="identical"/>
+          <transforms>
+            text that is not an XML element
+            <!-- neither is this comment -->
+            <ignored/>
+            <cocos from="11" to="17">
+              more text
+              <ignored/>
+              <!-- a supported flip follows -->
+              <flip path="time_slice/boundary/psi"/>
+            </cocos>
+          </transforms>
+        "#,
+    );
+    let map = ConversionMap::load(&xml).expect("relevant COCOS flip must load");
+    let explanation = map
+        .resolve("time_slice/boundary/psi", Direction::Forward)
+        .expect("defaulted flip path must resolve");
+    assert_eq!(
+        *value_transformation(&explanation),
+        ValueTransformation::SignFlip {
+            from_cocos: CocosConvention("17".to_string()),
+            to_cocos: CocosConvention("11".to_string()),
+            direction: TransformationDirection::ToHli,
+        }
+    );
+}
+
+#[test]
+fn redefine_requires_a_fidelity_child_not_merely_any_element() {
+    let without_fidelity = map_with(
+        "3.39.0",
+        "4.1.1",
+        r#"
+          <transforms>
+            <redefine glob="time_slice/boundary/*" left-units="m" right-units="cm">
+              text
+              <!-- irrelevant -->
+              <ignored/>
+            </redefine>
+          </transforms>
+        "#,
+    );
+    assert_eq!(
+        ConversionMap::load(&without_fidelity)
+            .expect_err("a non-fidelity child must not satisfy redefine"),
+        LoadError::MissingAttribute {
+            element: "redefine".to_string(),
+            attribute: "fidelity".to_string(),
+        }
+    );
+
+    let with_fidelity = map_with(
+        "3.39.0",
+        "4.1.1",
+        r#"
+          <default rel="identical"/>
+          <transforms>
+            <redefine glob="time_slice/boundary/*" left-units="m" right-units="cm">
+              <ignored/>
+              <fidelity forward="lossy" reverse="exact"/>
+            </redefine>
+          </transforms>
+        "#,
+    );
+    let map = ConversionMap::load(&with_fidelity).expect("relevant fidelity child must load");
+    let explanation = map
+        .resolve("time_slice/boundary/psi", Direction::Forward)
+        .expect("defaulted redefine path must resolve");
+    assert_eq!(explanation.fidelity, Fidelity::Lossy);
+    assert_eq!(
+        explanation.outcome,
+        Outcome::Refusal(RefusalReason::UnitRedefinition)
+    );
+}
+
+#[test]
+fn undocumented_metadata_is_ignored_without_changing_default_resolution() {
+    let xml = map_with(
+        "3.39.0",
+        "4.1.1",
+        r#"
+          <include href="not-present.xml"/>
+          <coverage scope="time_slice/boundary" forward="unmappable" reverse="lossy"/>
+          <unrecognised-metadata/>
+          <default rel="identical"/>
+        "#,
+    );
+    let map = ConversionMap::load(&xml).expect("ignored metadata must not be loaded or validated");
+    assert_eq!(
+        map.left
+            .cocos
+            .as_ref()
+            .expect("the fixture declares left-side COCOS")
+            .to_string(),
+        "11"
+    );
+    assert_eq!(
+        map.right
+            .cocos
+            .as_ref()
+            .expect("the fixture declares right-side COCOS")
+            .to_string(),
+        "17"
+    );
+    let explanation = map
+        .resolve("time_slice/boundary/type", Direction::Forward)
+        .expect("default identity must still resolve");
+    assert_eq!(explanation.match_kind, MatchKind::Default);
+    assert_eq!(explanation.fidelity, Fidelity::Exact);
+    assert_eq!(resolved_path(&explanation), "time_slice/boundary/type");
 }
 
 #[test]
@@ -1094,6 +1434,40 @@ fn a_read_transformation_inverts_to_the_stored_write_direction() {
             direction: TransformationDirection::ToStored,
         })
     );
+    assert_eq!(
+        read.inverse().and_then(|write| write.inverse()),
+        Some(read),
+        "both COCOS directions must return to the read transformation"
+    );
+}
+
+#[test]
+fn a_noop_transformation_stays_a_noop_when_inverted() {
+    assert_eq!(
+        ValueTransformation::None.inverse(),
+        Some(ValueTransformation::None)
+    );
+}
+
+#[test]
+fn a_sign_flip_between_the_same_cocos_convention_is_not_invertible() {
+    let convention = CocosConvention("11".to_string());
+
+    for direction in [
+        TransformationDirection::ToHli,
+        TransformationDirection::ToStored,
+    ] {
+        assert_eq!(
+            ValueTransformation::SignFlip {
+                from_cocos: convention.clone(),
+                to_cocos: convention.clone(),
+                direction,
+            }
+            .inverse(),
+            None,
+            "a same-convention flip must not become a write transformation"
+        );
+    }
 }
 
 #[test]
@@ -1338,6 +1712,10 @@ fn overlapping_glob_selectors_on_the_same_source_role_invalidate_the_map() {
             first: "a/*/c".to_string(),
             second: "a/b/*".to_string(),
         }
+    );
+    assert_eq!(
+        err.to_string(),
+        "overlapping glob source selectors on the left side: `a/*/c` and `a/b/*`"
     );
 }
 

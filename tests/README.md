@@ -34,9 +34,10 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 | `real_core/` | 6 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core, the checked-in equilibrium HDF5 fixture pair, and isolated graph-selected `pulse_schedule` and coexistence oracles. |
 | `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 4 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
 | `cmake/` | `cmake -P` checks of the build/CI configuration itself, each with a guard-the-guard companion that proves it rejects what it claims. |
+| `coverage/` | Compact shell fixtures for the local Rust decision-coverage and mutation audits. |
 | `scripts/` | Install/packaging shell checks. **CI-only — not in ctest.** |
 | `package/` | A downstream `find_package()` consumer project, used by `scripts/check-installed-package.sh`. |
-| `fixtures/` | A deliberately reduced conversion-map artifact — the negative fixture for the coverage-floor gate. |
+| `fixtures/` | The reduced conversion-map artifact for the coverage-floor gate, plus compact LCOV/scope and cargo-mutants report fixtures for the Rust audits. |
 
 `dd-graph-setup` is the exception to the `scripts/` row: it drives a clean
 temporary setup, load/start, query, stop and offline restart through local
@@ -98,7 +99,7 @@ refuse it, because the stub's recorder resets its integer fields on every call,
 so the probe's own rwmode is only readable while its open is the last plugin
 call made.
 
-### `read-path-*` — 45 · `shim/read_path_test.c`
+### `read-path-*` — 46 · `shim/read_path_test.c`
 
 `al_read_data`, the main conversion seam (issues #56 and #65, ADR 0014).
 
@@ -113,7 +114,9 @@ call made.
 - **Refusals before Core** — rank-changing retype, unit redefinition,
   unsupported sign-flip data types.
 - **Reentrancy** — a read arriving beneath an in-flight read is forwarded
-  untouched and does not re-apply a sign flip.
+  untouched and does not re-apply a sign flip; a callback-shaped interaction
+  also proves that consecutive nested calls preserve the outer conversion and
+  that a later top-level call converts again.
 - **Bypass** — matching, unknown, unstamped and conversion-disabled contexts.
 - **Loss log** — lossy `merged`/`moved` reads retained, log destroyed with its
   context, plus the ten safety refusals of the `imas_mvdd_context_loss_*` query
@@ -371,6 +374,29 @@ The ABI contract itself.
 read-outcome classification, registry behaviour, path joining, and the branches
 no C-ABI test can reach.
 
+### `rust-line-coverage-audit-fixtures`
+
+Runs `tests/coverage/check-rust-line-coverage-audit.sh`, the compact fixture
+suite for the local Rust decision-coverage audit. It proves that the checker
+adds covered and total lines across groups, does not average percentages, fails
+an aggregate pass with one below-floor group, refuses reports that omit or
+empty a required source measurement, and — against a throwaway source tree it
+builds itself — refuses a group range that stops short of its file's inline
+test module unless the remainder is a declared exclusion. It does not run the
+full audit: the
+ordinary CI job runs the checked-in command and uploads its LCOV report even
+when the threshold rejects it.
+
+### `rust-mutation-audit-fixtures`
+
+Runs `tests/coverage/check-rust-mutation-audit.sh`, the compact fixture suite
+for the local Rust mutation audit. It reuses the line audit's six-group scope,
+checks group and aggregate thresholds, rejects a timed-out mutant even when its
+numeric score clears the floor, excludes only a precisely documented equivalent
+or integration-only survivor, refuses a candidate mutant belonging to no group
+and no declared exclusion, and refuses incomplete cargo-mutants reports. It
+does not run cargo-mutants itself; the full audit remains a manual local command.
+
 ### `equilibrium-artifact-coverage-floor`
 
 Runs the `validate_equilibrium_coverage` binary **as a command**, not as an
@@ -382,7 +408,7 @@ completeness check, and requires rejection of two near-boundary fixtures
 generated inside the script (the approved artifact minus exactly one rule) so
 the gate cannot pass by matching a substring.
 
-### `ci-workflow`, `script-policy-versions` (+ their two guards)
+### `ci-workflow`, `rust-audit-workflows`, `script-policy-versions` (+ guards)
 
 Configuration-as-tested.
 
@@ -395,6 +421,11 @@ Configuration-as-tested.
   `IN_LIST` pass locally and fail only on CI.
 - Each has a `verify_*_guard` companion feeding it throwaway mutated fixtures,
   to prove it rejects them.
+- `check_rust_audit_workflows.cmake` proves the ordinary line gate and the
+  dispatch-only mutation workflow run their checked-in commands with pinned
+  tools, retain reports on failure, and preserve the exact floors and scope.
+  Its guard rejects a missing or decoy line command, threshold or scope drift,
+  and loss of the manual trigger.
 
 ### `scripts/` — CI only, not in ctest
 
@@ -411,11 +442,15 @@ scenario table, and register it in `cmake/tests/Shim.cmake`:
 
 ```cmake
 add_stub_test(<ctest-name> <executable> <scenario>
-    [HLI_DD_VERSION v] [STAMP_VERSION v] [ENV "KNOB=value"...])
+    [HLI_DD_VERSION v] [STAMP_VERSION v] [ENV "KNOB=value"...]
+    [UNSET_ENV KNOB...] [WORKING_DIRECTORY dir])
 ```
 
 That function owns the shared environment (`IMAS_CORE_LIBRARY`, the latched HLI
-version, the stub's stamp version). Do not copy a prologue: twelve copies of one
+version, the stub's stamp version), the variables a scenario needs *removed*
+(`UNSET_ENV`), and the directory it runs in (`WORKING_DIRECTORY`, created at
+configure time). Reach for those options rather than a bare
+`set_tests_properties`/`set_property` beside the call. Do not copy a prologue: twelve copies of one
 is where the shared harness came from, and one of those copies printed a literal
 `\n` in four suites' failure messages for months.
 

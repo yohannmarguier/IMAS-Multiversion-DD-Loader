@@ -33,7 +33,7 @@ static void check_reentrant_write_forwarded(int mismatched_ctx) {
                  REENTRANT_TIMEBASE) == 0);
     CHECK(pointer_from_stub("recording_stub_reentrant_data_seen_data") ==
           pointer_from_stub("recording_stub_reentrant_data_expected_data"));
-    CHECK(int_from_stub("recording_stub_reentrant_data_seen_datatype") == 52 /* DOUBLE_DATA */);
+    CHECK(int_from_stub("recording_stub_reentrant_data_seen_datatype") == IMAS_DOUBLE_DATA);
     CHECK(int_from_stub("recording_stub_reentrant_data_seen_dim") == 1);
     CHECK(pointer_from_stub("recording_stub_reentrant_data_seen_size") ==
           pointer_from_stub("recording_stub_reentrant_data_expected_size"));
@@ -47,7 +47,7 @@ static void scenario_write_data_reentry_forwards_across_the_plugin_family(void) 
                        mismatched_ctx);
     double payload = 1.0;
     int size[1] = {1};
-    CHECK(al_write_data(701, "outer/write", "", &payload, 52 /* DOUBLE_DATA */, 1, size).code ==
+    CHECK(al_write_data(701, "outer/write", "", &payload, IMAS_DOUBLE_DATA, 1, size).code ==
           0);
     check_reentrant_write_forwarded(mismatched_ctx);
     printf("reentry_guard_test write-data-reentry-forwards-across-the-plugin-family: "
@@ -60,7 +60,7 @@ static void scenario_plugin_write_data_reentry_forwards_across_the_ordinary_fami
                        mismatched_ctx);
     double payload = 1.0;
     int size[1] = {1};
-    CHECK(al_plugin_write_data(702, "outer/plugin_write", "", &payload, 52 /* DOUBLE_DATA */,
+    CHECK(al_plugin_write_data(702, "outer/plugin_write", "", &payload, IMAS_DOUBLE_DATA,
                                1, size)
               .code == 0);
     check_reentrant_write_forwarded(mismatched_ctx);

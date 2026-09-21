@@ -566,9 +566,10 @@ tests/hli/              focused installed-HLI production probes owned here
 tests/package/          installed-package consumer fixture
 tests/support/          shared C test harness
 tests/cmake/            CMake-script checks
+tests/coverage/         local Rust line-coverage and mutation-audit fixtures
 tests/scripts/          install/package checks plus the hermetic DD-graph setup lifecycle check
 tests/stub/             recording stub standing in for IMAS-Core
-tests/fixtures/         reduced conversion-map fixture for the coverage-floor test
+tests/fixtures/         conversion-map and Rust audit fixtures
 scripts/iter-env.sh     ITER cluster module loads
 scripts/dd-graph.sh     opt-in pinned DD-only graph selection and lifecycle
 config/dd-graph-release.env  immutable released DD-only graph selection
@@ -624,6 +625,15 @@ next to the equivalent `pkg-config` check.
 ## Tests
 
 - `rust-unit` — `cargo test` over the crate.
+- `rust-line-coverage-audit-fixtures` — exercises the local Rust
+  decision-coverage audit's checked-in scope and its aggregation, threshold,
+  missing-data and empty-data refusal cases. The maintainer command and
+  current below-floor baseline are in `docs/rust-line-coverage-audit.md`; it
+  is deliberately not a CI gate yet.
+- `rust-mutation-audit-fixtures` — exercises the local Rust mutation audit's
+  shared six-group scope, score thresholds, timeouts, exclusions and incomplete
+  run refusal. Its maintainer command and baseline report are in
+  `docs/rust-mutation-audit.md`; full mutation testing remains manual.
 - `ci-workflow` — guards the fast/full job split, unrestricted push trigger,
   shared pinned-toolchain setup, explicit test profiles, install checks, and
   `--no-tests=error` coverage gate; its rejection test proves comments or later

@@ -1,0 +1,39 @@
+name: Rust mutation audit
+
+# Full mutation testing is intentionally opt-in; ordinary CI owns the line gate.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_VERSION: 1.88.0
+  CARGO_C_VERSION: 0.10.15
+  CARGO_MUTANTS_VERSION: 27.1.0
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-mutation-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-toolchain
+      - name: Install the pinned mutation tool
+        run: cargo install cargo-mutants --version "$CARGO_MUTANTS_VERSION" --locked
+      # The wrapper selects the checked-in scope, rejects timeouts, and prints
+      # every survivor with its narrowly documented disposition.
+      - name: Run the full scoped mutation audit
+        run: bash scripts/audit-rust-mutation.sh
+      - name: Upload mutation report and survivor inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-mutation-audit
+          path: target/rust-mutation-audit.*/
+          if-no-files-found: warn

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "line_scope": "rust-line-coverage-scope.json",
+  "tool": {
+    "cargo_mutants_version": "27.1.0",
+    "minimum_rust_version": "1.88"
+  },
+  "minimums": {
+    "aggregate_percent": 85,
+    "group_percent": 75
+  }
+}

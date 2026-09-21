@@ -26,6 +26,23 @@ add_test(NAME ci-workflow-guard-rejects-misplaced-commands
         "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify_ci_workflow_guard.cmake")
 
+add_test(NAME rust-audit-workflows
+    COMMAND "${CMAKE_COMMAND}"
+        "-DCI_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
+        "-DMUTATION_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/rust-mutation-audit.yml"
+        "-DLINE_SCOPE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-line-coverage-scope.json"
+        "-DMUTATION_AUDIT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-mutation-audit.json"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_rust_audit_workflows.cmake")
+add_test(NAME rust-audit-workflow-guard
+    COMMAND "${CMAKE_COMMAND}"
+        "-DCI_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
+        "-DMUTATION_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/rust-mutation-audit.yml"
+        "-DLINE_SCOPE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-line-coverage-scope.json"
+        "-DMUTATION_AUDIT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-mutation-audit.json"
+        "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_rust_audit_workflows.cmake"
+        "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify_rust_audit_workflow_guard.cmake")
+
 # Scripts run with `cmake -P` inherit no policies, so each one must pin its
 # own version. CMake 4.x defaults those policies to NEW and CMake 3.x does
 # not, which once let an unpinned `IN_LIST` pass locally and fail only on
@@ -99,7 +116,8 @@ target_compile_definitions(recording_stub PRIVATE
 # which is why CMakeLists.txt requires CMake 3.22 -- below that the property is
 # ignored without warning and this guarantee disappears.
 function(add_stub_test name executable)
-    cmake_parse_arguments(PARSE_ARGV 2 ARG "" "HLI_DD_VERSION;STAMP_VERSION" "ENV")
+    cmake_parse_arguments(PARSE_ARGV 2 ARG ""
+        "HLI_DD_VERSION;STAMP_VERSION;WORKING_DIRECTORY" "ENV;UNSET_ENV")
 
     set(environment "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
     if(DEFINED ARG_HLI_DD_VERSION)
@@ -124,8 +142,19 @@ function(add_stub_test name executable)
         endif()
     endif()
     if(NOT DEFINED ARG_HLI_DD_VERSION)
+        list(APPEND ARG_UNSET_ENV IMAS_MVDD_HLI_DD_VERSION)
+    endif()
+    foreach(variable IN LISTS ARG_UNSET_ENV)
         set_property(TEST "${name}" APPEND PROPERTY ENVIRONMENT_MODIFICATION
-            "IMAS_MVDD_HLI_DD_VERSION=unset:")
+            "${variable}=unset:")
+    endforeach()
+    # A scenario that observes the shim's default, unconfigured destination
+    # needs a directory of its own; creating it here keeps every environment
+    # and placement decision inside this one function.
+    if(DEFINED ARG_WORKING_DIRECTORY)
+        file(MAKE_DIRECTORY "${ARG_WORKING_DIRECTORY}")
+        set_tests_properties("${name}" PROPERTIES
+            WORKING_DIRECTORY "${ARG_WORKING_DIRECTORY}")
     endif()
 endfunction()
 
@@ -226,6 +255,22 @@ endif()
 add_test(NAME rust-unit
     COMMAND "${CARGO_EXECUTABLE}" test ${CARGO_COMMON_ARGS})
 set_tests_properties(rust-unit PROPERTIES ENVIRONMENT "IMAS_MVDD_LOSS_LOG_DIR=")
+
+# The line-coverage gate itself lives in CI's `rust-line-coverage` job, which
+# runs the real audit. This fixture test protects the checker's scope, scoring
+# and refusal behavior without making ordinary CTest run a full coverage build.
+find_program(BASH_EXECUTABLE bash REQUIRED)
+add_test(NAME rust-line-coverage-audit-fixtures
+    COMMAND "${BASH_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/check-rust-line-coverage-audit.sh"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# Mutation testing remains an explicit local audit: the fixture test protects
+# its scope, scoring and refusal behavior without starting a costly run in CI.
+add_test(NAME rust-mutation-audit-fixtures
+    COMMAND "${BASH_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/check-rust-mutation-audit.sh"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # The artifact's autoconvert-equivalence floor is an external contract:
 # run the validation command itself, including its deliberately reduced
