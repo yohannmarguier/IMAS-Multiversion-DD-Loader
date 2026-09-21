@@ -305,6 +305,10 @@ struct AdvanceAtStage {
     stage: AcquisitionStage,
 }
 
+struct AdvanceAtPublicationCompletion {
+    clock: Arc<ManualClock>,
+}
+
 struct JoinObserver {
     joined: Mutex<bool>,
     wake: Condvar,
@@ -345,6 +349,16 @@ impl CoordinatorObserver for JoinObserver {
 impl AttemptObserver for AdvanceAtStage {
     fn entered(&self, stage: AcquisitionStage) {
         if stage == self.stage {
+            self.clock.advance(Duration::from_secs(5));
+        }
+    }
+}
+
+impl AttemptObserver for AdvanceAtPublicationCompletion {
+    fn entered(&self, _stage: AcquisitionStage) {}
+
+    fn completed(&self, stage: AcquisitionStage) {
+        if stage == AcquisitionStage::Publication {
             self.clock.advance(Duration::from_secs(5));
         }
     }
@@ -1011,6 +1025,61 @@ fn expiry_publishes_one_terminal_failure_to_the_leader_and_joiner() {
         ));
     }
     assert_eq!(source.loads.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn terminal_selection_rechecks_expiry_after_a_success_was_ready_to_publish() {
+    let clock = Arc::new(ManualClock::default());
+    let shared = SharedMapAttempt::new(AcquisitionAttempt::new(
+        Duration::from_secs(5),
+        clock.clone(),
+        Arc::new(NoopAttemptObserver),
+    ));
+    let map = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(complete_identity_scope()),
+    })
+    .acquire(&request())
+    .expect("the controlled map is ready for terminal publication");
+
+    shared
+        .attempt
+        .check(AcquisitionStage::Publication)
+        .expect("the leader's pre-publication check initially passes");
+    clock.advance(Duration::from_secs(5));
+    for result in [shared.publish(Ok(Arc::new(map))), shared.wait()] {
+        assert!(matches!(
+            result,
+            Err(AcquisitionFailure::TimedOut {
+                stage: AcquisitionStage::Publication,
+            })
+        ));
+    }
+}
+
+#[test]
+fn publication_completion_includes_cache_admission_and_rolls_back_expired_success() {
+    let source = ShutdownSource::new(complete_identity_scope());
+    let clock = Arc::new(ManualClock::default());
+    let coordinator = RuntimeMapCoordinator::with_clock_and_observer(
+        source.clone(),
+        Duration::from_secs(5),
+        clock.clone(),
+        Arc::new(AdvanceAtPublicationCompletion { clock }),
+    );
+
+    assert!(matches!(
+        coordinator.acquire(&request()),
+        Err(AcquisitionFailure::TimedOut {
+            stage: AcquisitionStage::Publication,
+        })
+    ));
+    assert_eq!(source.loads.load(Ordering::SeqCst), 1);
+    let state = coordinator
+        .state
+        .lock()
+        .expect("coordinator state mutex is not poisoned");
+    assert!(state.maps.is_empty());
+    assert!(state.attempts.is_empty());
 }
 
 #[test]

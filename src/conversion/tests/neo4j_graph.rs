@@ -525,6 +525,19 @@ impl StageTimeline {
 
 impl AttemptObserver for StageTimeline {
     fn entered(&self, stage: AcquisitionStage) {
+        if stage == AcquisitionStage::Publication {
+            return;
+        }
+        self.record(stage);
+    }
+
+    fn completed(&self, stage: AcquisitionStage) {
+        self.record(stage);
+    }
+}
+
+impl StageTimeline {
+    fn record(&self, stage: AcquisitionStage) {
         let started = self
             .started
             .lock()
