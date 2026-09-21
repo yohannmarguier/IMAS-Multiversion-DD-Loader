@@ -20,7 +20,8 @@ if test "$IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DIRECTION" = forward; then
 else
     stored=$second hli=$first
 fi
-printf '{"schema":1,"records":[{"pair":"%s","ids":"%s","stored_dd":"%s","hli_dd":"%s","direction":"%s","deadline_seconds":5,"outcome":"success","failure":null,"total_ns":1000000,"publication_completed_ns":1000000,"retained_map_estimate_bytes":1024,"resolver_lookup_ns_per_call":10,"cache_hit_ns_per_call":2,"retained_cache_hit_after_caller_release":true,"stages":[]}]}\n' \
+printf '{"schema":1,"records":[{"pair":"%s","ids":"%s","stored_dd":"%s","hli_dd":"%s","direction":"%s","deadline_seconds":%s,"outcome":"success","failure":null,"total_ns":1000000,"publication_completed_ns":1000000,"retained_map_estimate_bytes":1024,"resolver_lookup_ns_per_call":10,"cache_hit_ns_per_call":2,"retained_cache_hit_after_caller_release":true,"stages":[]}]}\n' \
     "$IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_PAIR" "$ids" "$stored" "$hli" \
     "$IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DIRECTION" \
+    "${IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DEADLINE_SECONDS:-5}" \
     > "$IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_OUTPUT"

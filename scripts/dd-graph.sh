@@ -29,12 +29,15 @@ Commands:
   update   select, acquire, verify, load, and start a replacement selection
   start    start the recorded task-owned service without network access
   stop     stop the recorded task-owned service without deleting it
-  query    verify the started service with a harmless Cypher query
+  query    verify service identity and required DD graph contents
   inspect  print the recorded immutable selection and service identity
   verify-service  verify the actual service ownership and selected identity
 
 `--selection FILE` is accepted by select and update. Without it, select uses
 config/dd-graph-release.env and setup reuses an existing recorded selection.
+`--container NAME` explicitly selects an alternate service for start, stop,
+query or verify-service; its complete ownership and selection identity must
+still match the configured graph home before the command acts.
 EOF
 }
 
@@ -272,9 +275,9 @@ ensure_no_running_task_service() {
 }
 
 start() {
-    local container
+    local container=${1:-}
     require_recorded_selection
-    container=$(container_name)
+    test -n "$container" || container=$(container_name)
     need_command docker
     docker container inspect "$container" >/dev/null 2>&1 \
         || die "no task-owned service for recorded selection; run setup instead"
@@ -284,9 +287,9 @@ start() {
 }
 
 stop() {
-    local container
+    local container=${1:-}
     require_recorded_selection
-    container=$(container_name)
+    test -n "$container" || container=$(container_name)
     need_command docker
     docker container inspect "$container" >/dev/null 2>&1 \
         || die "no task-owned service for recorded selection"
@@ -296,16 +299,17 @@ stop() {
 }
 
 query() {
-    local container result status
+    local container=${1:-} result status
     require_recorded_selection
     ensure_password
-    container=$(container_name)
+    test -n "$container" || container=$(container_name)
     need_command docker
     test -f "$smoke_query" || die "required DD graph smoke query is missing: $smoke_query"
     docker container inspect "$container" >/dev/null 2>&1 \
         || die "no task-owned service for recorded selection"
     validate_service_identity "$container"
-    result=$(docker exec "$container" cypher-shell --format plain --non-interactive -u neo4j \
+    result=$(docker exec "$container" cypher-shell --format plain --non-interactive \
+        -u "${IMAS_MVDD_GRAPH_USERNAME:-neo4j}" \
         -p "$IMAS_MVDD_GRAPH_PASSWORD" \
         "$(<"$smoke_query")")
     status=$(printf '%s\n' "$result" | tail -n 1 \
@@ -316,9 +320,9 @@ query() {
 }
 
 verify_service() {
-    local container
+    local container=${1:-}
     require_recorded_selection
-    container=$(container_name)
+    test -n "$container" || container=$(container_name)
     need_command docker
     docker container inspect "$container" >/dev/null 2>&1 \
         || die "no task-owned service for recorded selection"
@@ -352,12 +356,18 @@ inspect() {
 main() {
     local command=${1:-}
     local chosen_selection=
+    local chosen_container=
     shift || true
     while test $# -gt 0; do
         case "$1" in
             --selection)
                 test $# -ge 2 || die '--selection needs a file'
                 chosen_selection=$2
+                shift 2
+                ;;
+            --container)
+                test $# -ge 2 || die '--container needs a name'
+                chosen_container=$2
                 shift 2
                 ;;
             -h|--help)
@@ -370,9 +380,11 @@ main() {
 
     case "$command" in
         select)
+            test -z "$chosen_container" || die 'select does not accept --container'
             record_selection "${chosen_selection:-$default_selection}"
             ;;
         setup)
+            test -z "$chosen_container" || die 'setup does not accept --container'
             test -z "$chosen_selection" || die 'setup does not accept --selection; use select or update first'
             test -f "$selection_record" || die 'no recorded selection; run select first'
             require_recorded_selection
@@ -382,6 +394,7 @@ main() {
         update)
             local staged
             test -n "$chosen_selection" || die 'update requires --selection FILE'
+            test -z "$chosen_container" || die 'update does not accept --container'
             ensure_no_running_task_service
             staged=$(stage_selection "$chosen_selection")
             load_selection "$staged"
@@ -392,23 +405,24 @@ main() {
             ;;
         start)
             test -z "$chosen_selection" || die 'start does not accept --selection'
-            start
+            start "$chosen_container"
             ;;
         stop)
             test -z "$chosen_selection" || die 'stop does not accept --selection'
-            stop
+            stop "$chosen_container"
             ;;
         query)
             test -z "$chosen_selection" || die 'query does not accept --selection'
-            query
+            query "$chosen_container"
             ;;
         inspect)
             test -z "$chosen_selection" || die 'inspect does not accept --selection'
+            test -z "$chosen_container" || die 'inspect does not accept --container'
             inspect
             ;;
         verify-service)
             test -z "$chosen_selection" || die 'verify-service does not accept --selection'
-            verify_service
+            verify_service "$chosen_container"
             ;;
         ''|-h|--help)
             usage

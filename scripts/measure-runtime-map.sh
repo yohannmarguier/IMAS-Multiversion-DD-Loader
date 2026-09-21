@@ -7,7 +7,6 @@ set -euo pipefail
 readonly script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 readonly repo_root=$(cd "$script_dir/.." && pwd)
 readonly dd_graph="$script_dir/dd-graph.sh"
-readonly smoke_query="$repo_root/config/dd-graph-smoke.cypher"
 
 usage() {
     cat <<'EOF'
@@ -20,8 +19,8 @@ service restarted immediately before each directional observation; neither condi
 flushes OS or VM caches, and service startup is intentionally not timed.
 
 The selected task-owned graph must already exist and be running. Set
-IMAS_MVDD_GRAPH_HOME, IMAS_MVDD_GRAPH_PASSWORD, NEO4J_URI, NEO4J_USERNAME and
-NEO4J_PASSWORD as described in README.md. The command writes the two output
+IMAS_MVDD_GRAPH_HOME, NEO4J_URI, NEO4J_USERNAME and NEO4J_PASSWORD as
+described in README.md. The command writes the two output
 paths and temporary files beside the evidence output, as well as normal Cargo
 build artifacts. It stops and starts the selected graph service for the
 restarted-service observations.
@@ -29,8 +28,9 @@ restarted-service observations.
 When the digest-derived default container name is occupied by another task,
 set IMAS_MVDD_MEASUREMENT_CONTAINER to a separately provisioned container
 whose name begins `imas-mvdd-`, is labelled `imas.mvdd.dd-graph=true`, and
-has `imas.mvdd.dd-graph.home=$IMAS_MVDD_GRAPH_HOME`. The wrapper verifies
-those labels before controlling that explicit container for restart observations.
+has the complete owner, home, graph/archive/exporter and Neo4j identity of the
+recorded selection. The wrapper revalidates those labels before every lifecycle
+operation on that explicit container.
 EOF
 }
 
@@ -47,6 +47,12 @@ runs=5
 report=
 evidence=
 restart_settle_seconds=${IMAS_MVDD_GRAPH_RESTART_SETTLE_SECONDS:-30}
+measurement_deadline_seconds=${IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DEADLINE_SECONDS:-5}
+if test -n "${IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DEADLINE_SECONDS+x}"; then
+    diagnostic_deadline_override=true
+else
+    diagnostic_deadline_override=false
+fi
 while test $# -gt 0; do
     case "$1" in
         --output)
@@ -81,13 +87,17 @@ test "$runs" -gt 0 || die '--runs must be a positive integer'
 case "$restart_settle_seconds" in
     ''|*[!0-9]*) die 'IMAS_MVDD_GRAPH_RESTART_SETTLE_SECONDS must be a nonnegative integer' ;;
 esac
-for value in IMAS_MVDD_GRAPH_HOME IMAS_MVDD_GRAPH_PASSWORD NEO4J_URI NEO4J_USERNAME NEO4J_PASSWORD; do
+case "$measurement_deadline_seconds" in
+    ''|*[!0-9]*) die 'IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DEADLINE_SECONDS must be a positive integer' ;;
+esac
+test "$measurement_deadline_seconds" -gt 0 \
+    || die 'IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DEADLINE_SECONDS must be a positive integer'
+for value in IMAS_MVDD_GRAPH_HOME NEO4J_URI NEO4J_USERNAME NEO4J_PASSWORD; do
     test -n "${!value:-}" || die "set $value before measuring"
 done
 command -v cargo >/dev/null || die 'cargo is required'
 command -v jq >/dev/null || die 'jq is required'
 test -x "$dd_graph" || die "missing graph lifecycle script: $dd_graph"
-test -f "$smoke_query" || die "missing required DD graph smoke query: $smoke_query"
 
 recorded_identity=$("$dd_graph" inspect)
 identity_value() {
@@ -115,58 +125,45 @@ if test -n "${IMAS_MVDD_MEASUREMENT_CONTAINER:-}"; then
     esac
 fi
 command -v docker >/dev/null || die 'docker is required for graph measurement'
+if ! "$dd_graph" verify-service --container "$measurement_container" >/dev/null 2>&1; then
+    die "measurement container $measurement_container does not match the recorded graph selection"
+fi
 
-container_label() {
-    docker inspect --format "{{ index .Config.Labels \"$1\" }}" "$measurement_container"
-}
-
-verify_measurement_service() {
-    local label expected actual
-    for label_and_expected in \
-        'imas.mvdd.dd-graph=true' \
-        "imas.mvdd.dd-graph.owner=$expected_owner" \
-        "imas.mvdd.dd-graph.home=$IMAS_MVDD_GRAPH_HOME" \
-        "imas.mvdd.dd-graph.release=$graph_release" \
-        "imas.mvdd.dd-graph.manifest=$graph_manifest" \
-        "imas.mvdd.dd-graph.archive=$graph_archive" \
-        "imas.mvdd.dd-graph.commit=$graph_commit" \
-        "imas.mvdd.dd-graph.neo4j-version=$neo4j_version" \
-        "imas.mvdd.dd-graph.neo4j-digest=$neo4j_digest"; do
-        label=${label_and_expected%%=*}
-        expected=${label_and_expected#*=}
-        actual=$(container_label "$label")
-        test "$actual" = "$expected" \
-            || die "measurement container $measurement_container does not match the recorded graph selection: $label=${actual:-<missing>}, expected $expected"
-    done
-}
-verify_measurement_service
+published_bolt=$(docker port "$measurement_container" 7687/tcp)
+test -n "$published_bolt" \
+    || die "measurement container $measurement_container does not publish Bolt port 7687/tcp"
+case "$NEO4J_URI" in
+    bolt://*) configured_bolt=${NEO4J_URI#bolt://} ;;
+    *) die 'NEO4J_URI must be a bolt:// URI matching the measurement container' ;;
+esac
+case "$configured_bolt" in
+    *@*) die 'NEO4J_URI must not contain credentials; use NEO4J_USERNAME and NEO4J_PASSWORD' ;;
+esac
+printf '%s\n' "$published_bolt" | grep -Fqx "$configured_bolt" \
+    || die "NEO4J_URI $NEO4J_URI does not address its published Bolt endpoint ($published_bolt)"
 
 # Capture source provenance before creating measurement outputs or temporary
 # sample files, so the harness does not make its own checkout look dirty.
 code_commit=$(git -C "$repo_root" rev-parse HEAD)
-code_diff=$(git -C "$repo_root" diff HEAD --binary --no-ext-diff)
+code_diff_sha256=$(git -C "$repo_root" diff HEAD --binary --no-ext-diff \
+    | shasum -a 256 | awk '{print "sha256:" $1}')
 code_status=$(git -C "$repo_root" status --porcelain=v1)
 if test -n "$code_status"; then code_dirty=true; else code_dirty=false; fi
 rust_version=$(rustc --version)
 machine=$(uname -sm)
 
 graph_start() {
-    docker start "$measurement_container" >/dev/null
+    "$dd_graph" start --container "$measurement_container" >/dev/null
 }
 
 graph_stop() {
-    docker stop "$measurement_container" >/dev/null
+    "$dd_graph" stop --container "$measurement_container" >/dev/null
 }
 
 graph_query() {
-    local result status
-    result=$(docker exec "$measurement_container" cypher-shell --format plain --non-interactive \
-        -u "$NEO4J_USERNAME" -p "$NEO4J_PASSWORD" \
-        "$(<"$smoke_query")")
-    status=$(printf '%s\n' "$result" | tail -n 1 \
-        | awk -F', ' '{ gsub(/"|\r/, "", $1); print $1 }')
-    test "$status" = imas_mvdd_smoke_ok \
-        || die "measurement service failed required DD graph content smoke (status: ${status:-empty result})"
+    IMAS_MVDD_GRAPH_USERNAME="$NEO4J_USERNAME" \
+        IMAS_MVDD_GRAPH_PASSWORD="$NEO4J_PASSWORD" \
+        "$dd_graph" query --container "$measurement_container"
 }
 
 mkdir -p "$(dirname "$report")" "$(dirname "$evidence")"
@@ -235,12 +232,14 @@ jq -s \
     --arg graph_home "$IMAS_MVDD_GRAPH_HOME" \
     --arg neo4j_uri "$NEO4J_URI" \
     --arg code_commit "$code_commit" \
-    --arg code_diff "$code_diff" \
+    --arg code_diff_sha256 "$code_diff_sha256" \
     --arg code_status "$code_status" \
     --argjson code_dirty "$code_dirty" \
     --arg rust_version "$rust_version" \
     --arg machine "$machine" \
     --argjson restart_settle_seconds "$restart_settle_seconds" \
+    --argjson measurement_deadline_seconds "$measurement_deadline_seconds" \
+    --argjson diagnostic_deadline_override "$diagnostic_deadline_override" \
     --arg command "scripts/measure-runtime-map.sh --output $report --evidence $evidence --runs $runs" \
     '{
        schema: 2,
@@ -274,8 +273,10 @@ jq -s \
        reproducibility: {
          graph_home: $graph_home,
          neo4j_uri: $neo4j_uri,
+         measurement_deadline_seconds: $measurement_deadline_seconds,
+         diagnostic_deadline_override: $diagnostic_deadline_override,
          code_status: $code_status,
-         code_diff_from_head: $code_diff
+         code_diff_sha256: $code_diff_sha256
        },
        command: $command,
        samples: .
@@ -294,7 +295,11 @@ sample_count=$(jq '.samples | length' "$evidence")
     jq -r '.identities | to_entries[] | "| \(.key) | `\(.value)` |"' "$evidence"
     printf '| warm | running service preflighted by the required DD-content query; startup excluded; OS/VM caches not flushed |\n'
     printf '| service-restarted | stopped and restarted before every directional observation; sleep-only readiness (no Cypher probe); startup excluded; OS/VM caches not flushed |\n\n'
-    printf 'The unchanged default is **5 seconds** per complete attempt. An observation is successful only when the Rust coordinator returns a complete validated map before that deadline; the harness preserves failures rather than retrying, extending an individual attempt, or converting a partial map into success.\n\n'
+    if test "$diagnostic_deadline_override" = true; then
+        printf "The production default remains **5 seconds** per complete attempt; this run's explicit test-only diagnostic budget is **%s seconds**. An observation is successful only when the Rust coordinator returns a complete validated map before its recorded deadline; the harness preserves failures rather than retrying, extending an individual attempt, or converting a partial map into success.\n\n" "$measurement_deadline_seconds"
+    else
+        printf 'The unchanged production default is **5 seconds** per complete attempt. An observation is successful only when the Rust coordinator returns a complete validated map before that deadline; the harness preserves failures rather than retrying, extending an individual attempt, or converting a partial map into success.\n\n'
+    fi
     printf '## Median observations\n\n'
     printf 'Each row aggregates `%s` independent samples of one map key. Retained bytes are a capacity-based estimate of map-owned data only; they exclude allocator overhead, the `Arc`/coordinator cache, transient construction allocations, process RSS and peak memory. Resolver and cache figures are average nanoseconds per call over 20,000 in-process repetitions, not a latency SLO.\n\n' "$runs"
     printf '| Condition | Pair | Direction | Stored → HLI | Outcome | Total ms | Retained estimate KiB | Resolver ns/call | Cache-hit ns/call | Failure |\n| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |\n'

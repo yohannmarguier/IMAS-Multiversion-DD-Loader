@@ -115,6 +115,14 @@ grep -F 'no task-owned service' "$temp/cross-home-stop.out" >/dev/null \
     || fail 'cross-home stop failure is not actionable'
 test "$(grep -c '^stop ' "$temp/docker.log" || true)" = "$before_stop_count" \
     || fail 'cross-home stop issued a mutating Docker command'
+if IMAS_MVDD_GRAPH_HOME="$other_state" "$script" stop --container "$clean_service" \
+    >"$temp/cross-home-explicit-stop.out" 2>&1; then
+    fail 'an explicit container name bypassed cross-home ownership'
+fi
+grep -F 'expected' "$temp/cross-home-explicit-stop.out" >/dev/null \
+    || fail 'explicit cross-home ownership mismatch is not actionable'
+test "$(grep -c '^stop ' "$temp/docker.log" || true)" = "$before_stop_count" \
+    || fail 'explicit cross-home stop issued a mutating Docker command'
 
 # Authentication-only and empty/wrong-schema query responses cannot satisfy
 # the content smoke contract.

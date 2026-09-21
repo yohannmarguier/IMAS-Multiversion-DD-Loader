@@ -73,6 +73,8 @@ jq -e '
     .identities.neo4j_digest == "sha256:3333333333333333333333333333333333333333333333333333333333333333" and
     .identities.service == $service and
     (.identities.code_dirty | type) == "boolean" and
+    (.reproducibility.code_diff_sha256 | test("^sha256:[0-9a-f]{64}$")) and
+    (.reproducibility | has("code_diff_from_head") | not) and
     .conditions.service_restarted.readiness_probe == "sleep-only; no Cypher content query" and
     .conditions.service_restarted.os_vm_caches_flushed == false and
     (.samples | length) == 12 and
@@ -122,3 +124,35 @@ if IMAS_MVDD_MEASUREMENT_CONTAINER="$override" "$measure" \
 fi
 grep -F 'does not match the recorded graph selection' "$temp/wrong.out" >/dev/null \
     || fail 'explicit-container provenance mismatch is not actionable'
+
+# Labels alone are insufficient when the Rust Bolt URI can address another
+# service. The measured endpoint must be the selected container's published
+# Bolt endpoint.
+cp "$service_file" "$TEST_DOCKER_STATE/containers/$override"
+if NEO4J_URI=bolt://127.0.0.1:19999 IMAS_MVDD_MEASUREMENT_CONTAINER="$override" \
+    "$measure" --output "$temp/wrong-uri.md" --evidence "$temp/wrong-uri.json" --runs 1 \
+    >"$temp/wrong-uri.out" 2>&1; then
+    fail 'measurement accepted a Bolt URI addressing a different service'
+fi
+grep -F 'does not address its published Bolt endpoint' "$temp/wrong-uri.out" >/dev/null \
+    || fail 'measurement endpoint mismatch is not actionable'
+if NEO4J_URI=bolt://uri-secret@127.0.0.1:17687 \
+    IMAS_MVDD_MEASUREMENT_CONTAINER="$override" "$measure" \
+    --output "$temp/credential-uri.md" --evidence "$temp/credential-uri.json" --runs 1 \
+    >"$temp/credential-uri.out" 2>&1; then
+    fail 'measurement accepted credentials embedded in NEO4J_URI'
+fi
+grep -F 'must not contain credentials' "$temp/credential-uri.out" >/dev/null \
+    || fail 'credential-bearing URI failure is not actionable'
+if grep -F 'uri-secret' "$temp/credential-uri.out" >/dev/null; then
+    fail 'credential-bearing URI failure exposed the credential'
+fi
+
+# A diagnostic deadline is explicit evidence, never presented as a changed
+# production default.
+IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DEADLINE_SECONDS=17 "$measure" \
+    --output "$temp/diagnostic.md" --evidence "$temp/diagnostic.json" --runs 1
+jq -e '.reproducibility.measurement_deadline_seconds == 17 and .reproducibility.diagnostic_deadline_override == true' \
+    "$temp/diagnostic.json" >/dev/null || fail 'diagnostic deadline was not recorded'
+grep -F 'explicit test-only diagnostic budget is **17 seconds**' "$temp/diagnostic.md" >/dev/null \
+    || fail 'diagnostic deadline was presented as the production default'

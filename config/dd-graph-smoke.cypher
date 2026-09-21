@@ -10,8 +10,12 @@ CALL {
   RETURN count(n) AS stamp_count
 }
 CALL {
-  MATCH (:IMASNodeChange)-[:FOR_IMAS_PATH]->(:IMASNode)
-  RETURN count(*) AS change_count
+  MATCH (c:IMASNodeChange)
+  WITH c,
+       [(c)-[:FOR_IMAS_PATH]->(n:IMASNode) | n] AS owners,
+       [(c)-[:IN_VERSION]->(v:DDVersion) | v] AS releases
+  WHERE size(owners) = 1 AND size(releases) = 1
+  RETURN count(c) AS change_count
 }
 RETURN CASE
   WHEN release_count = 1 AND stamp_count = 1 AND change_count > 0

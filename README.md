@@ -133,7 +133,7 @@ NEO4J_PASSWORD=$IMAS_MVDD_GRAPH_PASSWORD
 selection, then applies the shared
 [`dd-graph-smoke.cypher`](config/dd-graph-smoke.cypher) contract: a required DD
 release, the equilibrium DD-version-stamp node and the `IMASNodeChange`
-ownership edge used by runtime acquisition. An
+ownership plus `IN_VERSION` edges used by runtime acquisition. An
 empty database, authentication-only response, incomplete schema or different
 selection cannot pass. `verify-service` performs only the label/ownership part
 and prints the verified non-secret identity; it deliberately does not warm
@@ -209,7 +209,10 @@ own stop/start and is the first graph-reading workload after a sleep-only
 readiness interval; the report does not claim that host OS, VM or disk caches
 were flushed. The JSON evidence records effective non-secret configuration,
 service and graph identities, code revision/dirty state, direction, run number,
-deadline and readiness policy.
+deadline and readiness policy. The configured `NEO4J_URI` must exactly match
+the selected container's published Bolt endpoint and cannot contain embedded
+credentials. Dirty-tree provenance records status and a SHA-256 of the patch,
+never the patch contents, so an unrelated local secret cannot enter evidence.
 
 ## Build, test, install
 
