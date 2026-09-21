@@ -40,7 +40,8 @@ IMAS-Core.
 
 C tests are
 grouped under `tests/abi/`, `tests/shim/`, `tests/real_core/`, and
-`tests/package/`, with shared test infrastructure in `tests/support/` (the
+`tests/package/`; focused installed-HLI probes live under `tests/hli/`, with
+shared test infrastructure in `tests/support/` (the
 C harness), `tests/stub/` (the recording stub), `tests/fixtures/` (the
 reduced conversion-map fixture), `tests/cmake/` (`cmake -P` script checks),
 and `tests/scripts/` (install/package shell checks plus the hermetic
@@ -216,7 +217,10 @@ $ cargo fmt && cargo clippy --all-targets          # lint, no CMake wrapper
 CI (`.github/workflows/ci.yml`) has a fast recording-stub job for fmt, clippy,
 both CMake configurations, install and downstream consumption, plus a full job
 on pull requests and `main` pushes that downloads and caches the IMAS-Core fork
-at the committed `IMAS_CORE_REF` before the drift and real-Core seams. It is the
+at the committed `IMAS_CORE_REF` before the drift and real-Core seams. The live
+profile requires the three `live-graph-core-coexistence-*` scenarios; a second,
+isolated controlled profile retains all five deterministic coexistence
+scenarios, with both inventories checked by exact enabled name. It is the
 only thing keeping the CMake path honest — `cargo test` alone never re-runs
 cargo-c, never regenerates the header, and never compiles the C smoke test.
 
@@ -224,8 +228,9 @@ A third workflow, `.github/workflows/hli-validation.yml`, runs real
 HLIs through the shim — one job each for Fortran, C++, MATLAB and Java, pinned
 in `IMAS_FORTRAN_REF`, `IMAS_CPP_REF`, `IMAS_MATLAB_REF` and `IMAS_JAVA_REF`.
 Its Fortran job builds the IMAS-Fortran fork pinned in
-`IMAS_FORTRAN_REF` with `AL_USE_MULTIVERSION_SHIM=ON` against the *installed*
-shim and runs that HLI's own suite — 83 per-IDS round-trips over memory, ASCII
+`IMAS_FORTRAN_REF` with `AL_USE_MULTIVERSION_SHIM=ON`. The complete legacy
+suite runs unchanged against a private XML-fixture package — 83 per-IDS
+round-trips over memory, ASCII
 and HDF5 for passthrough, plus `play_eq_two_dd-cross` for conversion. It runs on
 pull requests based on `develop`/`main` (fail-safe `paths-ignore`) and on
 `workflow_dispatch`. Three facts about it are easy to get wrong: it acquires
@@ -237,23 +242,34 @@ so the workflow asserts the disabled count as well as the total. See
 `docs/adr/0026-pin-imas-core-until-upstream-corrects-delete.md` for why Core is
 pinned rather than floated.
 
+The same job configures a separate build against the normally installed,
+graph-backed production package. Its exact enabled selection contains the
+graph-runtime COCOS round trip plus version-unset, equal-stamp, absent-stamp and
+malformed-stamp cases. The private XML package is assembled from the existing
+test-only stage and cannot be installed or selected as an operator fallback.
+
 Its C++ job builds `yohannmarguier/IMAS-Cpp` at `IMAS_CPP_REF` against the
-installed shim and the same Core fork pin, with DD 4.1.1. The generated C++
+same private XML-fixture package and Core fork pin, with DD 4.1.1. The generated C++
 suite only implements MDSplus, so this job installs the MDSplus runtime,
 development and Java packages, builds the DD models, and enables MDSplus and
 HDF5 in Core. It checks that tests are enabled and select the shim's runtime
 Core, checks HLI linkage, and runs the existing suite and examples serially.
-MDSplus package versions and CTest diagnostics are retained with the run.
+It then runs an exact five-scenario production selection through the normal
+graph-backed library: a cross-DD COCOS round trip and the four
+service-independent cases. A dedicated public-C++-HLI probe with graph
+credentials deliberately absent verifies an uncached 3.40.0 → 4.1.1 request
+refuses with the IDS and both versions. MDSplus package versions and CTest
+diagnostics are retained with the run.
 
 Since `IMAS_CPP_REF` moved to `38b9460` that fork also carries a **Tier-1 shim
 conformance suite** under `tests/shim/`, registered only when
 `AL_USE_MULTIVERSION_SHIM=ON`: eighteen catalogue scenarios in six families,
 thirteen of them contract assertions held red while the shim disagrees rather
 than inverted or quarantined. A DD 4.1.1 HLI reads and writes a checked-in DD
-3.39.0 pulse through the shim and is compared against the same HLI reading the
-DD 4.1.1 pulse of the same equilibrium, which makes this **the only HLI job
-that asserts on what conversion returns** rather than only that the HLI builds,
-links and runs. One direction only: the reverse needs a second `al-cpp` built
+3.39.0 pulse through the private XML fixture and is compared against the same
+HLI reading the DD 4.1.1 pulse of the same equilibrium. The separate production
+selection asserts the graph-derived result. One direction only: the reverse
+needs a second `al-cpp` built
 against DD 3.39.0. The asserted count is 65 — the generated suite, 21 examples,
 two generator refusal-policy tests, and 41 from that suite. Five of its
 contract assertions register only when `imas-python-fixtures/.venv` can import

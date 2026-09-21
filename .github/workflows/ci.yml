@@ -188,10 +188,19 @@ jobs:
       - name: Test graph coexistence real-Core scenarios
         run: |
           set -euo pipefail
-          pattern='^(read-coexistence|write-coexistence|write-delete-coexistence)-'
-          expected=5
-          actual=$(ctest --test-dir build -N -R "$pattern" | grep -cE '^  Test #[0-9]+:')
-          test "$actual" -eq "$expected"
+          required=(
+            live-graph-core-coexistence-forward
+            live-graph-core-coexistence-reverse
+            live-graph-core-coexistence-nested
+          )
+          pattern='^live-graph-core-coexistence-(forward|reverse|nested)$'
+          ctest --test-dir build --show-only=json-v1 > build/live-coexistence-inventory.json
+          required_tests=$(IFS=';'; echo "${required[*]}")
+          cmake \
+            "-DINVENTORY_FILE=$PWD/build/live-coexistence-inventory.json" \
+            "-DSELECTION_REGEX=$pattern" \
+            "-DREQUIRED_TESTS=$required_tests" \
+            -P tests/cmake/check_ctest_inventory.cmake
           ctest --test-dir build -R "$pattern" --output-on-failure --no-tests=error
 
       - name: Test drift and real-Core seams
@@ -204,6 +213,41 @@ jobs:
         run: |
           cmake --build build --target imas_print_version
           cmake --install build/_deps/al-core-build --prefix "$PWD/al-core-dist"
+
+      # The production profile above must never inherit the controlled graph
+      # facts. Keep the five deterministic coexistence regressions in their
+      # own build, linked to the same pinned Core but to the private controlled
+      # graph fixture rather than the installed production shim.
+      - name: Configure controlled graph coexistence profile
+        run: |
+          cmake -S . -B build-controlled -DCMAKE_BUILD_TYPE=Release \
+            -DIMAS_MVDD_GRAPH_TEST_SOURCE=controlled \
+            -DCMAKE_PREFIX_PATH="$PWD/al-core-dist"
+
+      - name: Build controlled graph coexistence profile
+        run: cmake --build build-controlled --target graph_coexistence_oracle_test
+
+      - name: Test controlled graph coexistence real-Core scenarios
+        run: |
+          set -euo pipefail
+          required=(
+            read-coexistence-forward-selects-primary-then-falls-back
+            read-coexistence-forward-arraystruct-falls-back-between-j-candidates
+            read-coexistence-reverse-selects-the-4.1-successor
+            write-delete-coexistence-forward-is-primary-only-and-fans-out
+            write-coexistence-reverse-non-primary-refuses
+          )
+          pattern='^(read-coexistence-forward-selects-primary-then-falls-back|read-coexistence-forward-arraystruct-falls-back-between-j-candidates|read-coexistence-reverse-selects-the-4.1-successor|write-delete-coexistence-forward-is-primary-only-and-fans-out|write-coexistence-reverse-non-primary-refuses)$'
+          ctest --test-dir build-controlled --show-only=json-v1 > \
+            build-controlled/controlled-coexistence-inventory.json
+          required_tests=$(IFS=';'; echo "${required[*]}")
+          cmake \
+            "-DINVENTORY_FILE=$PWD/build-controlled/controlled-coexistence-inventory.json" \
+            "-DSELECTION_REGEX=$pattern" \
+            "-DREQUIRED_TESTS=$required_tests" \
+            -P tests/cmake/check_ctest_inventory.cmake
+          ctest --test-dir build-controlled -R "$pattern" \
+            --output-on-failure --no-tests=error
 
       - name: Configure, build and test installed IMAS-Core lookup
         env:

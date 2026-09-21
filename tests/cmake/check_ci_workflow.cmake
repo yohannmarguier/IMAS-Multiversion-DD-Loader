@@ -283,30 +283,67 @@ if(DEFINED PINNED_FORTRAN_CORE_JOB OR DEFINED PINNED_CPP_CORE_JOB
             "hli/imas-python-fixtures/.venv/bin/python -m pip install -r .github/hli-fixture-requirements.txt"
             "install the HLI fixture dependencies")
     require_line(fortran_hli_job "ctest --output-on-failure --no-tests=error"
-            "retain the ordinary installed-shim HLI suite")
+            "retain the complete legacy XML-fixture HLI suite")
     require_matching_line(fortran_hli_job
             "HLI_TOTAL_TESTS - HLI_DISABLED_TESTS"
             "retain the ordinary HLI enabled-test count assertion")
     require_line(fortran_hli_job "- uses: ./.github/actions/setup-dd-graph"
         "start the pinned graph before the graph-backed Fortran scenario")
     require_matching_line(fortran_hli_job
-            "-DCMAKE_PREFIX_PATH=.*dist"
+            "prepare-private-xml-fixture-package\.sh.*dist-production.*dist-xml-fixture"
+            "stage a private XML-fixture package without changing production")
+    require_matching_line(fortran_hli_job
+            "-DCMAKE_PREFIX_PATH=.*dist-xml-fixture"
+            "configure the complete legacy Fortran suite against the private XML fixture")
+    require_matching_line(fortran_hli_job
+            "-DCMAKE_PREFIX_PATH=.*dist-production"
             "use the installed production shim for the Fortran scenario")
     require_matching_line(fortran_hli_job
             "-DAL_SHIM_GRAPH_RUNTIME_SCENARIO=ON"
             "configure the graph-backed Fortran scenario explicitly")
-    require_matching_line(fortran_hli_job
-            "ctest --test-dir build-graph -R '\\^al-fortran-test-shim-graph-runtime\\$'"
-            "run the graph-backed Fortran conversion scenario")
-    require_matching_line(fortran_hli_job
-            "test \"\\$graph_scenario_count\" -gt 0"
-            "reject an empty graph-backed Fortran scenario selection")
+    foreach(required_fortran_production_scenario IN ITEMS
+            al-fortran-test-shim-graph-runtime
+            al-fortran-test-shim-version-unset
+            al-fortran-test-shim-stamp-equal
+            al-fortran-test-shim-stamp-absent
+            al-fortran-test-shim-stamp-malformed)
+        require_matching_line(fortran_hli_job "${required_fortran_production_scenario}"
+            "run the production Fortran scenario ${required_fortran_production_scenario}")
+    endforeach()
+    require_matching_line(fortran_hli_job "check_ctest_inventory\.cmake"
+        "reject missing, disabled or extra production Fortran selections")
     check_component_pinned_core_linkage(${PINNED_CPP_CORE_JOB} CPP workflow)
     read_job(${PINNED_CPP_CORE_JOB} cpp_hli_job)
     require_line(cpp_hli_job "- uses: ./.github/actions/setup-dd-graph"
         "start the pinned graph before C++ cross-DD conformance scenarios")
     require_line(cpp_hli_job "IMAS_MVDD_GRAPH_DEADLINE_SECONDS: 120"
         "give the C++ HLI graph acquisition enough time for its fixture scope")
+    require_matching_line(cpp_hli_job
+            "prepare-private-xml-fixture-package\.sh.*dist-production.*dist-xml-fixture"
+            "stage the private XML fixture for the complete C++ conformance suite")
+    require_matching_line(cpp_hli_job
+            "-DCMAKE_PREFIX_PATH=.*dist-xml-fixture"
+            "configure the complete C++ suite against the private XML fixture")
+    foreach(required_cpp_production_scenario IN ITEMS
+            cpp-test-shim-roundtrip-cross-dd
+            cpp-test-shim-version-unset
+            cpp-test-shim-stamp-equal
+            cpp-test-shim-stamp-absent
+            cpp-test-shim-stamp-malformed)
+        require_matching_line(cpp_hli_job "${required_cpp_production_scenario}"
+            "run the production C++ scenario ${required_cpp_production_scenario}")
+    endforeach()
+    require_matching_line(cpp_hli_job "check_ctest_inventory\.cmake"
+        "reject missing, disabled or extra production C++ selections")
+    require_matching_line(cpp_hli_job "cpp_graph_acquisition_refusal\.cpp"
+        "compile the dedicated production C++ acquisition-refusal probe")
+    require_matching_line(cpp_hli_job "--unset=NEO4J_PASSWORD"
+        "make the acquisition-refusal condition deterministic")
+    foreach(required_refusal_text IN ITEMS
+            "conversion map acquisition failed" "equilibrium" "3.40.0" "4.1.1")
+        require_matching_line(cpp_hli_job "${required_refusal_text}"
+            "assert the production acquisition refusal identifies ${required_refusal_text}")
+    endforeach()
     check_component_pinned_core_linkage(${PINNED_MATLAB_CORE_JOB} MATLAB workflow)
     check_component_pinned_core_linkage(${PINNED_JAVA_CORE_JOB} JAVA workflow)
 
@@ -400,14 +437,31 @@ require_matching_line(full_job "-DIMAS_MVDD_GRAPH_TEST_SOURCE=live"
     "point real-Core graph scenarios at the production artifact")
 require_line(full_job "- name: Test graph coexistence real-Core scenarios"
     "run the graph coexistence real-Core scenarios explicitly")
-require_line(full_job "expected=5"
-    "retain the five graph coexistence scenarios as a nonzero executed count")
-require_line(full_job
-    "actual=$(ctest --test-dir build -N -R \"$pattern\" | grep -cE '^  Test #[0-9]+:')"
-    "count the registered graph coexistence real-Core scenarios")
+require_line(full_job "-P tests/cmake/check_ctest_inventory.cmake"
+    "validate exact enabled live and controlled real-Core inventories")
+foreach(required_live_scenario IN ITEMS
+        live-graph-core-coexistence-forward
+        live-graph-core-coexistence-reverse
+        live-graph-core-coexistence-nested)
+    require_matching_line(full_job "${required_live_scenario}"
+        "require the live real-Core coexistence scenario ${required_live_scenario}")
+endforeach()
 require_line(full_job
     "ctest --test-dir build -R \"$pattern\" --output-on-failure --no-tests=error"
     "execute the graph coexistence real-Core scenarios")
+require_line(full_job "- name: Test controlled graph coexistence real-Core scenarios"
+    "run the five controlled coexistence scenarios in an isolated profile")
+require_matching_line(full_job "-DIMAS_MVDD_GRAPH_TEST_SOURCE=controlled"
+    "select controlled facts only for the isolated coexistence profile")
+foreach(required_controlled_scenario IN ITEMS
+        read-coexistence-forward-selects-primary-then-falls-back
+        read-coexistence-forward-arraystruct-falls-back-between-j-candidates
+        read-coexistence-reverse-selects-the-4.1-successor
+        write-delete-coexistence-forward-is-primary-only-and-fans-out
+        write-coexistence-reverse-non-primary-refuses)
+    require_matching_line(full_job "${required_controlled_scenario}"
+        "retain the controlled real-Core scenario ${required_controlled_scenario}")
+endforeach()
 require_line(full_job "-DIMAS_CORE_DOWNLOAD_DEPENDENCIES=ON"
     "download the pinned real IMAS-Core")
 check_pinned_core_linkage(full workflow)

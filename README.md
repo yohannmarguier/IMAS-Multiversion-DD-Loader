@@ -153,9 +153,10 @@ CI uses the same script through the reusable
 only the verified archive under its immutable archive digest; a fresh CI job
 always loads a new task-owned database and starts Neo4j before its query smoke
 check. The `graph-abi` job then acquires its required complete live scope, and
-the Fortran HLI job starts the same selected graph before its installed
-graph-selected conversion scenario. A setup/acquisition failure or an empty
-scenario selection fails those graph-required checks. The action exports
+the Fortran and C++ HLI jobs start the same selected graph before their
+installed production scenarios. A setup/acquisition failure or a missing,
+disabled, empty or unexpectedly changed scenario selection fails those
+graph-required checks. The action exports
 `NEO4J_URI`, `NEO4J_USERNAME` and `NEO4J_PASSWORD`; they are job-local settings
 and credentials never enter Git or the job summary.
 
@@ -561,6 +562,7 @@ src/interpose/          C-facing seam adapters, one module per seam family
 tests/abi/              generated-header smoke test and ABI manifests
 tests/shim/             recording-stub seam tests
 tests/real_core/        HDF5 and real-IMAS-Core checks and plugin fixture
+tests/hli/              focused installed-HLI production probes owned here
 tests/package/          installed-package consumer fixture
 tests/support/          shared C test harness
 tests/cmake/            CMake-script checks
@@ -681,7 +683,10 @@ dependency. The `fast` job runs fmt, clippy, both CMake build configurations,
 all recording-stub seams, install, and both installed-package consumers. The
 `full` job runs for pull requests and `main` pushes; it downloads and caches the
 pinned IMAS-Core build, then runs the ABI drift and real-Core seam suites before
-performing the same install and consumer checks. Every CTest invocation uses
+performing the same install and consumer checks. Its live profile requires the
+three `live-graph-core-coexistence-*` scenarios; a separate controlled profile
+runs all five deterministic coexistence fixtures. Both selections are checked
+by exact enabled test name before execution. Every CTest invocation uses
 `--no-tests=error`; both jobs stay pinned to the cluster's Rust and cargo-c
 module versions.
 
@@ -691,16 +696,20 @@ Both jobs above call the C ABI directly, with arguments a test author chose.
 `.github/workflows/hli-validation.yml` runs real Fortran, C++, MATLAB and Java
 HLIs through the installed shim. Its Fortran job builds the IMAS-Fortran fork pinned in
 `IMAS_FORTRAN_REF` with `AL_USE_MULTIVERSION_SHIM=ON` and
-`find_package(imas-mvdd-loader CONFIG)`, and runs that HLI's own suite. It runs
+`find_package(imas-mvdd-loader CONFIG)`. The complete historical HLI suite runs
+unchanged against a private XML-fixture package assembled only inside the job;
+the normally installed package remains graph-backed. It runs
 on pull requests based on `develop` or `main` whose diff can affect the result,
 and on demand.
 
 The same Fortran job separately builds #230's opt-in
 `al-fortran-test-shim-graph-runtime` scenario against the installed production
-package, after starting the pinned graph. The scenario performs
+package, after starting the pinned graph. Its exact five-test production set
+also includes version-unset, equal-stamp, absent-stamp and malformed-stamp
+cases, proving those paths remain service-independent. The conversion scenario performs
 generated HLI calls that write and read the supported `psi` COCOS conversion
 and observes the `coordinates_type` refusal through the HLI's partial-read
-surface. Its selected CTest set must be nonempty, and the job summary records
+surface. Its selected CTest set must contain exactly those enabled names, and the job summary records
 the Fortran/Core pins, graph release and manifest digest. The ordinary
 installed package is graph-backed; XML is retained only for isolated mechanism
 regressions.
@@ -711,7 +720,12 @@ checks that the HLI links the shim and that each test selects the acquired Core,
 and requires 65 enabled tests: the generated suite, 21 examples, two
 generator refusal-policy tests, and the 41 registered here by the fork's
 Tier-1 shim conformance suite. It runs CTest serially because examples share
-pulses. Plugins are disabled.
+pulses. Those 65 legacy assertions use the same private XML-fixture package as
+Fortran. A second exact production selection overrides that package with the
+normal graph-backed library and runs a COCOS round trip plus the four
+service-independent cases. A dedicated public-C++-HLI probe then removes the
+graph password in a fresh process and requires an acquisition refusal naming
+`equilibrium`, stored DD 3.40.0 and HLI DD 4.1.1. Plugins are disabled.
 
 Unlike the Fortran job, C++ needs MDSplus: at the pinned commit its generated
 `cpp-TestSuite` implements only that backend and disables itself without it.
@@ -727,10 +741,10 @@ conformance suite (`tests/shim/`), which registers only under
 thirteen of them contract assertions that stay red while the shim disagrees
 rather than being inverted, quarantined or softened to match observed
 behaviour. It is a DD 4.1.1 HLI reading and writing a checked-in DD 3.39.0
-pulse through the shim, compared against the same HLI reading the DD 4.1.1
-pulse of the same equilibrium. That makes this the one HLI job asserting on
-what conversion actually returns, rather than only that the HLI builds, links
-and runs. It covers one direction: the reverse needs a second `al-cpp` built
+pulse through the private XML-fixture shim, compared against the same HLI
+reading the DD 4.1.1 pulse of the same equilibrium. The separate production
+selection is what asserts the graph-derived result. It covers one direction:
+the reverse needs a second `al-cpp` built
 against DD 3.39.0, which this job does not produce.
 
 Five of those thirteen — the stamp-state scenarios — register only when

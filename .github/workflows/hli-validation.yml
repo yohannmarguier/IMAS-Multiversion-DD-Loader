@@ -91,11 +91,9 @@ jobs:
 
       - uses: ./.github/actions/setup-toolchain
 
-      # This is a required graph-input gate for the separate installed HLI
-      # conversion scenario below. The private package still selects its
-      # controlled complete facts until #233 switches production selection, but
-      # a setup or live-acquisition regression must not be hidden by that
-      # controlled source.
+      # This is a required graph-input gate for the installed production-HLI
+      # scenarios below. The complete legacy suite uses a separate private XML
+      # fixture package; it cannot satisfy this graph-backed acceptance path.
       - uses: ./.github/actions/setup-dd-graph
 
       # Boost and HDF5 are IMAS-Core's dependencies, not the HLI's -- the HLI
@@ -181,7 +179,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: hli/build
-          key: hli-${{ runner.os }}-dd${{ env.HLI_DD_VERSION }}-fortran${{ steps.hli_pin.outputs.ref }}-core${{ steps.imas_core_pin.outputs.commit }}-tags-v1
+          key: hli-${{ runner.os }}-dd${{ env.HLI_DD_VERSION }}-fortran${{ steps.hli_pin.outputs.ref }}-core${{ steps.imas_core_pin.outputs.commit }}-xml-fixture-v1
 
       # IMAS_MVDD_REAL_CORE_TESTS=OFF because this job needs the shim built and
       # installed, not the shim's own suite -- ci.yml's fast and full jobs own
@@ -191,21 +189,22 @@ jobs:
       # HLI at a build tree, is deliberate: find_package(imas-mvdd-loader CONFIG)
       # is how a downstream consumer reaches the shim, so that is what gets
       # tested.
-      - name: Build and install the shim
+      - name: Build production and private XML-fixture shim packages
         run: |
           set -euo pipefail
           cmake -S . -B build-shim \
             -DCMAKE_BUILD_TYPE=Release \
             -DIMAS_MVDD_REAL_CORE_TESTS=OFF
           cmake --build build-shim
-          cmake --install build-shim --prefix "$PWD/dist"
+          cmake --install build-shim --prefix "$PWD/dist-production"
+          bash scripts/prepare-private-xml-fixture-package.sh "$PWD/dist-production" "$PWD/build-shim/xml-fixture-stage/lib/libimas_mvdd_loader.so" "$PWD/dist-xml-fixture"
 
       # The HLI acquires its run-time IMAS-Core here. Its repository and version
       # options are explicit so this build opens the same fork commit as ci.yml.
       #
       # AL_EXAMPLES stays ON even though 20 of its tests can never run in a shim
       # build, because HLI_DISABLED_TESTS asserts on that count.
-      - name: Configure the HLI against the shim
+      - name: Configure the legacy HLI suite against the private XML fixture
         working-directory: hli
         run: |
           set -euo pipefail
@@ -218,7 +217,7 @@ jobs:
             -DAL_USE_MULTIVERSION_SHIM=ON \
             -DAL_CORE_GIT_REPOSITORY=https://github.com/yohannmarguier/IMAS-Core.git \
             -DAL_CORE_VERSION="${{ steps.imas_core_pin.outputs.commit }}" \
-            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/dist" \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/dist-xml-fixture" \
             -DDD_VERSION="${HLI_DD_VERSION}" \
             -DAL_BACKEND_HDF5=ON \
             -DAL_BACKEND_MDSPLUS=OFF \
@@ -311,7 +310,7 @@ jobs:
       # interpolate it; the HLI's own CI does the same. ctest is given
       # IMAS_CORE_LIBRARY per test by ALCore.cmake, so nothing else is needed
       # here for the shim to find the IMAS-Core it opens.
-      - name: Run the HLI suite through the shim
+      - name: Run the complete legacy HLI suite through the XML fixture
         working-directory: hli/build
         run: |
           set -euo pipefail
@@ -319,9 +318,11 @@ jobs:
           export USER="$PWD/testdb"
           ctest --output-on-failure --no-tests=error
 
-      # Keep the conversion scenario in a separate HLI build while using the
-      # same installed production artifact as every downstream consumer.
-      - name: Configure the graph-backed Fortran conversion scenario
+      # Keep production semantics in a separate HLI build. Its selected set
+      # covers graph-backed conversion and every service-independent occurrence
+      # state; the obsolete unknown-artifact passthrough remains in the private
+      # XML-fixture suite above and is deliberately absent here.
+      - name: Configure the production graph-backed Fortran scenarios
         working-directory: hli
         run: |
           set -euo pipefail
@@ -333,7 +334,7 @@ jobs:
             -DCMAKE_CXX_STANDARD=17 \
             -DAL_USE_MULTIVERSION_SHIM=ON \
             -DAL_SHIM_GRAPH_RUNTIME_SCENARIO=ON \
-            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/dist" \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/dist-production" \
             -DAL_CORE_GIT_REPOSITORY=https://github.com/yohannmarguier/IMAS-Core.git \
             -DAL_CORE_VERSION="${{ steps.imas_core_pin.outputs.commit }}" \
             -DDD_VERSION="${HLI_DD_VERSION}" \
@@ -347,18 +348,18 @@ jobs:
             -DAL_PLUGINS=OFF \
             -DAL_HLI_DOCS=OFF
 
-      - name: Build the graph-backed Fortran conversion scenario
+      - name: Build the production graph-backed Fortran scenarios
         working-directory: hli
         run: |
           set -euo pipefail
-          cmake --build build-graph --target al-fortran-test-shim-graph-runtime -j"$(nproc)"
+          cmake --build build-graph -j"$(nproc)"
           cmake --build build-graph --target al-core-runtime -j"$(nproc)"
           expected="${{ steps.imas_core_pin.outputs.commit }}"
           actual=$(git -C build-graph/_deps/al-core-runtime/src/al-core-runtime rev-parse HEAD)
           expected=${expected,,}
           test "$actual" = "$expected"
 
-      - name: Run the graph-backed Fortran conversion scenario
+      - name: Run the production graph-backed Fortran scenarios
         env:
           IMAS_MVDD_GRAPH_DEADLINE_SECONDS: 120
         working-directory: hli
@@ -366,11 +367,22 @@ jobs:
           set -euo pipefail
           mkdir -p "$PWD/build-graph/testdb"
           export USER="$PWD/build-graph/testdb"
-          listing=$(ctest --test-dir build-graph -N -R '^al-fortran-test-shim-graph-runtime$')
-          printf '%s\n' "$listing"
-          graph_scenario_count=$(printf '%s\n' "$listing" | grep -cE '^  Test #[0-9]+:' || true)
-          test "$graph_scenario_count" -gt 0
-          ctest --test-dir build-graph -R '^al-fortran-test-shim-graph-runtime$' \
+          required=(
+            al-fortran-test-shim-graph-runtime
+            al-fortran-test-shim-version-unset
+            al-fortran-test-shim-stamp-equal
+            al-fortran-test-shim-stamp-absent
+            al-fortran-test-shim-stamp-malformed
+          )
+          pattern='^(al-fortran-test-shim-graph-runtime|al-fortran-test-shim-version-unset|al-fortran-test-shim-stamp-equal|al-fortran-test-shim-stamp-absent|al-fortran-test-shim-stamp-malformed)$'
+          ctest --test-dir build-graph --show-only=json-v1 > build-graph/test-inventory.json
+          required_tests=$(IFS=';'; echo "${required[*]}")
+          cmake \
+            "-DINVENTORY_FILE=$PWD/build-graph/test-inventory.json" \
+            "-DSELECTION_REGEX=$pattern" \
+            "-DREQUIRED_TESTS=$required_tests" \
+            -P "$GITHUB_WORKSPACE/tests/cmake/check_ctest_inventory.cmake"
+          ctest --test-dir build-graph -R "$pattern" \
             --output-on-failure --no-tests=error
           graph_release=$(sed -n 's/^GRAPH_RELEASE=//p' "$GITHUB_WORKSPACE/config/dd-graph-release.env")
           graph_manifest=$(sed -n 's/^GRAPH_MANIFEST_DIGEST=//p' "$GITHUB_WORKSPACE/config/dd-graph-release.env")
@@ -383,10 +395,10 @@ jobs:
             echo "| IMAS-Core | \`${{ steps.imas_core_pin.outputs.commit }}\` |"
             echo "| DD graph release | \`$graph_release\` |"
             echo "| DD graph manifest | \`$graph_manifest\` |"
-            echo "| Selected HLI scenarios | \`$graph_scenario_count\` |"
+            echo "| Required production HLI scenarios | \`${#required[@]}\` selected and passed |"
             echo
-            echo "The pinned graph was started by the shared setup action. This"
-            echo "The installed production shim acquires its map over Bolt; XML is"
+            echo "The pinned graph was started by the shared setup action. The"
+            echo "installed production shim acquires its map over Bolt; XML is"
             echo "available only to private regression-fixture builds."
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -539,22 +551,23 @@ jobs:
           "$venv" -m pip install --quiet h5py
           "$venv" -c 'import h5py; print("h5py", h5py.__version__)'
 
-      - name: Build and install the shim
+      - name: Build production and private XML-fixture shim packages
         run: |
           set -euo pipefail
           cmake -S . -B build-shim -DCMAKE_BUILD_TYPE=Release \
             -DIMAS_MVDD_REAL_CORE_TESTS=OFF
           cmake --build build-shim
-          cmake --install build-shim --prefix "$PWD/dist"
+          cmake --install build-shim --prefix "$PWD/dist-production"
+          bash scripts/prepare-private-xml-fixture-package.sh "$PWD/dist-production" "$PWD/build-shim/xml-fixture-stage/lib/libimas_mvdd_loader.so" "$PWD/dist-xml-fixture"
 
-      - name: Configure C++ against the shim and pinned Core
+      - name: Configure the legacy C++ suite against the private XML fixture
         run: |
           set -euo pipefail
           cmake -S hli-cpp -B hli-cpp/build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14 \
             -DCMAKE_CXX_STANDARD=17 \
-            -DCMAKE_PREFIX_PATH="$PWD/dist" \
+            -DCMAKE_PREFIX_PATH="$PWD/dist-xml-fixture" \
             -DAL_USE_MULTIVERSION_SHIM=ON \
             -DAL_DOWNLOAD_DEPENDENCIES=ON \
             -DAL_CORE_GIT_REPOSITORY=https://github.com/yohannmarguier/IMAS-Core.git \
@@ -690,13 +703,95 @@ jobs:
 
       # The examples share pulses, so keep CTest serial. Core interpolates
       # USER into legacy pulse paths; keep all test data inside this build.
-      - name: Run the C++ HLI tests
+      - name: Run the complete legacy C++ HLI suite through the XML fixture
         working-directory: hli-cpp/build
         run: |
           set -euo pipefail
           mkdir -p "$PWD/testdb"
           export USER="$PWD/testdb"
           ctest --output-on-failure --no-tests=error --parallel 1
+
+      # Reuse the pinned HLI binary but replace its private fixture shim at
+      # runtime with the normal installed artifact. LD_LIBRARY_PATH precedes
+      # the build RUNPATH on Linux; the ldd assertion makes that assignment an
+      # observed fact before any production scenario runs.
+      - name: Run production graph-backed C++ HLI scenarios
+        working-directory: hli-cpp/build
+        run: |
+          set -euo pipefail
+          production_library="$GITHUB_WORKSPACE/dist-production/lib"
+          export LD_LIBRARY_PATH="$production_library:${LD_LIBRARY_PATH:-}"
+          ldd libal-cpp-4.1.1.so | tee cpp-production-linkage.txt
+          grep -F "$production_library/libimas_mvdd_loader.so" cpp-production-linkage.txt
+
+          required=(
+            cpp-test-shim-roundtrip-cross-dd
+            cpp-test-shim-version-unset
+            cpp-test-shim-stamp-equal
+            cpp-test-shim-stamp-absent
+            cpp-test-shim-stamp-malformed
+          )
+          pattern='^(cpp-test-shim-roundtrip-cross-dd|cpp-test-shim-version-unset|cpp-test-shim-stamp-equal|cpp-test-shim-stamp-absent|cpp-test-shim-stamp-malformed)$'
+          required_tests=$(IFS=';'; echo "${required[*]}")
+          cmake \
+            "-DINVENTORY_FILE=$PWD/test-inventory.json" \
+            "-DSELECTION_REGEX=$pattern" \
+            "-DREQUIRED_TESTS=$required_tests" \
+            -P "$GITHUB_WORKSPACE/tests/cmake/check_ctest_inventory.cmake"
+
+          mkdir -p "$PWD/testdb-production"
+          export USER="$PWD/testdb-production"
+          ctest -R "$pattern" --output-on-failure --no-tests=error --parallel 1
+
+          graph_release=$(sed -n 's/^GRAPH_RELEASE=//p' "$GITHUB_WORKSPACE/config/dd-graph-release.env")
+          graph_manifest=$(sed -n 's/^GRAPH_MANIFEST_DIGEST=//p' "$GITHUB_WORKSPACE/config/dd-graph-release.env")
+          {
+            echo "### Graph-selected C++ conversion"
+            echo
+            echo "| Input | Pinned identity |"
+            echo "|---|---|"
+            echo "| IMAS-Cpp | \`${{ steps.pins.outputs.cpp }}\` |"
+            echo "| IMAS-Core | \`${{ steps.pins.outputs.core }}\` |"
+            echo "| DD graph release | \`$graph_release\` |"
+            echo "| DD graph manifest | \`$graph_manifest\` |"
+            echo "| Required production HLI scenarios | \`${#required[@]}\` selected and passed |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build the production C++ acquisition-refusal probe
+        working-directory: hli-cpp/build
+        run: |
+          set -euo pipefail
+          g++-14 -std=c++17 \
+            -I "$GITHUB_WORKSPACE/hli-cpp/src" \
+            -I "$GITHUB_WORKSPACE/hli-cpp/build/src" \
+            -I "$GITHUB_WORKSPACE/hli-cpp/build/_deps/al-core-src/include" \
+            "$GITHUB_WORKSPACE/tests/hli/cpp_graph_acquisition_refusal.cpp" \
+            -L "$GITHUB_WORKSPACE/hli-cpp/build" \
+            -Wl,-rpath,"$GITHUB_WORKSPACE/hli-cpp/build" \
+            -Wl,--defsym,DD_VER_4_1_1=0 \
+            -lal-cpp-4.1.1 $(pkg-config --cflags --libs blitz) -pthread \
+            -o cpp-graph-acquisition-refusal
+
+      - name: Test production C++ acquisition refusal through the HLI
+        working-directory: hli-cpp/build
+        run: |
+          set -euo pipefail
+          production_library="$GITHUB_WORKSPACE/dist-production/lib"
+          core=$(find "$PWD/_deps/al-core-build" -type f -name 'libal.so*' -print -quit)
+          test -n "$core"
+          fixture="$PWD/tests/shim/stamp-mismatch-fixture"
+          test -f "$fixture/equilibrium.h5"
+          output=$(cmake -E env \
+            --unset=NEO4J_PASSWORD \
+            "LD_LIBRARY_PATH=$production_library:${LD_LIBRARY_PATH:-}" \
+            "IMAS_CORE_LIBRARY=$core" \
+            "IMAS_MVDD_HLI_DD_VERSION=$HLI_DD_VERSION" \
+            -- "$PWD/cpp-graph-acquisition-refusal" "$fixture" 2>&1)
+          printf '%s\n' "$output"
+          grep -F "conversion map acquisition failed" <<< "$output"
+          grep -F "DD path: equilibrium" <<< "$output"
+          grep -F "HLI DD version: 4.1.1" <<< "$output"
+          grep -F "stored DD version: 3.40.0" <<< "$output"
 
       - name: Preserve C++ test diagnostics
         if: always()
@@ -708,6 +803,7 @@ jobs:
             hli-cpp/build/Testing/Temporary/
             hli-cpp/build/test-inventory.json
             hli-cpp/build/cpp-linkage.txt
+            hli-cpp/build/cpp-production-linkage.txt
             hli-cpp/build/CMakeCache.txt
 
   matlab-hli:

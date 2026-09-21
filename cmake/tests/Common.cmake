@@ -47,6 +47,13 @@ add_test(NAME dd-graph-setup
     COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/dd_graph_setup_test.sh")
 add_test(NAME runtime-map-measurement
     COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/measure_runtime_map_test.sh")
+add_test(NAME private-xml-fixture-package
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/private_xml_fixture_package_test.sh")
+add_test(NAME ctest-inventory-contract
+    COMMAND "${CMAKE_COMMAND}"
+        "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ctest_inventory.cmake"
+        "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify_ctest_inventory.cmake")
 
 # The recording stub is the fast profile's runtime dependency and remains
 # part of the full profile so the two complementary seam suites stay honest.
