@@ -1407,6 +1407,11 @@ impl ConversionMap {
                 .nodes
                 .iter()
                 .any(|node| node.kind == EndpointNodeKind::Leaf && node.path == path)
+            && !endpoint.nodes.iter().any(|node| {
+                node.path
+                    .strip_prefix(path)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+            })
     }
 
     /// Resolves `path`, supplied in the DD spelling named by `direction`'s

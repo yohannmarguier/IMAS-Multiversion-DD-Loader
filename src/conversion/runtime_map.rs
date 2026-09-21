@@ -240,6 +240,8 @@ impl AcquisitionClock for SystemClock {
 /// monotonic clock at a precise boundary instead of sleeping.
 pub(crate) trait AttemptObserver: Send + Sync {
     fn entered(&self, stage: AcquisitionStage);
+
+    fn completed(&self, _stage: AcquisitionStage) {}
 }
 
 struct NoopAttemptObserver;
@@ -300,15 +302,19 @@ impl AcquisitionAttempt {
     pub(crate) fn check(&self, stage: AcquisitionStage) -> Result<Duration, AttemptExpired> {
         let elapsed = self.clock.now().saturating_sub(self.started_at);
         if self.cancelled.load(AtomicOrdering::Acquire) || elapsed >= self.deadline {
-            let mut expired_stage = self
-                .expired_stage
-                .lock()
-                .expect("acquisition attempt mutex is not poisoned");
-            let stage = *expired_stage.get_or_insert(stage);
-            self.cancelled.store(true, AtomicOrdering::Release);
-            return Err(AttemptExpired { stage });
+            return Err(self.expire(stage));
         }
         Ok(self.deadline.saturating_sub(elapsed))
+    }
+
+    fn expire(&self, stage: AcquisitionStage) -> AttemptExpired {
+        let mut expired_stage = self
+            .expired_stage
+            .lock()
+            .expect("acquisition attempt mutex is not poisoned");
+        let stage = *expired_stage.get_or_insert(stage);
+        self.cancelled.store(true, AtomicOrdering::Release);
+        AttemptExpired { stage }
     }
 
     fn timeout_failure(&self) -> Option<AcquisitionFailure> {
@@ -316,6 +322,11 @@ impl AcquisitionAttempt {
             .lock()
             .expect("acquisition attempt mutex is not poisoned")
             .map(|stage| AcquisitionFailure::TimedOut { stage })
+    }
+
+    fn complete(&self, stage: AcquisitionStage) -> Result<Duration, AttemptExpired> {
+        self.observer.completed(stage);
+        self.check(stage)
     }
 }
 
@@ -830,9 +841,7 @@ fn coexistence_plans(
                 .map_err(|expired| AcquisitionFailure::TimedOut {
                     stage: expired.stage,
                 })?;
-            if numeric_release(&declaration.release) < numeric_release(earlier)
-                || numeric_release(&declaration.release) > numeric_release(later)
-            {
+            if numeric_release(&declaration.release) > numeric_release(later) {
                 continue;
             }
             let Some(predecessor_path) =
@@ -881,6 +890,26 @@ fn coexistence_plans(
             let successor_hli = replay_endpoint(facts, successor, &request.hli_dd)?;
             let predecessor_stored = replay_endpoint(facts, predecessor, &request.stored_dd)?;
             let successor_stored = replay_endpoint(facts, successor, &request.stored_dd)?;
+            if [
+                &predecessor_hli,
+                &successor_hli,
+                &predecessor_stored,
+                &successor_stored,
+            ]
+            .into_iter()
+            .any(|state| {
+                matches!(
+                    state,
+                    EndpointState::Present { interval_start, .. }
+                        if numeric_release(interval_start)
+                            > numeric_release(&declaration.release)
+                )
+            }) {
+                // A path that reappeared after the declaration has a new
+                // semantic role. Older correspondence evidence cannot make
+                // that role a candidate even when the spelling is reused.
+                continue;
+            }
             let hli_count = usize::from(matches!(predecessor_hli, EndpointState::Present { .. }))
                 + usize::from(matches!(successor_hli, EndpointState::Present { .. }));
             let stored_count =
@@ -904,7 +933,10 @@ fn coexistence_plans(
             let sole_metadata = match sole_endpoint {
                 (EndpointState::Present { metadata, .. }, EndpointState::Absent)
                 | (EndpointState::Absent, EndpointState::Present { metadata, .. }) => metadata,
-                _ => unreachable!("one coexistence side has exactly one endpoint"),
+                // One observed path plus one unanchored path is incomplete
+                // evidence, not proof that the latter is absent. Leave both
+                // paths to their independently localized endpoint rules.
+                _ => continue,
             };
             let candidates_servable = !candidate_endpoints
                 .iter()
@@ -1163,8 +1195,10 @@ fn historical_path_at(
         if successor_cycle_involving(facts, &ancestor.path, ids) {
             return None;
         }
-        let Some(declaration) = declaration_after(&ancestor.rename_declarations, endpoint) else {
-            continue;
+        let declaration = match declaration_after(&ancestor.rename_declarations, endpoint) {
+            HistoricalDeclaration::Absent => continue,
+            HistoricalDeclaration::Conflicting => return None,
+            HistoricalDeclaration::Found(declaration) => declaration,
         };
         let previous = normalize_previous_name(&declaration.previous_name, &ancestor.path, ids)?;
         if previous == ancestor.path {
@@ -1191,22 +1225,30 @@ fn ancestor_paths(path: &str) -> Vec<String> {
         .collect()
 }
 
-/// Returns the first change strictly after the endpoint. Equal-date entries
-/// are deliberately ambiguous: a row order must not choose a semantic role.
+enum HistoricalDeclaration<'a> {
+    Absent,
+    Found(&'a GraphRename),
+    Conflicting,
+}
+
+/// Returns the first change strictly after the endpoint. Contradictory
+/// equal-date evidence stays distinct from no applicable declaration so a
+/// child conflict cannot fall through to an ancestor correspondence.
 fn declaration_after<'a>(
     declarations: &'a [GraphRename],
     endpoint: &ArtifactDdVersion,
-) -> Option<&'a GraphRename> {
+) -> HistoricalDeclaration<'a> {
     let mut ordered: Vec<_> = declarations.iter().collect();
     ordered.sort_by_key(|declaration| numeric_release(&declaration.release));
     if ordered.windows(2).any(|pair| {
         pair[0].release == pair[1].release && pair[0].previous_name != pair[1].previous_name
     }) {
-        return None;
+        return HistoricalDeclaration::Conflicting;
     }
     ordered
         .into_iter()
         .find(|declaration| numeric_release(&declaration.release) > numeric_release(endpoint))
+        .map_or(HistoricalDeclaration::Absent, HistoricalDeclaration::Found)
 }
 
 fn is_distinct_role_change(older: &EndpointRole, newer: &EndpointRole) -> bool {
@@ -1331,15 +1373,42 @@ impl SharedMapAttempt {
         }
     }
 
-    fn publish(&self, result: MapAcquisitionResult) {
+    fn publish(&self, result: MapAcquisitionResult) -> MapAcquisitionResult {
+        self.publish_with_disposition(result, |_, _| {})
+    }
+
+    /// Selects exactly one terminal result while holding the result mutex.
+    /// Successful cache admission is performed by `disposition` before the
+    /// result becomes observable and before waiters are woken.
+    fn publish_with_disposition(
+        &self,
+        result: MapAcquisitionResult,
+        disposition: impl FnOnce(&mut MapAcquisitionResult, bool),
+    ) -> MapAcquisitionResult {
         let mut published = self
             .result
             .lock()
             .expect("shared map-attempt mutex is not poisoned");
         if published.is_none() {
+            let mut result = result.and_then(|map| {
+                self.attempt.check(AcquisitionStage::Publication)?;
+                Ok(map)
+            });
+            disposition(&mut result, true);
             *published = Some(result);
             self.completed.notify_all();
+        } else {
+            disposition(
+                published
+                    .as_mut()
+                    .expect("terminal result remains present while locked"),
+                false,
+            );
         }
+        published
+            .as_ref()
+            .expect("terminal result is selected before publication returns")
+            .clone()
     }
 
     fn wait(&self) -> MapAcquisitionResult {
@@ -1348,23 +1417,25 @@ impl SharedMapAttempt {
             .lock()
             .expect("shared map-attempt mutex is not poisoned");
         while published.is_none() {
-            let remaining = self.attempt.check(AcquisitionStage::Publication)?;
+            let remaining = match self.attempt.check(AcquisitionStage::Publication) {
+                Ok(remaining) => remaining,
+                Err(expired) => {
+                    let result = Err(expired.into());
+                    *published = Some(result.clone());
+                    self.completed.notify_all();
+                    return result;
+                }
+            };
             let (next, timeout) = self
                 .completed
                 .wait_timeout(published, remaining)
                 .expect("shared map-attempt mutex is not poisoned");
             published = next;
             if published.is_none() && timeout.timed_out() {
-                // Record the timeout on the shared attempt before returning
-                // it. A leader that finishes source work later then observes
-                // this same terminal stage instead of publishing a different
-                // timeout reason to the callers that joined it.
-                if let Err(expired) = self.attempt.check(AcquisitionStage::Publication) {
-                    return Err(expired.into());
-                }
-                return Err(AcquisitionFailure::TimedOut {
-                    stage: AcquisitionStage::Publication,
-                });
+                let result = Err(self.attempt.expire(AcquisitionStage::Publication).into());
+                *published = Some(result.clone());
+                self.completed.notify_all();
+                return result;
             }
         }
         published
@@ -1383,7 +1454,7 @@ struct CoordinatorState {
 enum CoordinatorDecision {
     Lead(Arc<SharedMapAttempt>),
     Join(Arc<SharedMapAttempt>),
-    Expired(Arc<SharedMapAttempt>, AcquisitionFailure),
+    Terminal(MapAcquisitionResult),
 }
 
 /// Shares one complete acquisition attempt per exact map key and keeps only
@@ -1472,8 +1543,10 @@ impl<S: GraphFactsSource> RuntimeMapCoordinator<S> {
                 match attempt.attempt.check(AcquisitionStage::Publication) {
                     Ok(_) => CoordinatorDecision::Join(attempt),
                     Err(expired) => {
+                        let expired = AcquisitionFailure::from(expired);
+                        let result = attempt.publish(Err(expired));
                         state.attempts.remove(&key);
-                        CoordinatorDecision::Expired(attempt, expired.into())
+                        CoordinatorDecision::Terminal(result)
                     }
                 }
             } else {
@@ -1492,8 +1565,7 @@ impl<S: GraphFactsSource> RuntimeMapCoordinator<S> {
             CoordinatorDecision::Join(attempt) => {
                 self.observer.joined_attempt();
                 let result = attempt.wait();
-                if let Err(failure) = &result {
-                    attempt.publish(Err(failure.clone()));
+                if result.is_err() {
                     let mut state = self
                         .state
                         .lock()
@@ -1508,10 +1580,7 @@ impl<S: GraphFactsSource> RuntimeMapCoordinator<S> {
                 }
                 return result;
             }
-            CoordinatorDecision::Expired(attempt, expired) => {
-                attempt.publish(Err(expired.clone()));
-                return Err(expired);
-            }
+            CoordinatorDecision::Terminal(result) => return result,
         };
 
         let result = self
@@ -1522,25 +1591,35 @@ impl<S: GraphFactsSource> RuntimeMapCoordinator<S> {
             .state
             .lock()
             .expect("runtime map coordinator mutex is not poisoned");
-        // Lock acquisition is part of publication, too. A waiter may already
-        // have terminated this attempt while the leader was constructing it.
-        let result = result.and_then(|map| {
-            attempt.attempt.check(AcquisitionStage::Publication)?;
-            Ok(map)
-        });
-        attempt.publish(result);
-        let result = attempt.wait();
-        if state
-            .attempts
-            .get(&key)
-            .is_some_and(|current| Arc::ptr_eq(current, &attempt))
-        {
-            state.attempts.remove(&key);
-            if let Ok(map) = &result {
-                state.maps.insert(key, Arc::clone(map));
+        // The state mutex and the attempt-result mutex form one publication
+        // boundary. Deadline adjudication, terminal selection, in-flight
+        // removal and successful cache admission all finish before waiters
+        // can observe the result.
+        attempt.publish_with_disposition(result, |result, newly_selected| {
+            let owns_attempt = state
+                .attempts
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, &attempt));
+            if owns_attempt {
+                state.attempts.remove(&key);
+                if newly_selected && let Ok(map) = result {
+                    state.maps.insert(key.clone(), Arc::clone(map));
+                }
             }
-        }
-        result
+            if newly_selected
+                && let Err(expired) = attempt.attempt.complete(AcquisitionStage::Publication)
+            {
+                if let Ok(map) = result
+                    && state
+                        .maps
+                        .get(&key)
+                        .is_some_and(|cached| Arc::ptr_eq(cached, map))
+                {
+                    state.maps.remove(&key);
+                }
+                *result = Err(expired.into());
+            }
+        })
     }
 }
 

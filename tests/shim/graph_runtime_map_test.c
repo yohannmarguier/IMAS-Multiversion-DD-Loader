@@ -235,24 +235,39 @@ static void scenario_coexistence_reverse_write_refuses_the_non_primary_source(vo
 }
 
 static void scenario_coexistence_delete_visits_every_candidate_in_order(void) {
+    int unsafe_ctx = open_coexisting_equilibrium();
+    int deletes_before_refusal = int_from_stub("recording_stub_delete_call_count");
+    al_status_t refusal =
+        al_delete_data(unsafe_ctx, "time_slice/constraints/j_phi");
+
+    CHECK(refusal.code == IMAS_MVDD_CONVERSION_ERROR);
+    CHECK_REFUSAL_MESSAGE(
+        refusal, "this subtree delete would leave data at a stored path outside the requested subtree",
+        "time_slice/constraints/j_phi", "4.1.1", "3.42.0");
+    CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before_refusal);
+    CHECK_OK(al_end_action(unsafe_ctx));
+
     int operation_ctx = open_coexisting_equilibrium();
     int deletes_before = int_from_stub("recording_stub_delete_call_count");
     int reads_before = int_from_stub("recording_stub_read_call_count");
 
-    CHECK_OK(al_delete_data(operation_ctx, "time_slice/constraints/j_phi"));
+    CHECK_OK(al_delete_data(operation_ctx,
+                            "time_slice/global_quantities/magnetic_axis/b_field_phi"));
     CHECK(int_from_stub("recording_stub_read_call_count") == reads_before);
     CHECK(int_from_stub("recording_stub_delete_call_count") == deletes_before + 2);
     CHECK(strcmp(string_at_from_stub("recording_stub_delete_path_at", deletes_before),
-                 "time_slice/constraints/j_phi") == 0);
+                 "time_slice/global_quantities/magnetic_axis/b_field_phi") == 0);
     CHECK(strcmp(string_at_from_stub("recording_stub_delete_path_at", deletes_before + 1),
-                 "time_slice/constraints/j_tor") == 0);
-    check_loss_at(operation_ctx, 0, "time_slice/constraints/j_phi",
+                 "time_slice/global_quantities/magnetic_axis/b_field_tor") == 0);
+    check_loss_at(operation_ctx, 0,
+                  "time_slice/global_quantities/magnetic_axis/b_field_phi",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_DELETE);
-    check_loss_at(operation_ctx, 1, "time_slice/constraints/j_tor",
+    check_loss_at(operation_ctx, 1,
+                  "time_slice/global_quantities/magnetic_axis/b_field_tor",
                   IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_DELETE);
 
     printf("graph_runtime_map_test coexistence-delete-visits-every-candidate-in-order: "
-           "candidate deletion used no presence probe\n");
+           "an unsafe hierarchy refused and a valid leaf plan used no presence probe\n");
 }
 
 static void scenario_identity_operations(void) {

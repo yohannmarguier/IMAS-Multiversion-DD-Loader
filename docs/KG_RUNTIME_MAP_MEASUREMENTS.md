@@ -114,12 +114,12 @@ compression.
 
 ## Publication-boundary handoff
 
-`AcquisitionStage::Publication` currently marks completion of map construction,
-not completion of the coordinator's cache insertion. The evidence therefore
-records the successful `coordinator.acquire` return time as
-`publication_completed_ns`; it is the end-to-end completion measure, whereas
-the stage timeline's `publication` entry is only a start marker. The final
-deadline check also precedes the cache insertion. This is a concrete
-deadline/publication observability defect in the #205 prerequisite, not a
-reason to change the five-second default here. It was returned to its owner in
-[the #205 handoff](https://github.com/yohannmarguier/IMAS-Multiversion-DD-Loader/issues/205#issuecomment-5752064958): add a post-insertion completion boundary and terminal deadline check.
+Issue #244 closed this handoff without changing the five-second default.
+`AcquisitionStage::Publication` now has a completion observation after
+terminal selection and tentative cache admission. The coordinator rechecks the
+deadline at that boundary while holding its state mutex and the shared
+attempt-result mutex; expiry removes the tentative entry and publishes one
+terminal timeout to the leader and all joiners. The measurement timeline's
+`publication` entry is therefore the completed coordinator disposition rather
+than the earlier map-construction marker, and `publication_completed_ns`
+remains the end-to-end successful return time.

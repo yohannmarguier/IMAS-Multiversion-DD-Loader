@@ -305,6 +305,10 @@ struct AdvanceAtStage {
     stage: AcquisitionStage,
 }
 
+struct AdvanceAtPublicationCompletion {
+    clock: Arc<ManualClock>,
+}
+
 struct JoinObserver {
     joined: Mutex<bool>,
     wake: Condvar,
@@ -345,6 +349,16 @@ impl CoordinatorObserver for JoinObserver {
 impl AttemptObserver for AdvanceAtStage {
     fn entered(&self, stage: AcquisitionStage) {
         if stage == self.stage {
+            self.clock.advance(Duration::from_secs(5));
+        }
+    }
+}
+
+impl AttemptObserver for AdvanceAtPublicationCompletion {
+    fn entered(&self, _stage: AcquisitionStage) {}
+
+    fn completed(&self, stage: AcquisitionStage) {
+        if stage == AcquisitionStage::Publication {
             self.clock.advance(Duration::from_secs(5));
         }
     }
@@ -1014,6 +1028,61 @@ fn expiry_publishes_one_terminal_failure_to_the_leader_and_joiner() {
 }
 
 #[test]
+fn terminal_selection_rechecks_expiry_after_a_success_was_ready_to_publish() {
+    let clock = Arc::new(ManualClock::default());
+    let shared = SharedMapAttempt::new(AcquisitionAttempt::new(
+        Duration::from_secs(5),
+        clock.clone(),
+        Arc::new(NoopAttemptObserver),
+    ));
+    let map = RuntimeMapAcquirer::new(ControlledSource {
+        result: Ok(complete_identity_scope()),
+    })
+    .acquire(&request())
+    .expect("the controlled map is ready for terminal publication");
+
+    shared
+        .attempt
+        .check(AcquisitionStage::Publication)
+        .expect("the leader's pre-publication check initially passes");
+    clock.advance(Duration::from_secs(5));
+    for result in [shared.publish(Ok(Arc::new(map))), shared.wait()] {
+        assert!(matches!(
+            result,
+            Err(AcquisitionFailure::TimedOut {
+                stage: AcquisitionStage::Publication,
+            })
+        ));
+    }
+}
+
+#[test]
+fn publication_completion_includes_cache_admission_and_rolls_back_expired_success() {
+    let source = ShutdownSource::new(complete_identity_scope());
+    let clock = Arc::new(ManualClock::default());
+    let coordinator = RuntimeMapCoordinator::with_clock_and_observer(
+        source.clone(),
+        Duration::from_secs(5),
+        clock.clone(),
+        Arc::new(AdvanceAtPublicationCompletion { clock }),
+    );
+
+    assert!(matches!(
+        coordinator.acquire(&request()),
+        Err(AcquisitionFailure::TimedOut {
+            stage: AcquisitionStage::Publication,
+        })
+    ));
+    assert_eq!(source.loads.load(Ordering::SeqCst), 1);
+    let state = coordinator
+        .state
+        .lock()
+        .expect("coordinator state mutex is not poisoned");
+    assert!(state.maps.is_empty());
+    assert!(state.attempts.is_empty());
+}
+
+#[test]
 fn successful_maps_outlive_callers_and_do_not_contact_the_graph_again() {
     let source = ShutdownSource::new(complete_identity_scope());
     let coordinator = RuntimeMapCoordinator::new(source.clone());
@@ -1208,6 +1277,21 @@ fn acquisition_returns_a_complete_identity_map_and_localized_retype_refusal() {
     );
     assert!(map.delete_target_is_leaf(Direction::Forward, "time_slice/profiles_1d/rho_tor"));
     assert!(!map.delete_target_is_leaf(Direction::Forward, "time_slice"));
+}
+
+#[test]
+fn acquisition_withholds_leaf_certification_from_a_leaf_with_a_descendant() {
+    let mut facts = complete_identity_scope();
+    for endpoint in &mut facts.nodes[0].endpoints {
+        endpoint.kind = GraphNodeKind::Leaf;
+    }
+
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request())
+        .expect("contradictory hierarchy is localized to delete classification");
+
+    assert!(!map.delete_target_is_leaf(Direction::Forward, "time_slice"));
+    assert!(map.delete_target_is_leaf(Direction::Forward, "time_slice/profiles_1d/rho_tor"));
 }
 
 #[test]
@@ -2186,6 +2270,123 @@ fn acquisition_uses_successor_first_candidates_only_at_the_coexisting_endpoint()
 }
 
 #[test]
+fn coexistence_candidates_survive_when_the_declaration_predates_both_endpoints() {
+    let mut facts = coexistence_facts();
+    facts.versions.push(version("3.42.1", Some("11")));
+
+    for (stored, hli) in [("3.42.0", "4.1.1"), ("3.42.1", "4.1.1")] {
+        let map = RuntimeMapAcquirer::new(ControlledSource {
+            result: Ok(facts.clone()),
+        })
+        .acquire(&request_between(stored, hli))
+        .expect("unchanged endpoint roles keep the historical relation relevant");
+        let explanation = map
+            .resolve("time_slice/constraints/j_phi", Direction::Forward)
+            .expect("the coexisting spelling remains claimed");
+        let Outcome::Path { candidates, .. } = explanation.outcome else {
+            panic!("coexistence must remain a candidate plan");
+        };
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| (candidate.path.as_str(), candidate.precedence))
+                .collect::<Vec<_>>(),
+            vec![
+                ("time_slice/constraints/j_phi", 1),
+                ("time_slice/constraints/j_tor", 2),
+            ]
+        );
+    }
+
+    let reverse = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request_between("4.1.1", "3.42.1"))
+        .expect("the inverse request keeps both endpoint-valid aliases");
+    for (path, precedence) in [
+        ("time_slice/constraints/j_phi", 1),
+        ("time_slice/constraints/j_tor", 2),
+    ] {
+        let explanation = reverse.resolve(path, Direction::Forward).unwrap();
+        assert_eq!(explanation.rel, Some(Rel::Merged));
+        assert_eq!(explanation.precedence, Some(precedence));
+        assert!(matches!(
+            explanation.outcome,
+            Outcome::Path { ref resolved_path, .. }
+                if resolved_path == "time_slice/constraints/j_phi"
+        ));
+    }
+}
+
+#[test]
+fn an_older_declaration_does_not_cross_a_removal_and_reappearance_boundary() {
+    let mut facts = coexistence_facts();
+    let successor = facts
+        .nodes
+        .iter_mut()
+        .find(|node| node.path == "time_slice/constraints/j_phi")
+        .expect("fixture has the successor");
+    successor.removed = vec![ArtifactDdVersion::new("4.0.0").unwrap()];
+    successor
+        .introduced
+        .push(ArtifactDdVersion::new("4.1.1").unwrap());
+
+    let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+        .acquire(&request_between("3.42.0", "4.1.1"))
+        .expect("the reappeared role remains a localized result");
+    assert_eq!(
+        map.resolve("time_slice/constraints/j_phi", Direction::Forward)
+            .expect("the reused spelling remains explicitly claimed")
+            .outcome,
+        Outcome::Refusal(RefusalReason::Unmappable)
+    );
+}
+
+#[test]
+fn acquisition_localizes_present_and_unanchored_coexistence_without_panicking() {
+    let mut facts = coexistence_facts();
+    let predecessor = facts
+        .nodes
+        .iter_mut()
+        .find(|node| node.path == "time_slice/constraints/j_tor")
+        .expect("fixture has the predecessor");
+    predecessor.removed.clear();
+    let successor = facts
+        .nodes
+        .iter_mut()
+        .find(|node| node.path == "time_slice/constraints/j_phi")
+        .expect("fixture has the successor");
+    successor
+        .endpoints
+        .retain(|endpoint| endpoint.release.to_string() != "3.42.0");
+    successor.removed = vec![ArtifactDdVersion::new("4.0.0").unwrap()];
+    successor
+        .introduced
+        .push(ArtifactDdVersion::new("4.1.1").unwrap());
+
+    for request in [
+        request_between("3.42.0", "4.1.1"),
+        request_between("4.1.1", "3.42.0"),
+    ] {
+        let map = RuntimeMapAcquirer::new(ControlledSource {
+            result: Ok(facts.clone()),
+        })
+        .acquire(&request)
+        .expect("incomplete coexistence evidence must remain localized");
+        assert_eq!(
+            map.resolve("time_slice/constraints/j_phi", Direction::Forward)
+                .expect("the unanchored spelling remains explicitly claimed")
+                .outcome,
+            Outcome::Refusal(RefusalReason::Unmappable)
+        );
+        assert!(matches!(
+            map.resolve("time", Direction::Forward)
+                .expect("independent evidence remains usable")
+                .outcome,
+            Outcome::Path { .. }
+        ));
+    }
+}
+
+#[test]
 fn acquisition_extends_an_evidenced_coexisting_structure_to_its_descendants() {
     let mut facts = coexistence_facts();
     for parent in [
@@ -2234,6 +2435,48 @@ fn acquisition_extends_an_evidenced_coexisting_structure_to_its_descendants() {
             ("time_slice/constraints/j_tor/measured", 2),
         ]
     );
+}
+
+#[test]
+fn a_conflicting_child_declaration_cannot_inherit_its_parent_correspondence() {
+    let mut facts = moved_parent_facts();
+    let child = "time_slice/current/profiles_1d/gap/r";
+    facts
+        .nodes
+        .iter_mut()
+        .find(|node| node.path == child)
+        .expect("fixture has the moved child")
+        .rename_declarations
+        .push(GraphRename {
+            release: ArtifactDdVersion::new("4.0.0").unwrap(),
+            previous_name: "../../../legacy/profiles_1d/gap/other_r".to_string(),
+        });
+
+    let assert_localized = |facts| {
+        let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+            .acquire(&request())
+            .expect("the child conflict must remain localized");
+        assert_eq!(
+            map.resolve(child, Direction::Forward)
+                .expect("the conflicting child remains claimed")
+                .outcome,
+            Outcome::Refusal(RefusalReason::Unmappable)
+        );
+        assert!(matches!(
+            map.resolve("time_slice/current/profiles_1d", Direction::Forward)
+                .expect("the independently supported parent remains usable")
+                .outcome,
+            Outcome::Path { .. }
+        ));
+    };
+
+    assert_localized(facts.clone());
+    facts.nodes.reverse();
+    facts
+        .nodes
+        .iter_mut()
+        .for_each(|node| node.rename_declarations.reverse());
+    assert_localized(facts);
 }
 
 #[test]

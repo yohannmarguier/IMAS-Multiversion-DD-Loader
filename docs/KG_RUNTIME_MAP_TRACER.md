@@ -70,8 +70,8 @@ candidate live evidence and the explicitly unrun real-Core/HLI cases.
 
 ## Neo4j acquisition boundary (#212)
 
-`conversion::runtime_map::neo4j_graph` selects the Rust `neo4j` 0.2 Bolt
-driver for the pinned local service. `Neo4jScopeSource` fetches the exact
+`conversion::runtime_map::neo4j_graph` selects the async Rust `neo4rs` 0.8
+Bolt driver for the pinned local service. `Neo4jScopeSource` fetches the exact
 release catalogue and every IDS-scoped node, lifecycle, metadata,
 `IMASNodeChange`, and `RENAMED_TO` row using bound `ids`, `skip`, and `limit`
 parameters. Every stream is retrieved as count plus complete pages; it rejects
@@ -93,8 +93,10 @@ substitute newer producer property names for this release contract.
 passes `Neo4jRawScope` through the schema decoder into `IdsGraphFacts`.
 Historical reconstruction stays in `RuntimeMapAcquirer`; source properties
 are distinct from observed endpoint metadata. The driver, decoder, replay,
-constructor, coordinator and publication consume one remaining deadline.
-Blocked driver workers cannot publish maps after the caller has timed out.
+constructor, coordinator and publication consume one remaining deadline. The
+async Bolt future is cancelled at that deadline; its sole pool owner is then
+dropped, closing the connection rather than leaving detached driver work
+behind.
 
 `bash tests/scripts/check-live-acquisition.sh` exercises complete validated
 maps for all three reference pairs in both directions, then resolves supported
@@ -122,18 +124,17 @@ publication check rather than returned.
 must propagate it to later source stages; it must never make a replacement
 attempt or reset the timer. `BoltExecutor::connect` applies the lesser of the
 configured `Neo4jConfig::connection_timeout` and that attempt's remainder to
-the driver connection and pool acquisition settings. The existing URI,
+connection setup. The existing URI,
 username and password fields supply normal Neo4j connection/authentication
 configuration; credentials stay in the caller's configuration (for the live
 check, its `NEO4J_*` environment variables) and are neither logged nor added
 to the C ABI. `Neo4jScopeSource::load_raw_scope` then passes the same remaining
-time to every read-only server transaction. A blocked synchronous driver call
-is run in a worker whose result is awaited only for that remainder. The caller
-therefore fails on deadline even if a network/driver call has not returned;
-the same transaction timeout asks Neo4j to abort the server-side work, and a
-late worker result has no receiver and cannot be decoded, constructed or
-published. The worker is deliberately not retained as an in-flight map or a
-joinable request; #215 owns that process-life concurrency policy.
+time to every query and result-stream receive. One current-thread Tokio runtime
+owns that work directly: timeout drops the in-progress future and the sole
+connection-pool owner, so the socket closes and no worker can outlive the
+attempt. The task-owned fake Bolt peer regression completes handshake and
+HELLO, stalls a later response, observes peer-side EOF, and repeats the check
+three times. #215 continues to own process-life sharing above this transport.
 
 The controlled unit tests advance a manual monotonic clock at source,
 validation, construction and publication boundaries, and simulate a blocked
@@ -157,6 +158,15 @@ independently. A source, construction or timeout failure wakes every joiner,
 is removed rather than cached, and a later request starts a fresh attempt. If
 an expired attempt returns late, pointer-identity publication fencing prevents
 it from replacing the newer retained result.
+
+The coordinator state mutex and each attempt's result mutex form the terminal
+publication boundary. Deadline adjudication, one terminal-result selection,
+in-flight removal, cache admission, and the publication-completion observation
+all finish before the condition variable wakes joiners. If the attempt expires
+at completion, the just-admitted success is removed under the same state lock
+and the terminal result becomes the shared publication timeout. Thus a leader
+and every joiner observe one result, and an expired success cannot remain in
+the process-life cache.
 
 ## Graph-selected C-ABI tracer (#216)
 
