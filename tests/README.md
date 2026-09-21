@@ -41,7 +41,12 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 `dd-graph-setup` is the exception to the `scripts/` row: it drives a clean
 temporary setup, load/start, query, stop and offline restart through local
 ORAS/Docker doubles. It proves the command sequence and immutable archive
-verification without Docker, ORAS, credentials, or a downloaded graph.
+verification without Docker, ORAS, credentials, or a downloaded graph. It also
+proves home-qualified ownership, label mismatch refusal, port-conflict safety
+and the required-content smoke outcomes. `runtime-map-measurement` drives the
+measurement command through a recording Docker/Cargo orchestrator, proving
+actual selected-service provenance and one restart per cold direction without
+a live graph or timing thresholds.
 
 ## Groups, in rough dependency order
 

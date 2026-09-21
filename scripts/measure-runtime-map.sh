@@ -7,6 +7,7 @@ set -euo pipefail
 readonly script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 readonly repo_root=$(cd "$script_dir/.." && pwd)
 readonly dd_graph="$script_dir/dd-graph.sh"
+readonly smoke_query="$repo_root/config/dd-graph-smoke.cypher"
 
 usage() {
     cat <<'EOF'
@@ -15,7 +16,7 @@ Usage: scripts/measure-runtime-map.sh --output REPORT.md --evidence SAMPLES.json
 Records the three live reference pairs in both directions through the current
 Rust Bolt source. `--runs` is the number of observations per condition and
 pair (default: 5). The report distinguishes a warmed running service from a
-service restarted immediately before each observation; neither condition
+service restarted immediately before each directional observation; neither condition
 flushes OS or VM caches, and service startup is intentionally not timed.
 
 The selected task-owned graph must already exist and be running. Set
@@ -86,43 +87,85 @@ done
 command -v cargo >/dev/null || die 'cargo is required'
 command -v jq >/dev/null || die 'jq is required'
 test -x "$dd_graph" || die "missing graph lifecycle script: $dd_graph"
+test -f "$smoke_query" || die "missing required DD graph smoke query: $smoke_query"
 
-measurement_container=${IMAS_MVDD_MEASUREMENT_CONTAINER:-}
-if test -n "$measurement_container"; then
+recorded_identity=$("$dd_graph" inspect)
+identity_value() {
+    local name=$1
+    printf '%s\n' "$recorded_identity" | sed -n "s/^${name}: //p"
+}
+
+expected_service=$(identity_value service)
+expected_owner=$(identity_value owner)
+graph_release=$(identity_value release)
+graph_manifest=$(identity_value manifest)
+graph_archive=$(identity_value archive)
+graph_commit=$(identity_value commit)
+neo4j_version=$(identity_value neo4j-version)
+neo4j_digest=$(identity_value neo4j-digest)
+for value in expected_service expected_owner graph_release graph_manifest graph_archive graph_commit neo4j_version neo4j_digest; do
+    test -n "${!value:-}" || die "recorded graph identity omits $value"
+done
+
+measurement_container=${IMAS_MVDD_MEASUREMENT_CONTAINER:-$expected_service}
+if test -n "${IMAS_MVDD_MEASUREMENT_CONTAINER:-}"; then
     case "$measurement_container" in
         imas-mvdd-*) ;;
         *) die 'IMAS_MVDD_MEASUREMENT_CONTAINER must name an imas-mvdd-* container' ;;
     esac
-    command -v docker >/dev/null || die 'docker is required for a custom measurement container'
-    test "$(docker inspect --format '{{ index .Config.Labels \"imas.mvdd.dd-graph\" }}' "$measurement_container")" = true \
-        || die 'custom measurement container is not labelled imas.mvdd.dd-graph=true'
-    test "$(docker inspect --format '{{ index .Config.Labels \"imas.mvdd.dd-graph.home\" }}' "$measurement_container")" = "$IMAS_MVDD_GRAPH_HOME" \
-        || die 'custom measurement container does not belong to IMAS_MVDD_GRAPH_HOME'
 fi
+command -v docker >/dev/null || die 'docker is required for graph measurement'
+
+container_label() {
+    docker inspect --format "{{ index .Config.Labels \"$1\" }}" "$measurement_container"
+}
+
+verify_measurement_service() {
+    local label expected actual
+    for label_and_expected in \
+        'imas.mvdd.dd-graph=true' \
+        "imas.mvdd.dd-graph.owner=$expected_owner" \
+        "imas.mvdd.dd-graph.home=$IMAS_MVDD_GRAPH_HOME" \
+        "imas.mvdd.dd-graph.release=$graph_release" \
+        "imas.mvdd.dd-graph.manifest=$graph_manifest" \
+        "imas.mvdd.dd-graph.archive=$graph_archive" \
+        "imas.mvdd.dd-graph.commit=$graph_commit" \
+        "imas.mvdd.dd-graph.neo4j-version=$neo4j_version" \
+        "imas.mvdd.dd-graph.neo4j-digest=$neo4j_digest"; do
+        label=${label_and_expected%%=*}
+        expected=${label_and_expected#*=}
+        actual=$(container_label "$label")
+        test "$actual" = "$expected" \
+            || die "measurement container $measurement_container does not match the recorded graph selection: $label=${actual:-<missing>}, expected $expected"
+    done
+}
+verify_measurement_service
+
+# Capture source provenance before creating measurement outputs or temporary
+# sample files, so the harness does not make its own checkout look dirty.
+code_commit=$(git -C "$repo_root" rev-parse HEAD)
+code_diff=$(git -C "$repo_root" diff HEAD --binary --no-ext-diff)
+code_status=$(git -C "$repo_root" status --porcelain=v1)
+if test -n "$code_status"; then code_dirty=true; else code_dirty=false; fi
+rust_version=$(rustc --version)
+machine=$(uname -sm)
 
 graph_start() {
-    if test -n "$measurement_container"; then
-        docker start "$measurement_container" >/dev/null
-    else
-        "$dd_graph" start >/dev/null
-    fi
+    docker start "$measurement_container" >/dev/null
 }
 
 graph_stop() {
-    if test -n "$measurement_container"; then
-        docker stop "$measurement_container" >/dev/null
-    else
-        "$dd_graph" stop >/dev/null
-    fi
+    docker stop "$measurement_container" >/dev/null
 }
 
 graph_query() {
-    if test -n "$measurement_container"; then
-        docker exec "$measurement_container" cypher-shell --non-interactive \
-            -u "$NEO4J_USERNAME" -p "$NEO4J_PASSWORD" 'RETURN count(*) AS node_count;'
-    else
-        "$dd_graph" query
-    fi
+    local result status
+    result=$(docker exec "$measurement_container" cypher-shell --format plain --non-interactive \
+        -u "$NEO4J_USERNAME" -p "$NEO4J_PASSWORD" \
+        "$(<"$smoke_query")")
+    status=$(printf '%s\n' "$result" | tail -n 1 | tr -d '"\r')
+    test "$status" = imas_mvdd_smoke_ok \
+        || die "measurement service failed required DD graph content smoke (status: ${status:-empty result})"
 }
 
 mkdir -p "$(dirname "$report")" "$(dirname "$evidence")"
@@ -138,23 +181,30 @@ readonly -a pairs=(
 measure_one() {
     local condition=$1
     local pair=$2
-    local run=$3
-    local sample="$sample_dir/${condition}-${pair}-${run}.json"
+    local direction=$3
+    local run=$4
+    local sample="$sample_dir/${condition}-${pair}-${direction}-${run}.json"
     IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_OUTPUT="$sample" \
         IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_PAIR="$pair" \
+        IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DIRECTION="$direction" \
         cargo test --release measure_pinned_runtime_map_acquisition --lib -- \
         --ignored --nocapture
-    jq -e '.schema == 1 and (.records | length == 2)' "$sample" >/dev/null \
-        || die "measurement test did not emit two directional records for $pair"
-    jq --arg condition "$condition" --argjson run "$run" \
-        '.records[] + {condition: $condition, run: $run}' "$sample" >>"$sample_dir/records.jsonl"
+    jq -e --arg direction "$direction" \
+        '.schema == 1 and (.records | length == 1) and .records[0].direction == $direction' \
+        "$sample" >/dev/null \
+        || die "measurement test did not emit the selected $direction record for $pair"
+    jq --arg condition "$condition" --arg direction "$direction" --argjson run "$run" \
+        '.records[] + {condition: $condition, direction: $direction, run: $run}' \
+        "$sample" >>"$sample_dir/records.jsonl"
 }
 
 cd "$repo_root"
 graph_query >/dev/null
 for run in $(seq 1 "$runs"); do
     for pair in "${pairs[@]}"; do
-        measure_one warm "$pair" "$run"
+        for direction in forward reverse; do
+            measure_one warm "$pair" "$direction" "$run"
+        done
     done
 done
 
@@ -162,49 +212,69 @@ done
 # does not claim a cold disk: this command cannot flush host OS or VM caches.
 for run in $(seq 1 "$runs"); do
     for pair in "${pairs[@]}"; do
-        graph_stop
-        graph_start
-        # Sleeping waits for service initialization without a Cypher request,
-        # which would warm the graph and invalidate this condition's label.
-        sleep "$restart_settle_seconds"
-        measure_one service-restarted "$pair" "$run"
+        for direction in forward reverse; do
+            graph_stop
+            graph_start
+            # Sleeping waits for service initialization without a Cypher request,
+            # which would warm the graph and invalidate this condition's label.
+            sleep "$restart_settle_seconds"
+            measure_one service-restarted "$pair" "$direction" "$run"
+        done
     done
 done
 
-release=$(awk -F= '$1 == "GRAPH_RELEASE" { print $2 }' config/dd-graph-release.env)
-manifest=$(awk -F= '$1 == "GRAPH_MANIFEST_DIGEST" { print $2 }' config/dd-graph-release.env)
-graph_commit=$(awk -F= '$1 == "GRAPH_COMMIT" { print $2 }' config/dd-graph-release.env)
-neo4j=$(awk -F= '$1 == "GRAPH_NEO4J_VERSION" { print $2 }' config/dd-graph-release.env)
-code_commit=$(git rev-parse HEAD)
-code_diff=$(git diff HEAD --binary --no-ext-diff)
-rust_version=$(rustc --version)
-machine=$(uname -sm)
-
 jq -s \
-    --arg release "$release" \
-    --arg manifest "$manifest" \
+    --arg release "$graph_release" \
+    --arg manifest "$graph_manifest" \
+    --arg archive "$graph_archive" \
     --arg graph_commit "$graph_commit" \
-    --arg neo4j "$neo4j" \
+    --arg neo4j_version "$neo4j_version" \
+    --arg neo4j_digest "$neo4j_digest" \
+    --arg service "$measurement_container" \
+    --arg graph_home "$IMAS_MVDD_GRAPH_HOME" \
+    --arg neo4j_uri "$NEO4J_URI" \
     --arg code_commit "$code_commit" \
     --arg code_diff "$code_diff" \
+    --arg code_status "$code_status" \
+    --argjson code_dirty "$code_dirty" \
     --arg rust_version "$rust_version" \
     --arg machine "$machine" \
+    --argjson restart_settle_seconds "$restart_settle_seconds" \
     --arg command "scripts/measure-runtime-map.sh --output $report --evidence $evidence --runs $runs" \
     '{
-       schema: 1,
+       schema: 2,
        conditions: {
-         warm: "running service preflighted with dd-graph query; service startup excluded",
-         service_restarted: "service stopped and started immediately before every observation; startup excluded; OS and VM caches were not flushed"
+         warm: {
+           service_state: "running",
+           readiness_probe: "meaningful DD content query before the warm batch",
+           os_vm_caches_flushed: false
+         },
+         service_restarted: {
+           service_state: "stopped and started immediately before every directional acquisition",
+           readiness_probe: "sleep-only; no Cypher content query",
+           startup_settle_seconds: $restart_settle_seconds,
+           startup_timed: false,
+           os_vm_caches_flushed: false
+         }
        },
        identities: {
          graph_release: $release,
          graph_manifest: $manifest,
-         graph_commit: $graph_commit,
-         neo4j: $neo4j,
+         graph_archive: $archive,
+         graph_exporter_revision: $graph_commit,
+         neo4j_version: $neo4j_version,
+         neo4j_digest: $neo4j_digest,
+         service: $service,
          code_commit: $code_commit,
-         code_diff_from_head: $code_diff,
+         code_dirty: $code_dirty,
          rust: $rust_version,
          machine: $machine
+       },
+       reproducibility: {
+         graph_home: $graph_home,
+         neo4j_uri: $neo4j_uri,
+         code_status: $code_status,
+         code_diff_from_head: $code_diff
        },
        command: $command,
        samples: .
@@ -217,16 +287,16 @@ jq -s \
     printf '## Identities and conditions\n\n'
     printf '| Item | Value |\n| --- | --- |\n'
     jq -r '.identities | to_entries[] | "| \(.key) | `\(.value)` |"' "$evidence"
-    printf '| warm | running service preflighted by a harmless count query; startup excluded |\n'
-    printf '| service-restarted | stopped and restarted before every observation; startup excluded; OS and VM caches not flushed |\n\n'
+    printf '| warm | running service preflighted by the required DD-content query; startup excluded; OS/VM caches not flushed |\n'
+    printf '| service-restarted | stopped and restarted before every directional observation; sleep-only readiness (no Cypher probe); startup excluded; OS/VM caches not flushed |\n\n'
     printf 'The unchanged default is **5 seconds** per complete attempt. An observation is successful only when the Rust coordinator returns a complete validated map before that deadline; the harness preserves failures rather than retrying, extending an individual attempt, or converting a partial map into success.\n\n'
     printf '## Median observations\n\n'
     printf 'Each row aggregates `%s` independent samples of one map key. Retained bytes are a capacity-based estimate of map-owned data only; they exclude allocator overhead, the `Arc`/coordinator cache, transient construction allocations, process RSS and peak memory. Resolver and cache figures are average nanoseconds per call over 20,000 in-process repetitions, not a latency SLO.\n\n' "$runs"
-    printf '| Condition | Pair | Stored → HLI | Outcome | Total ms | Retained estimate KiB | Resolver ns/call | Cache-hit ns/call | Failure |\n| --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |\n'
+    printf '| Condition | Pair | Direction | Stored → HLI | Outcome | Total ms | Retained estimate KiB | Resolver ns/call | Cache-hit ns/call | Failure |\n| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |\n'
     jq -r '
       def median($key): sort_by(.[$key]) | .[length / 2 | floor][$key];
       .samples
-      | group_by([.condition, .pair, .stored_dd, .hli_dd])[]
+      | group_by([.condition, .pair, .direction, .stored_dd, .hli_dd])[]
       | . as $group
       | ($group | median("total_ns")) as $total
       | ([ $group[].outcome ] | unique) as $outcomes
@@ -235,7 +305,7 @@ jq -s \
       | (if $outcome == "success" then ($group | median("resolver_lookup_ns_per_call")) else null end) as $lookup
       | (if $outcome == "success" then ($group | median("cache_hit_ns_per_call")) else null end) as $cache
       | ([ $group[].failure | select(. != null) ] | unique | join("; ")) as $failure
-      | "| \($group[0].condition) | \($group[0].pair) | \($group[0].stored_dd) → \($group[0].hli_dd) | \($outcome) | \(($total / 1000000 * 100 | round) / 100) | \(if $retained == null then "n/a" else (($retained / 1024 * 100 | round) / 100 | tostring) end) | \(if $lookup == null then "n/a" else ($lookup | tostring) end) | \(if $cache == null then "n/a" else ($cache | tostring) end) | \($failure) |"' \
+      | "| \($group[0].condition) | \($group[0].pair) | \($group[0].direction) | \($group[0].stored_dd) → \($group[0].hli_dd) | \($outcome) | \(($total / 1000000 * 100 | round) / 100) | \(if $retained == null then "n/a" else (($retained / 1024 * 100 | round) / 100 | tostring) end) | \(if $lookup == null then "n/a" else ($lookup | tostring) end) | \(if $cache == null then "n/a" else ($cache | tostring) end) | \($failure) |"' \
         "$evidence"
     printf '\n## Stage samples\n\n'
     printf 'Per-sample stage timestamps (connection setup, complete query retrieval, decoding, scope validation, rule construction, map validation and publication) are retained in the companion JSON evidence. `Connection` records construction of the configured Bolt driver; the driver may establish its TCP session lazily with the first query, so transport handshake time is included in query retrieval rather than overstated as an eagerly verified connection time. Timed-out rows retain the terminal failure and their stage timestamps but have no retained-map or lookup figures, because failed maps are never published or cached.\n'

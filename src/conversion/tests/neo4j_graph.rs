@@ -599,8 +599,9 @@ fn measurement_deadline() -> Duration {
     }
 }
 
-/// Emits one independently reproducible sample of the selected live pair.
-/// The accompanying script owns service restart and report conditions. This
+/// Emits one independently reproducible directional sample of the selected
+/// live pair. The accompanying script owns service restart and report
+/// conditions. This
 /// ignored test intentionally has no timing threshold: deterministic
 /// lifecycle tests establish correctness, while this records observations.
 #[test]
@@ -612,12 +613,18 @@ fn measure_pinned_runtime_map_acquisition() {
     let output = std::env::var("IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_OUTPUT")
         .expect("set IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_OUTPUT to a new sample path");
     let selected = std::env::var("IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_PAIR")
-        .unwrap_or_else(|_| "all".to_string());
+        .expect("select exactly one IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_PAIR");
+    let direction = std::env::var("IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DIRECTION")
+        .expect("select IMAS_MVDD_RUNTIME_MAP_MEASUREMENT_DIRECTION=forward or reverse");
+    assert!(
+        direction == "forward" || direction == "reverse",
+        "measurement direction must be forward or reverse"
+    );
     let pairs: Vec<_> = reference_measurement_pairs()
         .into_iter()
-        .filter(|(name, _, _, _)| selected == "all" || selected == *name)
+        .filter(|(name, _, _, _)| selected == *name)
         .collect();
-    assert!(!pairs.is_empty(), "unknown measurement pair {selected}");
+    assert_eq!(pairs.len(), 1, "unknown measurement pair {selected}");
 
     let timeline = Arc::new(StageTimeline::default());
     let deadline = measurement_deadline();
@@ -629,79 +636,82 @@ fn measure_pinned_runtime_map_acquisition() {
     );
     let mut records = Vec::new();
     for (name, ids, first, second) in pairs {
-        for (stored, hli) in [(first, second), (second, first)] {
-            let request = MapRequest {
-                ids: ids.to_string(),
-                stored_dd: ArtifactDdVersion::new(stored).unwrap(),
-                hli_dd: ArtifactDdVersion::new(hli).unwrap(),
-            };
-            timeline.start();
-            let started = Instant::now();
-            let acquired = coordinator.acquire(&request);
-            let total = started.elapsed();
-            let entries = timeline.entries();
-            let (outcome, failure, retained, lookup_ns, cached_ns, retained_cache_hit) =
-                match acquired {
-                    Ok(map) => {
-                        let retained = Arc::downgrade(&map);
-                        drop(map);
-                        let map = coordinator.acquire(&request).unwrap();
-                        let retained_cache_hit = Arc::ptr_eq(
-                            &map,
-                            &retained.upgrade().expect(
-                                "coordinator retains a successful map after caller release",
-                            ),
-                        );
-                        let lookup_path = "ids_properties/homogeneous_time";
-                        let lookup_count = 20_000_u32;
-                        let lookup_started = Instant::now();
-                        for _ in 0..lookup_count {
-                            assert!(map.resolve(lookup_path, Direction::Forward).is_some());
-                        }
-                        let lookup_ns =
-                            lookup_started.elapsed().as_nanos() / u128::from(lookup_count);
-                        let cached_count = 20_000_u32;
-                        let cached_started = Instant::now();
-                        for _ in 0..cached_count {
-                            assert!(Arc::ptr_eq(&map, &coordinator.acquire(&request).unwrap()));
-                        }
-                        let cached_ns =
-                            cached_started.elapsed().as_nanos() / u128::from(cached_count);
-                        (
-                            "success",
-                            None,
-                            Some(map.estimated_retained_bytes()),
-                            Some(lookup_ns),
-                            Some(cached_ns),
-                            Some(retained_cache_hit),
-                        )
-                    }
-                    Err(error) => (
-                        "failure",
-                        Some(format!("{error:?}")),
-                        None,
-                        None,
-                        None,
-                        None,
-                    ),
-                };
-            let stages = entries
-                .iter()
-                .map(|(stage, elapsed)| {
-                    format!(
-                        "{{\"stage\":{},\"elapsed_ns\":{}}}",
-                        json_string(measurement_stage_name(*stage)),
-                        elapsed.as_nanos()
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            records.push(format!(
-                "{{\"pair\":{},\"ids\":{},\"stored_dd\":{},\"hli_dd\":{},\"deadline_seconds\":{},\"outcome\":{},\"failure\":{},\"total_ns\":{},\"publication_completed_ns\":{},\"retained_map_estimate_bytes\":{},\"resolver_lookup_ns_per_call\":{},\"cache_hit_ns_per_call\":{},\"retained_cache_hit_after_caller_release\":{},\"stages\":[{}]}}",
+        let (stored, hli) = if direction == "forward" {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        let request = MapRequest {
+            ids: ids.to_string(),
+            stored_dd: ArtifactDdVersion::new(stored).unwrap(),
+            hli_dd: ArtifactDdVersion::new(hli).unwrap(),
+        };
+        timeline.start();
+        let started = Instant::now();
+        let acquired = coordinator.acquire(&request);
+        let total = started.elapsed();
+        let entries = timeline.entries();
+        let (outcome, failure, retained, lookup_ns, cached_ns, retained_cache_hit) = match acquired
+        {
+            Ok(map) => {
+                let retained = Arc::downgrade(&map);
+                drop(map);
+                let map = coordinator.acquire(&request).unwrap();
+                let retained_cache_hit = Arc::ptr_eq(
+                    &map,
+                    &retained
+                        .upgrade()
+                        .expect("coordinator retains a successful map after caller release"),
+                );
+                let lookup_path = "ids_properties/homogeneous_time";
+                let lookup_count = 20_000_u32;
+                let lookup_started = Instant::now();
+                for _ in 0..lookup_count {
+                    assert!(map.resolve(lookup_path, Direction::Forward).is_some());
+                }
+                let lookup_ns = lookup_started.elapsed().as_nanos() / u128::from(lookup_count);
+                let cached_count = 20_000_u32;
+                let cached_started = Instant::now();
+                for _ in 0..cached_count {
+                    assert!(Arc::ptr_eq(&map, &coordinator.acquire(&request).unwrap()));
+                }
+                let cached_ns = cached_started.elapsed().as_nanos() / u128::from(cached_count);
+                (
+                    "success",
+                    None,
+                    Some(map.estimated_retained_bytes()),
+                    Some(lookup_ns),
+                    Some(cached_ns),
+                    Some(retained_cache_hit),
+                )
+            }
+            Err(error) => (
+                "failure",
+                Some(format!("{error:?}")),
+                None,
+                None,
+                None,
+                None,
+            ),
+        };
+        let stages = entries
+            .iter()
+            .map(|(stage, elapsed)| {
+                format!(
+                    "{{\"stage\":{},\"elapsed_ns\":{}}}",
+                    json_string(measurement_stage_name(*stage)),
+                    elapsed.as_nanos()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        records.push(format!(
+                "{{\"pair\":{},\"ids\":{},\"stored_dd\":{},\"hli_dd\":{},\"direction\":{},\"deadline_seconds\":{},\"outcome\":{},\"failure\":{},\"total_ns\":{},\"publication_completed_ns\":{},\"retained_map_estimate_bytes\":{},\"resolver_lookup_ns_per_call\":{},\"cache_hit_ns_per_call\":{},\"retained_cache_hit_after_caller_release\":{},\"stages\":[{}]}}",
                 json_string(name),
                 json_string(ids),
                 json_string(stored),
                 json_string(hli),
+                json_string(&direction),
                 deadline.as_secs(),
                 json_string(outcome),
                 failure.map_or_else(|| "null".to_string(), |value| json_string(&value)),
@@ -713,7 +723,6 @@ fn measure_pinned_runtime_map_acquisition() {
                 retained_cache_hit.map_or_else(|| "null".to_string(), |value| value.to_string()),
                 stages,
             ));
-        }
     }
     std::fs::write(
         &output,
