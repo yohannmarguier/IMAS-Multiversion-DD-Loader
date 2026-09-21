@@ -1177,8 +1177,10 @@ fn historical_path_at(
         if successor_cycle_involving(facts, &ancestor.path, ids) {
             return None;
         }
-        let Some(declaration) = declaration_after(&ancestor.rename_declarations, endpoint) else {
-            continue;
+        let declaration = match declaration_after(&ancestor.rename_declarations, endpoint) {
+            HistoricalDeclaration::Absent => continue,
+            HistoricalDeclaration::Conflicting => return None,
+            HistoricalDeclaration::Found(declaration) => declaration,
         };
         let previous = normalize_previous_name(&declaration.previous_name, &ancestor.path, ids)?;
         if previous == ancestor.path {
@@ -1205,22 +1207,30 @@ fn ancestor_paths(path: &str) -> Vec<String> {
         .collect()
 }
 
-/// Returns the first change strictly after the endpoint. Equal-date entries
-/// are deliberately ambiguous: a row order must not choose a semantic role.
+enum HistoricalDeclaration<'a> {
+    Absent,
+    Found(&'a GraphRename),
+    Conflicting,
+}
+
+/// Returns the first change strictly after the endpoint. Contradictory
+/// equal-date evidence stays distinct from no applicable declaration so a
+/// child conflict cannot fall through to an ancestor correspondence.
 fn declaration_after<'a>(
     declarations: &'a [GraphRename],
     endpoint: &ArtifactDdVersion,
-) -> Option<&'a GraphRename> {
+) -> HistoricalDeclaration<'a> {
     let mut ordered: Vec<_> = declarations.iter().collect();
     ordered.sort_by_key(|declaration| numeric_release(&declaration.release));
     if ordered.windows(2).any(|pair| {
         pair[0].release == pair[1].release && pair[0].previous_name != pair[1].previous_name
     }) {
-        return None;
+        return HistoricalDeclaration::Conflicting;
     }
     ordered
         .into_iter()
         .find(|declaration| numeric_release(&declaration.release) > numeric_release(endpoint))
+        .map_or(HistoricalDeclaration::Absent, HistoricalDeclaration::Found)
 }
 
 fn is_distinct_role_change(older: &EndpointRole, newer: &EndpointRole) -> bool {

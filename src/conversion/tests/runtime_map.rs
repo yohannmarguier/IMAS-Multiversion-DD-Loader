@@ -2367,6 +2367,48 @@ fn acquisition_extends_an_evidenced_coexisting_structure_to_its_descendants() {
 }
 
 #[test]
+fn a_conflicting_child_declaration_cannot_inherit_its_parent_correspondence() {
+    let mut facts = moved_parent_facts();
+    let child = "time_slice/current/profiles_1d/gap/r";
+    facts
+        .nodes
+        .iter_mut()
+        .find(|node| node.path == child)
+        .expect("fixture has the moved child")
+        .rename_declarations
+        .push(GraphRename {
+            release: ArtifactDdVersion::new("4.0.0").unwrap(),
+            previous_name: "../../../legacy/profiles_1d/gap/other_r".to_string(),
+        });
+
+    let assert_localized = |facts| {
+        let map = RuntimeMapAcquirer::new(ControlledSource { result: Ok(facts) })
+            .acquire(&request())
+            .expect("the child conflict must remain localized");
+        assert_eq!(
+            map.resolve(child, Direction::Forward)
+                .expect("the conflicting child remains claimed")
+                .outcome,
+            Outcome::Refusal(RefusalReason::Unmappable)
+        );
+        assert!(matches!(
+            map.resolve("time_slice/current/profiles_1d", Direction::Forward)
+                .expect("the independently supported parent remains usable")
+                .outcome,
+            Outcome::Path { .. }
+        ));
+    };
+
+    assert_localized(facts.clone());
+    facts.nodes.reverse();
+    facts
+        .nodes
+        .iter_mut()
+        .for_each(|node| node.rename_declarations.reverse());
+    assert_localized(facts);
+}
+
+#[test]
 fn acquisition_localizes_a_coexistence_candidate_without_servable_value_evidence() {
     let mut facts = coexistence_facts();
     for node in facts
