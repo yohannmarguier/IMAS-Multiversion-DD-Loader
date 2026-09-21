@@ -246,7 +246,8 @@ The same job configures a separate build against the normally installed,
 graph-backed production package. Its exact enabled selection contains the
 graph-runtime COCOS round trip plus version-unset, equal-stamp, absent-stamp and
 malformed-stamp cases. The private XML package is assembled from the existing
-test-only stage and cannot be installed or selected as an operator fallback.
+test-only stage; no public CMake install or runtime setting can select it as an
+operator fallback.
 
 Its C++ job builds `yohannmarguier/IMAS-Cpp` at `IMAS_CPP_REF` against the
 same private XML-fixture package and Core fork pin, with DD 4.1.1. The generated C++

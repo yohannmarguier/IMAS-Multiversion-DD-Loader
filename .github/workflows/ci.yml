@@ -193,7 +193,7 @@ jobs:
             live-graph-core-coexistence-reverse
             live-graph-core-coexistence-nested
           )
-          pattern='^live-graph-core-coexistence-(forward|reverse|nested)$'
+          pattern="^($(IFS='|'; echo "${required[*]}"))$"
           ctest --test-dir build --show-only=json-v1 > build/live-coexistence-inventory.json
           required_tests=$(IFS=';'; echo "${required[*]}")
           cmake \
@@ -237,7 +237,7 @@ jobs:
             write-delete-coexistence-forward-is-primary-only-and-fans-out
             write-coexistence-reverse-non-primary-refuses
           )
-          pattern='^(read-coexistence-forward-selects-primary-then-falls-back|read-coexistence-forward-arraystruct-falls-back-between-j-candidates|read-coexistence-reverse-selects-the-4.1-successor|write-delete-coexistence-forward-is-primary-only-and-fans-out|write-coexistence-reverse-non-primary-refuses)$'
+          pattern="^($(IFS='|'; echo "${required[*]}"))$"
           ctest --test-dir build-controlled --show-only=json-v1 > \
             build-controlled/controlled-coexistence-inventory.json
           required_tests=$(IFS=';'; echo "${required[*]}")

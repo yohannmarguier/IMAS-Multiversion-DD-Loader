@@ -273,6 +273,11 @@ if(DEFINED PINNED_FORTRAN_CORE_JOB OR DEFINED PINNED_CPP_CORE_JOB
         endif()
     endforeach()
 
+    forbid_matching_line(workflow "^- 'tests/\\*\\*'$"
+        "ignore workflow-owned HLI tests")
+    forbid_matching_line(workflow "^- 'scripts/\\*\\*'$"
+        "ignore workflow-owned HLI helper scripts")
+
     check_pinned_core_linkage(${PINNED_FORTRAN_CORE_JOB} workflow)
     read_job(${PINNED_FORTRAN_CORE_JOB} fortran_hli_job)
     require_matching_line(fortran_hli_job "libhdf5-dev hdf5-tools"

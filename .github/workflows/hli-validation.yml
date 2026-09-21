@@ -28,8 +28,6 @@ on:
       - '**.md'
       - 'docs/adr/**'
       - 'graphify-out/**'
-      - 'tests/**'
-      - 'scripts/**'
   workflow_dispatch:
 
 permissions:
@@ -374,7 +372,7 @@ jobs:
             al-fortran-test-shim-stamp-absent
             al-fortran-test-shim-stamp-malformed
           )
-          pattern='^(al-fortran-test-shim-graph-runtime|al-fortran-test-shim-version-unset|al-fortran-test-shim-stamp-equal|al-fortran-test-shim-stamp-absent|al-fortran-test-shim-stamp-malformed)$'
+          pattern="^($(IFS='|'; echo "${required[*]}"))$"
           ctest --test-dir build-graph --show-only=json-v1 > build-graph/test-inventory.json
           required_tests=$(IFS=';'; echo "${required[*]}")
           cmake \
@@ -731,7 +729,7 @@ jobs:
             cpp-test-shim-stamp-absent
             cpp-test-shim-stamp-malformed
           )
-          pattern='^(cpp-test-shim-roundtrip-cross-dd|cpp-test-shim-version-unset|cpp-test-shim-stamp-equal|cpp-test-shim-stamp-absent|cpp-test-shim-stamp-malformed)$'
+          pattern="^($(IFS='|'; echo "${required[*]}"))$"
           required_tests=$(IFS=';'; echo "${required[*]}")
           cmake \
             "-DINVENTORY_FILE=$PWD/test-inventory.json" \
