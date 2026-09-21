@@ -308,7 +308,8 @@ query() {
     result=$(docker exec "$container" cypher-shell --format plain --non-interactive -u neo4j \
         -p "$IMAS_MVDD_GRAPH_PASSWORD" \
         "$(<"$smoke_query")")
-    status=$(printf '%s\n' "$result" | tail -n 1 | tr -d '"\r')
+    status=$(printf '%s\n' "$result" | tail -n 1 \
+        | awk -F', ' '{ gsub(/"|\r/, "", $1); print $1 }')
     test "$status" = imas_mvdd_smoke_ok \
         || die "selected service failed required DD graph content smoke (status: ${status:-empty result})"
     printf '%s\n' "$result"

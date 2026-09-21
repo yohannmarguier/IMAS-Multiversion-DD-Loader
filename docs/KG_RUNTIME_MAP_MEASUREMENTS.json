@@ -1,0 +1,1815 @@
+{
+  "schema": 2,
+  "conditions": {
+    "warm": {
+      "service_state": "running",
+      "readiness_probe": "meaningful DD content query before the warm batch",
+      "os_vm_caches_flushed": false
+    },
+    "service_restarted": {
+      "service_state": "stopped and started immediately before every directional acquisition",
+      "readiness_probe": "sleep-only; no Cypher content query",
+      "startup_settle_seconds": 30,
+      "startup_timed": false,
+      "os_vm_caches_flushed": false
+    }
+  },
+  "identities": {
+    "graph_release": "v5.3.0",
+    "graph_manifest": "sha256:dc90975cb9fa0c7b08e9e4809640d01e41d927b4162200c13eec5076e030329b",
+    "graph_archive": "sha256:2514cbd89c525131130f592f6f7596c700187a4eba43ba2d0e8c623fe32b38ed",
+    "graph_exporter_revision": "ba2c50cf4ce0df1fc4adc58f6957ce99b5c2db7e",
+    "neo4j_version": "2026.01.4-community",
+    "neo4j_digest": "sha256:657e0b601f09da7ef1bd51eebfe3758c3123eb362249767d8476500c95ea810e",
+    "service": "imas-mvdd-dd-graph-bd621bb0990c-dc90975cb9fa",
+    "code_commit": "da3dc9e8e717f67a01706af6f520b3f5e97f88ec",
+    "code_dirty": false,
+    "rust": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "machine": "Darwin arm64"
+  },
+  "reproducibility": {
+    "graph_home": "/private/tmp/imas-mvdd-issue-245-graph",
+    "neo4j_uri": "bolt://127.0.0.1:17690",
+    "code_status": "",
+    "code_diff_from_head": ""
+  },
+  "command": "scripts/measure-runtime-map.sh --output docs/KG_RUNTIME_MAP_MEASUREMENTS.md --evidence docs/KG_RUNTIME_MAP_MEASUREMENTS.json --runs 1",
+  "samples": [
+    {
+      "pair": "equilibrium-3.39.0-4.1.1",
+      "ids": "equilibrium",
+      "stored_dd": "3.39.0",
+      "hli_dd": "4.1.1",
+      "direction": "forward",
+      "deadline_seconds": 5,
+      "outcome": "failure",
+      "failure": "TimedOut { stage: RuleConstruction }",
+      "total_ns": 5000992083,
+      "publication_completed_ns": null,
+      "retained_map_estimate_bytes": null,
+      "resolver_lookup_ns_per_call": null,
+      "cache_hit_ns_per_call": null,
+      "retained_cache_hit_after_caller_release": null,
+      "stages": [
+        {
+          "stage": "source",
+          "elapsed_ns": 115000
+        },
+        {
+          "stage": "connection",
+          "elapsed_ns": 134291
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 745125
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 37274083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 112032583
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 140947583
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 582382375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 604923291
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 625300583
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 643935416
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 658812791
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 680073708
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 691309791
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 705407625
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 737237083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1057396791
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1085814083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1107583416
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1126756125
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1145001958
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1163296375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1178157208
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1191172500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1204271583
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1218827708
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1239899916
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1252940250
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1266219916
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1278738166
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1302606375
+        },
+        {
+          "stage": "decoding",
+          "elapsed_ns": 1331309041
+        },
+        {
+          "stage": "scope_validation",
+          "elapsed_ns": 1351000333
+        },
+        {
+          "stage": "rule_construction",
+          "elapsed_ns": 1352260958
+        }
+      ],
+      "condition": "warm",
+      "run": 1
+    },
+    {
+      "pair": "equilibrium-3.39.0-4.1.1",
+      "ids": "equilibrium",
+      "stored_dd": "4.1.1",
+      "hli_dd": "3.39.0",
+      "direction": "reverse",
+      "deadline_seconds": 5,
+      "outcome": "failure",
+      "failure": "TimedOut { stage: RuleConstruction }",
+      "total_ns": 5000332958,
+      "publication_completed_ns": null,
+      "retained_map_estimate_bytes": null,
+      "resolver_lookup_ns_per_call": null,
+      "cache_hit_ns_per_call": null,
+      "retained_cache_hit_after_caller_release": null,
+      "stages": [
+        {
+          "stage": "source",
+          "elapsed_ns": 6875
+        },
+        {
+          "stage": "connection",
+          "elapsed_ns": 7958
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 53542
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 10999042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 13729583
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 15680042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 25205250
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 33602083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 49648417
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 57461750
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 65092042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 83435167
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 92506375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 99364500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 103120583
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 110882958
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 119557083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 128218750
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 136255042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 144560917
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 153250500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 163479958
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 172536083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 181484500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 190511458
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 198985125
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 207320875
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 216650333
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 225368958
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 229872542
+        },
+        {
+          "stage": "decoding",
+          "elapsed_ns": 233651750
+        },
+        {
+          "stage": "scope_validation",
+          "elapsed_ns": 240076792
+        },
+        {
+          "stage": "rule_construction",
+          "elapsed_ns": 240577625
+        }
+      ],
+      "condition": "warm",
+      "run": 1
+    },
+    {
+      "pair": "equilibrium-3.42.0-4.1.1",
+      "ids": "equilibrium",
+      "stored_dd": "3.42.0",
+      "hli_dd": "4.1.1",
+      "direction": "forward",
+      "deadline_seconds": 5,
+      "outcome": "failure",
+      "failure": "TimedOut { stage: RuleConstruction }",
+      "total_ns": 5000645208,
+      "publication_completed_ns": null,
+      "retained_map_estimate_bytes": null,
+      "resolver_lookup_ns_per_call": null,
+      "cache_hit_ns_per_call": null,
+      "retained_cache_hit_after_caller_release": null,
+      "stages": [
+        {
+          "stage": "source",
+          "elapsed_ns": 6208
+        },
+        {
+          "stage": "connection",
+          "elapsed_ns": 7083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 51208
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 11164542
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 14839958
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 16890042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 25157458
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 32750833
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 40028750
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 51281292
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 59852792
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 68473917
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 79196708
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 86160208
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 90267333
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 97922875
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 105077125
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 111822667
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 118621083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 125649917
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 132948042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 140221167
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 147739458
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 155472750
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 163419750
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 171389958
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 179916542
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 187579458
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 194790375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 198791500
+        },
+        {
+          "stage": "decoding",
+          "elapsed_ns": 202048000
+        },
+        {
+          "stage": "scope_validation",
+          "elapsed_ns": 208110917
+        },
+        {
+          "stage": "rule_construction",
+          "elapsed_ns": 208556000
+        }
+      ],
+      "condition": "warm",
+      "run": 1
+    },
+    {
+      "pair": "equilibrium-3.42.0-4.1.1",
+      "ids": "equilibrium",
+      "stored_dd": "4.1.1",
+      "hli_dd": "3.42.0",
+      "direction": "reverse",
+      "deadline_seconds": 5,
+      "outcome": "failure",
+      "failure": "TimedOut { stage: RuleConstruction }",
+      "total_ns": 5001306917,
+      "publication_completed_ns": null,
+      "retained_map_estimate_bytes": null,
+      "resolver_lookup_ns_per_call": null,
+      "cache_hit_ns_per_call": null,
+      "retained_cache_hit_after_caller_release": null,
+      "stages": [
+        {
+          "stage": "source",
+          "elapsed_ns": 7542
+        },
+        {
+          "stage": "connection",
+          "elapsed_ns": 8459
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 55084
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 10271667
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 14272667
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 18234000
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 31745542
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 41194625
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 50910584
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 61787000
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 71890042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 82680500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 93586042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 103231500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 109179417
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 120679750
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 130926625
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 141749834
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 152254000
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 163419042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 176057292
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 188823334
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 204929625
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 218442375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 232030917
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 247923959
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 260677375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 277351709
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 293094417
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 300437542
+        },
+        {
+          "stage": "decoding",
+          "elapsed_ns": 313230250
+        },
+        {
+          "stage": "scope_validation",
+          "elapsed_ns": 320301917
+        },
+        {
+          "stage": "rule_construction",
+          "elapsed_ns": 320752334
+        }
+      ],
+      "condition": "warm",
+      "run": 1
+    },
+    {
+      "pair": "pulse-schedule-3.25.0-3.30.0",
+      "ids": "pulse_schedule",
+      "stored_dd": "3.25.0",
+      "hli_dd": "3.30.0",
+      "direction": "forward",
+      "deadline_seconds": 5,
+      "outcome": "success",
+      "failure": null,
+      "total_ns": 2590845125,
+      "publication_completed_ns": 2590845125,
+      "retained_map_estimate_bytes": 440790,
+      "resolver_lookup_ns_per_call": 2354,
+      "cache_hit_ns_per_call": 58,
+      "retained_cache_hit_after_caller_release": true,
+      "stages": [
+        {
+          "stage": "source",
+          "elapsed_ns": 6500
+        },
+        {
+          "stage": "connection",
+          "elapsed_ns": 7416
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 52625
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 5851291
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 7900916
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 17270291
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 102962708
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 110785000
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 117949583
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 124871458
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 134685000
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 139716041
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 144720333
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 238103125
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 251323833
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 260308291
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 267728791
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 277887375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 287195875
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 295619541
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 302791541
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 310657000
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 317366041
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 319639500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 323245458
+        },
+        {
+          "stage": "decoding",
+          "elapsed_ns": 326337041
+        },
+        {
+          "stage": "scope_validation",
+          "elapsed_ns": 340197000
+        },
+        {
+          "stage": "rule_construction",
+          "elapsed_ns": 341307541
+        },
+        {
+          "stage": "map_validation",
+          "elapsed_ns": 2590260708
+        },
+        {
+          "stage": "publication",
+          "elapsed_ns": 2590573250
+        }
+      ],
+      "condition": "warm",
+      "run": 1
+    },
+    {
+      "pair": "pulse-schedule-3.25.0-3.30.0",
+      "ids": "pulse_schedule",
+      "stored_dd": "3.30.0",
+      "hli_dd": "3.25.0",
+      "direction": "reverse",
+      "deadline_seconds": 5,
+      "outcome": "success",
+      "failure": null,
+      "total_ns": 2378750000,
+      "publication_completed_ns": 2378750000,
+      "retained_map_estimate_bytes": 440770,
+      "resolver_lookup_ns_per_call": 2361,
+      "cache_hit_ns_per_call": 56,
+      "retained_cache_hit_after_caller_release": true,
+      "stages": [
+        {
+          "stage": "source",
+          "elapsed_ns": 6584
+        },
+        {
+          "stage": "connection",
+          "elapsed_ns": 7584
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 52417
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 11036959
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 13042042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 14706209
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 21588042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 28385542
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 34332417
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 40896292
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 47437667
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 51958959
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 54798417
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 61291625
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 67644209
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 73986834
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 82922250
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 89450500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 95918417
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 102395375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 108610292
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 115153000
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 121347500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 123928959
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 127263417
+        },
+        {
+          "stage": "decoding",
+          "elapsed_ns": 130118917
+        },
+        {
+          "stage": "scope_validation",
+          "elapsed_ns": 134392042
+        },
+        {
+          "stage": "rule_construction",
+          "elapsed_ns": 134783917
+        },
+        {
+          "stage": "map_validation",
+          "elapsed_ns": 2378180167
+        },
+        {
+          "stage": "publication",
+          "elapsed_ns": 2378475625
+        }
+      ],
+      "condition": "warm",
+      "run": 1
+    },
+    {
+      "pair": "equilibrium-3.39.0-4.1.1",
+      "ids": "equilibrium",
+      "stored_dd": "3.39.0",
+      "hli_dd": "4.1.1",
+      "direction": "forward",
+      "deadline_seconds": 5,
+      "outcome": "failure",
+      "failure": "TimedOut { stage: RuleConstruction }",
+      "total_ns": 5000718709,
+      "publication_completed_ns": null,
+      "retained_map_estimate_bytes": null,
+      "resolver_lookup_ns_per_call": null,
+      "cache_hit_ns_per_call": null,
+      "retained_cache_hit_after_caller_release": null,
+      "stages": [
+        {
+          "stage": "source",
+          "elapsed_ns": 7667
+        },
+        {
+          "stage": "connection",
+          "elapsed_ns": 8750
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 59167
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 523929167
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 645279459
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 725481792
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1352959792
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1393494042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1420560209
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1461203375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1476924459
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1504912834
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1523717959
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1543745042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1604724417
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1924003000
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1950303709
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1970346875
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1993691084
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 2012461000
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 2034207750
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 2047722709
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 2061792834
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 2075154959
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 2090122584
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 2112219500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 2125056334
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 2137941875
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 2150779959
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 2179191459
+        },
+        {
+          "stage": "decoding",
+          "elapsed_ns": 2211351917
+        },
+        {
+          "stage": "scope_validation",
+          "elapsed_ns": 2227664667
+        },
+        {
+          "stage": "rule_construction",
+          "elapsed_ns": 2228883750
+        }
+      ],
+      "condition": "service-restarted",
+      "run": 1
+    },
+    {
+      "pair": "equilibrium-3.39.0-4.1.1",
+      "ids": "equilibrium",
+      "stored_dd": "4.1.1",
+      "hli_dd": "3.39.0",
+      "direction": "reverse",
+      "deadline_seconds": 5,
+      "outcome": "failure",
+      "failure": "TimedOut { stage: RuleConstruction }",
+      "total_ns": 5000339542,
+      "publication_completed_ns": null,
+      "retained_map_estimate_bytes": null,
+      "resolver_lookup_ns_per_call": null,
+      "cache_hit_ns_per_call": null,
+      "retained_cache_hit_after_caller_release": null,
+      "stages": [
+        {
+          "stage": "source",
+          "elapsed_ns": 6958
+        },
+        {
+          "stage": "connection",
+          "elapsed_ns": 8000
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 54500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 510047083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 624612458
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 699946958
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1090481375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1119134667
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1146610417
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1169205583
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1183244292
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1204528208
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1219263667
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1235493750
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1287377417
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1513953625
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1540242750
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1562548083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1580709292
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1595024667
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1609171708
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1621007250
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1633345875
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1646478667
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1659641833
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1681270208
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1692876667
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1704984292
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1716648292
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1747978958
+        },
+        {
+          "stage": "decoding",
+          "elapsed_ns": 1786550375
+        },
+        {
+          "stage": "scope_validation",
+          "elapsed_ns": 1806478250
+        },
+        {
+          "stage": "rule_construction",
+          "elapsed_ns": 1807714833
+        }
+      ],
+      "condition": "service-restarted",
+      "run": 1
+    },
+    {
+      "pair": "equilibrium-3.42.0-4.1.1",
+      "ids": "equilibrium",
+      "stored_dd": "3.42.0",
+      "hli_dd": "4.1.1",
+      "direction": "forward",
+      "deadline_seconds": 5,
+      "outcome": "failure",
+      "failure": "TimedOut { stage: RuleConstruction }",
+      "total_ns": 5001352708,
+      "publication_completed_ns": null,
+      "retained_map_estimate_bytes": null,
+      "resolver_lookup_ns_per_call": null,
+      "cache_hit_ns_per_call": null,
+      "retained_cache_hit_after_caller_release": null,
+      "stages": [
+        {
+          "stage": "source",
+          "elapsed_ns": 6917
+        },
+        {
+          "stage": "connection",
+          "elapsed_ns": 7917
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 56334
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 525223875
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 659728792
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 736719500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1136788084
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1166766584
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1189540209
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1211699084
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1224732334
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1244368084
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1257894459
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1276113917
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1333718042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1556567792
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1581416834
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1599355084
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1614082667
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1628448084
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1643514167
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1655717709
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1668008209
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1680877375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1692890459
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1714352917
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1726606125
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1740789334
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1753103167
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1784462459
+        },
+        {
+          "stage": "decoding",
+          "elapsed_ns": 1822717584
+        },
+        {
+          "stage": "scope_validation",
+          "elapsed_ns": 1836798959
+        },
+        {
+          "stage": "rule_construction",
+          "elapsed_ns": 1837856250
+        }
+      ],
+      "condition": "service-restarted",
+      "run": 1
+    },
+    {
+      "pair": "equilibrium-3.42.0-4.1.1",
+      "ids": "equilibrium",
+      "stored_dd": "4.1.1",
+      "hli_dd": "3.42.0",
+      "direction": "reverse",
+      "deadline_seconds": 5,
+      "outcome": "failure",
+      "failure": "TimedOut { stage: RuleConstruction }",
+      "total_ns": 5000398250,
+      "publication_completed_ns": null,
+      "retained_map_estimate_bytes": null,
+      "resolver_lookup_ns_per_call": null,
+      "cache_hit_ns_per_call": null,
+      "retained_cache_hit_after_caller_release": null,
+      "stages": [
+        {
+          "stage": "source",
+          "elapsed_ns": 8000
+        },
+        {
+          "stage": "connection",
+          "elapsed_ns": 9208
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 71458
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 574104042
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 708483125
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 785516250
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1269801833
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1303043375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1330666792
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1352907625
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1365588917
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1388131417
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1403421875
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1421834958
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1479400000
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1733240375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1761050708
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1783797417
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1799506500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1816154458
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1832422917
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1844818083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1858059917
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1870580542
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1884263167
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1906516000
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1921563542
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1936843292
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1950554708
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1979607875
+        },
+        {
+          "stage": "decoding",
+          "elapsed_ns": 2012306417
+        },
+        {
+          "stage": "scope_validation",
+          "elapsed_ns": 2032094083
+        },
+        {
+          "stage": "rule_construction",
+          "elapsed_ns": 2033198958
+        }
+      ],
+      "condition": "service-restarted",
+      "run": 1
+    },
+    {
+      "pair": "pulse-schedule-3.25.0-3.30.0",
+      "ids": "pulse_schedule",
+      "stored_dd": "3.25.0",
+      "hli_dd": "3.30.0",
+      "direction": "forward",
+      "deadline_seconds": 5,
+      "outcome": "success",
+      "failure": null,
+      "total_ns": 3921557833,
+      "publication_completed_ns": 3921557833,
+      "retained_map_estimate_bytes": 440790,
+      "resolver_lookup_ns_per_call": 2276,
+      "cache_hit_ns_per_call": 54,
+      "retained_cache_hit_after_caller_release": true,
+      "stages": [
+        {
+          "stage": "source",
+          "elapsed_ns": 6833
+        },
+        {
+          "stage": "connection",
+          "elapsed_ns": 7750
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 51375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 509411333
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 628638708
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 706788541
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1128640083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1159110291
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1189909541
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1210963500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1230830750
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1252924166
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1307384125
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1578970916
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1602359083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1619870541
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1634008375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1650586500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1663917375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1675007791
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1686688083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1700608333
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1710545916
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1739505875
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1775525166
+        },
+        {
+          "stage": "decoding",
+          "elapsed_ns": 1780777041
+        },
+        {
+          "stage": "scope_validation",
+          "elapsed_ns": 1794098791
+        },
+        {
+          "stage": "rule_construction",
+          "elapsed_ns": 1795071250
+        },
+        {
+          "stage": "map_validation",
+          "elapsed_ns": 3920934083
+        },
+        {
+          "stage": "publication",
+          "elapsed_ns": 3921267416
+        }
+      ],
+      "condition": "service-restarted",
+      "run": 1
+    },
+    {
+      "pair": "pulse-schedule-3.25.0-3.30.0",
+      "ids": "pulse_schedule",
+      "stored_dd": "3.30.0",
+      "hli_dd": "3.25.0",
+      "direction": "reverse",
+      "deadline_seconds": 5,
+      "outcome": "success",
+      "failure": null,
+      "total_ns": 3921532042,
+      "publication_completed_ns": 3921532042,
+      "retained_map_estimate_bytes": 440770,
+      "resolver_lookup_ns_per_call": 2274,
+      "cache_hit_ns_per_call": 55,
+      "retained_cache_hit_after_caller_release": true,
+      "stages": [
+        {
+          "stage": "source",
+          "elapsed_ns": 6917
+        },
+        {
+          "stage": "connection",
+          "elapsed_ns": 7875
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 56542
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 498590083
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 613669917
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 692746542
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1119203542
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1162753833
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1194042125
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1213701375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1232443000
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1242454917
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1290425958
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1558553792
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1583186958
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1600154375
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1614347500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1630552500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1643028125
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1655381458
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1670120708
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1681731500
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1691983000
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1720863250
+        },
+        {
+          "stage": "query",
+          "elapsed_ns": 1754894917
+        },
+        {
+          "stage": "decoding",
+          "elapsed_ns": 1759558917
+        },
+        {
+          "stage": "scope_validation",
+          "elapsed_ns": 1774145917
+        },
+        {
+          "stage": "rule_construction",
+          "elapsed_ns": 1775156875
+        },
+        {
+          "stage": "map_validation",
+          "elapsed_ns": 3921012667
+        },
+        {
+          "stage": "publication",
+          "elapsed_ns": 3921287125
+        }
+      ],
+      "condition": "service-restarted",
+      "run": 1
+    }
+  ]
+}

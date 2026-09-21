@@ -17,4 +17,7 @@ RETURN CASE
   WHEN release_count = 1 AND stamp_count = 1 AND change_count > 0
   THEN 'imas_mvdd_smoke_ok'
   ELSE 'imas_mvdd_smoke_invalid'
-END AS smoke_status;
+END AS smoke_status,
+release_count,
+stamp_count,
+change_count;
