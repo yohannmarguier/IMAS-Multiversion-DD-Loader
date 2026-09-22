@@ -490,8 +490,11 @@ Two invariants the diagram encodes:
 - **A loss log belongs to a root**, never to a cloned record — so a child
   arraystruct context contributes to the same eventual report, and a `lookup`
   snapshot can never carry a copied log.
-- **The map cache holds `Weak` references**, so a `ConversionMap` lives exactly
-  as long as some record references it. No eviction policy is needed or written.
+- **The runtime-map coordinator owns successful maps for the process lifetime**,
+  keyed by IDS name and the ordered stored/HLI DD-version pair. Context records
+  hold cheap `Arc` clones but do not own cache policy; closing every context
+  therefore leaves a warm map reusable without contacting the graph again.
+  Failed acquisitions are never retained, and there is no live refresh policy.
 
 ## 6. One resolution, narrowed per seam (ADR 0021)
 

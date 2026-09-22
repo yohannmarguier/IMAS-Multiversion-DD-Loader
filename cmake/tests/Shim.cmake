@@ -1288,3 +1288,12 @@ add_scoped_passthrough_test(
 add_scoped_passthrough_test(
     scoped-passthrough-writing-bind-and-unbind-plugin-forward-field-path-unchanged
     writing-bind-and-unbind-plugin-forward-field-path-unchanged)
+
+# The XML artifact is a private regression source, not a production fallback.
+# This separate label proves parsed XML semantics reach registered contexts and
+# observable Core calls without making them expectations of the graph source.
+set_tests_properties(
+    read-path-translates-field-and-timebase-independently
+    read-path-merged-read-falls-through-to-next-candidate
+    read-path-sign-flip-array-negates-values-and-preserves-empty-double
+    PROPERTIES LABELS xml-fidelity)
