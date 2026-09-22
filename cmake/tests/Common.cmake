@@ -30,14 +30,20 @@ add_test(NAME rust-audit-workflows
     COMMAND "${CMAKE_COMMAND}"
         "-DCI_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
         "-DMUTATION_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/rust-mutation-audit.yml"
+        "-DLINE_AUDIT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/audit-rust-line-coverage.sh"
+        "-DPRODUCTION_TESTS_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-production-line-coverage-tests.json"
         "-DLINE_SCOPE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-line-coverage-scope.json"
+        "-DXML_LINE_SCOPE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-xml-line-coverage-scope.json"
         "-DMUTATION_AUDIT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-mutation-audit.json"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_rust_audit_workflows.cmake")
 add_test(NAME rust-audit-workflow-guard
     COMMAND "${CMAKE_COMMAND}"
         "-DCI_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
         "-DMUTATION_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/rust-mutation-audit.yml"
+        "-DLINE_AUDIT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/audit-rust-line-coverage.sh"
+        "-DPRODUCTION_TESTS_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-production-line-coverage-tests.json"
         "-DLINE_SCOPE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-line-coverage-scope.json"
+        "-DXML_LINE_SCOPE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-xml-line-coverage-scope.json"
         "-DMUTATION_AUDIT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-mutation-audit.json"
         "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_rust_audit_workflows.cmake"
         "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
@@ -287,6 +293,11 @@ add_test(NAME rust-line-coverage-audit-fixtures
 add_test(NAME rust-integration-coverage-audit-fixtures
     COMMAND "${BASH_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/check-rust-integration-coverage.sh"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_test(NAME rust-production-test-witness-fixtures
+    COMMAND "${BASH_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/check-rust-test-witnesses.sh"
         "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Mutation testing remains an explicit local audit: the fixture test protects

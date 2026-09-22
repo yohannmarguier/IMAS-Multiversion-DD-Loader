@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "witnesses": {
+    "supported_conversion": "conversion::runtime_map::neo4j_graph::tests::raw_scope_acquires_a_supported_scalar_without_inventing_coordinates",
+    "absence": "conversion::runtime_map::tests::acquisition_keeps_missing_endpoint_evidence_as_a_local_refusal",
+    "unresolved_data": "conversion::runtime_map::tests::acquisition_keeps_an_uncorroborated_or_scientifically_unproven_rename_unmappable",
+    "failed_acquisition": "conversion::runtime_map::tests::acquisition_preserves_a_whole_source_failure",
+    "retry": "conversion::runtime_map::tests::an_expired_attempt_cannot_replace_a_later_retry",
+    "concurrent_same_key": "conversion::runtime_map::tests::concurrent_same_key_requests_share_one_construction_and_one_result"
+  }
+}

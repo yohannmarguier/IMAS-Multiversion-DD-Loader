@@ -6,12 +6,24 @@ Run the local audit from the repository root:
 $ bash scripts/audit-rust-line-coverage.sh
 ```
 
-It runs `cargo llvm-cov --all-features --lcov`, writes the generated LCOV file
-to `target/rust-line-coverage.lcov`, then checks it against
-`coverage/rust-line-coverage-scope.json`. The report always prints each group
-and the aggregate before returning failure, so it remains useful while the
-baseline is below the floors. It adds covered and total lines; it never averages
-percentages.
+It runs two independent configurations and never uses `--all-features`:
+
+- the production audit uses `--no-default-features`, writes
+  `target/rust-line-coverage-production.lcov`, and checks
+  `coverage/rust-line-coverage-scope.json`;
+- the private XML regression audit uses only `xml-fixture-source`, writes
+  `target/rust-line-coverage-xml.lcov`, and checks
+  `coverage/rust-xml-line-coverage-scope.json`.
+
+Each report prints every group and the aggregate under a configuration heading.
+The checker adds covered and total lines; it never averages percentages. Keeping
+the reports and scopes separate prevents XML fixture hits from satisfying a
+production runtime-map assignment. Before that unfiltered production run, the
+audit inventories its library tests and requires the six scenario witnesses in
+`coverage/rust-production-line-coverage-tests.json`; a missing, renamed, or
+feature-gated witness fails before coverage is measured. A second inventory of
+ignored tests ensures every witness will execute in the following unfiltered
+coverage run.
 
 Install the checked-in tool version and its LLVM component for the Rust
 toolchain you use:
@@ -31,7 +43,7 @@ The scope has six groups:
 
 | Group | Assigned behavior |
 | --- | --- |
-| conversion | Conversion-map resolution, path and seam policy, read outcome, the reentry gate, deterministic refusal formatting, and `lib.rs`'s shared status-buffer formatting. |
+| conversion | Conversion-map resolution, production graph decoding/map construction/acquisition coordination, path and seam policy, read outcome, the reentry gate, deterministic refusal formatting, and `lib.rs`'s shared status-buffer formatting. The XML scope substitutes `known_artifacts.rs` for the production runtime-map modules. |
 | DD-version | DD-version parsing, the latch policy, and pure stamp decoding. |
 | context-registry | Context lifecycle, root ownership, occurrence cache, map cache, and loss retention. |
 | loss | In-memory loss encoding/retention and append-only loss-file behavior. |
@@ -50,8 +62,13 @@ calculation, `loss_file.rs`'s rendering, naming and append behavior, and the
 policy ranges in `core_binding.rs` — including the fallback each unresolvable
 IMAS-Core selects — remain measured. The
 `validate_equilibrium_coverage` binary is excluded as its command-line,
-filesystem, and terminal adapter. Update the assignments with an internal seam
-extraction; do not silently shrink the scope.
+filesystem, and terminal adapter. Production graph coverage measures the
+controlled executor, raw-row validation, wire decoding, historical map
+construction, failures, retries and same-key coordination. Its exclusions are
+narrowly the live Bolt connection/I/O/value adapter and the process-global
+occurrence adapter; live graph and C-ABI suites own those integration layers.
+Update the assignments with an internal seam extraction; do not silently shrink
+the scope.
 
 **An exclusion may be ranged too.** Where only part of a measured file is
 another test layer's business — `version_stamp.rs`'s discovery read, the
@@ -75,34 +92,38 @@ range impossible rather than merely discouraged. A source absent from the scope
 is an explicit test-layer exclusion recorded in the same JSON file; it is not
 part of the denominator.
 
-The floors are 90% aggregate and 80% for every group. Ordinary CI runs this
-same command in its `rust-line-coverage` job and blocks on its verdict. Its
-LCOV report is uploaded even if the audit fails, so inspect the group totals
-before changing scope or tests. The compact fixture test is registered as
+Both configurations retain the 90% aggregate and 80% per-group floors.
+Ordinary CI runs this same command in its `rust-line-coverage` job and blocks on
+either verdict. Both LCOV reports are uploaded even if the audit fails, so
+inspect the matching configuration's totals before changing scope or tests.
+The compact fixture test is registered as
 `rust-line-coverage-audit-fixtures` and proves the aggregate/per-group boundary,
 malformed-data behavior, overlapping ownership refusal, and both truncated and
 newly stale range refusals against a throwaway source tree, without requiring a
-full coverage run.
+full coverage run. The workflow guard also
+parses the audit script: negative fixtures reject removal of the production
+run, replacement with `--all-features`, and scoring the XML report where
+runtime-map measurement is required. They also reject removal of a required
+runtime-map source assignment or test witness.
 
-## Integrated baseline (2026-09-22)
+## Integrated baselines (2026-09-22)
 
-The pinned tool reported the following from the integrated 306-unit-test audit,
-over the completed scope. `cargo-llvm-cov 0.9.1` and `cargo-mutants 27.1.0` are
-both available under Rust 1.88.0, which is the CI toolchain; the recorded line
-run also passes on the local Rust toolchain. All floors pass, so the command is
-suitable for CI enforcement.
+The pinned tool reported 390 passed production tests with three live-service
+tests explicitly ignored, followed by 306 passed XML-fixture tests.
+`cargo-llvm-cov 0.9.1` is available under Rust 1.88.0, the CI toolchain. Both
+configurations pass all floors.
 
-| Group | Covered/total | Coverage |
-| --- | ---: | ---: |
-| conversion | 2,004 / 2,298 | 87.2% |
-| DD-version | 188 / 199 | 94.5% |
-| context-registry | 170 / 170 | 100.0% |
-| loss | 238 / 239 | 99.6% |
-| artifact-validation | 222 / 227 | 97.8% |
-| deterministic runtime-binding policy | 110 / 110 | 100.0% |
-| aggregate | 2,932 / 3,243 | 90.4% |
+| Group | Production covered/total | Production | XML covered/total | XML |
+| --- | ---: | ---: | ---: | ---: |
+| conversion | 4,118 / 4,652 | 88.5% | 2,004 / 2,298 | 87.2% |
+| DD-version | 188 / 199 | 94.5% | 188 / 199 | 94.5% |
+| context-registry | 170 / 170 | 100.0% | 170 / 170 | 100.0% |
+| loss | 238 / 239 | 99.6% | 238 / 239 | 99.6% |
+| artifact-validation | 222 / 227 | 97.8% | 222 / 227 | 97.8% |
+| deterministic runtime-binding policy | 110 / 110 | 100.0% | 110 / 110 | 100.0% |
+| aggregate | 5,046 / 5,597 | 90.2% | 2,932 / 3,243 | 90.4% |
 
-The conversion denominator now includes the completeness and typed-map parsing
-decisions added before `conversion_map.rs`'s test module, the complete private
-XML-fixture lookup, and `seam_policy.rs`'s complete read-verdict assembly. Issue
-#248 records the stale-range failure and repaired audit output.
+The XML denominator retains issue #248's repaired completeness, private-fixture
+lookup, and seam-policy ranges. Its fixture guard rejects overlapping ownership
+and proves an inserted production decision makes a formerly complete range
+stale.

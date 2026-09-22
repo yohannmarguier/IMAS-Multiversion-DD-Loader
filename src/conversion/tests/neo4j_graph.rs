@@ -488,6 +488,170 @@ fn rejects_duplicate_event_ids_even_when_their_rows_are_otherwise_valid() {
     );
 }
 
+fn raw_scope_failure(executor: ControlledExecutor) -> String {
+    Neo4jScopeSource::new(executor, 2)
+        .unwrap()
+        .load_raw_scope("equilibrium", &attempt())
+        .expect_err("malformed controlled rows must not reach map construction")
+        .0
+}
+
+#[test]
+fn raw_scope_rejects_each_invalid_catalogue_and_node_shape() {
+    assert!(matches!(
+        Neo4jScopeSource::new(ControlledExecutor::default(), 0),
+        Err(GraphSourceError(message)) if message == "Neo4j page size must be nonzero"
+    ));
+
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[0].1 = count(-1);
+    assert_eq!(
+        raw_scope_failure(executor),
+        "count query did not return one non-negative integer"
+    );
+
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[0].1 = vec![row(&[])];
+    assert_eq!(
+        raw_scope_failure(executor),
+        "count query did not return one non-negative integer"
+    );
+
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[0].1 = count(1);
+    assert_eq!(
+        raw_scope_failure(executor),
+        "page exceeded its declared count boundary"
+    );
+
+    for (column, value, expected) in [
+        ("release", GraphValue::Null, "release is typed null"),
+        (
+            "release",
+            GraphValue::Integer(411),
+            "release is missing or not a non-empty string",
+        ),
+        (
+            "cocos",
+            GraphValue::String("not-a-convention".into()),
+            "invalid COCOS value: invalid COCOS convention `not-a-convention`",
+        ),
+        (
+            "cocos",
+            GraphValue::Integer(17),
+            "COCOS must be a typed null or non-empty string",
+        ),
+    ] {
+        let executor = complete_executor();
+        executor.replies.borrow_mut()[1].1[0].insert(column.into(), value);
+        assert_eq!(raw_scope_failure(executor), expected);
+    }
+
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[1].1[1]
+        .insert("release".into(), GraphValue::String("4.1.1".into()));
+    assert_eq!(raw_scope_failure(executor), "duplicate release row");
+
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[3].1[0].insert("ids".into(), GraphValue::String("other".into()));
+    assert_eq!(
+        raw_scope_failure(executor),
+        "node stream escaped its requested IDS"
+    );
+
+    for (value, expected) in [
+        (
+            GraphValue::Null,
+            "coordinate relationships must be an empty list, not typed null",
+        ),
+        (
+            GraphValue::Integer(1),
+            "coordinate relationships are missing or not a list",
+        ),
+        (
+            GraphValue::List(vec![GraphValue::String("bad".into())]),
+            "coordinate relationship is not a two-value list",
+        ),
+        (
+            GraphValue::List(vec![GraphValue::List(vec![
+                GraphValue::Integer(0),
+                GraphValue::String("time".into()),
+                GraphValue::String("path".into()),
+            ])]),
+            "coordinate relationships repeat or contain an invalid dimension",
+        ),
+    ] {
+        let executor = complete_executor();
+        executor.replies.borrow_mut()[3].1[0].insert("coordinate_relationships".into(), value);
+        assert_eq!(raw_scope_failure(executor), expected);
+    }
+
+    for (value, expected) in [
+        (
+            GraphValue::Null,
+            "introduced must be an empty list, not typed null",
+        ),
+        (
+            GraphValue::Integer(1),
+            "introduced is missing or not a list",
+        ),
+        (
+            GraphValue::List(vec![GraphValue::Integer(1)]),
+            "introduced contains a non-string release",
+        ),
+        (
+            GraphValue::List(vec![GraphValue::String("9.9.9".into())]),
+            "introduced references a release outside the version stream",
+        ),
+        (
+            GraphValue::List(vec![
+                GraphValue::String("4.1.1".into()),
+                GraphValue::String("4.1.1".into()),
+            ]),
+            "introduced repeats a release",
+        ),
+    ] {
+        let executor = complete_executor();
+        executor.replies.borrow_mut()[3].1[0].insert("introduced".into(), value);
+        assert_eq!(raw_scope_failure(executor), expected);
+    }
+}
+
+#[test]
+fn raw_scope_rejects_each_cross_scope_event_and_successor_shape() {
+    for (column, value, expected) in [
+        (
+            "path",
+            GraphValue::String("missing".into()),
+            "event references a path outside the node stream",
+        ),
+        (
+            "release",
+            GraphValue::String("9.9.9".into()),
+            "event references a release outside the version stream",
+        ),
+        ("kind", GraphValue::Null, "kind is typed null"),
+    ] {
+        let executor = complete_executor();
+        executor.replies.borrow_mut()[5].1[0].insert(column.into(), value);
+        assert_eq!(raw_scope_failure(executor), expected);
+    }
+
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[7].1[0]
+        .insert("from_path".into(), GraphValue::String("missing".into()));
+    assert_eq!(
+        raw_scope_failure(executor),
+        "successor references a path outside the node stream"
+    );
+
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[6].1 = count(2);
+    let duplicate = executor.replies.borrow()[7].1[0].clone();
+    executor.replies.borrow_mut()[7].1.push(duplicate);
+    assert_eq!(raw_scope_failure(executor), "duplicate successor row");
+}
+
 #[test]
 #[ignore = "requires the pinned Neo4j graph provisioned by CI"]
 fn pinned_graph_returns_complete_reference_scopes() {

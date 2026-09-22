@@ -541,10 +541,6 @@ fn validate_raw_scope(
     Ok(())
 }
 
-#[cfg(test)]
-#[path = "../tests/neo4j_graph.rs"]
-mod tests;
-
 impl<E: CypherExecutor> super::GraphFactsSource for Neo4jScopeSource<E> {
     fn load_ids_facts(
         &self,
@@ -567,3 +563,7 @@ impl super::GraphFactsSource for Neo4jFactsSource {
         Neo4jScopeSource::new(executor, self.0.page_size)?.load_ids_facts(ids, attempt)
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/neo4j_graph.rs"]
+mod tests;
