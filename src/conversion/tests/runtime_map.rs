@@ -559,7 +559,7 @@ fn direct_rename_facts() -> IdsGraphFacts {
     facts
 }
 
-fn coexistence_facts() -> IdsGraphFacts {
+pub(super) fn coexistence_facts() -> IdsGraphFacts {
     let mut facts = complete_identity_scope();
     facts.versions.insert(1, version("3.42.0", Some("11")));
 

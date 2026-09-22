@@ -2812,3 +2812,7 @@ fn invalid_node(node: &GraphNode, reason: &str) -> AcquisitionFailure {
 #[cfg(test)]
 #[path = "tests/runtime_map.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/runtime_map_fidelity.rs"]
+pub(crate) mod fidelity_tests;

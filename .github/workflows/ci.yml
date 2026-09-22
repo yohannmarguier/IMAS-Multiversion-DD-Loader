@@ -38,11 +38,24 @@ jobs:
 
       - uses: ./.github/actions/setup-toolchain
 
+      - name: Record the exhaustive controlled fidelity oracle
+        env:
+          IMAS_MVDD_FIDELITY_REPORT: target/runtime-map-fidelity/controlled.json
+        run: cargo test --release fidelity_ --lib
+
       - name: Acquire the complete live reference scopes
         run: bash tests/scripts/check-live-acquisition.sh
 
       - name: Record provisioning scope
         run: echo 'DD graph provisioning smoke check passed'
+
+      - name: Upload runtime-map fidelity reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-map-fidelity
+          path: target/runtime-map-fidelity/*.json
+          if-no-files-found: error
 
   # The normal production artifact consumes the pinned service. Fast retains
   # service-independent XML and controlled-graph fixture scenarios.
@@ -131,6 +144,9 @@ jobs:
       - name: Test recording-stub seams
         # Rust unit-test repairs are deferred while behavioral CI is restored.
         run: ctest --test-dir build -E '^rust-unit$' --output-on-failure --no-tests=error
+
+      - name: Check private XML fidelity separately
+        run: ctest --test-dir build -L xml-fidelity --output-on-failure --no-tests=error
 
       - name: Install
         run: cmake --install build --prefix "$PWD/dist"
