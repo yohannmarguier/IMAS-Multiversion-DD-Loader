@@ -566,7 +566,7 @@ tests/hli/              focused installed-HLI production probes owned here
 tests/package/          installed-package consumer fixture
 tests/support/          shared C test harness
 tests/cmake/            CMake-script checks
-tests/coverage/         local Rust line-coverage and mutation-audit fixtures
+tests/coverage/         local Rust unit and C-driven coverage/mutation audit fixtures
 tests/scripts/          install/package checks plus the hermetic DD-graph setup lifecycle check
 tests/stub/             recording stub standing in for IMAS-Core
 tests/fixtures/         conversion-map and Rust audit fixtures
@@ -628,8 +628,13 @@ next to the equivalent `pkg-config` check.
 - `rust-line-coverage-audit-fixtures` — exercises the local Rust
   decision-coverage audit's checked-in scope and its aggregation, threshold,
   missing-data and empty-data refusal cases. The maintainer command and
-  current below-floor baseline are in `docs/rust-line-coverage-audit.md`; it
-  is deliberately not a CI gate yet.
+  passing baseline are in `docs/rust-line-coverage-audit.md`; ordinary CI
+  enforces the same scoped audit.
+- `rust-integration-coverage-audit-fixtures` — exercises the evidence checker
+  for Rust coverage collected through C ABI scenarios: raw-profile presence,
+  exact loaded-library identity and the C-only zero-to-positive probe. The two
+  profile command, report layout and CI behavior are documented in
+  `docs/rust-integration-coverage.md`.
 - `rust-mutation-audit-fixtures` — exercises the local Rust mutation audit's
   shared six-group scope, score thresholds, timeouts, exclusions and incomplete
   run refusal. Its maintainer command and baseline report are in

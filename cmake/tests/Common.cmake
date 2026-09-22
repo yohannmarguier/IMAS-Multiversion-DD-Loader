@@ -132,6 +132,7 @@ function(add_stub_test name executable)
 
     add_test(NAME "${name}" COMMAND ${executable} ${ARG_UNPARSED_ARGUMENTS})
     set_tests_properties("${name}" PROPERTIES ENVIRONMENT "${environment}")
+    set_property(TEST "${name}" APPEND PROPERTY LABELS recording-stub)
     # The executable selects the test map source.  Keep that assignment on the
     # target so the shared harness can label every scenario without duplicating
     # a source-specific wrapper around its environment contract.
@@ -157,6 +158,24 @@ function(add_stub_test name executable)
             WORKING_DIRECTORY "${ARG_WORKING_DIRECTORY}")
     endif()
 endfunction()
+
+# The integration-coverage command runs this loader-only executable before any
+# Rust ABI call. Its dladdr result proves which staged shim the dynamic loader
+# selected, while the resulting all-zero Rust profile is the negative half of
+# the C-only coverage probe.
+function(add_rust_integration_loader_probe target shim_target)
+    add_executable(${target}
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/loaded_shim_path.c")
+    target_link_libraries(${target} PRIVATE ${shim_target} ${CMAKE_DL_LIBS})
+    add_dependencies(${target} imas_mvdd_capi)
+    set_target_properties(${target} PROPERTIES
+        BUILD_RPATH "$<TARGET_FILE_DIR:${shim_target}>")
+endfunction()
+
+add_rust_integration_loader_probe(
+    rust_integration_private_loader_probe imas_mvdd_loader)
+add_rust_integration_loader_probe(
+    rust_integration_production_loader_probe imas_mvdd_loader_production)
 
 # `real-core` denotes profile membership: every test registered inside this
 # bracket exists only when IMAS_MVDD_REAL_CORE_TESTS is on. Labelling the
@@ -263,6 +282,11 @@ find_program(BASH_EXECUTABLE bash REQUIRED)
 add_test(NAME rust-line-coverage-audit-fixtures
     COMMAND "${BASH_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/check-rust-line-coverage-audit.sh"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_test(NAME rust-integration-coverage-audit-fixtures
+    COMMAND "${BASH_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/check-rust-integration-coverage.sh"
         "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Mutation testing remains an explicit local audit: the fixture test protects
