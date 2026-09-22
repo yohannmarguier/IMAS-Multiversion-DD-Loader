@@ -65,6 +65,8 @@ endfunction()
 read_lines("${CI_WORKFLOW_FILE}" ci_lines)
 read_lines("${MUTATION_WORKFLOW_FILE}" mutation_lines)
 job_lines(ci_lines rust-line-coverage line_coverage_job)
+job_lines(ci_lines rust-integration-coverage integration_coverage_job)
+job_lines(ci_lines full full_job)
 job_lines(mutation_lines rust-mutation-audit mutation_job)
 set(mutation_flat)
 foreach(line IN LISTS mutation_lines)
@@ -92,6 +94,35 @@ require_line(line_coverage_job "path: target/rust-line-coverage.lcov"
     "upload the generated LCOV report")
 require_line(ci_lines "CARGO_LLVM_COV_VERSION: 0.9.1"
     "pin cargo-llvm-cov to the locally validated release")
+
+require_line(integration_coverage_job "- uses: ./.github/actions/setup-toolchain"
+    "use the pinned Rust toolchain for C ABI coverage")
+require_line(integration_coverage_job
+    "cargo install cargo-llvm-cov --version \"$CARGO_LLVM_COV_VERSION\" --locked"
+    "install the pinned cargo-llvm-cov release for C ABI coverage")
+require_line(integration_coverage_job
+    "run: bash scripts/collect-rust-integration-coverage.sh recording-stub"
+    "collect recording-stub C ABI coverage")
+require_line(integration_coverage_job "if: always()"
+    "retain recording-stub evidence after a failed scenario or report")
+require_line(integration_coverage_job "uses: actions/upload-artifact@v4"
+    "upload recording-stub C ABI coverage")
+require_line(integration_coverage_job
+    "path: target/rust-integration-coverage/recording-stub/"
+    "upload the complete recording-stub evidence directory")
+
+require_line(full_job
+    "run: bash scripts/collect-rust-integration-coverage.sh real-core"
+    "collect production-shim coverage through real Core")
+require_line(full_job
+    [=[IMAS_MVDD_INTEGRATION_CMAKE_PREFIX_PATH: ${{ github.workspace }}/al-core-dist]=]
+    "reuse the pinned installed IMAS-Core for instrumented coverage")
+require_line(full_job "if: always()"
+    "retain real-Core evidence after a failed scenario or report")
+require_line(full_job "uses: actions/upload-artifact@v4"
+    "upload real-Core C ABI coverage")
+require_line(full_job "path: target/rust-integration-coverage/real-core/"
+    "upload the complete real-Core evidence directory")
 
 if(NOT "workflow_dispatch:" IN_LIST mutation_flat)
     message(FATAL_ERROR "mutation workflow must have a workflow_dispatch trigger")
