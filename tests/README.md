@@ -385,9 +385,14 @@ empty a required source measurement, refuses overlapping group ownership, and
 that stops short of its file's inline test module and a formerly complete scope
 after a production decision is inserted before that module. It accepts the
 short range only when the remainder is a declared exclusion. It does not run
-the full audit: the
-ordinary CI job runs the checked-in command and uploads its LCOV report even
-when the threshold rejects it.
+the full audit: the ordinary CI job runs separate production and private-XML
+configurations and uploads both LCOV reports even when a threshold rejects
+either one. The `rust-audit-workflow-guard` companion rejects removal of the
+production run, substitution of `--all-features`, and a production check fed
+by the XML report. It also rejects removal of a production runtime-map source
+assignment, one of the six required scenario witnesses, or the ignored-test
+inventory that proves those witnesses execute. `rust-production-test-witness-fixtures`
+proves the witness checker rejects both missing and ignored tests.
 
 ### `rust-mutation-audit-fixtures`
 
@@ -423,7 +428,8 @@ Configuration-as-tested.
   `IN_LIST` pass locally and fail only on CI.
 - Each has a `verify_*_guard` companion feeding it throwaway mutated fixtures,
   to prove it rejects them.
-- `check_rust_audit_workflows.cmake` proves the ordinary line gate and the
+- `check_rust_audit_workflows.cmake` proves the ordinary production and XML
+  line gates and the
   dispatch-only mutation workflow run their checked-in commands with pinned
   tools, retain reports on failure, and preserve the exact floors and scope.
   Its guard rejects a missing or decoy line command, threshold or scope drift,

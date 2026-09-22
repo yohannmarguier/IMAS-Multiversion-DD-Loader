@@ -222,9 +222,10 @@ $ bash scripts/collect-rust-integration-coverage.sh recording-stub  # Rust hit b
 ```
 
 **The Rust test-quality audits (issue #189) sit outside the CMake graph.**
-`coverage/` holds the checked-in measurement scope
-(`rust-line-coverage-scope.json`), the mutation audit configuration and its
-disposition list, so two developers cannot score different files.
+`coverage/` holds the checked-in production and private-XML measurement scopes
+(`rust-line-coverage-scope.json` and `rust-xml-line-coverage-scope.json`), the
+production runtime-map test witnesses, the mutation audit configuration and
+its disposition list, so two developers cannot score different files.
 `scripts/audit-rust-*.sh` run the audits; `scripts/check-rust-*.py` are the
 policy authorities that score them and own the floors. `tests/coverage/` holds
 their fixture-driven CTest checks (`rust-line-coverage-audit-fixtures`,

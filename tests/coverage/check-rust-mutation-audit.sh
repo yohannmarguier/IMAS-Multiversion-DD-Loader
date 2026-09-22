@@ -141,8 +141,8 @@ cp "$source_dir/scripts/audit-rust-mutation.sh" "$command_root/scripts/"
 cp "$source_dir/scripts/check-rust-mutation-audit.py" "$command_root/scripts/"
 # The checker imports the shared scope model from beside itself.
 cp "$source_dir/scripts/rust_audit_scope.py" "$command_root/scripts/"
-cp "$fixture_dir/rust_line_coverage_scope.json" "$command_root/coverage/rust-line-coverage-scope.json"
-sed 's/rust_line_coverage_scope/rust-line-coverage-scope/' \
+cp "$fixture_dir/rust_line_coverage_scope.json" "$command_root/coverage/rust-xml-line-coverage-scope.json"
+sed 's/rust_line_coverage_scope/rust-xml-line-coverage-scope/' \
     "$fixture_dir/rust_mutation_audit.json" >"$command_root/coverage/rust-mutation-audit.json"
 python3 "$fixture_dir/create-rust-mutation-fixture.py" all_pass "$fixture_output"
 cp "$fixture_output/dispositions.json" "$command_root/coverage/rust-mutation-dispositions.json"

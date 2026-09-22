@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""The checked-in Rust audit scope, shared by both audit checkers.
+"""The checked-in Rust audit scope model, shared by both audit checkers.
 
-The line-coverage audit and the mutation audit measure the same six logical
-groups over the same source ranges, so the ownership model lives here once
-rather than once per checker. Only the scoring differs between them.
+Production and XML line coverage use separate source assignments over the same
+six logical groups. The mutation audit reuses the XML scope, so parsing and
+ownership validation live here once rather than once per checker.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ class Group:
 
 
 def load_groups(value: Any, scope_path: Path) -> list[Group]:
-    """The six logical groups and their owned source ranges.
+    """The six logical groups and one configuration's owned source ranges.
 
     Every range is validated and no two may overlap: one line has one owner,
     or the two audits could score the same code under different groups.

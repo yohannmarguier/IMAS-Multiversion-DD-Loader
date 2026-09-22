@@ -107,7 +107,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rust-line-coverage-lcov
-          path: target/rust-line-coverage.lcov
+          path: target/rust-line-coverage-*.lcov
           if-no-files-found: warn
 
   rust-integration-coverage:
