@@ -25,6 +25,30 @@ output=$(python3 "$checker" \
 grep -Fq 'loss: 8/10 lines (80.0%) PASS' <<<"$output"
 grep -Fq 'aggregate: 58/60 lines (96.7%) PASS' <<<"$output"
 
+# Inclusive ranges may meet at adjacent lines, but assigning even one line to
+# two groups would count one production decision twice.
+python3 - "$fixture_dir/rust_line_coverage_scope.json" "$work_dir/overlap.json" <<'PY'
+import json
+import sys
+
+scope = json.load(open(sys.argv[1]))
+scope["groups"][0]["sources"] = [
+    {"path": "src/shared.rs", "start_line": 1, "end_line": 5}
+]
+scope["groups"][1]["sources"] = [
+    {"path": "src/shared.rs", "start_line": 5, "end_line": 10}
+]
+json.dump(scope, open(sys.argv[2], "w"), indent=2)
+PY
+if python3 "$checker" \
+    --scope "$work_dir/overlap.json" \
+    --lcov "$fixture_dir/rust_line_coverage_all_pass.lcov" >"$work_dir/overlap.txt" 2>&1; then
+    echo "overlapping group assignments must fail" >&2
+    exit 1
+fi
+grep -Fq 'source src/shared.rs:5-10 is assigned to both conversion and dd-version' \
+    "$work_dir/overlap.txt"
+
 if python3 "$checker" \
     --scope "$fixture_dir/rust_line_coverage_scope.json" \
     --lcov "$fixture_dir/rust_line_coverage_group_failure.lcov" >"$work_dir/group-failure.txt" 2>&1; then
@@ -108,6 +132,28 @@ partial_scope "$tree/declared.json" declared
 python3 "$checker" --root "$tree" \
     --scope "$tree/declared.json" \
     --lcov "$tree/example.lcov" >/dev/null
+
+# Simulate the real regression: a previously complete range becomes stale
+# when a production decision is inserted immediately before the test module.
+python3 - "$tree/src/example.rs" <<'PY'
+import sys
+
+path = sys.argv[1]
+source = open(path).read()
+source = source.replace(
+    "#[cfg(test)]",
+    "fn newly_inserted_decision(value: bool) -> i32 {\n    if value { 1 } else { 2 }\n}\n\n#[cfg(test)]",
+)
+open(path, "w").write(source)
+PY
+if python3 "$checker" --root "$tree" \
+    --scope "$tree/declared.json" \
+    --lcov "$tree/example.lcov" >"$work_dir/inserted.txt" 2>&1; then
+    echo "production inserted before a test module must invalidate the stale scope" >&2
+    exit 1
+fi
+grep -Fq 'src/example.rs: production lines 9-12 belong to no group and no exclusion' \
+    "$work_dir/inserted.txt"
 
 if python3 "$checker" \
     --scope "$fixture_dir/rust_line_coverage_scope.json" \

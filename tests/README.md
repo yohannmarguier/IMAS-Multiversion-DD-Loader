@@ -380,10 +380,12 @@ Runs `tests/coverage/check-rust-line-coverage-audit.sh`, the compact fixture
 suite for the local Rust decision-coverage audit. It proves that the checker
 adds covered and total lines across groups, does not average percentages, fails
 an aggregate pass with one below-floor group, refuses reports that omit or
-empty a required source measurement, and — against a throwaway source tree it
-builds itself — refuses a group range that stops short of its file's inline
-test module unless the remainder is a declared exclusion. It does not run the
-full audit: the
+empty a required source measurement, refuses overlapping group ownership, and
+— against a throwaway source tree it builds itself — refuses both a group range
+that stops short of its file's inline test module and a formerly complete scope
+after a production decision is inserted before that module. It accepts the
+short range only when the remainder is a declared exclusion. It does not run
+the full audit: the
 ordinary CI job runs the checked-in command and uploads its LCOV report even
 when the threshold rejects it.
 
