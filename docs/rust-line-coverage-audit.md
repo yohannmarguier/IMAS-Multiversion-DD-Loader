@@ -80,12 +80,13 @@ same command in its `rust-line-coverage` job and blocks on its verdict. Its
 LCOV report is uploaded even if the audit fails, so inspect the group totals
 before changing scope or tests. The compact fixture test is registered as
 `rust-line-coverage-audit-fixtures` and proves the aggregate/per-group boundary,
-malformed-data behavior, and the truncated-range refusal against a throwaway
-source tree, without requiring a full coverage run.
+malformed-data behavior, overlapping ownership refusal, and both truncated and
+newly stale range refusals against a throwaway source tree, without requiring a
+full coverage run.
 
-## Integrated baseline (2026-09-18)
+## Integrated baseline (2026-09-22)
 
-The pinned tool reported the following from the integrated 298-unit-test audit,
+The pinned tool reported the following from the integrated 306-unit-test audit,
 over the completed scope. `cargo-llvm-cov 0.9.1` and `cargo-mutants 27.1.0` are
 both available under Rust 1.88.0, which is the CI toolchain; the recorded line
 run also passes on the local Rust toolchain. All floors pass, so the command is
@@ -93,16 +94,15 @@ suitable for CI enforcement.
 
 | Group | Covered/total | Coverage |
 | --- | ---: | ---: |
-| conversion | 1,901 / 2,096 | 90.7% |
+| conversion | 2,004 / 2,298 | 87.2% |
 | DD-version | 188 / 199 | 94.5% |
-| context-registry | 183 / 183 | 100.0% |
+| context-registry | 170 / 170 | 100.0% |
 | loss | 238 / 239 | 99.6% |
 | artifact-validation | 222 / 227 | 97.8% |
 | deterministic runtime-binding policy | 110 / 110 | 100.0% |
-| aggregate | 2,842 / 3,054 | 93.1% |
+| aggregate | 2,932 / 3,243 | 90.4% |
 
-The denominator grew by 130 lines against the first recorded baseline: the
-loss-file's rendering, naming and append behavior and the DD-version read
-classifier were all production code that earlier ranges stopped short of, while
-the three dispatchers that only read a process-wide value became declared
-exclusions rather than silent omissions.
+The conversion denominator now includes the completeness and typed-map parsing
+decisions added before `conversion_map.rs`'s test module, the complete private
+XML-fixture lookup, and `seam_policy.rs`'s complete read-verdict assembly. Issue
+#248 records the stale-range failure and repaired audit output.
