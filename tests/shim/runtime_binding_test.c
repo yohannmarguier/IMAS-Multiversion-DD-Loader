@@ -121,7 +121,7 @@ static void scenario_version_mismatch(void) {
     char *info = NULL;
     al_status_t status = al_context_info(1, &info);
 
-    CHECK(status.code != 0);
+    CHECK(status.code == -1);
     CHECK(strstr(status.message, SUPPORTED_CORE_VERSION) != NULL);
     CHECK(strstr(status.message, INCOMPATIBLE_CORE_VERSION) != NULL);
     CHECK(strstr(status.message, "IMAS_CORE_LIBRARY") != NULL);
@@ -162,7 +162,7 @@ static void scenario_null_version(void) {
     char *info = NULL;
     al_status_t status = al_context_info(1, &info);
 
-    CHECK(status.code != 0);
+    CHECK(status.code == -1);
     CHECK(strstr(status.message, "getALVersion") != NULL);
     CHECK(strstr(status.message, "null") != NULL);
     CHECK(strstr(status.message, "IMAS_CORE_LIBRARY") != NULL);
@@ -175,12 +175,35 @@ static void scenario_missing_library(void) {
     char *info = NULL;
     al_status_t status = al_context_info(1, &info);
 
-    CHECK(status.code != 0);
+    CHECK(status.code == -1);
     CHECK(status.message[0] != '\0');
     CHECK(strstr(status.message, "IMAS_CORE_LIBRARY") != NULL);
 
     printf("runtime_binding_test missing-library: status=%d message=%s\n", status.code,
            status.message);
+}
+
+static void scenario_missing_symbol(void) {
+    char untouched[] = "must remain untouched";
+    char *info = untouched;
+    al_status_t status = al_context_info(1, &info);
+
+    CHECK(status.code == -1);
+    CHECK(strstr(status.message, "IMAS_CORE_LIBRARY") != NULL);
+    CHECK(strstr(status.message, "has no 'al_context_info'") != NULL);
+    CHECK(info == untouched);
+
+    /* A library that passed the bootstrap version check but omitted the
+     * first required manifest symbol is unavailable as a whole. These
+     * functions have no status channel, so their documented unavailable-Core
+     * outputs must stay null rather than calling into the partial library. */
+    CHECK(getALVersion() == NULL);
+    CHECK(getDDVersion() == NULL);
+    CHECK(const2str(13) == NULL);
+    CHECK(err2str(-3) == NULL);
+
+    printf("runtime_binding_test missing-symbol: an incomplete Core failed with documented "
+           "status and fallback outputs\n");
 }
 
 static void scenario_real_core(void) {
@@ -756,6 +779,7 @@ int main(int argc, char **argv) {
         {"version-mismatch", scenario_version_mismatch},
         {"null-version", scenario_null_version},
         {"missing-library", scenario_missing_library},
+        {"missing-symbol", scenario_missing_symbol},
         {"bare-soname", scenario_bare_soname},
         {"verbatim-forwarding", scenario_verbatim_forwarding},
         {"plugin-forwarding", scenario_plugin_forwarding},
