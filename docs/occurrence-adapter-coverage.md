@@ -22,7 +22,10 @@ The collector writes `occurrence-adapter-xml.lcov` and
 `occurrence-adapter-graph.lcov`, preserves both raw-profile sets beneath
 `occurrence-adapter-profiles/`, and merges only their source counts in
 `metadata.json`.  It does not merge incompatible cargo artifacts or fold this
-result into the unit-coverage percentage.
+result into the unit-coverage percentage.  The checked-in
+`coverage/rust-occurrence-adapter-coverage-scope.json` names the adapter source
+and the two policy functions; the checker derives their current line range
+from the Rust source instead of embedding line numbers in the collector.
 
 ## Measured result
 

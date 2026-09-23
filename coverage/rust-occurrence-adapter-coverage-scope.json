@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "name": "occurrence-adapter",
+  "adapter": {
+    "path": "src/interpose/occurrence.rs"
+  },
+  "policy": {
+    "path": "src/conversion/seam_policy.rs",
+    "functions": [
+      "decide_occurrence_registration",
+      "decide_datapath_translation"
+    ]
+  }
+}

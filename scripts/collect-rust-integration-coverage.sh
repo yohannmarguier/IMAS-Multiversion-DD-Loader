@@ -233,10 +233,7 @@ if [[ "$profile" == recording-stub ]]; then
         --component-lcov "$run_dir/occurrence-adapter-xml.lcov"
         --component-lcov "$run_dir/occurrence-adapter-graph.lcov"
         --component-profile-dir "$run_dir/occurrence-adapter-profiles"
-        --adapter-source src/interpose/occurrence.rs
-        --policy-source src/conversion/seam_policy.rs
-        --policy-start-line 98
-        --policy-end-line 134
+        --component-scope "$root_dir/coverage/rust-occurrence-adapter-coverage-scope.json"
     )
 fi
 if [[ $report_status -eq 0 ]]; then

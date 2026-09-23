@@ -30,10 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--probe-source")
     parser.add_argument("--component-lcov", type=Path, action="append")
     parser.add_argument("--component-profile-dir", type=Path)
-    parser.add_argument("--adapter-source")
-    parser.add_argument("--policy-source")
-    parser.add_argument("--policy-start-line", type=int)
-    parser.add_argument("--policy-end-line", type=int)
+    parser.add_argument("--component-scope", type=Path)
     return parser.parse_args()
 
 
@@ -88,7 +85,12 @@ def load_lcov(path: Path) -> dict[str, dict[int, int]]:
     return files
 
 
-def source_counts(files: dict[str, dict[int, int]], requested: str) -> tuple[int, int]:
+def matching_source_counts(
+    files: dict[str, dict[int, int]],
+    requested: str,
+    start_line: int | None = None,
+    end_line: int | None = None,
+) -> dict[int, int]:
     requested = Path(requested).as_posix()
     matches = [
         lines
@@ -100,7 +102,19 @@ def source_counts(files: dict[str, dict[int, int]], requested: str) -> tuple[int
     counts: dict[int, int] = {}
     for lines in matches:
         for line, count in lines.items():
-            counts[line] = counts.get(line, 0) + count
+            if (start_line is None or line >= start_line) and (
+                end_line is None or line <= end_line
+            ):
+                counts[line] = counts.get(line, 0) + count
+    if not counts:
+        raise EvidenceError(
+            f"LCOV report has no measurement data for {requested} in requested range"
+        )
+    return counts
+
+
+def source_counts(files: dict[str, dict[int, int]], requested: str) -> tuple[int, int]:
+    counts = matching_source_counts(files, requested)
     return sum(count > 0 for count in counts.values()), len(counts)
 
 
@@ -119,20 +133,15 @@ def validate_component_args(args: argparse.Namespace) -> bool:
     supplied = (
         args.component_lcov,
         args.component_profile_dir,
-        args.adapter_source,
-        args.policy_source,
-        args.policy_start_line,
-        args.policy_end_line,
+        args.component_scope,
     )
     if any(value is not None for value in supplied) and not all(value is not None for value in supplied):
         raise EvidenceError(
-            "--component-lcov, --component-profile-dir, --adapter-source and "
-            "--policy-source/--policy-start-line/--policy-end-line must be supplied together"
+            "--component-lcov, --component-profile-dir and --component-scope "
+            "must be supplied together"
         )
-    if args.policy_start_line is not None and (
-        args.policy_start_line < 1 or args.policy_end_line < args.policy_start_line
-    ):
-        raise EvidenceError("policy source line range is invalid")
+    if args.component_lcov is not None and len(args.component_lcov) != 2:
+        raise EvidenceError("component coverage requires exactly two LCOV reports")
     return all(value is not None for value in supplied)
 
 
@@ -142,20 +151,7 @@ def source_report(
     start_line: int | None = None,
     end_line: int | None = None,
 ) -> dict[str, object]:
-    requested_path = Path(requested).as_posix()
-    matching_lines: dict[int, int] = {}
-    for name, lines in files.items():
-        name_path = Path(name).as_posix()
-        if name_path == requested_path or name_path.endswith("/" + requested_path):
-            for line, count in lines.items():
-                if (start_line is None or line >= start_line) and (
-                    end_line is None or line <= end_line
-                ):
-                    matching_lines[line] = matching_lines.get(line, 0) + count
-    if not matching_lines:
-        raise EvidenceError(
-            f"LCOV report has no measurement data for {requested} in requested range"
-        )
+    matching_lines = matching_source_counts(files, requested, start_line, end_line)
     result: dict[str, object] = {
         "source": requested,
         "covered_lines": sum(count > 0 for count in matching_lines.values()),
@@ -166,6 +162,50 @@ def source_report(
         result["start_line"] = start_line
         result["end_line"] = end_line
     return result
+
+
+def function_range(source: Path, names: list[str]) -> tuple[int, int]:
+    try:
+        lines = source.read_text().splitlines()
+    except OSError as error:
+        raise EvidenceError(f"cannot read scoped source {source}: {error}") from error
+
+    ranges: list[tuple[int, int]] = []
+    for name in names:
+        signature = f"fn {name}("
+        starts = [index for index, line in enumerate(lines) if signature in line]
+        if len(starts) != 1:
+            raise EvidenceError(f"expected exactly one {signature} in {source}")
+        start = starts[0]
+        depth = 0
+        opened = False
+        for index in range(start, len(lines)):
+            depth += lines[index].count("{") - lines[index].count("}")
+            opened = opened or "{" in lines[index]
+            if opened and depth == 0:
+                ranges.append((start + 1, index + 1))
+                break
+        else:
+            raise EvidenceError(f"cannot find the end of {name} in {source}")
+    return min(start for start, _ in ranges), max(end for _, end in ranges)
+
+
+def load_component_scope(path: Path) -> tuple[str, str, int, int]:
+    try:
+        value = json.loads(path.read_text())
+        adapter = value["adapter"]["path"]
+        policy = value["policy"]
+        policy_path = policy["path"]
+        functions = policy["functions"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise EvidenceError(f"invalid component scope {path}: {error}") from error
+    if not isinstance(adapter, str) or not isinstance(policy_path, str) or not (
+        isinstance(functions, list) and functions and all(isinstance(name, str) for name in functions)
+    ):
+        raise EvidenceError(f"invalid component scope {path}: invalid source selection")
+    source_root = path.parent.parent
+    start_line, end_line = function_range(source_root / policy_path, functions)
+    return adapter, policy_path, start_line, end_line
 
 
 def merge_reports(reports: list[dict[str, dict[int, int]]]) -> dict[str, dict[int, int]]:
@@ -254,6 +294,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         metadata["probe"] = probe
     if validate_component_args(args):
         component_report = merge_reports([load_lcov(path) for path in args.component_lcov])
+        adapter_source, policy_source, policy_start, policy_end = load_component_scope(
+            args.component_scope
+        )
         component_profiles = sorted(args.component_profile_dir.rglob("*.profraw"))
         if not component_profiles:
             raise EvidenceError(
@@ -263,12 +306,13 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         metadata["component"] = {
             "lcov": [str(path.resolve()) for path in args.component_lcov],
             "profile_count": len(component_profiles),
-            "adapter": source_report(component_report, args.adapter_source),
+            "scope": str(args.component_scope.resolve()),
+            "adapter": source_report(component_report, adapter_source),
             "policy": source_report(
                 component_report,
-                args.policy_source,
-                args.policy_start_line,
-                args.policy_end_line,
+                policy_source,
+                policy_start,
+                policy_end,
             ),
         }
     args.metadata.parent.mkdir(parents=True, exist_ok=True)

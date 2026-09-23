@@ -35,15 +35,26 @@ DA:10,1
 DA:11,2
 end_of_record
 LCOV
-cat >"$work_dir/occurrence.lcov" <<'LCOV'
+cat >"$work_dir/occurrence-xml.lcov" <<'LCOV'
 SF:src/interpose/occurrence.rs
 DA:20,1
 DA:21,0
 DA:22,3
 end_of_record
 SF:src/conversion/seam_policy.rs
-DA:40,2
-DA:41,0
+DA:98,2
+DA:104,0
+end_of_record
+LCOV
+cat >"$work_dir/occurrence-graph.lcov" <<'LCOV'
+SF:src/interpose/occurrence.rs
+DA:20,0
+DA:21,4
+DA:22,0
+end_of_record
+SF:src/conversion/seam_policy.rs
+DA:98,0
+DA:104,3
 end_of_record
 LCOV
 
@@ -59,12 +70,10 @@ python3 "$checker" \
     --baseline-lcov "$work_dir/baseline.lcov" \
     --probe-lcov "$work_dir/probe.lcov" \
     --probe-source src/core/core_binding.rs \
-    --component-lcov "$work_dir/occurrence.lcov" \
+    --component-lcov "$work_dir/occurrence-xml.lcov" \
+    --component-lcov "$work_dir/occurrence-graph.lcov" \
     --component-profile-dir "$work_dir/profiles" \
-    --adapter-source src/interpose/occurrence.rs \
-    --policy-source src/conversion/seam_policy.rs \
-    --policy-start-line 40 \
-    --policy-end-line 41 \
+    --component-scope "$source_dir/coverage/rust-occurrence-adapter-coverage-scope.json" \
     --metadata "$work_dir/metadata.json"
 
 python3 - "$work_dir/metadata.json" <<'PY'
@@ -81,21 +90,37 @@ assert value["probe"]["baseline_covered_lines"] == 0
 assert value["probe"]["scenario_covered_lines"] == 2
 assert value["component"]["adapter"] == {
     "source": "src/interpose/occurrence.rs",
-    "covered_lines": 2,
+    "covered_lines": 3,
     "measured_lines": 3,
-    "uncovered_lines": [21],
+    "uncovered_lines": [],
 }
 assert value["component"]["profile_count"] == 1
-assert value["component"]["lcov"][0].endswith("/occurrence.lcov")
+assert len(value["component"]["lcov"]) == 2
+assert value["component"]["lcov"][0].endswith("/occurrence-xml.lcov")
+assert value["component"]["lcov"][1].endswith("/occurrence-graph.lcov")
 assert value["component"]["policy"] == {
     "source": "src/conversion/seam_policy.rs",
-    "start_line": 40,
-    "end_line": 41,
-    "covered_lines": 1,
+    "start_line": 98,
+    "end_line": 134,
+    "covered_lines": 2,
     "measured_lines": 2,
-    "uncovered_lines": [41],
+    "uncovered_lines": [],
 }
 PY
+
+if python3 "$checker" \
+    --profile recording-stub --artifact private-xml-fixture --revision deadbeef \
+    --configuration Debug --profile-dir "$work_dir/profiles" \
+    --lcov "$work_dir/report.lcov" --library "$work_dir/lib/libimas_mvdd_loader.so" \
+    --loaded-library-file "$work_dir/loaded-library.txt" \
+    --component-lcov "$work_dir/occurrence-xml.lcov" \
+    --component-profile-dir "$work_dir/profiles" \
+    --component-scope "$source_dir/coverage/rust-occurrence-adapter-coverage-scope.json" \
+    --metadata "$work_dir/one-component.json" >"$work_dir/one-component.txt" 2>&1; then
+    echo "a single occurrence component report must fail" >&2
+    exit 1
+fi
+grep -Fq 'requires exactly two LCOV reports' "$work_dir/one-component.txt"
 
 mkdir -p "$work_dir/empty-profiles"
 if python3 "$checker" \
@@ -188,5 +213,4 @@ grep -Fq 'occurrence-adapter-graph.lcov' "$collector" || {
     echo "collector does not retain the graph occurrence adapter report" >&2
     exit 1
 }
-grep -Fq -- '--adapter-source src/interpose/occurrence.rs' "$collector" || exit 1
-grep -Fq -- '--policy-source src/conversion/seam_policy.rs' "$collector" || exit 1
+grep -Fq -- '--component-scope "$root_dir/coverage/rust-occurrence-adapter-coverage-scope.json"' "$collector" || exit 1

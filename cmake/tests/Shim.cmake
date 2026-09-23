@@ -1128,17 +1128,20 @@ set(_occurrence_adapter_tests
     hli-dd-version-invalid-environment-fails-first-open
     hli-dd-version-unset-first-open-then-setter-refused
     version-discovery-write-mode-probe-asks-for-a-read-context
-    graph-runtime-map-opening-families-reuse-a-retained-map
-    graph-runtime-map-write-mode-uses-read-op-stamp-probe
-    graph-runtime-map-absent-stamp-is-a-passthrough
-    graph-runtime-map-matching-stamp-is-a-passthrough
-    graph-runtime-map-malformed-stamp-refuses-and-ends-every-family
-    graph-runtime-map-conversion-disabled-is-a-plain-forward
-    graph-runtime-map-failure-closes-every-opening-family
-    graph-runtime-map-later-open-retries-a-failed-acquisition
     context-lifecycle-ending-child-removes-only-its-own-record
     context-lifecycle-ending-root-removes-only-its-own-record
     context-lifecycle-recycled-id-cannot-observe-the-released-record)
+if(NOT IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "live")
+    list(APPEND _occurrence_adapter_tests
+        graph-runtime-map-opening-families-reuse-a-retained-map
+        graph-runtime-map-write-mode-uses-read-op-stamp-probe
+        graph-runtime-map-absent-stamp-is-a-passthrough
+        graph-runtime-map-matching-stamp-is-a-passthrough
+        graph-runtime-map-malformed-stamp-refuses-and-ends-every-family
+        graph-runtime-map-conversion-disabled-is-a-plain-forward
+        graph-runtime-map-failure-closes-every-opening-family
+        graph-runtime-map-later-open-retries-a-failed-acquisition)
+endif()
 set_property(TEST ${_occurrence_adapter_tests} APPEND PROPERTY LABELS occurrence-adapter)
 unset(_occurrence_adapter_tests)
 
