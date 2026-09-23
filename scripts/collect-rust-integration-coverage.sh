@@ -63,6 +63,7 @@ cmake_args=(-S "$root_dir" -B "$build_dir" -DCMAKE_BUILD_TYPE=Debug)
 if [[ "$profile" == recording-stub ]]; then
     artifact=private-xml-fixture
     cargo_target="$build_dir/xml-fixture-cargo"
+    graph_cargo_target="$build_dir/graph-cargo"
     staged_library_dir="$build_dir/xml-fixture-stage/lib"
     loader_probe="$build_dir/rust_integration_private_loader_probe"
     cmake_args+=(-DIMAS_MVDD_REAL_CORE_TESTS=OFF)
@@ -108,11 +109,16 @@ if [[ ! -x "$loader_probe" ]]; then
 fi
 
 clear_raw_profiles() {
-    find "$cargo_target" -maxdepth 1 -type f -name '*.profraw' -delete
+    local target_dir=$1
+    find "$target_dir" -maxdepth 1 -type f -name '*.profraw' -delete
 }
 
 generate_report() {
     local report=$1
+    local report_target=${2:-$cargo_target}
+    CARGO_TARGET_DIR="$report_target" \
+    CARGO_LLVM_COV_TARGET_DIR="$report_target" \
+    CARGO_LLVM_COV_BUILD_DIR="$report_target" \
     cargo llvm-cov report \
         --target "$host_target" \
         --profile dev \
@@ -122,15 +128,16 @@ generate_report() {
 }
 
 archive_profiles() {
-    local destination=$1
+    local source_dir=$1
+    local destination=$2
     mkdir -p "$destination"
     local found=0
     while IFS= read -r -d '' raw_profile; do
         found=1
         mv -- "$raw_profile" "$destination/"
-    done < <(find "$cargo_target" -maxdepth 1 -type f -name '*.profraw' -print0)
+    done < <(find "$source_dir" -maxdepth 1 -type f -name '*.profraw' -print0)
     if [[ $found -eq 0 ]]; then
-        echo "raw-profile directory $cargo_target contains no .profraw files" >&2
+        echo "raw-profile directory $source_dir contains no .profraw files" >&2
         return 2
     fi
 }
@@ -139,24 +146,51 @@ archive_profiles() {
 # loading the instrumented library alone covers no core-binding decisions, then
 # the existing runtime-binding-success C scenario makes those Rust hits appear.
 if [[ "$profile" == recording-stub ]]; then
-    clear_raw_profiles
+    clear_raw_profiles "$cargo_target"
     export LLVM_PROFILE_FILE="$cargo_target/%p-%m.profraw"
     "$loader_probe" "$instrumented_library" >"$run_dir/baseline-loaded-library.txt"
     generate_report "$run_dir/baseline.lcov"
-    archive_profiles "$run_dir/baseline-profiles"
+    archive_profiles "$cargo_target" "$run_dir/baseline-profiles"
 
-    clear_raw_profiles
+    clear_raw_profiles "$cargo_target"
     export LLVM_PROFILE_FILE="$cargo_target/%p-%m.profraw"
     ctest --test-dir "$build_dir" -R '^runtime-binding-success$' \
         --output-on-failure --no-tests=error >"$run_dir/probe-ctest.log" 2>&1
     generate_report "$run_dir/probe.lcov"
-    archive_profiles "$run_dir/probe-profiles"
+    archive_profiles "$cargo_target" "$run_dir/probe-profiles"
+
+    # Issue #253 keeps occurrence-adapter execution separate from the broad
+    # recording-stub report.  The XML mechanism scenarios and controlled
+    # graph scenarios are different Rust artifacts, so collect their raw
+    # profiles and LCOV reports independently and let the checker merge their
+    # source counts without pretending they are one cargo build.
+    occurrence_status=0
+    occurrence_report_status=0
+    clear_raw_profiles "$cargo_target"
+    export LLVM_PROFILE_FILE="$cargo_target/%p-%m.profraw"
+    ctest --test-dir "$build_dir" -L occurrence-adapter -LE graph-runtime-map \
+        --output-on-failure --no-tests=error >"$run_dir/occurrence-adapter-xml-ctest.log" 2>&1 \
+        || occurrence_status=$?
+    generate_report "$run_dir/occurrence-adapter-xml.lcov" \
+        || occurrence_report_status=$?
+    archive_profiles "$cargo_target" "$run_dir/occurrence-adapter-profiles/xml" \
+        || occurrence_report_status=$?
+
+    clear_raw_profiles "$graph_cargo_target"
+    export LLVM_PROFILE_FILE="$graph_cargo_target/%p-%m.profraw"
+    ctest --test-dir "$build_dir" -L occurrence-adapter -L graph-runtime-map \
+        --output-on-failure --no-tests=error >"$run_dir/occurrence-adapter-graph-ctest.log" 2>&1 \
+        || occurrence_status=$?
+    generate_report "$run_dir/occurrence-adapter-graph.lcov" "$graph_cargo_target" \
+        || occurrence_report_status=$?
+    archive_profiles "$graph_cargo_target" "$run_dir/occurrence-adapter-profiles/graph" \
+        || occurrence_report_status=$?
 fi
 
 # Start the report-bearing run with no stale raw data. %p keeps subprocesses
 # distinct and %m keeps multiple instrumented binaries distinct under parallel
 # CTest execution.
-clear_raw_profiles
+clear_raw_profiles "$cargo_target"
 export LLVM_PROFILE_FILE="$cargo_target/%p-%m.profraw"
 "$loader_probe" "$instrumented_library" >"$run_dir/loaded-library.txt"
 
@@ -177,7 +211,7 @@ set -e
 
 report_status=0
 generate_report "$run_dir/coverage.lcov" || report_status=$?
-archive_profiles "$run_dir/profiles" || report_status=$?
+archive_profiles "$cargo_target" "$run_dir/profiles" || report_status=$?
 
 revision=$(git -C "$root_dir" rev-parse HEAD)
 checker_args=(
@@ -196,6 +230,13 @@ if [[ "$profile" == recording-stub ]]; then
         --baseline-lcov "$run_dir/baseline.lcov"
         --probe-lcov "$run_dir/probe.lcov"
         --probe-source src/core/core_binding.rs
+        --component-lcov "$run_dir/occurrence-adapter-xml.lcov"
+        --component-lcov "$run_dir/occurrence-adapter-graph.lcov"
+        --component-profile-dir "$run_dir/occurrence-adapter-profiles"
+        --adapter-source src/interpose/occurrence.rs
+        --policy-source src/conversion/seam_policy.rs
+        --policy-start-line 98
+        --policy-end-line 134
     )
 fi
 if [[ $report_status -eq 0 ]]; then
@@ -206,6 +247,14 @@ fi
 if [[ $ctest_status -ne 0 ]]; then
     echo "$profile C scenarios failed with status $ctest_status; coverage evidence was retained in $run_dir" >&2
     exit "$ctest_status"
+fi
+if [[ "${occurrence_status:-0}" -ne 0 ]]; then
+    echo "occurrence-adapter C scenarios failed with status $occurrence_status; coverage evidence was retained in $run_dir" >&2
+    exit "$occurrence_status"
+fi
+if [[ "${occurrence_report_status:-0}" -ne 0 ]]; then
+    echo "occurrence-adapter coverage collection failed with status $occurrence_report_status; partial evidence was retained in $run_dir" >&2
+    exit "$occurrence_report_status"
 fi
 if [[ $report_status -ne 0 ]]; then
     echo "$profile coverage collection failed with status $report_status; partial evidence was retained in $run_dir" >&2

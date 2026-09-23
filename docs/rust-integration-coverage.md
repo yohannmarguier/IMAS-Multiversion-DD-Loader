@@ -46,6 +46,14 @@ in `src/core/core_binding.rs`; running the existing
 Removing that scenario therefore removes those hits rather than leaving an
 assumed integration claim.
 
+It additionally runs the process-isolated `occurrence-adapter` ledger twice:
+once against the private XML mechanism artifact and once against the
+controlled graph artifact.  Their LCOV and raw profiles stay separate, while
+`metadata.json` reports `src/interpose/occurrence.rs` adapter execution and the
+occurrence-only `src/conversion/seam_policy.rs` slice independently.  See
+`docs/occurrence-adapter-coverage.md` for the scenario ledger, measured result,
+residual cases and fresh-build mutation observations.
+
 These reports are evidence, not a second coverage gate. They intentionally set
 no whole-crate percentage floor and do not change the scoped 90% Rust-unit
 baseline. A CTest failure is returned after any usable report has been written,

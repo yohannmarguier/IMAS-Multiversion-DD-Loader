@@ -83,6 +83,11 @@ occurrence; a **malformed stamp refuses *and* ends the just-opened context**
 rather than leaking it; a Core failure forwards its status unchanged; an unset
 HLI version is a plain forward.
 
+The `occurrence-adapter` label selects the 16 process-isolated latch,
+discovery, acquisition and lifecycle scenarios used by the C-driven Rust
+coverage report.  It is an exact cross-suite ledger rather than another test
+executable; see `docs/occurrence-adapter-coverage.md`.
+
 > There is no C-level registry introspection, so "the mismatch was registered"
 > is proven the only way it is externally observable: a *second* open of the
 > same occurrence translates `datapath` before Core is called.

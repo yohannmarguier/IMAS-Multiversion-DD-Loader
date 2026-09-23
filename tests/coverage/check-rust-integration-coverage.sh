@@ -35,6 +35,17 @@ DA:10,1
 DA:11,2
 end_of_record
 LCOV
+cat >"$work_dir/occurrence.lcov" <<'LCOV'
+SF:src/interpose/occurrence.rs
+DA:20,1
+DA:21,0
+DA:22,3
+end_of_record
+SF:src/conversion/seam_policy.rs
+DA:40,2
+DA:41,0
+end_of_record
+LCOV
 
 python3 "$checker" \
     --profile recording-stub \
@@ -48,6 +59,12 @@ python3 "$checker" \
     --baseline-lcov "$work_dir/baseline.lcov" \
     --probe-lcov "$work_dir/probe.lcov" \
     --probe-source src/core/core_binding.rs \
+    --component-lcov "$work_dir/occurrence.lcov" \
+    --component-profile-dir "$work_dir/profiles" \
+    --adapter-source src/interpose/occurrence.rs \
+    --policy-source src/conversion/seam_policy.rs \
+    --policy-start-line 40 \
+    --policy-end-line 41 \
     --metadata "$work_dir/metadata.json"
 
 python3 - "$work_dir/metadata.json" <<'PY'
@@ -62,6 +79,22 @@ assert value["revision"] == "0123456789abcdef"
 assert value["profile_count"] == 1
 assert value["probe"]["baseline_covered_lines"] == 0
 assert value["probe"]["scenario_covered_lines"] == 2
+assert value["component"]["adapter"] == {
+    "source": "src/interpose/occurrence.rs",
+    "covered_lines": 2,
+    "measured_lines": 3,
+    "uncovered_lines": [21],
+}
+assert value["component"]["profile_count"] == 1
+assert value["component"]["lcov"][0].endswith("/occurrence.lcov")
+assert value["component"]["policy"] == {
+    "source": "src/conversion/seam_policy.rs",
+    "start_line": 40,
+    "end_line": 41,
+    "covered_lines": 1,
+    "measured_lines": 2,
+    "uncovered_lines": [41],
+}
 PY
 
 mkdir -p "$work_dir/empty-profiles"
@@ -124,7 +157,8 @@ if CARGO_TARGET_DIR="$work_dir/incompatible-target" \
     CARGO_LLVM_COV_TARGET_DIR="$work_dir/incompatible-target" \
     CARGO_LLVM_COV_BUILD_DIR="$work_dir/incompatible-target" \
     CARGO_LLVM_COV=1 CARGO_LLVM_COV_SHOW_ENV=1 \
-    cargo llvm-cov report --target "$host_target" --profile dev \
+    cargo llvm-cov report --manifest-path "$source_dir/Cargo.toml" \
+        --target "$host_target" --profile dev \
         --failure-mode any --lcov \
         --output-path "$work_dir/incompatible.lcov" \
         >"$work_dir/incompatible.txt" 2>&1; then
@@ -142,3 +176,17 @@ grep -Fq 'rm -rf -- "$run_dir" "$build_dir"' "$collector"
 grep -Fq 'LLVM_PROFILE_FILE="$cargo_target/%p-%m.profraw"' "$collector"
 grep -Fq 'ctest_status=${PIPESTATUS[0]}' "$collector"
 grep -Fq 'exit "$ctest_status"' "$collector"
+grep -Fq -- '-L occurrence-adapter' "$collector" || {
+    echo "collector does not execute the occurrence-adapter scenario ledger" >&2
+    exit 1
+}
+grep -Fq 'occurrence-adapter-xml.lcov' "$collector" || {
+    echo "collector does not retain the XML occurrence adapter report" >&2
+    exit 1
+}
+grep -Fq 'occurrence-adapter-graph.lcov' "$collector" || {
+    echo "collector does not retain the graph occurrence adapter report" >&2
+    exit 1
+}
+grep -Fq -- '--adapter-source src/interpose/occurrence.rs' "$collector" || exit 1
+grep -Fq -- '--policy-source src/conversion/seam_policy.rs' "$collector" || exit 1

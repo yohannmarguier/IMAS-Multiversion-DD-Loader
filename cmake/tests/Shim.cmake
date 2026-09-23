@@ -1119,6 +1119,29 @@ add_stub_test(context-lifecycle-ending-dataentry-context-leaves-live-operation-a
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
 
+# Issue #253's measured occurrence-opening contract.  Keep this as an exact
+# behavioral ledger rather than labeling whole executables: each entry earns a
+# distinct latch, discovery, cleanup or lifetime claim in its own process.
+set(_occurrence_adapter_tests
+    hli-dd-version-setter-accepts-valid-version
+    hli-dd-version-setter-rejects-conflicting-repeat
+    hli-dd-version-invalid-environment-fails-first-open
+    hli-dd-version-unset-first-open-then-setter-refused
+    version-discovery-write-mode-probe-asks-for-a-read-context
+    graph-runtime-map-opening-families-reuse-a-retained-map
+    graph-runtime-map-write-mode-uses-read-op-stamp-probe
+    graph-runtime-map-absent-stamp-is-a-passthrough
+    graph-runtime-map-matching-stamp-is-a-passthrough
+    graph-runtime-map-malformed-stamp-refuses-and-ends-every-family
+    graph-runtime-map-conversion-disabled-is-a-plain-forward
+    graph-runtime-map-failure-closes-every-opening-family
+    graph-runtime-map-later-open-retries-a-failed-acquisition
+    context-lifecycle-ending-child-removes-only-its-own-record
+    context-lifecycle-ending-root-removes-only-its-own-record
+    context-lifecycle-recycled-id-cannot-observe-the-released-record)
+set_property(TEST ${_occurrence_adapter_tests} APPEND PROPERTY LABELS occurrence-adapter)
+unset(_occurrence_adapter_tests)
+
 # --- Issue #67: give the al_plugin_* reentry twins the same context
 # creation, path translation, and lifecycle behavior as their ordinary
 # counterparts --------------------------------------------------------
