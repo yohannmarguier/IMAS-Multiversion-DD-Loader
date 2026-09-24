@@ -466,15 +466,28 @@ static void scenario_plugin_read_no_source_returns_null_without_core_call(void) 
 
     int plugin_calls_before = int_from_stub("recording_stub_plugin_call_count");
     void *data = (void *)1;
-    int size[1] = {0};
+    int size[1] = {73};
     CHECK(al_plugin_read_data(operation_ctx, "time_slice/contour_tree/critical_point", "", &data,
                               IMAS_DOUBLE_DATA, 1, size)
               .code == 0);
 
     CHECK(data == NULL);
+    CHECK(size[0] == 0);
     CHECK(int_from_stub("recording_stub_plugin_call_count") == plugin_calls_before);
     CHECK(loss_count(operation_ctx) == 1);
     check_loss_at(operation_ctx, 0, "time_slice/contour_tree/critical_point",
+                  IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
+
+    double scalar = 3.5;
+    data = &scalar;
+    CHECK(al_plugin_read_data(operation_ctx, "time_slice/global_quantities/rho_tor_boundary", "",
+                              &data, IMAS_DOUBLE_DATA, 0, NULL)
+              .code == 0);
+    CHECK(scalar == -9.0E40);
+    CHECK(data == &scalar);
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == plugin_calls_before);
+    CHECK(loss_count(operation_ctx) == 2);
+    check_loss_at(operation_ctx, 1, "time_slice/global_quantities/rho_tor_boundary",
                   IMAS_MVDD_FIDELITY_LOSSY, IMAS_MVDD_LOSS_OPERATION_READ);
 
     printf("plugin_reentry_policy_test plugin-read-no-source-returns-null-without-core-call: no "
@@ -534,13 +547,23 @@ static void scenario_plugin_read_through_child_context_retains_loss_on_root(void
                                               &time_slice_ctx)
               .code == 0);
 
+    void *data = NULL;
+    int shape[1] = {0};
+    CHECK(al_plugin_read_data(time_slice_ctx,
+                              "/time_slice/global_quantities/beta_normal", "", &data,
+                              IMAS_DOUBLE_DATA, 1, shape)
+              .code == 0);
+    CHECK(data != NULL);
+    check_plugin_stub_field("/time_slice/global_quantities/beta_tor_norm");
+    check_no_loss_entry(operation_ctx);
+
     /* move-gap is rel="moved", fidelity forward="lossy" (read_path_test.c
      * proves the same rule at the root; nested_context_read_test.c proves it
      * through an ordinary arraystruct child). Reading it relative to a
      * plugin-opened time_slice child must append the same complete DD path
      * to the root's loss log. */
-    void *data = NULL;
-    int shape[1] = {0};
+    data = NULL;
+    shape[0] = 0;
     CHECK(al_plugin_read_data(time_slice_ctx, "boundary_separatrix/gap/r", "", &data,
                               IMAS_DOUBLE_DATA, 1, shape)
               .code == 0);

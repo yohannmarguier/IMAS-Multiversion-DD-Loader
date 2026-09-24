@@ -22,6 +22,10 @@ SF:src/core/core_binding.rs
 DA:10,0
 DA:11,3
 end_of_record
+SF:src/interpose/read.rs
+DA:20,7
+DA:21,0
+end_of_record
 LCOV
 cat >"$work_dir/baseline.lcov" <<'LCOV'
 SF:src/core/core_binding.rs
@@ -74,6 +78,7 @@ python3 "$checker" \
     --component-lcov "$work_dir/occurrence-graph.lcov" \
     --component-profile-dir "$work_dir/profiles" \
     --component-scope "$source_dir/coverage/rust-occurrence-adapter-coverage-scope.json" \
+    --source src/interpose/read.rs \
     --metadata "$work_dir/metadata.json"
 
 python3 - "$work_dir/metadata.json" <<'PY'
@@ -106,6 +111,9 @@ assert value["component"]["policy"] == {
     "measured_lines": 2,
     "uncovered_lines": [],
 }
+assert value["sources"] == {
+    "src/interpose/read.rs": {"covered_lines": 1, "measured_lines": 2}
+}
 PY
 
 if python3 "$checker" \
@@ -121,6 +129,19 @@ if python3 "$checker" \
     exit 1
 fi
 grep -Fq 'requires exactly two LCOV reports' "$work_dir/one-component.txt"
+
+if python3 "$checker" \
+    --profile recording-stub --artifact private-xml-fixture --revision deadbeef \
+    --configuration Debug --profile-dir "$work_dir/profiles" \
+    --lcov "$work_dir/report.lcov" --library "$work_dir/lib/libimas_mvdd_loader.so" \
+    --loaded-library-file "$work_dir/loaded-library.txt" \
+    --source src/interpose/missing.rs \
+    --metadata "$work_dir/missing-source.json" >"$work_dir/missing-source.txt" 2>&1; then
+    echo "a requested source absent from LCOV must fail" >&2
+    exit 1
+fi
+grep -Fq 'LCOV report has no measurement data for src/interpose/missing.rs' \
+    "$work_dir/missing-source.txt"
 
 mkdir -p "$work_dir/empty-profiles"
 if python3 "$checker" \
@@ -214,3 +235,10 @@ grep -Fq 'occurrence-adapter-graph.lcov' "$collector" || {
     exit 1
 }
 grep -Fq -- '--component-scope "$root_dir/coverage/rust-occurrence-adapter-coverage-scope.json"' "$collector" || exit 1
+for source in \
+    src/interpose/read.rs \
+    src/interpose/write.rs \
+    src/interpose/delete.rs \
+    src/conversion/seam_policy.rs; do
+    grep -Fq -- "--source $source" "$collector"
+done

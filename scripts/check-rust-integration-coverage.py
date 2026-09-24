@@ -31,6 +31,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--component-lcov", type=Path, action="append")
     parser.add_argument("--component-profile-dir", type=Path)
     parser.add_argument("--component-scope", type=Path)
+    parser.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        help="source path whose covered and measured line counts must be published",
+    )
     return parser.parse_args()
 
 
@@ -249,6 +255,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     if covered_lines == 0:
         raise EvidenceError(f"LCOV report {args.lcov} contains no covered Rust lines")
 
+    sources: dict[str, dict[str, int]] = {}
+    for source in args.source:
+        source_covered, source_measured = source_counts(report, source)
+        sources[source] = {
+            "covered_lines": source_covered,
+            "measured_lines": source_measured,
+        }
+
     probe: dict[str, object] | None = None
     if validate_probe_args(args):
         baseline_covered, baseline_total = source_counts(
@@ -289,6 +303,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "lcov": str(args.lcov.resolve()),
         "covered_lines": covered_lines,
         "measured_lines": measured_lines,
+        "sources": sources,
     }
     if probe is not None:
         metadata["probe"] = probe

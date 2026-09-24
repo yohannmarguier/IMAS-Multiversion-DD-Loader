@@ -224,6 +224,10 @@ checker_args=(
     --library "$instrumented_library"
     --loaded-library-file "$run_dir/loaded-library.txt"
     --metadata "$run_dir/metadata.json"
+    --source src/interpose/read.rs
+    --source src/interpose/write.rs
+    --source src/interpose/delete.rs
+    --source src/conversion/seam_policy.rs
 )
 if [[ "$profile" == recording-stub ]]; then
     checker_args+=(

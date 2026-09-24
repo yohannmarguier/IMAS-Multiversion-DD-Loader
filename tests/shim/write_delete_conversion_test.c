@@ -206,6 +206,28 @@ static void scenario_write_candidate_lands_at_primary_and_retains_unwritten_cand
            "only precedence 1 was written, the other candidates were retained as potential write losses, and the round trip is consistent (a consistency check, not an on-disk claim)\n");
 }
 
+static void scenario_plugin_write_candidate_uses_primary_and_records_stored_losses(void) {
+    int operation_ctx = open_mismatched_equilibrium();
+    int calls_before = int_from_stub("recording_stub_plugin_call_count");
+    double value = 42.0;
+    int size[1] = {1};
+
+    CHECK(al_plugin_write_data(operation_ctx, "time_slice/profiles_2d/b_field_phi", "time",
+                               &value, IMAS_DOUBLE_DATA, 1, size)
+              .code == 0);
+    CHECK(int_from_stub("recording_stub_plugin_call_count") == calls_before + 1);
+    CHECK(strcmp(string_from_stub("recording_stub_plugin_first_string"),
+                 "time_slice/profiles_2d/b_field_phi") == 0);
+    CHECK(pointer_from_stub("recording_stub_plugin_pointer") == &value);
+    CHECK(value == 42.0);
+    CHECK(size[0] == 1);
+    CHECK(loss_count(operation_ctx) == 2);
+    check_loss_at(operation_ctx, 0, "time_slice/profiles_2d/b_field_tor",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+    check_loss_at(operation_ctx, 1, "time_slice/profiles_2d/b_tor",
+                  IMAS_MVDD_FIDELITY_POTENTIALLY_LOSSY, IMAS_MVDD_LOSS_OPERATION_WRITE);
+}
+
 static void scenario_write_non_primary_source_refuses_by_precedence(void) {
     int operation_ctx = open_mismatched_equilibrium();
     int writes_before = int_from_stub("recording_stub_write_call_count");
@@ -333,6 +355,16 @@ static void scenario_plugin_write_cocos_sign_flip_uses_a_shim_owned_copy(void) {
     CHECK(values[0] == 1.25);
     CHECK(values[1] == -2.5);
     CHECK(size[0] == 2);
+
+    double unset = -9.0E40;
+    CHECK(al_plugin_write_data(operation_ctx, "time_slice/constraints/flux_loop/measured", "time",
+                               &unset, IMAS_DOUBLE_DATA, 0, NULL)
+              .code == 0);
+    CHECK(pointer_from_stub("recording_stub_plugin_pointer") == &unset);
+    CHECK(int_from_stub("recording_stub_plugin_write_double_count") == 1);
+    CHECK(double_at_from_stub("recording_stub_plugin_write_double_at", 0) == -9.0E40);
+    CHECK(unset == -9.0E40);
+    check_no_loss_entry(operation_ctx);
 
     printf("write_delete_conversion_test write-path-plugin-cocos-sign-flip-uses-a-shim-owned-copy: "
            "the plugin reentry seam used the same copy policy\n");
@@ -868,6 +900,7 @@ int main(int argc, char **argv) {
         {"write-path-plugin-matching-context-forwards-unchanged", scenario_plugin_write_matching_context_forwards_unchanged},
         {"write-path-nested-child-context-resolves-relative-and-absolute-fields", scenario_write_nested_child_context_resolves_relative_and_absolute_fields},
         {"write-path-candidate-lands-at-primary-and-retains-unwritten-candidates", scenario_write_candidate_lands_at_primary_and_retains_unwritten_candidates},
+        {"write-path-plugin-candidate-uses-primary-and-records-stored-losses", scenario_plugin_write_candidate_uses_primary_and_records_stored_losses},
         {"write-path-non-primary-source-refuses-by-precedence", scenario_write_non_primary_source_refuses_by_precedence},
         {"write-path-split-candidate-lands-at-primary", scenario_write_split_candidate_lands_at_primary},
         {"write-path-child-candidate-retains-complete-path-at-root", scenario_write_child_candidate_retains_complete_path_at_root},
