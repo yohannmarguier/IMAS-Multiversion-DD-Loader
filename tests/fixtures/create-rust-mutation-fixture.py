@@ -9,12 +9,12 @@ from pathlib import Path
 
 
 SOURCES = {
-    "conversion": "src/conversion.rs",
-    "dd-version": "src/version.rs",
-    "context-registry": "src/registry.rs",
-    "loss": "src/loss.rs",
-    "artifact-validation": "src/bin/validate.rs",
-    "deterministic-runtime-binding-policy": "src/core/policy.rs",
+    "conversion": "src/fixture/conversion.rs",
+    "dd-version": "src/fixture/version.rs",
+    "context-registry": "src/fixture/registry.rs",
+    "loss": "src/fixture/loss.rs",
+    "artifact-validation": "src/fixture/validate.rs",
+    "deterministic-runtime-binding-policy": "src/fixture/policy.rs",
 }
 
 

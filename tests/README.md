@@ -379,18 +379,24 @@ no C-ABI test can reach.
 Runs `tests/coverage/check-rust-line-coverage-audit.sh`, the compact fixture
 suite for the local Rust decision-coverage audit. It proves that the checker
 adds covered and total lines across groups, does not average percentages, fails
-an aggregate pass with one below-floor group, refuses reports that omit or
-empty a required source measurement, refuses overlapping group ownership, and
-— against a throwaway source tree it builds itself — refuses both a group range
-that stops short of its file's inline test module and a formerly complete scope
-after a production decision is inserted before that module. It accepts the
-short range only when the remainder is a declared exclusion. It does not run
-the full audit: the ordinary CI job runs separate production and private-XML
-configurations and uploads both LCOV reports even when a threshold rejects
-either one. The `rust-audit-workflow-guard` companion rejects removal of the
-production run, substitution of `--all-features`, and a production check fed
-by the XML report. It also rejects removal of a production runtime-map source
-assignment, one of the six required scenario witnesses, or the ignored-test
+an aggregate pass with one below-floor group, rejects an aggregate below 90%
+when all groups meet 80%, distinguishes a scoped 90% PASS
+from a full unfiltered result below 90%, reports excluded production and inline
+test bodies separately, rejects stale revision metadata, publishes the input
+diagnostic when a report is missing, refuses reports that omit or empty a
+required source measurement, refuses overlapping
+group ownership, and—against a throwaway source tree it builds itself—refuses
+a group range that stops short of its file's inline test module, reaches into
+that module, or becomes stale after a production decision is inserted. It
+accepts the short range only when the remainder is a declared exclusion. It
+does not run the full audit: the ordinary CI job runs separate fresh production
+and private-XML configurations and uploads their Markdown explanation with both
+LCOV inputs even when a threshold rejects either one. The
+`rust-audit-workflow-guard`
+companion rejects removal of the production run, either fresh-profile clean,
+the Markdown upload, substitution of `--all-features`, and a production check
+fed by the XML report. It also rejects removal of a production runtime-map
+source assignment, one of the six required scenario witnesses, or the ignored-test
 inventory that proves those witnesses execute. `rust-production-test-witness-fixtures`
 proves the witness checker rejects both missing and ignored tests.
 
