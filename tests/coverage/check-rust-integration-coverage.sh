@@ -22,6 +22,10 @@ SF:src/core/core_binding.rs
 DA:10,0
 DA:11,3
 end_of_record
+SF:src/interpose/read.rs
+DA:20,7
+DA:21,0
+end_of_record
 LCOV
 cat >"$work_dir/baseline.lcov" <<'LCOV'
 SF:src/core/core_binding.rs
@@ -48,6 +52,7 @@ python3 "$checker" \
     --baseline-lcov "$work_dir/baseline.lcov" \
     --probe-lcov "$work_dir/probe.lcov" \
     --probe-source src/core/core_binding.rs \
+    --source src/interpose/read.rs \
     --metadata "$work_dir/metadata.json"
 
 python3 - "$work_dir/metadata.json" <<'PY'
@@ -62,7 +67,23 @@ assert value["revision"] == "0123456789abcdef"
 assert value["profile_count"] == 1
 assert value["probe"]["baseline_covered_lines"] == 0
 assert value["probe"]["scenario_covered_lines"] == 2
+assert value["sources"] == {
+    "src/interpose/read.rs": {"covered_lines": 1, "measured_lines": 2}
+}
 PY
+
+if python3 "$checker" \
+    --profile recording-stub --artifact private-xml-fixture --revision deadbeef \
+    --configuration Debug --profile-dir "$work_dir/profiles" \
+    --lcov "$work_dir/report.lcov" --library "$work_dir/lib/libimas_mvdd_loader.so" \
+    --loaded-library-file "$work_dir/loaded-library.txt" \
+    --source src/interpose/missing.rs \
+    --metadata "$work_dir/missing-source.json" >"$work_dir/missing-source.txt" 2>&1; then
+    echo "a requested source absent from LCOV must fail" >&2
+    exit 1
+fi
+grep -Fq 'LCOV report has no measurement data for src/interpose/missing.rs' \
+    "$work_dir/missing-source.txt"
 
 mkdir -p "$work_dir/empty-profiles"
 if python3 "$checker" \
@@ -142,3 +163,10 @@ grep -Fq 'rm -rf -- "$run_dir" "$build_dir"' "$collector"
 grep -Fq 'LLVM_PROFILE_FILE="$cargo_target/%p-%m.profraw"' "$collector"
 grep -Fq 'ctest_status=${PIPESTATUS[0]}' "$collector"
 grep -Fq 'exit "$ctest_status"' "$collector"
+for source in \
+    src/interpose/read.rs \
+    src/interpose/write.rs \
+    src/interpose/delete.rs \
+    src/conversion/seam_policy.rs; do
+    grep -Fq -- "--source $source" "$collector"
+done

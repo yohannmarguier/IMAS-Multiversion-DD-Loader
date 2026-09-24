@@ -153,9 +153,9 @@ record intact, a recycled context ID never exposes a stale record, and the
 latter two seams forward unchanged without touching the registry. Observed
 indirectly, via whether a later read still translates.
 
-### `write-path-*` — 25 · `shim/write_delete_conversion_test.c`
+### `write-path-*` — 26 · `shim/write_delete_conversion_test.c`
 
-`al_write_data` and its plugin reentry twin `al_plugin_write_data`, whose three
+`al_write_data` and its plugin reentry twin `al_plugin_write_data`, whose four
 scenarios are spelled `write-path-plugin-*`. The delete half of the same
 executable is the next group: one binary serves both seams because they share
 the fixture helpers, but a ctest name says which seam it drives, so
@@ -167,7 +167,8 @@ one stored spelling, preserving relative/absolute child-context semantics and
 caller-owned `data`/`size`. Issue #127 adds COCOS writes: the policy sends Core
 a sign-flipped, shim-owned copy (including rank 7) while preserving caller
 storage; an unset rank-0 sentinel forwards unchanged so Core keeps its own
-skip behaviour. Issue #128 writes only an ambiguous plan's precedence-1
+skip behaviour, through the ordinary and plugin twins alike. Issue #128 writes
+only an ambiguous plan's precedence-1
 candidate — never fanning out the way issue #130's delete does, because a write
 asserts one value where a delete asserts an absence (ADR 0017) — records every
 skipped candidate as a `POTENTIALLY_LOSSY` `WRITE` loss after Core succeeds
@@ -222,8 +223,9 @@ counterparts (issues #67 and #68): discovery / registration / translation /
 malformed-stamp refusal for plugin global and slice actions, translation and
 refusal for the plugin arraystruct action, record removal-on-success and
 retention-on-failure for plugin end action, and the full read policy for
-`al_plugin_read_data` (translation, refusal, no-source, merged fallthrough,
-sign flip, loss retention through a child context).
+`al_plugin_read_data` (translation, refusal, scalar and array no-source
+outputs, merged fallthrough, sign flip, absolute child-context resolution, and
+loss retention through a child context).
 
 ### `reentry-guard-*` — 6 · `shim/reentry_guard_test.c`
 

@@ -855,6 +855,7 @@ add_write_delete_test(write-path-candidate-lands-at-primary-and-retains-unwritte
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0
     ENV "RECORDING_STUB_READ_LAST_WRITE=1")
+add_write_delete_test(write-path-plugin-candidate-uses-primary-and-records-stored-losses)
 add_write_delete_test(write-path-non-primary-source-refuses-by-precedence)
 add_write_delete_test(write-path-split-candidate-lands-at-primary
     HLI_DD_VERSION 3.39.0
@@ -1292,8 +1293,8 @@ add_scoped_passthrough_test(
 # The XML artifact is a private regression source, not a production fallback.
 # This separate label proves parsed XML semantics reach registered contexts and
 # observable Core calls without making them expectations of the graph source.
-set_tests_properties(
+set_property(TEST
     read-path-translates-field-and-timebase-independently
     read-path-merged-read-falls-through-to-next-candidate
     read-path-sign-flip-array-negates-values-and-preserves-empty-double
-    PROPERTIES LABELS xml-fidelity)
+    APPEND PROPERTY LABELS xml-fidelity)

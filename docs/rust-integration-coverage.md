@@ -35,11 +35,18 @@ The reports remain separate by construction:
 Every output directory retains `coverage.lcov`, raw profiles, configure/build
 logs, the CTest log, the canonical loaded-library path and `metadata.json`.
 The metadata records the Git revision, configuration, artifact path, profile
-count and report totals. The loader-only C probe resolves `al_context_info`
-with `dladdr` and fails unless its canonical provider is the exact staged
+count and report totals. It also publishes covered and measured line counts for
+the read, write and delete adapters and their shared seam policy, so the C ABI
+evidence for those intentionally unit-scope-excluded modules is visible without
+deriving it from the full LCOV file. These per-source counts are measurements,
+not thresholds. The loader-only C probe resolves `al_context_info` with
+`dladdr` and fails unless its canonical provider is the exact staged
 instrumented library.
 
-The recording-stub run also records an executable negative/positive proof.
+The recording-stub selection includes the XML-fidelity scenarios as well as
+their `xml-fidelity` label: CTest labels are cumulative, so adding that
+diagnostic label must not remove those scenarios from the published profile.
+The run also records an executable negative/positive proof.
 Loading the shim without calling Rust produces `baseline.lcov` with zero hits
 in `src/core/core_binding.rs`; running the existing
 `runtime-binding-success` scenario produces `probe.lcov` with positive hits.
