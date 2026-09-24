@@ -29,7 +29,7 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 | Path | What lives there |
 |---|---|
 | `support/` | `shim_test_support.h` — the one shared C harness: `CHECK`/`CHECK_OK`/`CHECK_REFUSAL_MESSAGE`, IMAS-Core's four data-type codes, the recording stub's two data-event kinds, the loss-log helpers (`loss_count`, `check_no_loss_entry`, `check_loss_at`, `check_no_write_lossy_verdict`), `open_recording_stub` plus the `{string,int,double,double_at,pointer}_from_stub` accessors, `open_mismatched_occurrence`, and the `{name, function}` scenario table `RUN_NAMED_SCENARIO` dispatches `argv[1]` through. Include this instead of writing a prologue. |
-| `stub/` | `recording_stub.c` — a fake `libal` exporting the whole runtime-bound surface and recording what it received, including snapshots of write payloads whose shim-owned buffers are freed on return, so assertions are made on what crossed the boundary rather than inferred from a data round trip. ~23 `RECORDING_STUB_*` env knobs drive fixtures and failures (stamp version, not-found, sign-flip values, per-seam `*_FAIL` knobs, filled-paths CSV, reentrant reads and writes). |
+| `stub/` | `recording_stub.c` is a fake `libal` exporting the whole runtime-bound surface and recording what it received, including snapshots of write payloads whose shim-owned buffers are freed on return, so assertions are made on what crossed the boundary rather than inferred from a data round trip. ~23 `RECORDING_STUB_*` env knobs drive fixtures and failures (stamp version, not-found, sign-flip values, per-seam `*_FAIL` knobs, filled-paths CSV, reentrant reads and writes). `missing_symbol_stub.c` is version-compatible but exports only `getALVersion`, exercising failure after the binding bootstrap. |
 | `shim/` | 11 C suites driving the public ABI against that stub, one ctest test per scenario. |
 | `real_core/` | 6 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core, the checked-in equilibrium HDF5 fixture pair, and isolated graph-selected `pulse_schedule` and coexistence oracles. |
 | `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 4 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
@@ -51,12 +51,13 @@ a live graph or timing thresholds.
 
 ## Groups, in rough dependency order
 
-### `runtime-binding-*` — 10 stub + 2 real · `shim/runtime_binding_test.c`
+### `runtime-binding-*` — 11 stub + 2 real · `shim/runtime_binding_test.c`
 
 ADR 0001: the shim `dlopen`/`dlsym`'s IMAS-Core with local symbol visibility
 instead of linking it. Covers successful resolution, tolerated minor drift,
-refused major mismatch, a null `getALVersion`, a missing library, resolution by
-bare soname through the loader's own search path, and verbatim forwarding of
+refused major mismatch, a null `getALVersion`, a missing library, a
+version-compatible library missing a required symbol, resolution by bare soname
+through the loader's own search path, and verbatim forwarding of
 the data, plugin and utility/version families. The `real-core` variants prove
 the same against the genuine library.
 
@@ -457,14 +458,17 @@ scenario table, and register it in `cmake/tests/Shim.cmake`:
 
 ```cmake
 add_stub_test(<ctest-name> <executable> <scenario>
-    [HLI_DD_VERSION v] [STAMP_VERSION v] [ENV "KNOB=value"...]
+    [CORE_LIBRARY_TARGET target] [HLI_DD_VERSION v] [STAMP_VERSION v]
+    [ENV "KNOB=value"...]
     [UNSET_ENV KNOB...] [WORKING_DIRECTORY dir])
 ```
 
 That function owns the shared environment (`IMAS_CORE_LIBRARY`, the latched HLI
 version, the stub's stamp version), the variables a scenario needs *removed*
 (`UNSET_ENV`), and the directory it runs in (`WORKING_DIRECTORY`, created at
-configure time). Reach for those options rather than a bare
+configure time). `CORE_LIBRARY_TARGET` replaces the default recording stub for
+a deliberate partial-Core fixture while keeping the same isolated-process and
+environment contract. Reach for those options rather than a bare
 `set_tests_properties`/`set_property` beside the call. Do not copy a prologue: twelve copies of one
 is where the shared harness came from, and one of those copies printed a literal
 `\n` in four suites' failure messages for months.

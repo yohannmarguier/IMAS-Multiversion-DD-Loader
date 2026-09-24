@@ -82,6 +82,8 @@ add_test(NAME ctest-inventory-contract
 # part of the full profile so the two complementary seam suites stay honest.
 add_library(recording_stub SHARED
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/stub/recording_stub.c")
+add_library(missing_symbol_stub SHARED
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/stub/missing_symbol_stub.c")
 # Matches the shim's bare-soname fallback (src/core_binding.rs) so the
 # bare-soname scenario below can exercise the loader's normal search
 # path instead of the explicit override.
@@ -93,6 +95,8 @@ set_target_properties(recording_stub PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/stub")
 target_compile_definitions(recording_stub PRIVATE
     "RECORDING_STUB_DEFAULT_VERSION=\"${IMAS_CORE_VERSION}\"")
+target_compile_definitions(missing_symbol_stub PRIVATE
+    "MISSING_SYMBOL_STUB_VERSION=\"${IMAS_CORE_VERSION}\"")
 
 # Registers one scenario of a recording-stub suite as its own ctest test.
 #
@@ -108,7 +112,8 @@ target_compile_definitions(recording_stub PRIVATE
 # peculiar to it.
 #
 #   add_stub_test(<ctest-name> <executable> [<scenario-argument>...]
-#                 [HLI_DD_VERSION <version>] [STAMP_VERSION <version>]
+#                 [CORE_LIBRARY_TARGET <target>] [HLI_DD_VERSION <version>]
+#                 [STAMP_VERSION <version>]
 #                 [ENV <NAME=value>...])
 #
 # ENV entries are appended to the environment verbatim, in the order given,
@@ -123,9 +128,18 @@ target_compile_definitions(recording_stub PRIVATE
 # ignored without warning and this guarantee disappears.
 function(add_stub_test name executable)
     cmake_parse_arguments(PARSE_ARGV 2 ARG ""
-        "HLI_DD_VERSION;STAMP_VERSION;WORKING_DIRECTORY" "ENV;UNSET_ENV")
+        "CORE_LIBRARY_TARGET;HLI_DD_VERSION;STAMP_VERSION;WORKING_DIRECTORY" "ENV;UNSET_ENV")
 
-    set(environment "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+    if(DEFINED ARG_CORE_LIBRARY_TARGET)
+        if(NOT TARGET "${ARG_CORE_LIBRARY_TARGET}")
+            message(FATAL_ERROR "${name} names missing Core fixture target ${ARG_CORE_LIBRARY_TARGET}")
+        endif()
+        set(core_library_target "${ARG_CORE_LIBRARY_TARGET}")
+        add_dependencies("${executable}" "${core_library_target}")
+    else()
+        set(core_library_target recording_stub)
+    endif()
+    set(environment "IMAS_CORE_LIBRARY=$<TARGET_FILE:${core_library_target}>")
     if(DEFINED ARG_HLI_DD_VERSION)
         list(APPEND environment "IMAS_MVDD_HLI_DD_VERSION=${ARG_HLI_DD_VERSION}")
     endif()
@@ -294,6 +308,8 @@ add_test(NAME rust-integration-coverage-audit-fixtures
     COMMAND "${BASH_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/check-rust-integration-coverage.sh"
         "${CMAKE_CURRENT_SOURCE_DIR}")
+set_tests_properties(rust-integration-coverage-audit-fixtures PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_test(NAME rust-production-test-witness-fixtures
     COMMAND "${BASH_EXECUTABLE}"

@@ -48,6 +48,8 @@ add_stub_test(runtime-binding-null-version runtime_binding_test null-version
 add_test(NAME runtime-binding-missing-library COMMAND runtime_binding_test missing-library)
 set_tests_properties(runtime-binding-missing-library PROPERTIES ENVIRONMENT
     "IMAS_CORE_LIBRARY=${CMAKE_CURRENT_BINARY_DIR}/does-not-exist.so")
+add_stub_test(runtime-binding-missing-symbol runtime_binding_test missing-symbol
+    CORE_LIBRARY_TARGET missing_symbol_stub)
 
 add_stub_test(runtime-binding-verbatim-forwarding runtime_binding_test verbatim-forwarding)
 
