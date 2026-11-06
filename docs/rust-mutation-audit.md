@@ -12,7 +12,7 @@ binary makes a red assertion look green and lags the result by exactly one
 iteration — the standing fact recorded in CLAUDE.md. Do the same by hand when
 running `cargo mutants` directly on one module. It first asks cargo-mutants for its
 candidate list, selects only mutants whose complete source spans belong to the
-six groups in `coverage/rust-line-coverage-scope.json`, writes that exact
+six groups in `coverage/rust-xml-line-coverage-scope.json`, writes that exact
 selection and a generated cargo-mutants filter into a fresh
 `target/rust-mutation-audit.XXXXXX/` directory, then runs cargo-mutants in its
 own scratch copy. It leaves the candidate list, selection, filter and complete
@@ -40,9 +40,10 @@ and the floors.
 
 ## Scope and score
 
-The mutation configuration names `rust-line-coverage-scope.json` rather than
+The mutation configuration names `rust-xml-line-coverage-scope.json` rather than
 copying its groups or source ranges. The checker rejects any other scope. As a
-result conversion, DD-version, context-registry, loss, artifact-validation and
+result the XML regression configuration's conversion, DD-version,
+context-registry, loss, artifact-validation and
 deterministic runtime-binding policy retain exactly the line audit's ownership,
 including its documented range-level treatment of mixed adapter/policy files.
 Raw-pointer adaptation, forwarding, dynamic loading and real-Core integration

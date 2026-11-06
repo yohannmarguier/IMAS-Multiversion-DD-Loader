@@ -48,6 +48,8 @@ add_stub_test(runtime-binding-null-version runtime_binding_test null-version
 add_test(NAME runtime-binding-missing-library COMMAND runtime_binding_test missing-library)
 set_tests_properties(runtime-binding-missing-library PROPERTIES ENVIRONMENT
     "IMAS_CORE_LIBRARY=${CMAKE_CURRENT_BINARY_DIR}/does-not-exist.so")
+add_stub_test(runtime-binding-missing-symbol runtime_binding_test missing-symbol
+    CORE_LIBRARY_TARGET missing_symbol_stub)
 
 add_stub_test(runtime-binding-verbatim-forwarding runtime_binding_test verbatim-forwarding)
 
@@ -855,6 +857,7 @@ add_write_delete_test(write-path-candidate-lands-at-primary-and-retains-unwritte
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0
     ENV "RECORDING_STUB_READ_LAST_WRITE=1")
+add_write_delete_test(write-path-plugin-candidate-uses-primary-and-records-stored-losses)
 add_write_delete_test(write-path-non-primary-source-refuses-by-precedence)
 add_write_delete_test(write-path-split-candidate-lands-at-primary
     HLI_DD_VERSION 3.39.0
@@ -1119,6 +1122,32 @@ add_stub_test(context-lifecycle-ending-dataentry-context-leaves-live-operation-a
     HLI_DD_VERSION 4.1.1
     STAMP_VERSION 3.39.0)
 
+# Issue #253's measured occurrence-opening contract.  Keep this as an exact
+# behavioral ledger rather than labeling whole executables: each entry earns a
+# distinct latch, discovery, cleanup or lifetime claim in its own process.
+set(_occurrence_adapter_tests
+    hli-dd-version-setter-accepts-valid-version
+    hli-dd-version-setter-rejects-conflicting-repeat
+    hli-dd-version-invalid-environment-fails-first-open
+    hli-dd-version-unset-first-open-then-setter-refused
+    version-discovery-write-mode-probe-asks-for-a-read-context
+    context-lifecycle-ending-child-removes-only-its-own-record
+    context-lifecycle-ending-root-removes-only-its-own-record
+    context-lifecycle-recycled-id-cannot-observe-the-released-record)
+if(NOT IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "live")
+    list(APPEND _occurrence_adapter_tests
+        graph-runtime-map-opening-families-reuse-a-retained-map
+        graph-runtime-map-write-mode-uses-read-op-stamp-probe
+        graph-runtime-map-absent-stamp-is-a-passthrough
+        graph-runtime-map-matching-stamp-is-a-passthrough
+        graph-runtime-map-malformed-stamp-refuses-and-ends-every-family
+        graph-runtime-map-conversion-disabled-is-a-plain-forward
+        graph-runtime-map-failure-closes-every-opening-family
+        graph-runtime-map-later-open-retries-a-failed-acquisition)
+endif()
+set_property(TEST ${_occurrence_adapter_tests} APPEND PROPERTY LABELS occurrence-adapter)
+unset(_occurrence_adapter_tests)
+
 # --- Issue #67: give the al_plugin_* reentry twins the same context
 # creation, path translation, and lifecycle behavior as their ordinary
 # counterparts --------------------------------------------------------
@@ -1288,3 +1317,53 @@ add_scoped_passthrough_test(
 add_scoped_passthrough_test(
     scoped-passthrough-writing-bind-and-unbind-plugin-forward-field-path-unchanged
     writing-bind-and-unbind-plugin-forward-field-path-unchanged)
+
+# The XML artifact is a private regression source, not a production fallback.
+# This separate label proves parsed XML semantics reach registered contexts and
+# observable Core calls without making them expectations of the graph source.
+set_property(TEST
+    read-path-translates-field-and-timebase-independently
+    read-path-merged-read-falls-through-to-next-candidate
+    read-path-sign-flip-array-negates-values-and-preserves-empty-double
+    APPEND PROPERTY LABELS xml-fidelity)
+
+# Focused loss delivery evidence. Existing boundary/failure scenarios remain
+# separate processes; the two additional cases cover mixed operations and
+# concurrent first delivery through the public ABI.
+add_executable(loss_delivery_test "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/loss_delivery_test.c")
+target_link_libraries(loss_delivery_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS} Threads::Threads)
+target_compile_definitions(loss_delivery_test PRIVATE
+    "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+add_dependencies(loss_delivery_test imas_mvdd_capi recording_stub)
+set_target_properties(loss_delivery_test PROPERTIES
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
+foreach(scenario operations-survive-close concurrent-first-loss)
+    add_stub_test(loss-delivery-${scenario} loss_delivery_test ${scenario}
+        HLI_DD_VERSION 4.1.1 STAMP_VERSION 3.39.0
+        ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-delivery-${scenario}")
+endforeach()
+set(_loss_adapter_tests
+    loss-delivery-operations-survive-close
+    loss-delivery-concurrent-first-loss
+    loss-file-is-created-on-first-loss-and-deduplicates-lines
+    loss-file-is-absent-without-loss
+    loss-file-filename-collision-gains-a-numeric-suffix
+    loss-file-default-destination-uses-the-process-clock-and-pid
+    read-path-loss-file-empty-directory-value-disables-delivery
+    read-path-loss-file-missing-directory-reports-once-without-failing-reads
+    read-path-loss-file-file-destination-reports-once-without-failing-reads
+    read-path-loss-file-append-failure-reports-once-without-failing-reads
+    read-path-merged-read-retains-a-lossy-verdict-in-the-loss-log
+    read-path-loss-count-null-output-is-refused
+    read-path-loss-at-null-path-buffer-is-refused
+    read-path-loss-at-null-verdict-is-refused
+    read-path-loss-at-negative-index-is-refused
+    read-path-loss-at-out-of-range-index-is-refused
+    read-path-loss-at-insufficient-buffer-is-refused
+    read-path-loss-operation-at-null-output-is-refused
+    read-path-loss-operation-at-negative-index-is-refused
+    read-path-loss-operation-at-out-of-range-index-is-refused
+    read-path-loss-operation-at-untracked-context-is-refused-after-zero-count
+    arraystruct-path-refusal-retains-an-unmappable-read-loss)
+set_property(TEST ${_loss_adapter_tests} APPEND PROPERTY LABELS loss-adapter)
+unset(_loss_adapter_tests)

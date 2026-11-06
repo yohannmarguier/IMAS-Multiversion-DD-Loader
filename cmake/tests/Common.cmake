@@ -30,14 +30,20 @@ add_test(NAME rust-audit-workflows
     COMMAND "${CMAKE_COMMAND}"
         "-DCI_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
         "-DMUTATION_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/rust-mutation-audit.yml"
+        "-DLINE_AUDIT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/audit-rust-line-coverage.sh"
+        "-DPRODUCTION_TESTS_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-production-line-coverage-tests.json"
         "-DLINE_SCOPE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-line-coverage-scope.json"
+        "-DXML_LINE_SCOPE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-xml-line-coverage-scope.json"
         "-DMUTATION_AUDIT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-mutation-audit.json"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_rust_audit_workflows.cmake")
 add_test(NAME rust-audit-workflow-guard
     COMMAND "${CMAKE_COMMAND}"
         "-DCI_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/ci.yml"
         "-DMUTATION_WORKFLOW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/.github/workflows/rust-mutation-audit.yml"
+        "-DLINE_AUDIT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/audit-rust-line-coverage.sh"
+        "-DPRODUCTION_TESTS_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-production-line-coverage-tests.json"
         "-DLINE_SCOPE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-line-coverage-scope.json"
+        "-DXML_LINE_SCOPE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-xml-line-coverage-scope.json"
         "-DMUTATION_AUDIT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/coverage/rust-mutation-audit.json"
         "-DCHECK_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_rust_audit_workflows.cmake"
         "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
@@ -76,6 +82,8 @@ add_test(NAME ctest-inventory-contract
 # part of the full profile so the two complementary seam suites stay honest.
 add_library(recording_stub SHARED
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/stub/recording_stub.c")
+add_library(missing_symbol_stub SHARED
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/stub/missing_symbol_stub.c")
 # Matches the shim's bare-soname fallback (src/core_binding.rs) so the
 # bare-soname scenario below can exercise the loader's normal search
 # path instead of the explicit override.
@@ -87,6 +95,8 @@ set_target_properties(recording_stub PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/stub")
 target_compile_definitions(recording_stub PRIVATE
     "RECORDING_STUB_DEFAULT_VERSION=\"${IMAS_CORE_VERSION}\"")
+target_compile_definitions(missing_symbol_stub PRIVATE
+    "MISSING_SYMBOL_STUB_VERSION=\"${IMAS_CORE_VERSION}\"")
 
 # Registers one scenario of a recording-stub suite as its own ctest test.
 #
@@ -102,7 +112,8 @@ target_compile_definitions(recording_stub PRIVATE
 # peculiar to it.
 #
 #   add_stub_test(<ctest-name> <executable> [<scenario-argument>...]
-#                 [HLI_DD_VERSION <version>] [STAMP_VERSION <version>]
+#                 [CORE_LIBRARY_TARGET <target>] [HLI_DD_VERSION <version>]
+#                 [STAMP_VERSION <version>]
 #                 [ENV <NAME=value>...])
 #
 # ENV entries are appended to the environment verbatim, in the order given,
@@ -117,9 +128,18 @@ target_compile_definitions(recording_stub PRIVATE
 # ignored without warning and this guarantee disappears.
 function(add_stub_test name executable)
     cmake_parse_arguments(PARSE_ARGV 2 ARG ""
-        "HLI_DD_VERSION;STAMP_VERSION;WORKING_DIRECTORY" "ENV;UNSET_ENV")
+        "CORE_LIBRARY_TARGET;HLI_DD_VERSION;STAMP_VERSION;WORKING_DIRECTORY" "ENV;UNSET_ENV")
 
-    set(environment "IMAS_CORE_LIBRARY=$<TARGET_FILE:recording_stub>")
+    if(DEFINED ARG_CORE_LIBRARY_TARGET)
+        if(NOT TARGET "${ARG_CORE_LIBRARY_TARGET}")
+            message(FATAL_ERROR "${name} names missing Core fixture target ${ARG_CORE_LIBRARY_TARGET}")
+        endif()
+        set(core_library_target "${ARG_CORE_LIBRARY_TARGET}")
+        add_dependencies("${executable}" "${core_library_target}")
+    else()
+        set(core_library_target recording_stub)
+    endif()
+    set(environment "IMAS_CORE_LIBRARY=$<TARGET_FILE:${core_library_target}>")
     if(DEFINED ARG_HLI_DD_VERSION)
         list(APPEND environment "IMAS_MVDD_HLI_DD_VERSION=${ARG_HLI_DD_VERSION}")
     endif()
@@ -132,6 +152,7 @@ function(add_stub_test name executable)
 
     add_test(NAME "${name}" COMMAND ${executable} ${ARG_UNPARSED_ARGUMENTS})
     set_tests_properties("${name}" PROPERTIES ENVIRONMENT "${environment}")
+    set_property(TEST "${name}" APPEND PROPERTY LABELS recording-stub)
     # The executable selects the test map source.  Keep that assignment on the
     # target so the shared harness can label every scenario without duplicating
     # a source-specific wrapper around its environment contract.
@@ -157,6 +178,24 @@ function(add_stub_test name executable)
             WORKING_DIRECTORY "${ARG_WORKING_DIRECTORY}")
     endif()
 endfunction()
+
+# The integration-coverage command runs this loader-only executable before any
+# Rust ABI call. Its dladdr result proves which staged shim the dynamic loader
+# selected, while the resulting all-zero Rust profile is the negative half of
+# the C-only coverage probe.
+function(add_rust_integration_loader_probe target shim_target)
+    add_executable(${target}
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/loaded_shim_path.c")
+    target_link_libraries(${target} PRIVATE ${shim_target} ${CMAKE_DL_LIBS})
+    add_dependencies(${target} imas_mvdd_capi)
+    set_target_properties(${target} PROPERTIES
+        BUILD_RPATH "$<TARGET_FILE_DIR:${shim_target}>")
+endfunction()
+
+add_rust_integration_loader_probe(
+    rust_integration_private_loader_probe imas_mvdd_loader)
+add_rust_integration_loader_probe(
+    rust_integration_production_loader_probe imas_mvdd_loader_production)
 
 # `real-core` denotes profile membership: every test registered inside this
 # bracket exists only when IMAS_MVDD_REAL_CORE_TESTS is on. Labelling the
@@ -263,6 +302,18 @@ find_program(BASH_EXECUTABLE bash REQUIRED)
 add_test(NAME rust-line-coverage-audit-fixtures
     COMMAND "${BASH_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/check-rust-line-coverage-audit.sh"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_test(NAME rust-integration-coverage-audit-fixtures
+    COMMAND "${BASH_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/check-rust-integration-coverage.sh"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+set_tests_properties(rust-integration-coverage-audit-fixtures PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_test(NAME rust-production-test-witness-fixtures
+    COMMAND "${BASH_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/coverage/check-rust-test-witnesses.sh"
         "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Mutation testing remains an explicit local audit: the fixture test protects

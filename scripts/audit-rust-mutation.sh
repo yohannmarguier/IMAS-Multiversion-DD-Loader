@@ -4,7 +4,7 @@ set -euo pipefail
 
 root_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 audit="$root_dir/coverage/rust-mutation-audit.json"
-line_scope="$root_dir/coverage/rust-line-coverage-scope.json"
+line_scope="$root_dir/coverage/rust-xml-line-coverage-scope.json"
 dispositions="$root_dir/coverage/rust-mutation-dispositions.json"
 
 if [[ -n $(git -C "$root_dir" status --porcelain) ]]; then

@@ -49,6 +49,46 @@ fn record_dummy_root(
 }
 
 #[test]
+#[cfg(not(feature = "xml-fixture-source"))]
+fn root_and_child_contexts_retain_the_exact_acquired_runtime_map() {
+    let acquired = crate::conversion::runtime_map::fidelity_tests::acquired_oracle_map();
+    let registry = ContextRegistry::new();
+    registry.record_dataentry_with_uri(10, "imas:hdf5?path=oracle".to_string());
+    assert!(registry.record_root(
+        RootRegistration {
+            ctx_id: 20,
+            resolved_path: String::new(),
+            pulse_ctx_id: 10,
+            dataobjectname: "oracle_ids".to_string(),
+            key: MapCacheKey::new(
+                "oracle_ids".to_string(),
+                version("3.39.0"),
+                version("4.1.1"),
+            ),
+            direction_to_stored: Direction::Forward,
+            opened_read_op: true,
+        },
+        Arc::clone(&acquired),
+    ));
+    assert!(registry.record_child(21, 20, "new_name".to_string(), "old_name".to_string()));
+
+    for context_id in [20, 21] {
+        let context = registry.lookup(context_id).unwrap();
+        assert!(Arc::ptr_eq(&acquired, &context.map));
+        assert!(matches!(
+            context.map.resolve("new_name", Direction::Forward),
+            Some(crate::conversion::conversion_map::RuleExplanation {
+                outcome: crate::conversion::conversion_map::Outcome::Path {
+                    resolved_path,
+                    ..
+                },
+                ..
+            }) if resolved_path == "old_name"
+        ));
+    }
+}
+
+#[test]
 fn an_unrecorded_context_has_no_conversion_record() {
     let registry = ContextRegistry::new();
     assert!(registry.lookup(1).is_none());

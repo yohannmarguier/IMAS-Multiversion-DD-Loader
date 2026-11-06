@@ -29,7 +29,7 @@ $ ./build/read_path_test identity-rule-returns-data   # one scenario, directly
 | Path | What lives there |
 |---|---|
 | `support/` | `shim_test_support.h` — the one shared C harness: `CHECK`/`CHECK_OK`/`CHECK_REFUSAL_MESSAGE`, IMAS-Core's four data-type codes, the recording stub's two data-event kinds, the loss-log helpers (`loss_count`, `check_no_loss_entry`, `check_loss_at`, `check_no_write_lossy_verdict`), `open_recording_stub` plus the `{string,int,double,double_at,pointer}_from_stub` accessors, `open_mismatched_occurrence`, and the `{name, function}` scenario table `RUN_NAMED_SCENARIO` dispatches `argv[1]` through. Include this instead of writing a prologue. |
-| `stub/` | `recording_stub.c` — a fake `libal` exporting the whole runtime-bound surface and recording what it received, including snapshots of write payloads whose shim-owned buffers are freed on return, so assertions are made on what crossed the boundary rather than inferred from a data round trip. ~23 `RECORDING_STUB_*` env knobs drive fixtures and failures (stamp version, not-found, sign-flip values, per-seam `*_FAIL` knobs, filled-paths CSV, reentrant reads and writes). |
+| `stub/` | `recording_stub.c` is a fake `libal` exporting the whole runtime-bound surface and recording what it received, including snapshots of write payloads whose shim-owned buffers are freed on return, so assertions are made on what crossed the boundary rather than inferred from a data round trip. ~23 `RECORDING_STUB_*` env knobs drive fixtures and failures (stamp version, not-found, sign-flip values, per-seam `*_FAIL` knobs, filled-paths CSV, reentrant reads and writes). `missing_symbol_stub.c` is version-compatible but exports only `getALVersion`, exercising failure after the binding bootstrap. |
 | `shim/` | 11 C suites driving the public ABI against that stub, one ctest test per scenario. |
 | `real_core/` | 6 C suites + a loadable C++ plugin fixture, against genuine CMake-acquired IMAS-Core, the checked-in equilibrium HDF5 fixture pair, and isolated graph-selected `pulse_schedule` and coexistence oracles. |
 | `abi/` | The linkage smoke test and three `.def` manifests that are the single source of truth for the mirrored surface: `abi_symbols.def` (37 mirrored symbols + expected fn-pointer types), `owned_exports.def` (the 4 `imas_mvdd_*` exports the shim owns), `abi_fallback_constants.def` (the id/name tables `core_binding.rs` hand-transcribes from `al_const.h`). |
@@ -51,12 +51,13 @@ a live graph or timing thresholds.
 
 ## Groups, in rough dependency order
 
-### `runtime-binding-*` — 10 stub + 2 real · `shim/runtime_binding_test.c`
+### `runtime-binding-*` — 11 stub + 2 real · `shim/runtime_binding_test.c`
 
 ADR 0001: the shim `dlopen`/`dlsym`'s IMAS-Core with local symbol visibility
 instead of linking it. Covers successful resolution, tolerated minor drift,
-refused major mismatch, a null `getALVersion`, a missing library, resolution by
-bare soname through the loader's own search path, and verbatim forwarding of
+refused major mismatch, a null `getALVersion`, a missing library, a
+version-compatible library missing a required symbol, resolution by bare soname
+through the loader's own search path, and verbatim forwarding of
 the data, plugin and utility/version families. The `real-core` variants prove
 the same against the genuine library.
 
@@ -82,6 +83,21 @@ stamps forward unchanged and register nothing; a mismatch registers the
 occurrence; a **malformed stamp refuses *and* ends the just-opened context**
 rather than leaking it; a Core failure forwards its status unchanged; an unset
 HLI version is a plain forward.
+
+The `occurrence-adapter` label selects the 16 process-isolated latch,
+discovery, acquisition and lifecycle scenarios used by the C-driven Rust
+coverage report.  It is an exact cross-suite ledger rather than another test
+executable; see `docs/occurrence-adapter-coverage.md`.
+
+The `loss-adapter` label selects 22 process-isolated loss export and file
+delivery scenarios, including `shim/loss_delivery_test.c`'s mixed-operation
+and concurrent-first-delivery cases. Its separate measured report and residual
+writer cases are documented in `docs/loss-delivery-coverage.md`.
+
+`coverage/check-artifact-command.py` runs nine subprocess checks against a
+supplied `validate_equilibrium_coverage` binary. The integration collector's
+`artifact-command` profile builds and measures that production executable;
+see `docs/artifact-command-coverage.md`.
 
 > There is no C-level registry introspection, so "the mismatch was registered"
 > is proven the only way it is externally observable: a *second* open of the
@@ -153,9 +169,9 @@ record intact, a recycled context ID never exposes a stale record, and the
 latter two seams forward unchanged without touching the registry. Observed
 indirectly, via whether a later read still translates.
 
-### `write-path-*` — 25 · `shim/write_delete_conversion_test.c`
+### `write-path-*` — 26 · `shim/write_delete_conversion_test.c`
 
-`al_write_data` and its plugin reentry twin `al_plugin_write_data`, whose three
+`al_write_data` and its plugin reentry twin `al_plugin_write_data`, whose four
 scenarios are spelled `write-path-plugin-*`. The delete half of the same
 executable is the next group: one binary serves both seams because they share
 the fixture helpers, but a ctest name says which seam it drives, so
@@ -167,7 +183,8 @@ one stored spelling, preserving relative/absolute child-context semantics and
 caller-owned `data`/`size`. Issue #127 adds COCOS writes: the policy sends Core
 a sign-flipped, shim-owned copy (including rank 7) while preserving caller
 storage; an unset rank-0 sentinel forwards unchanged so Core keeps its own
-skip behaviour. Issue #128 writes only an ambiguous plan's precedence-1
+skip behaviour, through the ordinary and plugin twins alike. Issue #128 writes
+only an ambiguous plan's precedence-1
 candidate — never fanning out the way issue #130's delete does, because a write
 asserts one value where a delete asserts an absence (ADR 0017) — records every
 skipped candidate as a `POTENTIALLY_LOSSY` `WRITE` loss after Core succeeds
@@ -222,8 +239,9 @@ counterparts (issues #67 and #68): discovery / registration / translation /
 malformed-stamp refusal for plugin global and slice actions, translation and
 refusal for the plugin arraystruct action, record removal-on-success and
 retention-on-failure for plugin end action, and the full read policy for
-`al_plugin_read_data` (translation, refusal, no-source, merged fallthrough,
-sign flip, loss retention through a child context).
+`al_plugin_read_data` (translation, refusal, scalar and array no-source
+outputs, merged fallthrough, sign flip, absolute child-context resolution, and
+loss retention through a child context).
 
 ### `reentry-guard-*` — 6 · `shim/reentry_guard_test.c`
 
@@ -379,13 +397,26 @@ no C-ABI test can reach.
 Runs `tests/coverage/check-rust-line-coverage-audit.sh`, the compact fixture
 suite for the local Rust decision-coverage audit. It proves that the checker
 adds covered and total lines across groups, does not average percentages, fails
-an aggregate pass with one below-floor group, refuses reports that omit or
-empty a required source measurement, and — against a throwaway source tree it
-builds itself — refuses a group range that stops short of its file's inline
-test module unless the remainder is a declared exclusion. It does not run the
-full audit: the
-ordinary CI job runs the checked-in command and uploads its LCOV report even
-when the threshold rejects it.
+an aggregate pass with one below-floor group, rejects an aggregate below 90%
+when all groups meet 80%, distinguishes a scoped 90% PASS
+from a full unfiltered result below 90%, reports excluded production and inline
+test bodies separately, rejects stale revision metadata, publishes the input
+diagnostic when a report is missing, refuses reports that omit or empty a
+required source measurement, refuses overlapping
+group ownership, and—against a throwaway source tree it builds itself—refuses
+a group range that stops short of its file's inline test module, reaches into
+that module, or becomes stale after a production decision is inserted. It
+accepts the short range only when the remainder is a declared exclusion. It
+does not run the full audit: the ordinary CI job runs separate fresh production
+and private-XML configurations and uploads their Markdown explanation with both
+LCOV inputs even when a threshold rejects either one. The
+`rust-audit-workflow-guard`
+companion rejects removal of the production run, either fresh-profile clean,
+the Markdown upload, substitution of `--all-features`, and a production check
+fed by the XML report. It also rejects removal of a production runtime-map
+source assignment, one of the six required scenario witnesses, or the ignored-test
+inventory that proves those witnesses execute. `rust-production-test-witness-fixtures`
+proves the witness checker rejects both missing and ignored tests.
 
 ### `rust-mutation-audit-fixtures`
 
@@ -421,7 +452,8 @@ Configuration-as-tested.
   `IN_LIST` pass locally and fail only on CI.
 - Each has a `verify_*_guard` companion feeding it throwaway mutated fixtures,
   to prove it rejects them.
-- `check_rust_audit_workflows.cmake` proves the ordinary line gate and the
+- `check_rust_audit_workflows.cmake` proves the ordinary production and XML
+  line gates and the
   dispatch-only mutation workflow run their checked-in commands with pinned
   tools, retain reports on failure, and preserve the exact floors and scope.
   Its guard rejects a missing or decoy line command, threshold or scope drift,
@@ -442,14 +474,17 @@ scenario table, and register it in `cmake/tests/Shim.cmake`:
 
 ```cmake
 add_stub_test(<ctest-name> <executable> <scenario>
-    [HLI_DD_VERSION v] [STAMP_VERSION v] [ENV "KNOB=value"...]
+    [CORE_LIBRARY_TARGET target] [HLI_DD_VERSION v] [STAMP_VERSION v]
+    [ENV "KNOB=value"...]
     [UNSET_ENV KNOB...] [WORKING_DIRECTORY dir])
 ```
 
 That function owns the shared environment (`IMAS_CORE_LIBRARY`, the latched HLI
 version, the stub's stamp version), the variables a scenario needs *removed*
 (`UNSET_ENV`), and the directory it runs in (`WORKING_DIRECTORY`, created at
-configure time). Reach for those options rather than a bare
+configure time). `CORE_LIBRARY_TARGET` replaces the default recording stub for
+a deliberate partial-Core fixture while keeping the same isolated-process and
+environment contract. Reach for those options rather than a bare
 `set_tests_properties`/`set_property` beside the call. Do not copy a prologue: twelve copies of one
 is where the shared harness came from, and one of those copies printed a literal
 `\n` in four suites' failure messages for months.

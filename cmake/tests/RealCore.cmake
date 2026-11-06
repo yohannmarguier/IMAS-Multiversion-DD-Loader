@@ -21,6 +21,30 @@ if(IMAS_CORE_BUILT_FROM_SOURCE)
     add_dependencies(runtime_binding_test ${IMAS_CORE_AL_TARGET})
 endif()
 
+# The integration-coverage profile must measure the ordinary production shim,
+# not the private XML fixture that the main recording-stub executable links.
+# Reuse the existing real-core scenario source and assertions in a separately
+# linked executable so the two Rust objects and their raw profiles never mix.
+add_executable(runtime_binding_production_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/runtime_binding_test.c")
+target_link_libraries(runtime_binding_production_test PRIVATE
+    imas_mvdd_loader_production ${CMAKE_DL_LIBS})
+target_compile_definitions(runtime_binding_production_test PRIVATE
+    "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\""
+    "SHIM_LIBRARY_PATH=\"$<TARGET_FILE:imas_mvdd_loader_production>\""
+    "SUPPORTED_CORE_VERSION=\"${IMAS_CORE_VERSION}\""
+    "INCOMPATIBLE_CORE_VERSION=\"${IMAS_CORE_INCOMPATIBLE_VERSION}\"")
+add_dependencies(runtime_binding_production_test imas_mvdd_capi)
+if(IMAS_CORE_BUILT_FROM_SOURCE)
+    add_dependencies(runtime_binding_production_test ${IMAS_CORE_AL_TARGET})
+endif()
+set_target_properties(runtime_binding_production_test PROPERTIES
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader_production>")
+add_real_core_test(runtime-binding-production-real-core
+    $<TARGET_FILE:runtime_binding_production_test> real-core)
+set_property(TEST runtime-binding-production-real-core
+    APPEND PROPERTY LABELS production-shim)
+
 # A real-Core run cannot use the recording stub's private accessors or
 # fabricated context IDs. The acquired Core target already provides the
 # matching headers and library in every acquisition mode, so drive all
@@ -289,6 +313,10 @@ set_target_properties(graph_runtime_map_oracle_test PROPERTIES
     BUILD_RPATH "${IMAS_MVDD_GRAPH_RUNTIME_RPATH}")
 
 if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "live")
+    set(_production_shim_real_core_tests
+        live-graph-core-coexistence-forward
+        live-graph-core-coexistence-reverse
+        live-graph-core-coexistence-nested)
     target_compile_definitions(graph_runtime_map_oracle_test PRIVATE IMAS_MVDD_LIVE_GRAPH=1)
     foreach(family IN ITEMS equilibrium_read write_delete_oracle)
         add_executable(live_${family}_test "${CMAKE_CURRENT_SOURCE_DIR}/tests/real_core/${family}_test.c")
@@ -307,7 +335,11 @@ if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "live")
         foreach(scenario IN ITEMS lands-on-the-stored-spelling flips-the-sign-on-disk refusal-leaves-the-stamp-untouched)
             add_real_core_test(live-graph-core-${direction}-${scenario}
                 $<TARGET_FILE:live_write_delete_oracle_test> write-oracle-${direction}-${scenario})
+            list(APPEND _production_shim_real_core_tests
+                live-graph-core-${direction}-${scenario})
         endforeach()
+        list(APPEND _production_shim_real_core_tests
+            live-graph-core-${direction}-rename-read)
     endforeach()
 endif()
 
@@ -327,5 +359,19 @@ add_real_core_test(delete-graph-pulse-schedule-forward-structure
     $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-forward-structure-delete)
 add_real_core_test(delete-graph-pulse-schedule-reverse-structure
     $<TARGET_FILE:graph_runtime_map_oracle_test> graph-pulse-schedule-reverse-structure-delete)
+
+if(IMAS_MVDD_GRAPH_TEST_SOURCE STREQUAL "live")
+    list(APPEND _production_shim_real_core_tests
+        read-graph-pulse-schedule-forward
+        read-graph-pulse-schedule-reverse
+        write-graph-pulse-schedule-forward
+        write-graph-pulse-schedule-reverse
+        delete-graph-pulse-schedule-forward
+        delete-graph-pulse-schedule-reverse
+        delete-graph-pulse-schedule-forward-structure
+        delete-graph-pulse-schedule-reverse-structure)
+    set_property(TEST ${_production_shim_real_core_tests}
+        APPEND PROPERTY LABELS production-shim)
+endif()
 
 imas_mvdd_end_real_core_tests()

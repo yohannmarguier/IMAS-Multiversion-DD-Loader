@@ -38,11 +38,24 @@ jobs:
 
       - uses: ./.github/actions/setup-toolchain
 
+      - name: Record the exhaustive controlled fidelity oracle
+        env:
+          IMAS_MVDD_FIDELITY_REPORT: target/runtime-map-fidelity/controlled.json
+        run: cargo test --release fidelity_ --lib
+
       - name: Acquire the complete live reference scopes
         run: bash tests/scripts/check-live-acquisition.sh
 
       - name: Record provisioning scope
         run: echo 'DD graph provisioning smoke check passed'
+
+      - name: Upload runtime-map fidelity reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-map-fidelity
+          path: target/runtime-map-fidelity/*.json
+          if-no-files-found: error
 
   # The normal production artifact consumes the pinned service. Fast retains
   # service-independent XML and controlled-graph fixture scenarios.
@@ -89,12 +102,46 @@ jobs:
       - name: Enforce scoped Rust line coverage
         run: bash scripts/audit-rust-line-coverage.sh
       # A failed threshold is exactly when the report is useful.
-      - name: Upload scoped line-coverage report
+      - name: Upload line-coverage report and inputs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rust-line-coverage-lcov
-          path: target/rust-line-coverage.lcov
+          name: rust-line-coverage-report
+          path: |
+            target/rust-line-coverage-report.md
+            target/rust-line-coverage-*.lcov
+          if-no-files-found: warn
+
+  rust-integration-coverage:
+    # Unlike the scoped unit gate above, this is diagnostic evidence for Rust
+    # reached only through existing C ABI scenarios. It deliberately has no
+    # percentage threshold.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-toolchain
+      - name: Install the pinned coverage tool
+        run: |
+          rustup component add llvm-tools-preview --toolchain "$RUST_VERSION"
+          cargo install cargo-llvm-cov --version "$CARGO_LLVM_COV_VERSION" --locked
+      - name: Collect recording-stub C ABI Rust coverage
+        run: bash scripts/collect-rust-integration-coverage.sh recording-stub
+      - name: Measure the artifact-validation executable
+        if: ${{ !cancelled() }}
+        run: bash scripts/collect-rust-integration-coverage.sh artifact-command
+      - name: Upload artifact command coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-integration-coverage-artifact-command
+          path: target/rust-integration-coverage/artifact-command/
+          if-no-files-found: warn
+      - name: Upload recording-stub integration coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-integration-coverage-recording-stub
+          path: target/rust-integration-coverage/recording-stub/
           if-no-files-found: warn
 
   fast:
@@ -131,6 +178,9 @@ jobs:
       - name: Test recording-stub seams
         # Rust unit-test repairs are deferred while behavioral CI is restored.
         run: ctest --test-dir build -E '^rust-unit$' --output-on-failure --no-tests=error
+
+      - name: Check private XML fidelity separately
+        run: ctest --test-dir build -L xml-fidelity --output-on-failure --no-tests=error
 
       - name: Install
         run: cmake --install build --prefix "$PWD/dist"
@@ -299,3 +349,21 @@ jobs:
 
       - name: Check an install under a relative prefix
         run: bash tests/scripts/check-relative-prefix-install.sh build
+
+      - name: Install the pinned integration coverage tool
+        run: |
+          rustup component add llvm-tools-preview --toolchain "$RUST_VERSION"
+          cargo install cargo-llvm-cov --version "$CARGO_LLVM_COV_VERSION" --locked
+
+      - name: Collect real-Core production-shim Rust coverage
+        env:
+          IMAS_MVDD_INTEGRATION_CMAKE_PREFIX_PATH: ${{ github.workspace }}/al-core-dist
+        run: bash scripts/collect-rust-integration-coverage.sh real-core
+
+      - name: Upload real-Core integration coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-integration-coverage-real-core
+          path: target/rust-integration-coverage/real-core/
+          if-no-files-found: warn

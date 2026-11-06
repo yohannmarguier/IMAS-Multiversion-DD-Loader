@@ -1,4 +1,4 @@
-SF:src/conversion.rs
+SF:src/fixture/conversion.rs
 DA:1,1
 DA:2,1
 DA:3,1
@@ -10,7 +10,7 @@ DA:8,1
 DA:9,1
 DA:10,0
 end_of_record
-SF:src/version.rs
+SF:src/fixture/version.rs
 DA:1,1
 DA:2,1
 DA:3,1
@@ -22,7 +22,7 @@ DA:8,1
 DA:9,1
 DA:10,0
 end_of_record
-SF:src/registry.rs
+SF:src/fixture/registry.rs
 DA:1,1
 DA:2,1
 DA:3,1
@@ -34,7 +34,7 @@ DA:8,1
 DA:9,1
 DA:10,0
 end_of_record
-SF:src/loss.rs
+SF:src/fixture/loss.rs
 DA:1,1
 DA:2,1
 DA:3,1
@@ -46,7 +46,7 @@ DA:8,1
 DA:9,1
 DA:10,0
 end_of_record
-SF:src/bin/validate.rs
+SF:src/fixture/validate.rs
 DA:1,1
 DA:2,1
 DA:3,1
@@ -58,7 +58,7 @@ DA:8,1
 DA:9,1
 DA:10,0
 end_of_record
-SF:src/core/policy.rs
+SF:src/fixture/policy.rs
 DA:1,1
 DA:2,1
 DA:3,1

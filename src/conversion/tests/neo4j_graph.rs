@@ -488,6 +488,170 @@ fn rejects_duplicate_event_ids_even_when_their_rows_are_otherwise_valid() {
     );
 }
 
+fn raw_scope_failure(executor: ControlledExecutor) -> String {
+    Neo4jScopeSource::new(executor, 2)
+        .unwrap()
+        .load_raw_scope("equilibrium", &attempt())
+        .expect_err("malformed controlled rows must not reach map construction")
+        .0
+}
+
+#[test]
+fn raw_scope_rejects_each_invalid_catalogue_and_node_shape() {
+    assert!(matches!(
+        Neo4jScopeSource::new(ControlledExecutor::default(), 0),
+        Err(GraphSourceError(message)) if message == "Neo4j page size must be nonzero"
+    ));
+
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[0].1 = count(-1);
+    assert_eq!(
+        raw_scope_failure(executor),
+        "count query did not return one non-negative integer"
+    );
+
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[0].1 = vec![row(&[])];
+    assert_eq!(
+        raw_scope_failure(executor),
+        "count query did not return one non-negative integer"
+    );
+
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[0].1 = count(1);
+    assert_eq!(
+        raw_scope_failure(executor),
+        "page exceeded its declared count boundary"
+    );
+
+    for (column, value, expected) in [
+        ("release", GraphValue::Null, "release is typed null"),
+        (
+            "release",
+            GraphValue::Integer(411),
+            "release is missing or not a non-empty string",
+        ),
+        (
+            "cocos",
+            GraphValue::String("not-a-convention".into()),
+            "invalid COCOS value: invalid COCOS convention `not-a-convention`",
+        ),
+        (
+            "cocos",
+            GraphValue::Integer(17),
+            "COCOS must be a typed null or non-empty string",
+        ),
+    ] {
+        let executor = complete_executor();
+        executor.replies.borrow_mut()[1].1[0].insert(column.into(), value);
+        assert_eq!(raw_scope_failure(executor), expected);
+    }
+
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[1].1[1]
+        .insert("release".into(), GraphValue::String("4.1.1".into()));
+    assert_eq!(raw_scope_failure(executor), "duplicate release row");
+
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[3].1[0].insert("ids".into(), GraphValue::String("other".into()));
+    assert_eq!(
+        raw_scope_failure(executor),
+        "node stream escaped its requested IDS"
+    );
+
+    for (value, expected) in [
+        (
+            GraphValue::Null,
+            "coordinate relationships must be an empty list, not typed null",
+        ),
+        (
+            GraphValue::Integer(1),
+            "coordinate relationships are missing or not a list",
+        ),
+        (
+            GraphValue::List(vec![GraphValue::String("bad".into())]),
+            "coordinate relationship is not a two-value list",
+        ),
+        (
+            GraphValue::List(vec![GraphValue::List(vec![
+                GraphValue::Integer(0),
+                GraphValue::String("time".into()),
+                GraphValue::String("path".into()),
+            ])]),
+            "coordinate relationships repeat or contain an invalid dimension",
+        ),
+    ] {
+        let executor = complete_executor();
+        executor.replies.borrow_mut()[3].1[0].insert("coordinate_relationships".into(), value);
+        assert_eq!(raw_scope_failure(executor), expected);
+    }
+
+    for (value, expected) in [
+        (
+            GraphValue::Null,
+            "introduced must be an empty list, not typed null",
+        ),
+        (
+            GraphValue::Integer(1),
+            "introduced is missing or not a list",
+        ),
+        (
+            GraphValue::List(vec![GraphValue::Integer(1)]),
+            "introduced contains a non-string release",
+        ),
+        (
+            GraphValue::List(vec![GraphValue::String("9.9.9".into())]),
+            "introduced references a release outside the version stream",
+        ),
+        (
+            GraphValue::List(vec![
+                GraphValue::String("4.1.1".into()),
+                GraphValue::String("4.1.1".into()),
+            ]),
+            "introduced repeats a release",
+        ),
+    ] {
+        let executor = complete_executor();
+        executor.replies.borrow_mut()[3].1[0].insert("introduced".into(), value);
+        assert_eq!(raw_scope_failure(executor), expected);
+    }
+}
+
+#[test]
+fn raw_scope_rejects_each_cross_scope_event_and_successor_shape() {
+    for (column, value, expected) in [
+        (
+            "path",
+            GraphValue::String("missing".into()),
+            "event references a path outside the node stream",
+        ),
+        (
+            "release",
+            GraphValue::String("9.9.9".into()),
+            "event references a release outside the version stream",
+        ),
+        ("kind", GraphValue::Null, "kind is typed null"),
+    ] {
+        let executor = complete_executor();
+        executor.replies.borrow_mut()[5].1[0].insert(column.into(), value);
+        assert_eq!(raw_scope_failure(executor), expected);
+    }
+
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[7].1[0]
+        .insert("from_path".into(), GraphValue::String("missing".into()));
+    assert_eq!(
+        raw_scope_failure(executor),
+        "successor references a path outside the node stream"
+    );
+
+    let executor = complete_executor();
+    executor.replies.borrow_mut()[6].1 = count(2);
+    let duplicate = executor.replies.borrow()[7].1[0].clone();
+    executor.replies.borrow_mut()[7].1.push(duplicate);
+    assert_eq!(raw_scope_failure(executor), "duplicate successor row");
+}
+
 #[test]
 #[ignore = "requires the pinned Neo4j graph provisioned by CI"]
 fn pinned_graph_returns_complete_reference_scopes() {
@@ -496,6 +660,29 @@ fn pinned_graph_returns_complete_reference_scopes() {
     use crate::conversion::runtime_map::{MapRequest, RuntimeMapCoordinator};
     let coordinator =
         RuntimeMapCoordinator::with_deadline(Neo4jFactsSource(config), Duration::from_secs(120));
+    let mut completed_requests = Vec::new();
+    let mut completed_checks = Vec::new();
+    let mut completed_mismatches = Vec::new();
+    let mut record_check = |ids: &str,
+                            hli: &str,
+                            stored: &str,
+                            path: &str,
+                            expected: &str,
+                            observed: &str| {
+        let check = format!(
+            "{{\"ids\":{},\"hli_dd\":{},\"stored_dd\":{},\"path\":{},\"expected\":{},\"observed\":{}}}",
+            json_string(ids),
+            json_string(hli),
+            json_string(stored),
+            json_string(path),
+            json_string(expected),
+            json_string(observed),
+        );
+        completed_checks.push(check.clone());
+        if expected != observed {
+            completed_mismatches.push(check);
+        }
+    };
     for (ids, first, second) in [
         ("equilibrium", "3.39.0", "4.1.1"),
         ("equilibrium", "3.42.0", "4.1.1"),
@@ -510,61 +697,118 @@ fn pinned_graph_returns_complete_reference_scopes() {
             let map = coordinator
                 .acquire(&request)
                 .unwrap_or_else(|error| panic!("{ids} {stored} -> {hli}: {error:?}"));
-            assert!(matches!(
-                map.resolve("ids_properties/homogeneous_time", Direction::Forward)
-                    .unwrap()
-                    .outcome,
-                Outcome::Path { .. }
-            ));
+            let identity_path = "ids_properties/homogeneous_time";
+            let identity_observed = match map.resolve(identity_path, Direction::Forward) {
+                Some(identity) => match identity.outcome {
+                    Outcome::Path { resolved_path, .. } => format!("path:{resolved_path}"),
+                    outcome => format!("{outcome:?}"),
+                },
+                None => "absent".to_string(),
+            };
+            record_check(
+                ids,
+                hli,
+                stored,
+                identity_path,
+                &format!("path:{identity_path}"),
+                &identity_observed,
+            );
             if ids == "equilibrium" {
                 use crate::conversion::conversion_map::ValueTransformation;
-                let psi = map
-                    .resolve("time_slice/profiles_1d/psi", Direction::Forward)
-                    .unwrap();
-                assert!(matches!(
-                    psi.outcome,
-                    Outcome::Path {
-                        value_transformation: ValueTransformation::SignFlip { .. },
-                        ..
-                    }
-                ));
+                let psi_observed =
+                    match map.resolve("time_slice/profiles_1d/psi", Direction::Forward) {
+                        Some(psi) => match psi.outcome {
+                            Outcome::Path {
+                                value_transformation:
+                                    ValueTransformation::SignFlip {
+                                        from_cocos,
+                                        to_cocos,
+                                        ..
+                                    },
+                                ..
+                            } => format!("sign:{from_cocos}->{to_cocos}"),
+                            outcome => format!("{outcome:?}"),
+                        },
+                        None => "absent".to_string(),
+                    };
+                let psi_expected = if hli == "4.1.1" {
+                    "sign:11->17"
+                } else {
+                    "sign:17->11"
+                };
+                record_check(
+                    ids,
+                    hli,
+                    stored,
+                    "time_slice/profiles_1d/psi",
+                    psi_expected,
+                    &psi_observed,
+                );
                 let j = if hli == "4.1.1" { "j_phi" } else { "j_tor" };
                 let field = format!("time_slice/constraints/{j}/measured");
-                assert!(matches!(
-                    map.resolve(&field, Direction::Forward).unwrap().outcome,
-                    Outcome::Path { .. }
-                ));
+                let expected_target = format!(
+                    "time_slice/constraints/{}/measured",
+                    if stored == "3.39.0" { "j_tor" } else { "j_phi" }
+                );
+                let j_observed = match map.resolve(&field, Direction::Forward) {
+                    Some(j) => match j.outcome {
+                        Outcome::Path { resolved_path, .. } => format!("path:{resolved_path}"),
+                        outcome => format!("{outcome:?}"),
+                    },
+                    None => "absent".to_string(),
+                };
+                record_check(
+                    ids,
+                    hli,
+                    stored,
+                    &field,
+                    &format!("path:{expected_target}"),
+                    &j_observed,
+                );
                 {
                     let field = format!(
                         "time_slice/global_quantities/magnetic_axis/b_field_{}",
                         if hli == "4.1.1" { "phi" } else { "tor" }
                     );
-                    let outcome = map.resolve(&field, Direction::Forward);
-                    assert!(outcome.is_some(), "missing endpoint {field}");
-                    assert!(
-                        matches!(outcome.unwrap().outcome, Outcome::Refusal(_)),
-                        "unsupported evidence became a value conversion: {field}"
-                    );
+                    let observed = match map.resolve(&field, Direction::Forward) {
+                        Some(explanation) => match explanation.outcome {
+                            Outcome::Refusal(_) => "refusal".to_string(),
+                            outcome => format!("{outcome:?}"),
+                        },
+                        None => "absent".to_string(),
+                    };
+                    record_check(ids, hli, stored, &field, "refusal", &observed);
                 }
-                assert!(matches!(
-                    map.resolve("time_slice/boundary/outline/r", Direction::Forward)
-                        .unwrap()
-                        .outcome,
-                    Outcome::Path { .. }
-                ));
+                let outline = "time_slice/boundary/outline/r";
+                let observed = match map.resolve(outline, Direction::Forward) {
+                    Some(explanation) => match explanation.outcome {
+                        Outcome::Path { resolved_path, .. } => format!("path:{resolved_path}"),
+                        outcome => format!("{outcome:?}"),
+                    },
+                    None => "absent".to_string(),
+                };
+                record_check(
+                    ids,
+                    hli,
+                    stored,
+                    outline,
+                    &format!("path:{outline}"),
+                    &observed,
+                );
                 if hli == "4.1.1" {
-                    assert!(matches!(
-                        map.resolve("time_slice/boundary/gap", Direction::Forward)
-                            .unwrap()
-                            .outcome,
-                        Outcome::Refusal(_)
-                    ));
-                    assert!(matches!(
-                        map.resolve("grids_ggd/grid/space/coordinates_type", Direction::Forward)
-                            .unwrap()
-                            .outcome,
-                        Outcome::Refusal(_)
-                    ));
+                    for field in [
+                        "time_slice/boundary/gap",
+                        "grids_ggd/grid/space/coordinates_type",
+                    ] {
+                        let observed = match map.resolve(field, Direction::Forward) {
+                            Some(explanation) => match explanation.outcome {
+                                Outcome::Refusal(_) => "refusal".to_string(),
+                                outcome => format!("{outcome:?}"),
+                            },
+                            None => "absent".to_string(),
+                        };
+                        record_check(ids, hli, stored, field, "refusal", &observed);
+                    }
                 }
             } else {
                 let (caller, target) = if hli == "3.30.0" {
@@ -574,19 +818,68 @@ fn pinned_graph_returns_complete_reference_scopes() {
                 };
                 for suffix in ["", "/name"] {
                     let field = format!("ec/{caller}{suffix}");
-                    let outcome = map.resolve(&field, Direction::Forward).unwrap();
-                    assert!(
-                        matches!(outcome.outcome, Outcome::Path { resolved_path, .. } if resolved_path == format!("ec/{target}{suffix}"))
-                    );
+                    let expected = format!("path:ec/{target}{suffix}");
+                    let observed = match map.resolve(&field, Direction::Forward) {
+                        Some(explanation) => match explanation.outcome {
+                            Outcome::Path { resolved_path, .. } => format!("path:{resolved_path}"),
+                            outcome => format!("{outcome:?}"),
+                        },
+                        None => "absent".to_string(),
+                    };
+                    record_check(ids, hli, stored, &field, &expected, &observed);
                 }
-                assert!(
-                    map.resolve("ec/beam/name", Direction::Forward).is_none(),
-                    "an intermediate witness is not an endpoint"
-                );
+                let intermediate = "ec/beam/name";
+                let observed = match map.resolve(intermediate, Direction::Forward) {
+                    Some(explanation) => format!("{:?}", explanation.outcome),
+                    None => "absent".to_string(),
+                };
+                record_check(ids, hli, stored, intermediate, "absent", &observed);
             }
+            completed_requests.push(format!(
+                "{{\"ids\":\"{ids}\",\"hli_dd\":\"{hli}\",\"stored_dd\":\"{stored}\"}}"
+            ));
             eprintln!("live complete acquisition succeeded: {ids} {stored} -> {hli}");
         }
     }
+    if let Some(path) = std::env::var_os("IMAS_MVDD_LIVE_FIDELITY_REPORT") {
+        let selection = include_str!("../../../config/dd-graph-release.env");
+        let selected = |name: &str| {
+            selection
+                .lines()
+                .find_map(|line| line.strip_prefix(&format!("{name}=")))
+                .unwrap_or_else(|| panic!("pinned graph selection is missing {name}"))
+        };
+        let report = format!(
+            concat!(
+                "{{\n",
+                "  \"schema\": \"imas-mvdd-live-fidelity-v1\",\n",
+                "  \"source_identity\": {{\"release\":\"{}\",\"manifest\":\"{}\",\"archive\":\"{}\",\"producer_commit\":\"{}\"}},\n",
+                "  \"scope\": \"sampled-pinned-graph\",\n",
+                "  \"query_scoping\": \"IDS-bound count and complete page consumption\",\n",
+                "  \"requests\": [{}],\n",
+                "  \"checks\": [{}],\n",
+                "  \"mismatches\": [{}]\n",
+                "}}\n"
+            ),
+            selected("GRAPH_RELEASE"),
+            selected("GRAPH_MANIFEST_DIGEST"),
+            selected("GRAPH_ARCHIVE_DIGEST"),
+            selected("GRAPH_COMMIT"),
+            completed_requests.join(","),
+            completed_checks.join(","),
+            completed_mismatches.join(",")
+        );
+        let path = std::path::Path::new(&path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("live fidelity report directory is writable");
+        }
+        std::fs::write(path, report).expect("live fidelity report is writable");
+    }
+    assert!(
+        completed_mismatches.is_empty(),
+        "live fidelity mismatches: {}",
+        completed_mismatches.join(",")
+    );
 }
 
 #[derive(Default)]

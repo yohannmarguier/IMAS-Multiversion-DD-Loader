@@ -15,8 +15,12 @@
 typedef al_status_t (*data_fn)(int, const char *, const char *, void *, int, int, int *);
 typedef void (*set_reentrant_data_fn)(data_fn, int, const char *, const char *);
 
-static const char *const REENTRANT_FIELD = "time_slice/global_quantities/beta_tor_norm";
+/* IMAS-Core sees this stored spelling after the outer conversion has already
+ * translated the HLI spelling. A reentry policy pass must forward it once,
+ * not resolve it again to the HLI spelling. */
+static const char *const REENTRANT_FIELD = "time_slice/global_quantities/beta_normal";
 static const char *const REENTRANT_TIMEBASE = "time";
+static const char *const HLI_FIELD = "time_slice/global_quantities/beta_tor_norm";
 
 static void arm_reentrant_data(const char *setter_name, data_fn callback, int ctx_id) {
     set_reentrant_data_fn arm = (set_reentrant_data_fn)stub_symbol_or_die(setter_name);
@@ -38,6 +42,19 @@ static void check_reentrant_write_forwarded(int mismatched_ctx) {
     CHECK(pointer_from_stub("recording_stub_reentrant_data_seen_size") ==
           pointer_from_stub("recording_stub_reentrant_data_expected_size"));
     CHECK(int_from_stub("recording_stub_reentrant_data_seen_size_first") == 1);
+    CHECK(loss_count(mismatched_ctx) == 0);
+
+    /* Returning from a passthrough callback leaves the original mismatch
+     * record live. A fresh HLI-side write must therefore still translate to
+     * the stored spelling, proving the callback changed neither registry
+     * state nor the depth of the next top-level call. */
+    double payload = 2.0;
+    int size[1] = {1};
+    CHECK(al_write_data(mismatched_ctx, HLI_FIELD, REENTRANT_TIMEBASE, &payload,
+                        IMAS_DOUBLE_DATA, 1, size)
+              .code == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_write_field"), REENTRANT_FIELD) == 0);
+    CHECK(strcmp(string_from_stub("recording_stub_write_timebase"), REENTRANT_TIMEBASE) == 0);
     CHECK(loss_count(mismatched_ctx) == 0);
 }
 

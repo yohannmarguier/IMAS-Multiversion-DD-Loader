@@ -218,12 +218,14 @@ $ cmake --install build --prefix /path/to/prefix
 $ cargo fmt && cargo clippy --all-targets          # lint, no CMake wrapper
 $ bash scripts/audit-rust-line-coverage.sh         # scoped line coverage, blocking in CI
 $ bash scripts/audit-rust-mutation.sh              # scoped mutation audit, manual workflow
+$ bash scripts/collect-rust-integration-coverage.sh recording-stub  # Rust hit by C scenarios
 ```
 
 **The Rust test-quality audits (issue #189) sit outside the CMake graph.**
-`coverage/` holds the checked-in measurement scope
-(`rust-line-coverage-scope.json`), the mutation audit configuration and its
-disposition list, so two developers cannot score different files.
+`coverage/` holds the checked-in production and private-XML measurement scopes
+(`rust-line-coverage-scope.json` and `rust-xml-line-coverage-scope.json`), the
+production runtime-map test witnesses, the mutation audit configuration and
+its disposition list, so two developers cannot score different files.
 `scripts/audit-rust-*.sh` run the audits; `scripts/check-rust-*.py` are the
 policy authorities that score them and own the floors. `tests/coverage/` holds
 their fixture-driven CTest checks (`rust-line-coverage-audit-fixtures`,
@@ -233,6 +235,15 @@ and `docs/rust-mutation-audit.md` carry scope, formulas, thresholds, commands
 and exclusion rules; `docs/mutation-audits/` keeps the per-slice baselines.
 Ordinary CI blocks on the line-coverage audit; the full mutation audit is
 `workflow_dispatch`-only.
+
+**C-driven Rust coverage (issue #251) is a separate integration report, not a
+new whole-crate percentage gate.**
+`scripts/collect-rust-integration-coverage.sh` builds an instrumented shared
+shim and drives the existing C scenarios in distinct `recording-stub` and
+`real-core` profiles; `scripts/check-rust-integration-coverage.py` validates
+the retained evidence and records its revision and configuration.
+`rust-integration-coverage-audit-fixtures` protects that collection contract,
+and `docs/rust-integration-coverage.md` documents the local and CI workflows.
 
 CI (`.github/workflows/ci.yml`) has a fast recording-stub job for fmt, clippy,
 both CMake configurations, install and downstream consumption, plus a full job
