@@ -126,6 +126,16 @@ jobs:
           cargo install cargo-llvm-cov --version "$CARGO_LLVM_COV_VERSION" --locked
       - name: Collect recording-stub C ABI Rust coverage
         run: bash scripts/collect-rust-integration-coverage.sh recording-stub
+      - name: Measure the artifact-validation executable
+        if: ${{ !cancelled() }}
+        run: bash scripts/collect-rust-integration-coverage.sh artifact-command
+      - name: Upload artifact command coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-integration-coverage-artifact-command
+          path: target/rust-integration-coverage/artifact-command/
+          if-no-files-found: warn
       - name: Upload recording-stub integration coverage
         if: always()
         uses: actions/upload-artifact@v4

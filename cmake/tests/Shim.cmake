@@ -1326,3 +1326,44 @@ set_property(TEST
     read-path-merged-read-falls-through-to-next-candidate
     read-path-sign-flip-array-negates-values-and-preserves-empty-double
     APPEND PROPERTY LABELS xml-fidelity)
+
+# Focused loss delivery evidence. Existing boundary/failure scenarios remain
+# separate processes; the two additional cases cover mixed operations and
+# concurrent first delivery through the public ABI.
+add_executable(loss_delivery_test "${CMAKE_CURRENT_SOURCE_DIR}/tests/shim/loss_delivery_test.c")
+target_link_libraries(loss_delivery_test PRIVATE imas_mvdd_loader ${CMAKE_DL_LIBS} Threads::Threads)
+target_compile_definitions(loss_delivery_test PRIVATE
+    "RECORDING_STUB_PATH=\"$<TARGET_FILE:recording_stub>\"")
+add_dependencies(loss_delivery_test imas_mvdd_capi recording_stub)
+set_target_properties(loss_delivery_test PROPERTIES
+    BUILD_RPATH "$<TARGET_FILE_DIR:imas_mvdd_loader>")
+foreach(scenario operations-survive-close concurrent-first-loss)
+    add_stub_test(loss-delivery-${scenario} loss_delivery_test ${scenario}
+        HLI_DD_VERSION 4.1.1 STAMP_VERSION 3.39.0
+        ENV "IMAS_MVDD_LOSS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/loss-delivery-${scenario}")
+endforeach()
+set(_loss_adapter_tests
+    loss-delivery-operations-survive-close
+    loss-delivery-concurrent-first-loss
+    loss-file-is-created-on-first-loss-and-deduplicates-lines
+    loss-file-is-absent-without-loss
+    loss-file-filename-collision-gains-a-numeric-suffix
+    loss-file-default-destination-uses-the-process-clock-and-pid
+    read-path-loss-file-empty-directory-value-disables-delivery
+    read-path-loss-file-missing-directory-reports-once-without-failing-reads
+    read-path-loss-file-file-destination-reports-once-without-failing-reads
+    read-path-loss-file-append-failure-reports-once-without-failing-reads
+    read-path-merged-read-retains-a-lossy-verdict-in-the-loss-log
+    read-path-loss-count-null-output-is-refused
+    read-path-loss-at-null-path-buffer-is-refused
+    read-path-loss-at-null-verdict-is-refused
+    read-path-loss-at-negative-index-is-refused
+    read-path-loss-at-out-of-range-index-is-refused
+    read-path-loss-at-insufficient-buffer-is-refused
+    read-path-loss-operation-at-null-output-is-refused
+    read-path-loss-operation-at-negative-index-is-refused
+    read-path-loss-operation-at-out-of-range-index-is-refused
+    read-path-loss-operation-at-untracked-context-is-refused-after-zero-count
+    arraystruct-path-refusal-retains-an-unmappable-read-loss)
+set_property(TEST ${_loss_adapter_tests} APPEND PROPERTY LABELS loss-adapter)
+unset(_loss_adapter_tests)

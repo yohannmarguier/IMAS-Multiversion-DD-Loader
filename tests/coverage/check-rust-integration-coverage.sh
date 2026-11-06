@@ -242,3 +242,49 @@ for source in \
     src/conversion/seam_policy.rs; do
     grep -Fq -- "--source $source" "$collector"
 done
+
+# A helper-only report must not satisfy the executable or loss-adapter claim.
+cat >"$work_dir/command.lcov" <<'LCOV'
+SF:src/bin/validate_equilibrium_coverage.rs
+DA:20,1
+DA:21,0
+end_of_record
+SF:src/artifact_validation.rs
+DA:30,5
+end_of_record
+LCOV
+command_args=(--profile artifact-command --artifact production-executable
+    --revision deadbeef --configuration production --profile-dir "$work_dir/profiles"
+    --executable "$work_dir/lib/libimas_mvdd_loader.so"
+    --detail-source src/bin/validate_equilibrium_coverage.rs)
+python3 "$checker" "${command_args[@]}" --lcov "$work_dir/command.lcov" \
+    --metadata "$work_dir/command.json"
+python3 - "$work_dir/command.json" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1]))
+assert value['details'] == [{
+    'source': 'src/bin/validate_equilibrium_coverage.rs',
+    'covered_lines': 1, 'measured_lines': 2, 'uncovered_lines': [21]}]
+assert 'executable' in value and 'library' not in value
+PY
+sed 's/DA:20,1/DA:20,0/' "$work_dir/command.lcov" >"$work_dir/helper-only.lcov"
+if python3 "$checker" "${command_args[@]}" --lcov "$work_dir/helper-only.lcov" \
+    --metadata "$work_dir/helper-only.json" >"$work_dir/helper-only.txt" 2>&1; then
+    echo "helper-only hits must not satisfy executable measurement" >&2
+    exit 1
+fi
+grep -Fq 'required source src/bin/validate_equilibrium_coverage.rs has no executed lines' \
+    "$work_dir/helper-only.txt"
+if python3 "$checker" "${command_args[@]}" --lcov "$work_dir/report.lcov" \
+    --metadata "$work_dir/absent-command.json" >"$work_dir/absent-command.txt" 2>&1; then
+    echo "a report without the command source must fail" >&2
+    exit 1
+fi
+grep -Fq 'no measurement data for src/bin/validate_equilibrium_coverage.rs' "$work_dir/absent-command.txt"
+grep -Fq -- '-L loss-adapter' "$collector"
+grep -Fq -- '--detail-source src/interpose/loss.rs --detail-source src/loss_file.rs' "$collector"
+grep -Fq 'exit "$loss_status"' "$collector"
+command_collector="$source_dir/scripts/collect-rust-command-coverage.sh"
+grep -Fq 'tests/coverage/check-artifact-command.py --executable "$binary"' "$command_collector"
+grep -Fq -- '--detail-source src/bin/validate_equilibrium_coverage.rs' "$command_collector"
+grep -Fq 'exit "$scenario_status"' "$command_collector"

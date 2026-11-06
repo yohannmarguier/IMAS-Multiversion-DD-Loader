@@ -22,8 +22,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--configuration", required=True)
     parser.add_argument("--profile-dir", type=Path, required=True)
     parser.add_argument("--lcov", type=Path, required=True)
-    parser.add_argument("--library", type=Path, required=True)
-    parser.add_argument("--loaded-library-file", type=Path, required=True)
+    artifact = parser.add_mutually_exclusive_group(required=True)
+    artifact.add_argument("--library", type=Path)
+    artifact.add_argument("--executable", type=Path)
+    parser.add_argument("--loaded-library-file", type=Path)
     parser.add_argument("--metadata", type=Path, required=True)
     parser.add_argument("--baseline-lcov", type=Path)
     parser.add_argument("--probe-lcov", type=Path)
@@ -31,6 +33,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--component-lcov", type=Path, action="append")
     parser.add_argument("--component-profile-dir", type=Path)
     parser.add_argument("--component-scope", type=Path)
+    parser.add_argument("--detail-source", action="append", default=[],
+                        help="publish uncovered lines and require nonzero execution for this source")
     parser.add_argument(
         "--source",
         action="append",
@@ -230,24 +234,29 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     profiles = sorted(args.profile_dir.glob("*.profraw"))
     if not profiles:
         raise EvidenceError(f"raw-profile directory {args.profile_dir} contains no .profraw files")
-    if not args.library.is_file():
+    binary = args.library if args.library is not None else args.executable
+    if not binary.is_file():
+        if args.executable is not None:
+            raise EvidenceError(f"instrumented executable does not exist: {binary}")
         raise EvidenceError(f"instrumented library does not exist: {args.library}")
 
-    try:
-        observed_lines = [line for line in args.loaded_library_file.read_text().splitlines() if line]
-    except OSError as error:
-        raise EvidenceError(
-            f"cannot read loaded-library evidence {args.loaded_library_file}: {error}"
-        ) from error
-    if len(observed_lines) != 1:
-        raise EvidenceError("loaded-library evidence must contain exactly one nonempty path")
-    expected_library = args.library.resolve()
-    observed_library = Path(observed_lines[0]).resolve()
-    if observed_library != expected_library:
-        raise EvidenceError(
-            "loaded shim does not match the instrumented library: "
-            f"expected {expected_library}, observed {observed_library}"
-        )
+    if args.library is not None:
+        if args.loaded_library_file is None:
+            raise EvidenceError("--library requires --loaded-library-file")
+        try:
+            observed_lines = [line for line in args.loaded_library_file.read_text().splitlines() if line]
+        except OSError as error:
+            raise EvidenceError(
+                f"cannot read loaded-library evidence {args.loaded_library_file}: {error}"
+            ) from error
+        if len(observed_lines) != 1:
+            raise EvidenceError("loaded-library evidence must contain exactly one nonempty path")
+        observed_library = Path(observed_lines[0]).resolve()
+        if observed_library != binary.resolve():
+            raise EvidenceError(
+                "loaded shim does not match the instrumented library: "
+                f"expected {binary.resolve()}, observed {observed_library}"
+            )
 
     report = load_lcov(args.lcov)
     covered_lines = sum(count > 0 for lines in report.values() for count in lines.values())
@@ -298,13 +307,18 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "revision": args.revision,
         "configuration": args.configuration,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "library": str(expected_library),
+        "library" if args.library is not None else "executable": str(binary.resolve()),
         "profile_count": len(profiles),
         "lcov": str(args.lcov.resolve()),
         "covered_lines": covered_lines,
         "measured_lines": measured_lines,
         "sources": sources,
     }
+    if args.detail_source:
+        metadata["details"] = [source_report(report, source) for source in args.detail_source]
+        for detail in metadata["details"]:
+            if detail["covered_lines"] == 0:
+                raise EvidenceError(f"required source {detail['source']} has no executed lines")
     if probe is not None:
         metadata["probe"] = probe
     if validate_component_args(args):

@@ -89,6 +89,16 @@ discovery, acquisition and lifecycle scenarios used by the C-driven Rust
 coverage report.  It is an exact cross-suite ledger rather than another test
 executable; see `docs/occurrence-adapter-coverage.md`.
 
+The `loss-adapter` label selects 22 process-isolated loss export and file
+delivery scenarios, including `shim/loss_delivery_test.c`'s mixed-operation
+and concurrent-first-delivery cases. Its separate measured report and residual
+writer cases are documented in `docs/loss-delivery-coverage.md`.
+
+`coverage/check-artifact-command.py` runs nine subprocess checks against a
+supplied `validate_equilibrium_coverage` binary. The integration collector's
+`artifact-command` profile builds and measures that production executable;
+see `docs/artifact-command-coverage.md`.
+
 > There is no C-level registry introspection, so "the mismatch was registered"
 > is proven the only way it is externally observable: a *second* open of the
 > same occurrence translates `datapath` before Core is called.

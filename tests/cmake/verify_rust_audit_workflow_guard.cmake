@@ -47,6 +47,23 @@ function(expect_rejection fixture expected_diagnostic ci_contents mutation_conte
     endif()
 endfunction()
 
+foreach(command_contract IN ITEMS invocation upload)
+    if(command_contract STREQUAL "invocation")
+        set(required "run: bash scripts/collect-rust-integration-coverage.sh artifact-command")
+        set(diagnostic "integration_coverage_job must measure the artifact-validation executable")
+    else()
+        set(required "path: target/rust-integration-coverage/artifact-command/")
+        set(diagnostic "integration_coverage_job must upload the artifact command")
+    endif()
+    string(REPLACE "${required}" "# removed ${required}" missing_command_contract "${ci_workflow}")
+    if(ci_workflow STREQUAL missing_command_contract)
+        message(FATAL_ERROR "Could not remove artifact command ${command_contract}")
+    endif()
+    expect_rejection(missing-command-${command_contract} "${diagnostic}"
+        "${missing_command_contract}" "${mutation_workflow}" "${line_audit_script}"
+        "${production_tests}" "${line_scope}" "${xml_line_scope}" "${mutation_audit}")
+endforeach()
+
 string(REPLACE "run: bash scripts/audit-rust-line-coverage.sh"
     "# run: bash scripts/audit-rust-line-coverage.sh" misplaced_line_command "${ci_workflow}")
 if(ci_workflow STREQUAL misplaced_line_command)

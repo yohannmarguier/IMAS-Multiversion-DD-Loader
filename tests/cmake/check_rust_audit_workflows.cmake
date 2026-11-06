@@ -175,6 +175,12 @@ require_line(integration_coverage_job "uses: actions/upload-artifact@v4"
 require_line(integration_coverage_job
     "path: target/rust-integration-coverage/recording-stub/"
     "upload the complete recording-stub evidence directory")
+require_line(integration_coverage_job
+    "run: bash scripts/collect-rust-integration-coverage.sh artifact-command"
+    "measure the artifact-validation executable")
+require_line(integration_coverage_job
+    "path: target/rust-integration-coverage/artifact-command/"
+    "upload the artifact command evidence directory")
 
 require_line(full_job
     "run: bash scripts/collect-rust-integration-coverage.sh real-core"

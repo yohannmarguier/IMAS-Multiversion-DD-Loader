@@ -7,7 +7,7 @@ output_root="$root_dir/target/rust-integration-coverage"
 build_root="$root_dir/target/rust-integration-coverage-build"
 
 usage() {
-    echo "usage: $0 <recording-stub|real-core|all>" >&2
+    echo "usage: $0 <recording-stub|real-core|artifact-command|all>" >&2
 }
 
 if [[ $# -ne 1 ]]; then
@@ -15,9 +15,13 @@ if [[ $# -ne 1 ]]; then
     exit 2
 fi
 profile=$1
+if [[ "$profile" == artifact-command ]]; then
+    exec bash "$root_dir/scripts/collect-rust-command-coverage.sh"
+fi
 if [[ "$profile" == all ]]; then
     "$0" recording-stub
     "$0" real-core
+    "$0" artifact-command
     exit 0
 fi
 if [[ "$profile" != recording-stub && "$profile" != real-core ]]; then
@@ -185,6 +189,23 @@ if [[ "$profile" == recording-stub ]]; then
         || occurrence_report_status=$?
     archive_profiles "$graph_cargo_target" "$run_dir/occurrence-adapter-profiles/graph" \
         || occurrence_report_status=$?
+
+    loss_status=0
+    clear_raw_profiles "$cargo_target"
+    export LLVM_PROFILE_FILE="$cargo_target/%p-%m.profraw"
+    "$loader_probe" "$instrumented_library" >"$run_dir/loss-loaded-library.txt"
+    ctest --test-dir "$build_dir" -L loss-adapter \
+        --output-on-failure --no-tests=error >"$run_dir/loss-adapter-ctest.log" 2>&1 \
+        || loss_status=$?
+    generate_report "$run_dir/loss-adapter.lcov" || loss_status=$?
+    archive_profiles "$cargo_target" "$run_dir/loss-adapter-profiles" || loss_status=$?
+    python3 "$root_dir/scripts/check-rust-integration-coverage.py" \
+        --profile loss-adapter --artifact "$artifact" \
+        --revision "$(git -C "$root_dir" rev-parse HEAD)" --configuration "$configuration" \
+        --profile-dir "$run_dir/loss-adapter-profiles" --lcov "$run_dir/loss-adapter.lcov" \
+        --library "$instrumented_library" --loaded-library-file "$run_dir/loss-loaded-library.txt" \
+        --detail-source src/interpose/loss.rs --detail-source src/loss_file.rs \
+        --metadata "$run_dir/loss-adapter.json" || loss_status=$?
 fi
 
 # Start the report-bearing run with no stale raw data. %p keeps subprocesses
@@ -248,6 +269,10 @@ fi
 if [[ $ctest_status -ne 0 ]]; then
     echo "$profile C scenarios failed with status $ctest_status; coverage evidence was retained in $run_dir" >&2
     exit "$ctest_status"
+fi
+if [[ "${loss_status:-0}" -ne 0 ]]; then
+    echo "loss-adapter collection failed; partial evidence was retained in $run_dir" >&2
+    exit "$loss_status"
 fi
 if [[ "${occurrence_status:-0}" -ne 0 ]]; then
     echo "occurrence-adapter C scenarios failed with status $occurrence_status; coverage evidence was retained in $run_dir" >&2

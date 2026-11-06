@@ -8,14 +8,16 @@ $ IMAS_MVDD_INTEGRATION_CMAKE_PREFIX_PATH=/path/to/imas-core-prefix \
     bash scripts/collect-rust-integration-coverage.sh all
 ```
 
-`all` runs two independent profiles. `recording-stub` drives the private XML
+`all` runs three independent profiles. `recording-stub` drives the private XML
 fixture shim through the existing recording-stub C scenarios. `real-core`
 reuses the existing runtime-binding real-Core scenario in an executable linked
 to the ordinary production graph-backed shim. The latter needs either an
 installed IMAS-Core discoverable by CMake or
 `IMAS_MVDD_INTEGRATION_CMAKE_PREFIX_PATH`. Set
 `IMAS_MVDD_INTEGRATION_DOWNLOAD_CORE=1` instead to use the repository's pinned
-download-and-build mode. Either profile can be run by itself.
+download-and-build mode. `artifact-command` builds the production validation
+executable and runs its subprocess contract without Core or Neo4j. Each profile
+can be run by itself.
 
 Each invocation deletes and recreates only its task-owned directories under
 `target/rust-integration-coverage{,-build}/<profile>`. The build inherits
@@ -27,12 +29,13 @@ raw profile that is incompatible with the selected artifact.
 
 The reports remain separate by construction:
 
-| Profile | Rust object | C scenario family | Output |
+| Profile | Rust object | Scenario family | Output |
 | --- | --- | --- | --- |
 | `recording-stub` | private `xml-fixture-source` shim | recording stub | `target/rust-integration-coverage/recording-stub/` |
 | `real-core` | production graph-backed shim | real IMAS-Core | `target/rust-integration-coverage/real-core/` |
+| `artifact-command` | production validation executable | command arguments, inputs, reports and exit statuses | `target/rust-integration-coverage/artifact-command/` |
 
-Every output directory retains `coverage.lcov`, raw profiles, configure/build
+The two C ABI output directories retain `coverage.lcov`, raw profiles, configure/build
 logs, the CTest log, the canonical loaded-library path and `metadata.json`.
 The metadata records the Git revision, configuration, artifact path, profile
 count and report totals. It also publishes covered and measured line counts for
@@ -60,6 +63,19 @@ controlled graph artifact.  Their LCOV and raw profiles stay separate, while
 occurrence-only `src/conversion/seam_policy.rs` slice independently.  See
 `docs/occurrence-adapter-coverage.md` for the scenario ledger, measured result,
 residual cases and fresh-build mutation observations.
+
+The recording-stub collector also measures the 22-scenario `loss-adapter`
+ledger independently. `loss-adapter.lcov`, `loss-adapter-profiles/`, its CTest
+log and `loss-adapter.json` report the loss exports and process writer,
+including each uncovered executable line. The checker rejects a report that
+has no hits in either requested source. See [loss-delivery-coverage.md](loss-delivery-coverage.md).
+
+The command profile retains its executable path, raw profiles, `coverage.lcov`,
+`metadata.json`, build log and `scenarios.json` with each subprocess's status,
+stdout, stderr and assertion failures. Its command-source measurement must
+have hits; calculation-helper execution alone cannot satisfy it. It preserves
+scenario failure status after collecting the report and uploads evidence even
+on failure. See [artifact-command-coverage.md](artifact-command-coverage.md).
 
 These reports are evidence, not a second coverage gate. They intentionally set
 no whole-crate percentage floor and do not change the scoped 90% Rust-unit
