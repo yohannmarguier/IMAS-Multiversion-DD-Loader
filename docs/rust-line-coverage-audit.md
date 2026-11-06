@@ -15,10 +15,25 @@ It runs two independent configurations and never uses `--all-features`:
   `target/rust-line-coverage-xml.lcov`, and checks
   `coverage/rust-xml-line-coverage-scope.json`.
 
-Each report prints every group and the aggregate under a configuration heading.
-The checker adds covered and total lines; it never averages percentages. Keeping
-the reports and scopes separate prevents XML fixture hits from satisfying a
-production runtime-map assignment. Before that unfiltered production run, the
+The same command writes `target/rust-line-coverage-report.md`, the report CI
+publishes with both LCOV inputs. Each section names its exact feature
+configuration, scope file and LCOV file. The report header records `HEAD`, the
+active `rustc`, and the pinned `cargo-llvm-cov`; the checker refuses stale
+revision metadata or a coverage-tool version that disagrees with the scope.
+The wrapper cleans cargo-llvm-cov's workspace profiles before each
+configuration, so neither configuration reuses the other's counters.
+
+Each section shows four different quantities from that configuration's one
+fresh LCOV input: every scoped group, the scoped aggregate, the complete
+unfiltered LLVM total, and the production lines assigned to exclusions. It
+also says whether the unfiltered total contains executable lines from inline
+test bodies. Excluded production and inline-test lines remain outside the gate;
+the checker rejects a scoped range that reaches into an inline test module.
+They are shown so a lower full percentage cannot be mistaken for a failed
+scoped audit. The checker adds covered and total lines; it never averages
+percentages. Keeping the reports and scopes separate prevents XML fixture hits
+from satisfying a production runtime-map assignment. Before that unfiltered
+production run, the
 audit inventories its library tests and requires the six scenario witnesses in
 `coverage/rust-production-line-coverage-tests.json`; a missing, renamed, or
 feature-gated witness fails before coverage is measured. A second inventory of
@@ -85,26 +100,41 @@ exists to prevent.
 The checker rejects a missing or empty configured source measurement, malformed
 LCOV input, overlapping source assignments, or a scope that does not name all
 six groups. It also rejects **a measured file whose production lines are not
-fully assigned**: it reads each measured source, takes its inline test module
-as the end of production, and requires every line before that to fall in a
-group range or in a declared exclusion. That is what makes a silently truncated
-range impossible rather than merely discouraged. A source absent from the scope
-is an explicit test-layer exclusion recorded in the same JSON file; it is not
-part of the denominator.
+fully assigned** and **a measured range that extends into an inline test
+module**: it reads each measured source, takes its inline test module as the end
+of production, and requires every line before that to fall in a group range or
+in a declared exclusion. That is what makes a silently truncated range—or one
+whose old endpoint drifted into tests—impossible rather than merely discouraged.
+A source absent from the scope is an explicit test-layer exclusion recorded in
+the same JSON file; it is not part of the denominator.
 
-Both configurations retain the 90% aggregate and 80% per-group floors.
-Ordinary CI runs this same command in its `rust-line-coverage` job and blocks on
-either verdict. Both LCOV reports are uploaded even if the audit fails, so
-inspect the matching configuration's totals before changing scope or tests.
+Both configurations retain the 90% aggregate and 80% per-group floors. The
+pass condition is unambiguous: the scoped aggregate and every scoped group must
+meet their floors; the complete unfiltered LLVM percentage is diagnostic.
+Ordinary CI runs the same local command in its `rust-line-coverage` job and
+blocks on either scoped verdict. The wrapper still measures and reports the
+second configuration when the first configuration misses a floor. CI uploads
+the Markdown report and both LCOV inputs under `if: always()`, including after
+a threshold failure. The wrapper truncates stale evidence first, then asks the
+checker to create an `INCOMPLETE` report before test or coverage execution
+begins; a checker input failure replaces that placeholder
+with its exact diagnostic, and a later configuration appends normally. Thus a
+failed audit never publishes a stale report left by an earlier local run.
+
 The compact fixture test is registered as
 `rust-line-coverage-audit-fixtures` and proves the aggregate/per-group boundary,
-malformed-data behavior, overlapping ownership refusal, and both truncated and
-newly stale range refusals against a throwaway source tree, without requiring a
-full coverage run. The workflow guard also
+an aggregate below 90% even when every group is exactly at 80%, the distinction
+between a 90% scoped PASS and a full total below 90%, excluded production and
+inline-test accounting, missing reports and their published diagnostics, stale
+revision metadata, malformed-data behavior, overlapping ownership refusal, and
+truncated, newly stale, and test-module-overrun range refusals against a
+throwaway source tree, without requiring a full coverage run. The workflow
+guard also
 parses the audit script: negative fixtures reject removal of the production
-run, replacement with `--all-features`, and scoring the XML report where
-runtime-map measurement is required. They also reject removal of a required
-runtime-map source assignment or test witness.
+run, either fresh-profile clean, the published Markdown report, replacement
+with `--all-features`, and scoring the XML report where runtime-map measurement
+is required. They also reject removal of a required runtime-map source
+assignment or test witness.
 
 ## Integrated baselines (2026-09-22)
 
@@ -115,15 +145,18 @@ configurations pass all floors.
 
 | Group | Production covered/total | Production | XML covered/total | XML |
 | --- | ---: | ---: | ---: | ---: |
-| conversion | 4,118 / 4,652 | 88.5% | 2,004 / 2,298 | 87.2% |
+| conversion | 4,112 / 4,646 | 88.5% | 1,998 / 2,292 | 87.2% |
 | DD-version | 188 / 199 | 94.5% | 188 / 199 | 94.5% |
 | context-registry | 170 / 170 | 100.0% | 170 / 170 | 100.0% |
 | loss | 238 / 239 | 99.6% | 238 / 239 | 99.6% |
 | artifact-validation | 222 / 227 | 97.8% | 222 / 227 | 97.8% |
 | deterministic runtime-binding policy | 110 / 110 | 100.0% | 110 / 110 | 100.0% |
-| aggregate | 5,046 / 5,597 | 90.2% | 2,932 / 3,243 | 90.4% |
+| aggregate | 5,040 / 5,591 | 90.1% | 2,926 / 3,237 | 90.4% |
 
 The XML denominator retains issue #248's repaired completeness, private-fixture
-lookup, and seam-policy ranges. Its fixture guard rejects overlapping ownership
-and proves an inserted production decision makes a formerly complete range
-stale.
+lookup, and seam-policy ranges. Both denominators stop `path_conversion.rs` at
+line 1070 and `context_registry.rs` at line 468, their current production
+boundaries; six executable test-helper lines that the former stale endpoint
+counted now appear only in the unfiltered diagnostic. The fixture guard rejects
+overlapping ownership and proves both an inserted production decision and a
+range that drifts into tests invalidate the scope.

@@ -45,12 +45,12 @@ python3 "$checker" \
     --candidate-mutants "$work_dir/selection/selected.json" \
     --write-selection "$work_dir/selection/scoped.json" \
     --write-cargo-mutants-config "$work_dir/selection/mutants.toml"
-grep -Fq 'src/conversion.rs:1:1: replace conversion outcome 1' "$work_dir/selection/scoped.json"
+grep -Fq 'src/fixture/conversion.rs:1:1: replace conversion outcome 1' "$work_dir/selection/scoped.json"
 if grep -Fq 'src/interpose/read.rs' "$work_dir/selection/scoped.json"; then
     echo "a mutant outside the line-audit scope must not be selected" >&2
     exit 1
 fi
-grep -Fq '^src/conversion\\.rs:1:1: replace conversion outcome 1$' "$work_dir/selection/mutants.toml"
+grep -Fq '^src/fixture/conversion\\.rs:1:1: replace conversion outcome 1$' "$work_dir/selection/mutants.toml"
 
 # A candidate belonging to no group and no declared exclusion is a hole in the
 # scope, not a mutant to drop quietly.
@@ -81,7 +81,7 @@ grep -Fq 'the measurement scope has a hole' "$work_dir/hole.txt"
 output=$(run_fixture all_pass)
 grep -Fq 'conversion: caught=2 missed=0 timed-out=0 unviable=1 excluded=1 score=100.0% PASS' <<<"$output"
 grep -Fq 'aggregate: caught=7 missed=0 timed-out=0 unviable=1 excluded=1 score=100.0% PASS' <<<"$output"
-grep -Fq 'src/conversion.rs:4:1: replace branch with false | observable behavior: the documented equivalent branch is unchanged | classification: equivalent | disposition: excluded: zero and positive values take the same branch' <<<"$output"
+grep -Fq 'src/fixture/conversion.rs:4:1: replace branch with false | observable behavior: the documented equivalent branch is unchanged | classification: equivalent | disposition: excluded: zero and positive values take the same branch' <<<"$output"
 
 output=$(run_fixture integration_only)
 grep -Fq 'classification: integration-only | disposition: excluded: the observable backend behavior is covered by a real-Core integration test' <<<"$output"
@@ -128,7 +128,7 @@ if run_fixture incomplete >"$work_dir/incomplete.txt" 2>&1; then
     echo "an incomplete mutation run must fail" >&2
     exit 1
 fi
-grep -Fq 'mutation audit input error: selected mutant src/loss.rs:1:1: replace loss with none has no outcome' "$work_dir/incomplete.txt"
+grep -Fq 'mutation audit input error: selected mutant src/fixture/loss.rs:1:1: replace loss with none has no outcome' "$work_dir/incomplete.txt"
 
 # Cargo-mutants reports a nonzero result for its raw missed-mutant count even
 # when every miss is narrowly excluded by the checker. The public audit command

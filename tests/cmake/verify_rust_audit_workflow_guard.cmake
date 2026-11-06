@@ -100,6 +100,58 @@ expect_rejection(missing-production-run
     "${ci_workflow}" "${mutation_workflow}" "${missing_production_run}"
     "${production_tests}" "${line_scope}" "${xml_line_scope}" "${mutation_audit}")
 
+string(REPLACE "cargo llvm-cov clean --workspace"
+    "# cargo llvm-cov clean --workspace" missing_fresh_profiles "${line_audit_script}")
+if(line_audit_script STREQUAL missing_fresh_profiles)
+    message(FATAL_ERROR "Could not remove the fresh-profile commands")
+endif()
+expect_rejection(missing-fresh-profiles
+    "line_audit_lines must run exactly two fresh-profile cleans"
+    "${ci_workflow}" "${mutation_workflow}" "${missing_fresh_profiles}"
+    "${production_tests}" "${line_scope}" "${xml_line_scope}" "${mutation_audit}")
+
+string(REPLACE "set +e" "# set +e" early_threshold_exit "${line_audit_script}")
+if(line_audit_script STREQUAL early_threshold_exit)
+    message(FATAL_ERROR "Could not restore fail-fast behavior around the scoped checks")
+endif()
+expect_rejection(early-threshold-exit
+    "line_audit_lines must continue after a threshold failure"
+    "${ci_workflow}" "${mutation_workflow}" "${early_threshold_exit}"
+    "${production_tests}" "${line_scope}" "${xml_line_scope}" "${mutation_audit}")
+
+string(REPLACE ": >\"$coverage_report\""
+    "# : >\"$coverage_report\"" missing_report_truncation
+    "${line_audit_script}")
+if(line_audit_script STREQUAL missing_report_truncation)
+    message(FATAL_ERROR "Could not remove the stale-report truncation")
+endif()
+expect_rejection(missing-report-truncation
+    "line_audit_lines must truncate stale evidence before fallible setup"
+    "${ci_workflow}" "${mutation_workflow}" "${missing_report_truncation}"
+    "${production_tests}" "${line_scope}" "${xml_line_scope}" "${mutation_audit}")
+
+string(REPLACE
+    "python3 \"$root_dir/scripts/check-rust-line-coverage.py\" --initialize-report --report-output \"$coverage_report\""
+    "# python3 \"$root_dir/scripts/check-rust-line-coverage.py\" --initialize-report --report-output \"$coverage_report\""
+    missing_initial_report "${line_audit_script}")
+if(line_audit_script STREQUAL missing_initial_report)
+    message(FATAL_ERROR "Could not remove the initial line-coverage report")
+endif()
+expect_rejection(missing-initial-report
+    "line_audit_lines must initialize the report through the checker"
+    "${ci_workflow}" "${mutation_workflow}" "${missing_initial_report}"
+    "${production_tests}" "${line_scope}" "${xml_line_scope}" "${mutation_audit}")
+
+string(REPLACE "          target/rust-line-coverage-report.md"
+    "          # target/rust-line-coverage-report.md" missing_markdown_report "${ci_workflow}")
+if(ci_workflow STREQUAL missing_markdown_report)
+    message(FATAL_ERROR "Could not remove the Markdown line-coverage report upload")
+endif()
+expect_rejection(missing-markdown-report
+    "line_coverage_job must upload the human-readable line-coverage report"
+    "${missing_markdown_report}" "${mutation_workflow}" "${line_audit_script}"
+    "${production_tests}" "${line_scope}" "${xml_line_scope}" "${mutation_audit}")
+
 string(REPLACE "${production_command}"
     "cargo llvm-cov --all-features --lib --lcov --output-path \"$production_report\""
     all_features_production_run "${line_audit_script}")
@@ -119,7 +171,7 @@ if(line_audit_script STREQUAL production_without_runtime_measurement)
     message(FATAL_ERROR "Could not replace the production measurement")
 endif()
 expect_rejection(production-without-runtime-measurement
-    "line_audit_lines must score the production report"
+    "line_audit_lines must score and report the production configuration"
     "${ci_workflow}" "${mutation_workflow}" "${production_without_runtime_measurement}"
     "${production_tests}" "${line_scope}" "${xml_line_scope}" "${mutation_audit}")
 

@@ -51,16 +51,31 @@ function(job_lines workflow_lines_variable job_name output_variable)
     set("${output_variable}" "${lines}" PARENT_SCOPE)
 endfunction()
 
-function(require_line lines_variable expected description)
+function(exact_line_count lines_variable expected output_variable)
     string(REPLACE "[" "@LBRACKET@" expected "${expected}")
     string(REPLACE "]" "@RBRACKET@" expected "${expected}")
+    set(count 0)
     foreach(actual IN LISTS ${lines_variable})
         string(STRIP "${actual}" actual)
         if(actual STREQUAL expected)
-            return()
+            math(EXPR count "${count} + 1")
         endif()
     endforeach()
-    message(FATAL_ERROR "${lines_variable} must ${description}")
+    set("${output_variable}" "${count}" PARENT_SCOPE)
+endfunction()
+
+function(require_line lines_variable expected description)
+    exact_line_count("${lines_variable}" "${expected}" count)
+    if(count EQUAL 0)
+        message(FATAL_ERROR "${lines_variable} must ${description}")
+    endif()
+endfunction()
+
+function(require_line_count lines_variable expected expected_count description)
+    exact_line_count("${lines_variable}" "${expected}" actual_count)
+    if(NOT actual_count EQUAL expected_count)
+        message(FATAL_ERROR "${lines_variable} must ${description}")
+    endif()
 endfunction()
 
 read_lines("${CI_WORKFLOW_FILE}" ci_lines)
@@ -98,23 +113,50 @@ require_line(line_audit_lines
     "python3 scripts/check-rust-test-witnesses.py --manifest \"$production_test_witnesses\" --discovered \"$production_tests\" --ignored \"$ignored_production_tests\""
     "reject missing or ignored production runtime-map witnesses")
 require_line(line_audit_lines
+    "coverage_report=\"$root_dir/target/rust-line-coverage-report.md\""
+    "name the local and CI Markdown report")
+require_line(line_audit_lines
+    "revision=$(git -C \"$root_dir\" rev-parse HEAD)"
+    "record the measured Git revision")
+require_line(line_audit_lines "rustc_version=$(rustc --version)"
+    "record the measured Rust toolchain")
+require_line(line_audit_lines ": >\"$coverage_report\""
+    "truncate stale evidence before fallible setup")
+require_line(line_audit_lines
+    "python3 \"$root_dir/scripts/check-rust-line-coverage.py\" --initialize-report --report-output \"$coverage_report\""
+    "initialize the report through the checker before measurement")
+require_line_count(line_audit_lines "cargo llvm-cov clean --workspace" 2
+    "run exactly two fresh-profile cleans")
+require_line_count(line_audit_lines "set +e" 2
+    "continue after a threshold failure")
+require_line(line_audit_lines "audit_status=$?"
+    "retain the production scoped verdict")
+require_line(line_audit_lines "xml_status=$?"
+    "retain the private XML scoped verdict")
+require_line(line_audit_lines
     "cargo llvm-cov --no-default-features --lib --lcov --output-path \"$production_report\""
     "measure the production build without private fixture features")
 require_line(line_audit_lines
     "cargo llvm-cov --no-default-features --features xml-fixture-source --lib --lcov --output-path \"$xml_report\""
     "measure the private XML regression fixture separately")
 require_line(line_audit_lines
-    "python3 scripts/check-rust-line-coverage.py --root \"$root_dir\" --scope \"$scope\" --lcov \"$production_report\""
-    "score the production report against the production scope")
+    "python3 scripts/check-rust-line-coverage.py --root \"$root_dir\" --scope \"$scope\" --lcov \"$production_report\" --configuration \"production (--no-default-features)\" --revision \"$revision\" --rustc-version \"$rustc_version\" --cargo-llvm-cov-version \"$actual_version\" --report-output \"$coverage_report\""
+    "score and report the production configuration")
 require_line(line_audit_lines
-    "python3 scripts/check-rust-line-coverage.py --root \"$root_dir\" --scope \"$xml_scope\" --lcov \"$xml_report\""
-    "score the XML report against the XML scope")
+    "python3 scripts/check-rust-line-coverage.py --root \"$root_dir\" --scope \"$xml_scope\" --lcov \"$xml_report\" --configuration \"private XML fixture (--no-default-features --features xml-fixture-source)\" --revision \"$revision\" --rustc-version \"$rustc_version\" --cargo-llvm-cov-version \"$actual_version\" --report-output \"$coverage_report\" --append-report"
+    "score and append the private XML configuration")
+require_line(line_audit_lines "exit \"$audit_status\""
+    "return the combined scoped verdict after publishing both configurations")
 require_line(line_coverage_job "if: always()"
     "retain the line report after a failed audit")
 require_line(line_coverage_job "uses: actions/upload-artifact@v4"
     "upload the line report")
-require_line(line_coverage_job "path: target/rust-line-coverage-*.lcov"
-    "upload both generated LCOV reports")
+require_line(line_coverage_job "path: |"
+    "upload the complete line-coverage evidence set")
+require_line(line_coverage_job "target/rust-line-coverage-report.md"
+    "upload the human-readable line-coverage report")
+require_line(line_coverage_job "target/rust-line-coverage-*.lcov"
+    "upload both generated LCOV inputs")
 require_line(ci_lines "CARGO_LLVM_COV_VERSION: 0.9.1"
     "pin cargo-llvm-cov to the locally validated release")
 

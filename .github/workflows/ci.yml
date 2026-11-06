@@ -102,12 +102,14 @@ jobs:
       - name: Enforce scoped Rust line coverage
         run: bash scripts/audit-rust-line-coverage.sh
       # A failed threshold is exactly when the report is useful.
-      - name: Upload scoped line-coverage report
+      - name: Upload line-coverage report and inputs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rust-line-coverage-lcov
-          path: target/rust-line-coverage-*.lcov
+          name: rust-line-coverage-report
+          path: |
+            target/rust-line-coverage-report.md
+            target/rust-line-coverage-*.lcov
           if-no-files-found: warn
 
   rust-integration-coverage:
